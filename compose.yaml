@@ -18,23 +18,23 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       #
-      - "--certificatesresolvers.cloudflare.acme.email={ACME_EMAIL}"
+      - "--certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.cloudflare.acme.storage=/etc/traefik/acme/cloudflare.json"
       #- "--certificatesresolvers.cloudflare.acme.httpchallenge=true"
       #- "--certificatesresolvers.cloudflare.acme.httpchallenge.entrypoint=web"
       #- "--certificatesresolvers.cloudflare.acme.dnschallenge=true"
       #- "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
       - "--certificatesresolvers.cloudflare.acme.tlschallenge=true"
-      - "--certificatesresolvers.cloudflare.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
+      #- "--certificatesresolvers.cloudflare.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
       #
-      - "--certificatesresolvers.namecheap.acme.email={ACME_EMAIL}"
+      - "--certificatesresolvers.namecheap.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.namecheap.acme.storage=/etc/traefik/acme/namecheap.json"
       #- "--certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=true"
       #- "--certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=web"
       #- "--certificatesresolvers.namecheap.acme.dnschallenge=true"
       #- "--certificatesresolvers.namecheap.acme.dnschallenge.provider=namecheap"
       - "--certificatesresolvers.namecheap.acme.tlschallenge=true"
-      - "--certificatesresolvers.namecheap.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
+      #- "--certificatesresolvers.namecheap.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
     ports:
       - "80:80"
       - "443:443"
@@ -45,9 +45,9 @@ services:
       - ./traefik:/etc/traefik
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      - CF_DNS_API_TOKEN={CF_DNS_API_TOKEN}
-      - NAMECHEAP_API_USER={NAMECHEAP_API_USER}
-      - NAMECHEAP_API_KEY={NAMECHEAP_API_KEY}
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+      - NAMECHEAP_API_USER=${NAMECHEAP_API_USER}
+      - NAMECHEAP_API_KEY=${NAMECHEAP_API_KEY}
 
   blog:
     image: ghost:5-alpine
