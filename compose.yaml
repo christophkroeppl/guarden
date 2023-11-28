@@ -1,8 +1,8 @@
 version: '3.8'
 
-#networks:
-#  root:
-#    external: true
+networks:
+  web:
+    external: true
 
 services:
   proxy:
@@ -13,18 +13,36 @@ services:
       - "--api.insecure=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=web"
       - "--entrypoints.web.address=:80"
-      #- "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.address=:443"
+      #
+      - "--certificateresolvers.cloudflare.acme.email={ACME_EMAIL}"
+      - "--certificateresolvers.cloudflare.acme.storage=/etc/traefik/acme/cloudflare.json"
+      - "--certificateresolvers.cloudflare.acme.httpchallenge.entrypoint=web"
+      - "--certificateresolvers.cloudflare.acme.dnschallenge=true"
+      - "--certificateresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
+      - "--certificateresolvers.cloudflare.acme.tlschallenge=true"
+      #
+      - "--certificateresolvers.namecheap.acme.email={ACME_EMAIL}"
+      - "--certificateresolvers.namecheap.acme.storage=/etc/traefik/acme/namecheap.json"
+      - "--certificateresolvers.namecheap.acme.httpchallenge.entrypoint=web"
+      - "--certificateresolvers.namecheap.acme.dnschallenge=true"
+      - "--certificateresolvers.namecheap.acme.dnschallenge.provider=namecheap"
+      - "--certificateresolvers.namecheap.acme.tlschallenge=true"
     ports:
       - "80:80"
       - "443:443"
+    networks:
+      - web
     volumes:
       #- ./config:/etc/traefik:ro
+      - ./traefik:/etc/traefik
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    #environment:
-    #  - CF_DNS_API_TOKEN=your-cloudflare-api-token
-    #networks:
-    #  - root
+    environment:
+      - CF_DNS_API_TOKEN={CF_DNS_API_TOKEN}
+      - NAMECHEAP_API_USER={NAMECHEAP_API_USER}
+      - NAMECHEAP_API_KEY={NAMECHEAP_API_KEY}
 
   blog:
     image: ghost:5-alpine
@@ -32,6 +50,8 @@ services:
     restart: unless-stopped
     ports:
       - "2368:2368"
+    networks:
+      - web
     environment:
       # see https://ghost.org/docs/config/#configuration-options
       NODE_ENV: development
@@ -39,6 +59,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.blog.rule=Host(`kroeppl.dev`)"
+      - "traefik.http.routers.blog.tls.certresolver=cloudflare"
       - "traefik.http.routers.blog.entrypoints=web"
       - "traefik.http.services.blog.loadbalancer.server.port=2368"
 
@@ -47,5 +68,6 @@ services:
     container_name: "whoami"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.whoami.rule=Host(`whoami.kroeppl.dev`)"
+      - "traefik.http.routers.whoami.rule=Host(`kroeppl.online`)"
+      - "traefik.http.routers.whoami.tls.certresolver=namecheap"
       - "traefik.http.routers.whoami.entrypoints=web"
