@@ -47,5 +47,5 @@ services:
     container_name: "whoami"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.kroeppl.dev`)"
       - "traefik.http.routers.whoami.entrypoints=web"
