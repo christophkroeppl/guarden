@@ -25,7 +25,6 @@ services:
       #- "--certificatesresolvers.cloudflare.acme.dnschallenge=true"
       #- "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
       - "--certificatesresolvers.cloudflare.acme.tlschallenge=true"
-      - "--certificatesresolvers.cloudflare.acme.tlschallenge.provider=cloudflare"
       - "--certificatesresolvers.cloudflare.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
       #
       - "--certificatesresolvers.namecheap.acme.email={ACME_EMAIL}"
@@ -35,7 +34,6 @@ services:
       #- "--certificatesresolvers.namecheap.acme.dnschallenge=true"
       #- "--certificatesresolvers.namecheap.acme.dnschallenge.provider=namecheap"
       - "--certificatesresolvers.namecheap.acme.tlschallenge=true"
-      - "--certificatesresolvers.namecheap.acme.tlschallenge.provider=namecheap"
       - "--certificatesresolvers.namecheap.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
     ports:
       - "80:80"
