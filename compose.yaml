@@ -38,6 +38,6 @@ services:
       url: http://kroeppl.dev/
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.blog.rule=Host('kroeppl.dev')"
+      - "traefik.http.routers.blog.rule=Host(`kroeppl.dev`)"
       - "traefik.http.routers.blog.entrypoints=web"
       - "traefik.http.services.blog.loadbalancer.server.port=2368"
