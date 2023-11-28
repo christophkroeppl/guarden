@@ -41,3 +41,11 @@ services:
       - "traefik.http.routers.blog.rule=Host(`kroeppl.dev`)"
       - "traefik.http.routers.blog.entrypoints=web"
       - "traefik.http.services.blog.loadbalancer.server.port=2368"
+
+  whoami:
+    image: "traefik/whoami"
+    container_name: "whoami"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
+      - "traefik.http.routers.whoami.entrypoints=web"
