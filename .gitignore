@@ -1,0 +1,11 @@
+# .env holds secrets
+.env
+
+# ignore all folders (state)
+./**
+
+# keep empty folders (exception for .gitkeep)
+!./**/.gitkeep
+
+# keep all config folders (.config, ...)
+!./.*#
