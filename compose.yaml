@@ -10,6 +10,7 @@ services:
     container_name: proxy
     restart: unless-stopped
     command: 
+      - "--log.level=DEBUG"
       - "--api.insecure=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
@@ -19,17 +20,23 @@ services:
       #
       - "--certificatesresolvers.cloudflare.acme.email={ACME_EMAIL}"
       - "--certificatesresolvers.cloudflare.acme.storage=/etc/traefik/acme/cloudflare.json"
-      - "--certificatesresolvers.cloudflare.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.cloudflare.acme.dnschallenge=true"
-      - "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
+      #- "--certificatesresolvers.cloudflare.acme.httpchallenge=true"
+      #- "--certificatesresolvers.cloudflare.acme.httpchallenge.entrypoint=web"
+      #- "--certificatesresolvers.cloudflare.acme.dnschallenge=true"
+      #- "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
       - "--certificatesresolvers.cloudflare.acme.tlschallenge=true"
+      - "--certificatesresolvers.cloudflare.acme.tlschallenge.provider=cloudflare"
+      - "--certificatesresolvers.cloudflare.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
       #
       - "--certificatesresolvers.namecheap.acme.email={ACME_EMAIL}"
       - "--certificatesresolvers.namecheap.acme.storage=/etc/traefik/acme/namecheap.json"
-      - "--certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.namecheap.acme.dnschallenge=true"
-      - "--certificatesresolvers.namecheap.acme.dnschallenge.provider=namecheap"
+      #- "--certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=true"
+      #- "--certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=web"
+      #- "--certificatesresolvers.namecheap.acme.dnschallenge=true"
+      #- "--certificatesresolvers.namecheap.acme.dnschallenge.provider=namecheap"
       - "--certificatesresolvers.namecheap.acme.tlschallenge=true"
+      - "--certificatesresolvers.namecheap.acme.tlschallenge.provider=namecheap"
+      - "--certificatesresolvers.namecheap.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
     ports:
       - "80:80"
       - "443:443"
