@@ -20,7 +20,7 @@ services:
       - "--accesslog=true"
       #- "--accesslog.filepath=/etc/traefik/logs/access.log"
       #- "--accesslog.format=json"
-      - "--accessLog.bufferingSize=100"
+      #- "--accessLog.bufferingSize=100"
       #
       - "--api.insecure=true"
       - "--providers.docker=true"
