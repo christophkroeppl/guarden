@@ -76,3 +76,4 @@ services:
       - "traefik.http.routers.whoami.rule=Host(`kroeppl.online`)"
       - "traefik.http.routers.whoami.tls.certresolver=namecheap"
       - "traefik.http.routers.whoami.entrypoints=web"
+      - "traefik.http.services.whoami.loadbalancer.server.port=80"
