@@ -15,10 +15,10 @@ services:
     restart: unless-stopped
     command: 
       #- "--log.level=DEBUG"
-      - "--log.filePath=/etc/traefik/logs/traefik.log"
+      #- "--log.filePath=/etc/traefik/logs/traefik.log"
       #- "--log.format=json"
       - "--accesslog=true"
-      - "--accesslog.filepath=/etc/traefik/logs/access.log"
+      #- "--accesslog.filepath=/etc/traefik/logs/access.log"
       #- "--accesslog.format=json"
       - "--accessLog.bufferingSize=100"
       #
