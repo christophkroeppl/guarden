@@ -9,7 +9,7 @@ domain (ip ip6) {
     # Often times that is the same as the host port, but not always
 
     # generic http and https access
-    proto tcp dport (80 81 443)
+    proto tcp dport (80 443)
 
     ACCEPT;
 }
