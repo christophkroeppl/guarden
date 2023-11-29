@@ -47,6 +47,15 @@ services:
       #- "--certificatesresolvers.namecheap.acme.dnschallenge.provider=namecheap"
       - "--certificatesresolvers.namecheap.acme.tlschallenge=true"
       #- "--certificatesresolvers.namecheap.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
+      #
+      #- "--experimental.plugins.fail2ban.modulename=github.com/tomMoulard/fail2ban"
+      #- "--experimental.plugins.fail2ban.version=v0.7.1"
+      #- "--experimental.plugins.sablier.modulename=github.com/acouvreur/sablier"
+      #- "--experimental.plugins.sablier.version=v1.5.0"
+      #- "--experimental.plugins.souin.modulename=github.com/darkweak/souin"
+      #- "--experimental.plugins.souin.version=v1.6.43"
+      #- "--experimental.plugins.jwt.moduleName=github.com/team-carepay/traefik-jwt-plugin"
+      #- "--experimental.plugins.jwt.version=v0.0.11"""
     ports:
       - "80:80"
       - "443:443"
@@ -66,8 +75,8 @@ services:
       - "traefik.http.routers.dash.tls.certresolver=namecheap"
       - "traefik.http.routers.dash.entrypoints=websecure"
       - "traefik.http.routers.dash.service=api@internal"
-      - "traefik.http.routers.dash.middlewares=test-auth"
-      - "traefik.http.middlewares.test-auth.basicauth.users=test:testusmaximus!"
+      #- "traefik.http.routers.dash.middlewares=test-auth"
+      #- "traefik.http.middlewares.test-auth.basicauth.users=test:testusmaximus!"
 
   blog:
     image: ghost:5-alpine
