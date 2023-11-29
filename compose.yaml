@@ -6,7 +6,7 @@ networks:
     ipam:
       driver: default
     driver_opts:
-      - "com.docker.network.bridge.name:docker_web"
+      com.docker.network.bridge.name: docker_web
 
 services:
   proxy:
