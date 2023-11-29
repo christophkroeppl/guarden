@@ -2,9 +2,29 @@
 
 CHECK_MARK="\033[0;32m\xE2\x9C\x94\033[0m"
 
+
+echo -n "Updating..."
+apt update
+
+
+echo -n "Installing and configuring fail2ban..."
+{
+    DEBIAN_FRONTEND=noninteractive apt-get -y install ferm
+
+    echo "Backing up original ferm config..."
+    mv /etc/ferm/ferm.conf /etc/ferm/ferm.conf.bak
+    mv /etc/ferm/ferm.d /etc/ferm/ferm.d.bak
+
+    echo "Deploying new ferm config..."
+    cp .ferm/* /etc/ferm/
+
+} >> install.log 2>&1
+
+echo -e "\\r${CHECK_MARK} Succesfully installed fail2ban."
+
+
 echo -n "Installing and configuring ferm..."
 {
-    apt update
     DEBIAN_FRONTEND=noninteractive apt-get -y install ferm
 
     echo "Backing up original ferm config..."
