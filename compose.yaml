@@ -51,6 +51,14 @@ services:
       - CLOUDFLARE_DNS_API_TOKEN=${CLOUDFLARE_DNS_API_TOKEN}
       - NAMECHEAP_API_USER=${NAMECHEAP_API_USER}
       - NAMECHEAP_API_KEY=${NAMECHEAP_API_KEY}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dash.rule=Host(`dash.kroeppl.online`)"
+      - "traefik.http.routers.dash.tls.certresolver=namecheap"
+      - "traefik.http.routers.dash.entrypoints=web"
+      - "traefik.http.routers.dash.service=api@internal"
+      - "traefik.http.routers.dash.middleware=auth"
+      - "traefik.middlewares.auth.basicauth.users=test:testusmaximus!"
 
   blog:
     image: ghost:5-alpine
