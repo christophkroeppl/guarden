@@ -3,6 +3,11 @@ version: '3.9'
 networks:
   web:
     external: true
+    driver: bridge
+    ipam:
+      driver: default
+      driver_opts:
+        - com.docker.network.bridge.name: docker_web
 
 services:
   proxy:
