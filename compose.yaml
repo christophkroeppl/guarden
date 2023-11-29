@@ -63,7 +63,7 @@ services:
       - "traefik.http.routers.dash.tls.certresolver=namecheap"
       - "traefik.http.routers.dash.entrypoints=web"
       - "traefik.http.routers.dash.service=api@internal"
-      - "traefik.http.routers.dash.middleware=auth"
+      - "traefik.http.routers.dash.middlewares=auth"
       - "traefik.middlewares.auth.basicauth.users=test:testusmaximus!"
 
   blog:
