@@ -2,7 +2,6 @@ version: '3.9'
 
 networks:
   web:
-    external: true
     driver: bridge
     ipam:
       driver: default
