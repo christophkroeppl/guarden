@@ -55,8 +55,6 @@ services:
     image: ghost:5-alpine
     container_name: blog
     restart: unless-stopped
-    ports:
-      - "2368:2368"
     networks:
       - web
     environment:
