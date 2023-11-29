@@ -64,7 +64,7 @@ services:
       - "traefik.http.routers.dash.entrypoints=web"
       - "traefik.http.routers.dash.service=api@internal"
       - "traefik.http.routers.dash.middlewares=auth"
-      - "traefik.middlewares.auth.basicauth.users=test:testusmaximus!"
+      - "traefik.http.middlewares.test-auth.basicauth.users=test:testusmaximus!"
 
   blog:
     image: ghost:5-alpine
