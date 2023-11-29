@@ -9,15 +9,7 @@ apt update
 
 echo -n "Installing and configuring fail2ban..."
 {
-    DEBIAN_FRONTEND=noninteractive apt-get -y install ferm
-
-    echo "Backing up original ferm config..."
-    mv /etc/ferm/ferm.conf /etc/ferm/ferm.conf.bak
-    mv /etc/ferm/ferm.d /etc/ferm/ferm.d.bak
-
-    echo "Deploying new ferm config..."
-    cp .ferm/* /etc/ferm/
-
+    DEBIAN_FRONTEND=noninteractive apt-get -y install fail2ban
 } >> install.log 2>&1
 
 echo -e "\\r${CHECK_MARK} Succesfully installed fail2ban."
