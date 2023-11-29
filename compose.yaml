@@ -17,6 +17,8 @@ services:
       #- "--log.level=DEBUG"
       - "--api.insecure=true"
       - "--accesslog=true"
+      - "--accessLog.bufferingSize=100"
+      #
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=web"
