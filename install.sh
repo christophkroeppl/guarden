@@ -32,7 +32,11 @@ echo -n "Installing and configuring ferm..."
         sed -i "s/venet0/eth0/g" /etc/ferm/ferm.d/99-docker.ferm
     fi
 
+    echo "Test ferm config:"
+    ferm --no-exec /etc/ferm/ferm.conf
+
+    echo "Enabling ferm config:"
+    ferm /etc/ferm/ferm.conf
 } >> install.log 2>&1
 
-echo -e "\\r${CHECK_MARK} Succesfully installed ferm. Rebooting now..."
-reboot
+echo -e "\\r${CHECK_MARK} Succesfully installed ferm."
