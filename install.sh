@@ -24,9 +24,9 @@ echo -n "Installing and configuring ferm..."
     mv /etc/ferm/ferm.d /etc/ferm/ferm.d.bak
 
     echo "Deploying new ferm config..."
-    cp .ferm/* /etc/ferm/
+    cp -r .ferm/* /etc/ferm/
 
-    if ifconfig | grep "eth0"; then
+    if ip link show | grep "eth0"; then
         # TODO: run sed on all files in ferm.d
         sed -i "s/venet0/eth0/g" /etc/ferm/ferm.d/30-in.docker.public-ports.ferm
         sed -i "s/venet0/eth0/g" /etc/ferm/ferm.d/99-docker.ferm
