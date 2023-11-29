@@ -33,7 +33,7 @@ echo -n "Installing and configuring ferm..."
     fi
 
     echo "Test ferm config:"
-    ferm --no-exec /etc/ferm/ferm.conf
+    ferm --noexec /etc/ferm/ferm.conf
 
     echo "Enabling ferm config:"
     ferm /etc/ferm/ferm.conf
