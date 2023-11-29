@@ -15,8 +15,11 @@ services:
     restart: unless-stopped
     command: 
       #- "--log.level=DEBUG"
-      - "--api.insecure=true"
+      - "--log.filePath=/etc/traefik/logs/traefik.log"
+      #- "--log.format=json"
       - "--accesslog=true"
+      - "--accesslog.filepath=/etc/traefik/logs/access.log"
+      #- "--accesslog.format=json"
       - "--accessLog.bufferingSize=100"
       #
       - "--providers.docker=true"
@@ -45,11 +48,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "8080:8080"
     networks:
       - web
     volumes:
-      #- ./config:/etc/traefik:ro
       - ./traefik:/etc/traefik
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
