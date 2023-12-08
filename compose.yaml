@@ -5,6 +5,8 @@ networks:
     driver: bridge
     ipam:
       driver: default
+      config:
+        - subnet: 172.100.0.0/16
     driver_opts:
       com.docker.network.bridge.name: docker_web
 
@@ -13,7 +15,7 @@ services:
     build: ./traefik
     container_name: proxy
     restart: unless-stopped
-    command: 
+    command:
       #- "--log.level=DEBUG"
       #- "--log.filePath=/etc/traefik/logs/traefik.log"
       #- "--log.format=json"
