@@ -39,7 +39,6 @@ services:
       #- "--certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare"
       #- "--certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53"
       #- "--certificatesresolvers.cloudflare.acme.tlschallenge=true"
-      - "--certificatesresolvers.cloudflare.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
       #
       - "--certificatesresolvers.namecheap.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.namecheap.acme.storage=/etc/traefik/data/acme/namecheap.json"
@@ -48,7 +47,6 @@ services:
       #- "--certificatesresolvers.namecheap.acme.dnschallenge=true"
       #- "--certificatesresolvers.namecheap.acme.dnschallenge.provider=namecheap"
       #- "--certificatesresolvers.namecheap.acme.tlschallenge=true"
-      - "--certificatesresolvers.namecheap.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/dictionary"
       #
       #- "--experimental.plugins.fail2ban.modulename=github.com/tomMoulard/fail2ban"
       #- "--experimental.plugins.fail2ban.version=v0.7.1"
