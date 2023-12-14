@@ -97,6 +97,52 @@ services:
       - traefik.http.routers.blog.entrypoints=websecure
       - traefik.http.services.blog.loadbalancer.server.port=2368
 
+  vaultwarden:
+    image: vaultwarden/server:latest-alpine
+    container_name: vaultwarden
+    restart: unless-stopped
+    depends_on:
+      - proxy
+    environment:
+      - WEBSOCKET_ENABLED=true
+      - SIGNUPS_ALLOWED=true
+      - INVITATIONS_ALLOWED=true
+      - LOGIN_RATELIMIT_MAX_BURST=10
+      - LOGIN_RATELIMIT_SECONDS=60
+      - ADMIN_RATELIMIT_MAX_BURST=10
+      - ADMIN_RATELIMIT_SECONDS=60
+      - ADMIN_TOKEN={VAULTWARDEN_ADMIN_TOKEN}
+      #- SENDS_ALLOWED=true
+      #- EMERGENCY_ACCESS_ALLOWED=true
+      - SMTP_HOST={VAULTWARDEN_SMTP_HOST}
+      - SMTP_FROM={VAULTWARDEN_SMTP_FROM}
+      - SMTP_FROM_NAME={VAULTWARDEN_SMTP_FROM_NAME}
+      - SMTP_SECURITY={VAULTWARDEN_SMTP_SECURITY}
+      - SMTP_PORT={VAULTWARDEN_SMTP_PORT}
+      - SMTP_USERNAME={VAULTWARDEN_SMTP_USERNAME}
+      - SMTP_PASSWORD={VAULTWARDEN_SMTP_PASSWORD}
+      - SMTP_AUTH_MECHANISM={VAULTWARDEN_SMTP_AUTH_MECHANISM}
+      - WEB_VAULT_ENABLED=true
+      - DOMAIN=https://vault.kroeppl.online
+    volumes:
+      - ./vaultwarden/data:/data
+    networks:
+      - web
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=web
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.routers.vaultwarden-https.rule=Host(`vault.kroeppl.online`)
+      - traefik.http.routers.vaultwarden-https.entrypoints=websecure
+      - traefik.http.routers.vaultwarden-https.tls=true
+      - traefik.http.routers.vaultwarden-https.service=vaultwarden
+      - traefik.http.routers.vaultwarden-http.rule=Host(`vault.kroeppl.online`)
+      - traefik.http.routers.vaultwarden-http.entrypoints=web
+      - traefik.http.routers.vaultwarden-http.middlewares=redirect-https
+      - traefik.http.routers.vaultwarden-http.service=vaultwarden
+      - traefik.http.services.vaultwarden.loadbalancer.server.port=80
+
   whoami:
     image: traefik/whoami
     container_name: whoami
