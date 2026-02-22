@@ -1,0 +1,13 @@
+networks:
+  web:
+    name: web
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.100.0.0/16
+    driver_opts:
+      com.docker.network.bridge.name: docker_web
+
+include:
+  - ./traefik/compose.yaml

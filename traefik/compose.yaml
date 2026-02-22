@@ -1,0 +1,76 @@
+services:
+  proxy:
+    build: .
+    container_name: proxy
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    command:
+      #- --log.level=DEBUG
+      #- --log.filePath=/etc/traefik/logs/traefik.log
+      #- --log.format=json
+      - --accesslog=true
+      #- --accesslog.filepath=/etc/traefik/logs/access.log
+      #- --accesslog.format=json
+      #- --accessLog.bufferingSize=100
+      #
+      - --api=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=web
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      #
+      - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.cloudflare.acme.storage=/etc/traefik/data/acme/cloudflare.json
+      - --certificatesresolvers.cloudflare.acme.httpchallenge=true
+      - --certificatesresolvers.cloudflare.acme.httpchallenge.entrypoint=web
+      #- --certificatesresolvers.cloudflare.acme.dnschallenge=true
+      #- --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
+      #- --certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+      #- --certificatesresolvers.cloudflare.acme.tlschallenge=true
+      #
+      - --certificatesresolvers.namecheap.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.namecheap.acme.storage=/etc/traefik/data/acme/namecheap.json
+      - --certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=true
+      - --certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=web
+      #- --certificatesresolvers.namecheap.acme.dnschallenge=true
+      #- --certificatesresolvers.namecheap.acme.dnschallenge.provider=namecheap
+      #- --certificatesresolvers.namecheap.acme.tlschallenge=true
+      #
+      #- --experimental.plugins.fail2ban.modulename=github.com/tomMoulard/fail2ban
+      #- --experimental.plugins.fail2ban.version=v0.7.1
+      #- --experimental.plugins.sablier.modulename=github.com/acouvreur/sablier
+      #- --experimental.plugins.sablier.version=v1.5.0
+      #- --experimental.plugins.souin.modulename=github.com/darkweak/souin
+      #- --experimental.plugins.souin.version=v1.6.43
+      #- --experimental.plugins.jwt.moduleName=github.com/team-carepay/traefik-jwt-plugin
+      #- --experimental.plugins.jwt.version=v0.0.11
+    ports:
+      - 80:80
+      - 443:443
+    networks:
+      - web
+    volumes:
+      - ./data:/etc/traefik/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - ACME_EMAIL=${ACME_EMAIL}
+      - CLOUDFLARE_DNS_API_TOKEN=${CLOUDFLARE_DNS_API_TOKEN}
+      - NAMECHEAP_API_USER=${NAMECHEAP_API_USER}
+      - NAMECHEAP_API_KEY=${NAMECHEAP_API_KEY}
+    labels:
+      - traefik.enable=true
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.proxy.entrypoints=web
+      - traefik.http.routers.proxy.rule=Host(`${PROXY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.proxy.middlewares=redirect-https
+
+      - traefik.http.routers.proxy-secure.entrypoints=websecure
+      - traefik.http.routers.proxy-secure.rule=Host(`${PROXY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.proxy-secure.service=api@internal
+      - traefik.http.routers.proxy-secure.tls=true
+      - traefik.http.routers.proxy-secure.tls.certResolver=namecheap

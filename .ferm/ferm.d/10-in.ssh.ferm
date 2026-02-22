@@ -1,0 +1,4 @@
+domain (ip ip6) {
+    # accept ssh
+    table filter chain INPUT proto tcp dport ssh ACCEPT;
+}

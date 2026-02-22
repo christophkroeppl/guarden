@@ -1,0 +1,15 @@
+domain (ip ip6) {
+    table filter chain DOCKER-USER
+
+    # Incoming traffic bound for a docker service will come in
+    # to the FORWARD chain on eth0 and exit on docker_web
+    interface venet0 outerface docker_web
+
+    # The destination port here is the port listening IN THE DOCKER CONTAINER
+    # Often times that is the same as the host port, but not always
+
+    # generic http and https access
+    proto tcp dport (80 443)
+
+    ACCEPT;
+}

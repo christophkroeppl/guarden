@@ -1,0 +1,11 @@
+# ignore nested volumes (state)
+/*/*/**
+
+# keep data folders (exception for .gitkeep)
+!**/.gitkeep
+
+# keep all dot files and folders (.config, .ferm, ...)
+!/.**
+
+# .env holds secrets
+.env

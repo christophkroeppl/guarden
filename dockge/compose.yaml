@@ -1,0 +1,33 @@
+networks:
+  web:
+    external: true
+
+services:
+  dockge:
+    image: louislam/dockge:1
+    restart: unless-stopped
+    networks:
+      - web
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/data
+      - /home/docker/srv:/home/docker/srv
+    environment:
+      - DOCKGE_STACKS_DIR=/home/docker/srv
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=web
+      - traefik.http.services.dockge.loadbalancer.server.port=5001
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.dockge.entrypoints=web
+      - traefik.http.routers.dockge.middlewares=redirect-https
+      - traefik.http.routers.dockge.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+
+      - traefik.http.routers.dockge-secure.entrypoints=websecure
+      - traefik.http.routers.dockge-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.dockge-secure.service=dockge
+      - traefik.http.routers.dockge-secure.tls=true
+      - traefik.http.routers.dockge-secure.tls.certResolver=namecheap

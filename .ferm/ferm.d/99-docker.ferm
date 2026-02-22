@@ -1,0 +1,7 @@
+domain (ip ip6) table filter chain DOCKER-USER {
+    interface venet0 outerface docker_web {
+        mod conntrack ctstate (RELATED ESTABLISHED) ACCEPT;
+        DROP;
+    }
+    RETURN;
+}

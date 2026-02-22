@@ -1,0 +1,10 @@
+http:
+  middlewares:
+    srv-fail2ban:
+      plugin:
+        fail2ban:
+          rules:
+            bantime: 3h
+            enabled: "true"
+            findtime: 10m
+            maxretry: "4"
