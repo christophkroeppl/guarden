@@ -3,9 +3,8 @@ networks:
     external: true
 
 services:
-  compose:
+  dockge:
     image: louislam/dockge:1
-    container_name: compose
     restart: unless-stopped
     networks:
       - web
@@ -21,18 +20,18 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=web
-
-      - traefik.http.routers.compose.entrypoints=http
-      - traefik.http.routers.compose.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
-      - traefik.http.routers.compose.middlewares=compose-https-redirect
-      - traefik.http.middlewares.compose-https-redirect.redirectscheme.scheme=https
-      
-      - traefik.http.routers.compose-secure.entrypoints=https
-      - traefik.http.routers.compose-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
-      - traefik.http.routers.compose-secure.tls=true
-      - traefik.http.routers.compose-secure.tls.certresolver=namecheap
-      - traefik.http.routers.compose-secure.service=compose
-
-      - traefik.http.services.compose.loadbalancer.server.port=5001
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
       - traefik.http.middlewares.test-auth.basicauth.users=${TEST_USER}:${TEST_PASSWORD}
-      - traefik.http.routers.compose.middlewares=test-auth
+      - traefik.http.routers.dockge.middlewares=test-auth
+      - traefik.http.services.dockge.loadbalancer.server.port=5001
+
+      - traefik.http.routers.dockge.entrypoints=http
+      - traefik.http.routers.dockge.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.dockge.middlewares=dockge-https-redirect
+      - traefik.http.middlewares.dockge-https-redirect.redirectscheme.scheme=https
+
+      - traefik.http.routers.dockge-secure.entrypoints=https
+      - traefik.http.routers.dockge-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.dockge-secure.tls.certresolver=namecheap
+      - traefik.http.routers.dockge-secure.service=dockge
