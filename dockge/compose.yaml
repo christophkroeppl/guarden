@@ -20,9 +20,17 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=web
-      - traefik.http.routers.compose.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
-      - traefik.http.routers.compose.tls.certresolver=namecheap
-      - traefik.http.routers.compose.entrypoints=websecure
-      - traefik.http.services.compose.loadbalancer.server.port=5001
+
+      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}.entrypoints=http
+      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.middlewares.${ORCHESTRATOR_SUBDOMAIN}-https-redirect.redirectscheme.scheme=https
+      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}.middlewares=compose-https-redirect
+      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.entrypoints=https
+      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.tls=true
+      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.tls.certresolver=namecheap
+      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.service=${ORCHESTRATOR_SUBDOMAIN}
+
+      - traefik.http.services.${ORCHESTRATOR_SUBDOMAIN}.loadbalancer.server.port=5001
       - traefik.http.middlewares.test-auth.basicauth.users=${TEST_USER}:${TEST_PASSWORD}
       - traefik.http.routers.compose.middlewares=test-auth
