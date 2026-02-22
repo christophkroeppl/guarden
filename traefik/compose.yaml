@@ -51,7 +51,7 @@ services:
     networks:
       - web
     volumes:
-      - ./traefik/data:/etc/traefik/data
+      - ./data:/etc/traefik/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - ACME_EMAIL=${ACME_EMAIL}
