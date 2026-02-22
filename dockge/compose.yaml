@@ -29,6 +29,6 @@ services:
       - traefik.http.routers.dockge.service=dockge
 
       - traefik.http.routers.dockge-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
-      - traefik.http.routers.dockge-secure.entrypoints=https
+      - traefik.http.routers.dockge-secure.entrypoints=websecure
       - traefik.http.routers.dockge-secure.tls.certresolver=namecheap
       - traefik.http.routers.dockge-secure.service=dockge
