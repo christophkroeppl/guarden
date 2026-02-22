@@ -1,0 +1,25 @@
+networks:
+  web:
+    external: true
+  bitcoin-net:
+    name: bitcoin-net
+
+services:
+  bitcoin-knots:
+    image: bitcoinknots/bitcoin:29.3.knots20260210-bip110-v0.3-alpine
+    container_name: bitcoind
+    networks:
+      - web
+      - bitcoin-net
+    volumes:
+      - ./data:/home/bitcoin/.bitcoin
+    ports:
+      - 8333:8333 # Mainnet P2P
+      # - 8332:8332 # Mainnet RPC
+    command:
+      - -printtoconsole=1
+      - -server=1
+      # - -rpcbind=0.0.0.0
+      # - -rpcallowip=172.100.0.0/16 # as per web network
+      # - -rpcauth=${RPC_AUTH}
+      - -prune=500000
