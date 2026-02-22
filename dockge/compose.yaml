@@ -17,18 +17,17 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=web
-      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
-      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
-      - traefik.http.middlewares.test-auth.basicauth.users=${TEST_USER}:${TEST_PASSWORD}
-      - traefik.http.routers.dockge.middlewares=test-auth
       - traefik.http.services.dockge.loadbalancer.server.port=5001
 
-      - traefik.http.routers.dockge.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
       - traefik.http.routers.dockge.entrypoints=web
       - traefik.http.routers.dockge.middlewares=redirect-https
-      - traefik.http.routers.dockge.service=dockge
+      - traefik.http.routers.dockge.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
 
-      - traefik.http.routers.dockge-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
       - traefik.http.routers.dockge-secure.entrypoints=websecure
-      - traefik.http.routers.dockge-secure.tls.certresolver=namecheap
+      - traefik.http.routers.dockge-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
       - traefik.http.routers.dockge-secure.service=dockge
+      - traefik.http.routers.dockge-secure.tls=true
+      - traefik.http.routers.dockge-secure.tls.certResolver=namecheap

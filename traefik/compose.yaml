@@ -14,7 +14,7 @@ services:
       #- --accesslog.format=json
       #- --accessLog.bufferingSize=100
       #
-      - --api.insecure=true
+      - --api=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=web
@@ -61,9 +61,16 @@ services:
       - NAMECHEAP_API_KEY=${NAMECHEAP_API_KEY}
     labels:
       - traefik.enable=true
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.proxy.entrypoints=web
       - traefik.http.routers.proxy.rule=Host(`${PROXY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
-      - traefik.http.routers.proxy.tls.certresolver=namecheap
-      - traefik.http.routers.proxy.entrypoints=websecure
-      - traefik.http.routers.proxy.service=api@internal
-      - traefik.http.routers.proxy.middlewares=test-auth
-      - traefik.http.middlewares.test-auth.basicauth.users=${TEST_USER}:${TEST_PASSWORD}
+      - traefik.http.routers.proxy.middlewares=redirect-https
+
+      - traefik.http.routers.proxy-secure.entrypoints=websecure
+      - traefik.http.routers.proxy-secure.rule=Host(`${PROXY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.proxy-secure.service=api@internal
+      - traefik.http.routers.proxy-secure.tls=true
+      - traefik.http.routers.proxy-secure.tls.certResolver=namecheap
