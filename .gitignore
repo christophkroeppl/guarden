@@ -1,11 +1,11 @@
 # .env holds secrets
 .env
 
-# ignore all folders (state)
-./**
+# ignore nested volumes (state)
+/*/*/**
 
-# keep empty folders (exception for .gitkeep)
-!./**/.gitkeep
+# keep data folders (exception for .gitkeep)
+!**/.gitkeep
 
-# keep all config folders (.config, ...)
-!./.*
+# keep all dot files and folders (.config, .ferm, ...)
+!/.**
