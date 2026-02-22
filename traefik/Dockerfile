@@ -1,4 +1,4 @@
-FROM traefik:2.10
+FROM traefik:2.11
 
 RUN mkdir -p /etc/traefik/data/acme
 RUN touch /etc/traefik/data/acme/cloudflare.json
