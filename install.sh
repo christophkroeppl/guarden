@@ -7,9 +7,17 @@ echo -n "Updating..."
 apt update
 
 
-echo -n "Installing and configuring fail2ban..."
+echo -n "Installing direnv to manage env files..."
 {
-    DEBIAN_FRONTEND=noninteractive apt-get -y install fail2ban
+    DEBIAN_FRONTEND=noninteractive apt -y install direnv
+} >> install.log 2>&1
+
+echo -e "\\r${CHECK_MARK} Succesfully installed direnv."
+
+
+echo -n "Installing fail2ban..."
+{
+    DEBIAN_FRONTEND=noninteractive apt -y install fail2ban
 } >> install.log 2>&1
 
 echo -e "\\r${CHECK_MARK} Succesfully installed fail2ban."
@@ -17,7 +25,7 @@ echo -e "\\r${CHECK_MARK} Succesfully installed fail2ban."
 
 echo -n "Installing and configuring ferm..."
 {
-    DEBIAN_FRONTEND=noninteractive apt-get -y install ferm
+    DEBIAN_FRONTEND=noninteractive apt -y install ferm
 
     echo "Backing up original ferm config..."
     mv /etc/ferm/ferm.conf /etc/ferm/ferm.conf.bak
