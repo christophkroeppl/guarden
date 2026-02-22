@@ -28,7 +28,7 @@ services:
       - WEB_VAULT_ENABLED=true
       - DOMAIN=https://${VAULTWARDEN_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
     volumes:
-      - ./vaultwarden/data:/data
+      - ./data:/data
     networks:
       - web
     labels:
