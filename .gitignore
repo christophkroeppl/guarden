@@ -9,3 +9,6 @@
 
 # .env holds secrets
 .env
+
+# from install.sh
+install.log
