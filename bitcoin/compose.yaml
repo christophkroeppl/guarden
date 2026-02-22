@@ -12,7 +12,7 @@ services:
       - web
       - bitcoin-net
     volumes:
-      - data:/home/bitcoin/.bitcoin
+      - ./data:/home/bitcoin/.bitcoin
     ports:
       - 8333:8333 # Mainnet P2P
       # - 8332:8332 # Mainnet RPC
