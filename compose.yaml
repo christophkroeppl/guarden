@@ -1,5 +1,3 @@
-version: '3.9'
-
 networks:
   web:
     driver: bridge
@@ -13,7 +11,6 @@ networks:
 services:
   proxy:
     build: ./traefik
-    container_name: proxy
     restart: unless-stopped
     command:
       #- --log.level=DEBUG
@@ -71,90 +68,9 @@ services:
       - NAMECHEAP_API_KEY=${NAMECHEAP_API_KEY}
     labels:
       - traefik.enable=true
-      - traefik.http.routers.dash.rule=Host(`dash.kroeppl.dev`)
+      - traefik.http.routers.dash.rule=Host(`${PROXY_SUBDOMAIN}.${CLOUDFLARE_DOMAIN__KROEPPL_DEV}`)
       - traefik.http.routers.dash.tls.certresolver=namecheap
       - traefik.http.routers.dash.entrypoints=websecure
       - traefik.http.routers.dash.service=api@internal
-      # -traefik.http.routers.dash.middlewares=test-auth
-      # -traefik.http.middlewares.test-auth.basicauth.users=test:testusmaximus!
-
-  blog:
-    image: ghost:5-alpine
-    container_name: blog
-    restart: unless-stopped
-    depends_on:
-      - proxy
-    networks:
-      - web
-    environment:
-      NODE_ENV: development
-      url: http://kroeppl.dev/
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=web
-      - traefik.http.routers.blog.rule=Host(`kroeppl.dev`)
-      - traefik.http.routers.blog.tls.certresolver=cloudflare
-      - traefik.http.routers.blog.entrypoints=websecure
-      - traefik.http.services.blog.loadbalancer.server.port=2368
-
-  vaultwarden:
-    image: vaultwarden/server:latest-alpine
-    container_name: vaultwarden
-    restart: unless-stopped
-    depends_on:
-      - proxy
-    environment:
-      - WEBSOCKET_ENABLED=true
-      - SIGNUPS_ALLOWED=true
-      - INVITATIONS_ALLOWED=true
-      - LOGIN_RATELIMIT_MAX_BURST=10
-      - LOGIN_RATELIMIT_SECONDS=60
-      - ADMIN_RATELIMIT_MAX_BURST=10
-      - ADMIN_RATELIMIT_SECONDS=60
-      - ADMIN_TOKEN={VAULTWARDEN_ADMIN_TOKEN}
-      #- SENDS_ALLOWED=true
-      #- EMERGENCY_ACCESS_ALLOWED=true
-      #- SMTP_HOST={VAULTWARDEN_SMTP_HOST}
-      #- SMTP_FROM={VAULTWARDEN_SMTP_FROM}
-      #- SMTP_FROM_NAME={VAULTWARDEN_SMTP_FROM_NAME}
-      #- SMTP_SECURITY={VAULTWARDEN_SMTP_SECURITY}
-      #- SMTP_PORT={VAULTWARDEN_SMTP_PORT}
-      #- SMTP_USERNAME={VAULTWARDEN_SMTP_USERNAME}
-      #- SMTP_PASSWORD={VAULTWARDEN_SMTP_PASSWORD}
-      #- SMTP_AUTH_MECHANISM={VAULTWARDEN_SMTP_AUTH_MECHANISM}
-      - WEB_VAULT_ENABLED=true
-      - DOMAIN=https://vault.kroeppl.online
-    volumes:
-      - ./vaultwarden/data:/data
-    networks:
-      - web
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=web
-      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
-      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
-      - traefik.http.routers.vaultwarden-https.rule=Host(`vault.kroeppl.online`)
-      - traefik.http.routers.vaultwarden-https.entrypoints=websecure
-      - traefik.http.routers.vaultwarden-https.tls=true
-      - traefik.http.routers.vaultwarden-https.service=vaultwarden
-      - traefik.http.routers.vaultwarden-http.rule=Host(`vault.kroeppl.online`)
-      - traefik.http.routers.vaultwarden-http.entrypoints=web
-      - traefik.http.routers.vaultwarden-http.middlewares=redirect-https
-      - traefik.http.routers.vaultwarden-http.service=vaultwarden
-      - traefik.http.services.vaultwarden.loadbalancer.server.port=80
-
-  whoami:
-    image: traefik/whoami
-    container_name: whoami
-    restart: unless-stopped
-    depends_on:
-      - proxy
-    networks:
-      - web
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=web
-      - traefik.http.routers.whoami.rule=Host(`kroeppl.online`)
-      - traefik.http.routers.whoami.tls.certresolver=namecheap
-      - traefik.http.routers.whoami.entrypoints=websecure
-      - traefik.http.services.whoami.loadbalancer.server.port=80
+      - traefik.http.routers.dash.middlewares=test-auth
+      - traefik.http.middlewares.test-auth.basicauth.users=${TEST_USER}:${TEST_PASSWORD}
