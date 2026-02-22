@@ -1,6 +1,7 @@
 services:
   proxy:
     build: .
+    container_name: proxy
     restart: unless-stopped
     env_file:
       - ../.env
@@ -60,9 +61,9 @@ services:
       - NAMECHEAP_API_KEY=${NAMECHEAP_API_KEY}
     labels:
       - traefik.enable=true
-      - traefik.http.routers.dash.rule=Host(`${PROXY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
-      - traefik.http.routers.dash.tls.certresolver=namecheap
-      - traefik.http.routers.dash.entrypoints=websecure
-      - traefik.http.routers.dash.service=api@internal
-      - traefik.http.routers.dash.middlewares=test-auth
+      - traefik.http.routers.proxy.rule=Host(`${PROXY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.proxy.tls.certresolver=namecheap
+      - traefik.http.routers.proxy.entrypoints=websecure
+      - traefik.http.routers.proxy.service=api@internal
+      - traefik.http.routers.proxy.middlewares=test-auth
       - traefik.http.middlewares.test-auth.basicauth.users=${TEST_USER}:${TEST_PASSWORD}

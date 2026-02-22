@@ -5,6 +5,7 @@ networks:
 services:
   compose:
     image: louislam/dockge:1
+    container_name: compose
     restart: unless-stopped
     networks:
       - web
@@ -21,16 +22,17 @@ services:
       - traefik.enable=true
       - traefik.docker.network=web
 
-      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}.entrypoints=http
-      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
-      - traefik.http.middlewares.${ORCHESTRATOR_SUBDOMAIN}-https-redirect.redirectscheme.scheme=https
-      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}.middlewares=compose-https-redirect
-      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.entrypoints=https
-      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
-      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.tls=true
-      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.tls.certresolver=namecheap
-      - traefik.http.routers.${ORCHESTRATOR_SUBDOMAIN}-secure.service=${ORCHESTRATOR_SUBDOMAIN}
+      - traefik.http.routers.compose.entrypoints=http
+      - traefik.http.routers.compose.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.compose.middlewares=compose-https-redirect
+      - traefik.http.middlewares.compose-https-redirect.redirectscheme.scheme=https
+      
+      - traefik.http.routers.compose-secure.entrypoints=https
+      - traefik.http.routers.compose-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.compose-secure.tls=true
+      - traefik.http.routers.compose-secure.tls.certresolver=namecheap
+      - traefik.http.routers.compose-secure.service=compose
 
-      - traefik.http.services.${ORCHESTRATOR_SUBDOMAIN}.loadbalancer.server.port=5001
+      - traefik.http.services.compose.loadbalancer.server.port=5001
       - traefik.http.middlewares.test-auth.basicauth.users=${TEST_USER}:${TEST_PASSWORD}
       - traefik.http.routers.compose.middlewares=test-auth
