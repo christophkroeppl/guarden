@@ -6,7 +6,6 @@ services:
   compose:
     image: louislam/dockge:1
     restart: unless-stopped
-    env_file: "../.env"
     networks:
       - web
     volumes:

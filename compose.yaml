@@ -1,5 +1,6 @@
 networks:
   web:
+    name: web
     driver: bridge
     ipam:
       driver: default
