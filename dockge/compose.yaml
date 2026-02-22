@@ -18,8 +18,8 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=web
-      - traefik.http.routers.compose.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${CLOUDFLARE_DOMAIN__KROEPPL_DEV}`)
-      - traefik.http.routers.compose.tls.certresolver=cloudflare
+      - traefik.http.routers.compose.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.compose.tls.certresolver=namecheap
       - traefik.http.routers.compose.entrypoints=websecure
       - traefik.http.services.compose.loadbalancer.server.port=5001
       - traefik.http.middlewares.test-auth.basicauth.users=${TEST_USER}:${TEST_PASSWORD}
