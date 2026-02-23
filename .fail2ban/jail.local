@@ -1,0 +1,9 @@
+[DEFAULT]
+# Ban IP for 1 hour after repeated failed attempts.
+bantime = 3600
+# Number of failures before ban.
+maxretry = 5
+
+[sshd]
+enabled = true
+port = ssh
