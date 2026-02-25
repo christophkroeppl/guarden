@@ -1,0 +1,19 @@
+---
+description: Prefer latest Alpine image when the publisher offers it
+globs: "**/compose.yaml,**/compose.yml,**/*compose*.yaml,**/Dockerfile*"
+alwaysApply: false
+---
+
+# Prefer latest Alpine when offered
+
+When an image is available with an **Alpine** variant, use it (smaller, fewer CVEs):
+
+```yaml
+# ✅ Prefer alpine when the publisher offers it
+image: someorg/image:latest-alpine
+
+# ❌ Avoid non-alpine when alpine exists
+# image: someorg/image:latest
+```
+
+Apply when adding or editing services. Check the image’s tags on the registry for `alpine`, `-alpine`, or `latest-alpine`.
