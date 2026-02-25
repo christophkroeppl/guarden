@@ -1,0 +1,38 @@
+networks:
+  backends:
+    external: true
+
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - HOMEPAGE_VAR_DOCKER_HOST=tcp://socket-proxy:2375
+    volumes:
+      - ./data:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.homepage.loadbalancer.server.port=3000
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.homepage.entrypoints=web
+      - traefik.http.routers.homepage.middlewares=redirect-https
+      - traefik.http.routers.homepage.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+
+      - traefik.http.routers.homepage-secure.entrypoints=websecure
+      - traefik.http.routers.homepage-secure.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.homepage-secure.service=homepage
+      - traefik.http.routers.homepage-secure.tls=true
+      - traefik.http.routers.homepage-secure.tls.certResolver=namecheap

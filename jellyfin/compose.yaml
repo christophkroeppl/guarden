@@ -1,0 +1,41 @@
+networks:
+  backends:
+    external: true
+
+services:
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - PUID=1000
+      - PGID=1000
+      - JELLYFIN_PublishedServerUrl=https://${JELLYFIN_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+    volumes:
+      - ./data:/config
+      - ./cache:/cache
+      - ./media:/data/media
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.jellyfin.loadbalancer.server.port=8096
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.jellyfin.entrypoints=web
+      - traefik.http.routers.jellyfin.middlewares=redirect-https
+      - traefik.http.routers.jellyfin.rule=Host(`${JELLYFIN_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+
+      - traefik.http.routers.jellyfin-secure.entrypoints=websecure
+      - traefik.http.routers.jellyfin-secure.rule=Host(`${JELLYFIN_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.jellyfin-secure.service=jellyfin
+      - traefik.http.routers.jellyfin-secure.tls=true
+      - traefik.http.routers.jellyfin-secure.tls.certResolver=namecheap

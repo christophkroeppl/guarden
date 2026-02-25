@@ -1,0 +1,36 @@
+networks:
+  backends:
+    external: true
+
+services:
+  authelia:
+    image: authelia/authelia:latest
+    container_name: authelia
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ./data:/config
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.authelia.loadbalancer.server.port=9091
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.authelia.entrypoints=web
+      - traefik.http.routers.authelia.middlewares=redirect-https
+      - traefik.http.routers.authelia.rule=Host(`${AUTHELIA_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+
+      - traefik.http.routers.authelia-secure.entrypoints=websecure
+      - traefik.http.routers.authelia-secure.rule=Host(`${AUTHELIA_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.authelia-secure.service=authelia
+      - traefik.http.routers.authelia-secure.tls=true
+      - traefik.http.routers.authelia-secure.tls.certResolver=namecheap

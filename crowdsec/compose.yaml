@@ -1,0 +1,23 @@
+networks:
+  backends:
+    external: true
+
+services:
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest-alpine
+    container_name: crowdsec
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - COLLECTIONS=crowdsecurity/traefik crowdsecurity/linux
+    volumes:
+      - ./data:/var/lib/crowdsec/data
+      - ./config:/etc/crowdsec
+      - /var/log:/var/log/host:ro
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+      - diun.include_tags=alpine

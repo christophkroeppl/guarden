@@ -1,0 +1,44 @@
+networks:
+  backends:
+    external: true
+
+services:
+  jdownloader:
+    image: jaymoulin/jdownloader:latest
+    container_name: jdownloader
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - PUID=1000
+      - PGID=1000
+      - MYJD_USER=${JDOWNLOADER_USER}
+      - MYJD_PASSWORD=${JDOWNLOADER_PASSWORD}
+    volumes:
+      - ./data:/opt/jdownloader-2/cfg
+      - ./downloads:/opt/jdownloader-2/downloads
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.jdownloader.loadbalancer.server.port=3126
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.middlewares.jdownloader-stripprefix.stripprefix.prefixes=/${JDOWNLOADER_SLUG}
+
+      - traefik.http.routers.jdownloader.entrypoints=web
+      - traefik.http.routers.jdownloader.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${JDOWNLOADER_SLUG}`)
+      - traefik.http.routers.jdownloader.middlewares=redirect-https
+
+      - traefik.http.routers.jdownloader-secure.entrypoints=websecure
+      - traefik.http.routers.jdownloader-secure.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${JDOWNLOADER_SLUG}`)
+      - traefik.http.routers.jdownloader-secure.service=jdownloader
+      - traefik.http.routers.jdownloader-secure.middlewares=jdownloader-stripprefix
+      - traefik.http.routers.jdownloader-secure.tls=true
+      - traefik.http.routers.jdownloader-secure.tls.certResolver=namecheap
