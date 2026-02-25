@@ -18,6 +18,7 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=web
+      - --providers.file.directory=/etc/traefik/config
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       #
@@ -32,7 +33,6 @@ services:
       #
       - --certificatesresolvers.namecheap.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.namecheap.acme.storage=/etc/traefik/data/acme/namecheap.json
-      - --certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=true
       - --certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=web
       #- --certificatesresolvers.namecheap.acme.dnschallenge=true
       #- --certificatesresolvers.namecheap.acme.dnschallenge.provider=namecheap
@@ -53,6 +53,7 @@ services:
       - web
     volumes:
       - ./data:/etc/traefik/data
+      - ./config:/etc/traefik/config:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - ACME_EMAIL=${ACME_EMAIL}
