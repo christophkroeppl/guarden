@@ -1,5 +1,5 @@
 networks:
-  web:
+  edge:
     external: true
   bitcoin-net:
     name: bitcoin-net
@@ -9,7 +9,7 @@ services:
     image: bitcoinknots/bitcoin:29.3.knots20260210-bip110-v0.3-alpine
     container_name: bitcoind
     networks:
-      - web
+      - edge
       - bitcoin-net
     volumes:
       - ./data:/home/bitcoin/.bitcoin
@@ -20,6 +20,6 @@ services:
       - -printtoconsole=1
       - -server=1
       # - -rpcbind=0.0.0.0
-      # - -rpcallowip=172.100.0.0/16 # as per web network
+      # - -rpcallowip=172.100.0.0/16 # as per edge network
       # - -rpcauth=${RPC_AUTH}
       - -prune=500000

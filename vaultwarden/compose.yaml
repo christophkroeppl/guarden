@@ -1,5 +1,5 @@
 networks:
-  proxy-web:
+  backends:
     external: true
 
 services:
@@ -30,10 +30,10 @@ services:
     volumes:
       - ./data:/data
     networks:
-      - proxy-web
+      - backends
     labels:
       - traefik.enable=true
-      - traefik.docker.network=proxy-web
+      - traefik.docker.network=backends
       - traefik.http.services.vaultwarden.loadbalancer.server.port=80
 
       - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true

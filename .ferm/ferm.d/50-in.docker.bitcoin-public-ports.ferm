@@ -2,8 +2,8 @@ domain (ip ip6) {
     table filter chain DOCKER-USER
 
     # Incoming traffic bound for a docker service will come in
-    # to the FORWARD chain on eth0 and exit on docker_web
-    interface venet0 outerface docker_web
+    # to the FORWARD chain on venet0 and exit on docker_edge
+    interface venet0 outerface docker_edge
 
     # Bitcoin Core / Knots ports exposed via Docker publish
     # 8332: JSON-RPC/REST
