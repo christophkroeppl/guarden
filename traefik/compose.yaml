@@ -59,7 +59,7 @@ services:
       - ./config:/etc/traefik/config:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      - TZ=Europe/Prague
+      - TZ=${TZ}
       - ACME_EMAIL=${ACME_EMAIL}
       - CLOUDFLARE_DNS_API_TOKEN=${CLOUDFLARE_DNS_API_TOKEN}
       - NAMECHEAP_API_USER=${NAMECHEAP_API_USER}
