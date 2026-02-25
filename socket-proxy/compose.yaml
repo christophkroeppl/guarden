@@ -2,6 +2,10 @@
 # Only this container mounts the host socket; other services use tcp://socket-proxy:2375
 # Ref: https://github.com/TenovanDigital/ServerSecurityStack
 
+networks:
+  backends:
+    external: true
+
 services:
   socket-proxy:
     container_name: socket-proxy
