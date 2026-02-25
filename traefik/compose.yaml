@@ -17,7 +17,7 @@ services:
       - --api=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=web
+      - --providers.docker.network=proxy-web
       - --providers.file.directory=/etc/traefik/config
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
@@ -51,6 +51,7 @@ services:
       - 443:443
     networks:
       - web
+      - proxy-web
     volumes:
       - ./data:/etc/traefik/data
       - ./config:/etc/traefik/config:ro

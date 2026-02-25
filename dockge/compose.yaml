@@ -1,5 +1,5 @@
 networks:
-  web:
+  proxy-web:
     external: true
 
 services:
@@ -7,7 +7,7 @@ services:
     image: louislam/dockge:1
     restart: unless-stopped
     networks:
-      - web
+      - proxy-web
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
@@ -16,7 +16,7 @@ services:
       - DOCKGE_STACKS_DIR=/home/docker/srv
     labels:
       - traefik.enable=true
-      - traefik.docker.network=web
+      - traefik.docker.network=proxy-web
       - traefik.http.services.dockge.loadbalancer.server.port=5001
 
       - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
