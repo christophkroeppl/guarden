@@ -13,6 +13,7 @@ services:
       - ./data:/app/data
       - /home/docker/srv:/home/docker/srv
     environment:
+      - TZ=Europe/Prague
       - DOCKGE_STACKS_DIR=/home/docker/srv
     labels:
       - diun.enable=true
