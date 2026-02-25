@@ -3,6 +3,8 @@ services:
     build: .
     container_name: proxy
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - ../.env
     command:
@@ -17,7 +19,8 @@ services:
       - --api=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=web
+      - --providers.docker.network=backends
+      - --providers.file.directory=/etc/traefik/config
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       #
@@ -32,7 +35,6 @@ services:
       #
       - --certificatesresolvers.namecheap.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.namecheap.acme.storage=/etc/traefik/data/acme/namecheap.json
-      - --certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=true
       - --certificatesresolvers.namecheap.acme.httpchallenge.entrypoint=web
       #- --certificatesresolvers.namecheap.acme.dnschallenge=true
       #- --certificatesresolvers.namecheap.acme.dnschallenge.provider=namecheap
@@ -50,16 +52,22 @@ services:
       - 80:80
       - 443:443
     networks:
-      - web
+      - edge
+      - backends
     volumes:
       - ./data:/etc/traefik/data
+      - ./config:/etc/traefik/config:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
+      - TZ=Europe/Prague
       - ACME_EMAIL=${ACME_EMAIL}
       - CLOUDFLARE_DNS_API_TOKEN=${CLOUDFLARE_DNS_API_TOKEN}
       - NAMECHEAP_API_USER=${NAMECHEAP_API_USER}
       - NAMECHEAP_API_KEY=${NAMECHEAP_API_KEY}
     labels:
+      - diun.enable=true
+      - diun.include_tags=alpine
+
       - traefik.enable=true
 
       - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true

@@ -1,5 +1,6 @@
 #!/bin/bash
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 CHECK_MARK="\033[0;32m\xE2\x9C\x94\033[0m"
 
 
@@ -32,7 +33,7 @@ echo -n "Installing and configuring ferm..."
     mv /etc/ferm/ferm.d /etc/ferm/ferm.d.bak
 
     echo "Deploying new ferm config..."
-    cp -r .ferm/* /etc/ferm/
+    cp -r "${SCRIPT_DIR}/.ferm/"* /etc/ferm/
 
     if ip link show | grep -q "eth0"; then
         for rule in /etc/ferm/ferm.d/*; do

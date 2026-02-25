@@ -1,13 +1,18 @@
 networks:
-  web:
-    name: web
+  edge:
+    name: edge
     driver: bridge
     ipam:
       driver: default
       config:
         - subnet: 172.100.0.0/16
     driver_opts:
-      com.docker.network.bridge.name: docker_web
+      com.docker.network.bridge.name: docker_edge
+  backends:
+    name: backends
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: docker_backends
 
 include:
   - ./traefik/compose.yaml

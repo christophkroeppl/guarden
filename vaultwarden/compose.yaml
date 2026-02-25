@@ -1,12 +1,15 @@
 networks:
-  web:
+  backends:
     external: true
 
 services:
   vaultwarden:
     image: vaultwarden/server:latest-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
+      - TZ=Europe/Prague
       - WEBSOCKET_ENABLED=true
       - SIGNUPS_ALLOWED=true
       - INVITATIONS_ALLOWED=true
@@ -30,10 +33,13 @@ services:
     volumes:
       - ./data:/data
     networks:
-      - web
+      - backends
     labels:
+      - diun.enable=true
+      - diun.include_tags=alpine
+
       - traefik.enable=true
-      - traefik.docker.network=web
+      - traefik.docker.network=backends
       - traefik.http.services.vaultwarden.loadbalancer.server.port=80
 
       - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true

@@ -1,0 +1,22 @@
+---
+description: Use lscr.io registry for LinuxServer.io images
+globs: "**/compose.yaml,**/compose.yml,**/*compose*.yaml,**/Dockerfile*"
+alwaysApply: false
+---
+
+# LinuxServer.io images – use lscr.io registry
+
+When using images from [LinuxServer.io](https://www.linuxserver.io/), pull from their primary registry **lscr.io**:
+
+```yaml
+# ✅ Use lscr.io
+image: lscr.io/linuxserver/IMAGE:TAG
+
+# ❌ Avoid docker.io or ghcr.io for LinuxServer images
+# image: linuxserver/IMAGE:TAG
+# image: ghcr.io/linuxserver/IMAGE:TAG
+```
+
+Example: `lscr.io/linuxserver/plex:latest`, `lscr.io/linuxserver/nextcloud:latest`.
+
+Apply this when adding or editing services that use LinuxServer images.
