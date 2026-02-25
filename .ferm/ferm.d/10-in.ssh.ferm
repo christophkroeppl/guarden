@@ -1,4 +1,5 @@
+# SSH: send to fail2ban chain first (banned IPs dropped), then accept.
 domain (ip ip6) {
-    # accept ssh
+    table filter chain INPUT proto tcp dport ssh jump f2b-sshd;
     table filter chain INPUT proto tcp dport ssh ACCEPT;
 }

@@ -1,3 +1,5 @@
+# For venet0 → docker_edge: allow established/related; drop any other new traffic.
+# So only ports explicitly allowed above (30, 50) get new connections; everything else is dropped.
 domain (ip ip6) table filter chain DOCKER-USER {
     interface venet0 outerface docker_edge {
         mod conntrack ctstate (RELATED ESTABLISHED) ACCEPT;

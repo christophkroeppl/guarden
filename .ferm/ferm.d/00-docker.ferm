@@ -1,6 +1,10 @@
+# Preserve Docker’s and fail2ban’s chains so we don’t overwrite them when applying ferm.
+# Docker inserts rules into DOCKER-USER (we add our rules in 30, 50, 99); we don’t touch Docker’s own chains.
 domain (ip ip6) {
     table filter {
         chain (DOCKER DOCKER-INGRESS DOCKER-ISOLATION-STAGE-1 DOCKER-ISOLATION-STAGE-2 FORWARD) @preserve;
+        # Host fail2ban (sshd jail) manages f2b-sshd; we only jump to it from INPUT (10-in.ssh.ferm).
+        chain f2b-sshd @preserve;
     }
 
     table nat {

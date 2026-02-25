@@ -5,10 +5,9 @@ domain (ip ip6) {
     # to the FORWARD chain on venet0 and exit on docker_edge
     interface venet0 outerface docker_edge
 
-    # Bitcoin Core / Knots ports exposed via Docker publish
-    # 8332: JSON-RPC/REST
-    # 8333: P2P
-    proto tcp dport (8332 8333)
+    # Allow Bitcoin P2P (and optional RPC) from the internet to the edge network.
+    # 8332: JSON-RPC/REST, 8333: P2P.
+    proto tcp dport (8333)
 
     ACCEPT;
 }
