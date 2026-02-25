@@ -29,10 +29,10 @@ services:
 
       - traefik.http.routers.homepage.entrypoints=web
       - traefik.http.routers.homepage.middlewares=redirect-https
-      - traefik.http.routers.homepage.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.homepage.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
 
       - traefik.http.routers.homepage-secure.entrypoints=websecure
-      - traefik.http.routers.homepage-secure.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.homepage-secure.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
       - traefik.http.routers.homepage-secure.service=homepage
       - traefik.http.routers.homepage-secure.tls=true
       - traefik.http.routers.homepage-secure.tls.certResolver=namecheap

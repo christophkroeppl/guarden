@@ -33,11 +33,11 @@ services:
       - traefik.http.middlewares.jdownloader-stripprefix.stripprefix.prefixes=/${JDOWNLOADER_SLUG}
 
       - traefik.http.routers.jdownloader.entrypoints=web
-      - traefik.http.routers.jdownloader.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${JDOWNLOADER_SLUG}`)
+      - traefik.http.routers.jdownloader.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${JDOWNLOADER_SLUG}`)
       - traefik.http.routers.jdownloader.middlewares=redirect-https
 
       - traefik.http.routers.jdownloader-secure.entrypoints=websecure
-      - traefik.http.routers.jdownloader-secure.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${JDOWNLOADER_SLUG}`)
+      - traefik.http.routers.jdownloader-secure.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${JDOWNLOADER_SLUG}`)
       - traefik.http.routers.jdownloader-secure.service=jdownloader
       - traefik.http.routers.jdownloader-secure.middlewares=jdownloader-stripprefix
       - traefik.http.routers.jdownloader-secure.tls=true

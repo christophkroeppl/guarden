@@ -30,13 +30,13 @@ services:
 
       - traefik.http.routers.dockge.entrypoints=web
       - traefik.http.routers.dockge.middlewares=redirect-https
-      - traefik.http.routers.dockge.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${DOCKGE_SLUG}`)
+      - traefik.http.routers.dockge.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${DOCKGE_SLUG}`)
       - traefik.http.routers.dockge.middlewares=dockge-stripprefix
 
       - traefik.http.middlewares.dockge-stripprefix.stripprefix.prefixes=/${DOCKGE_SLUG}
 
       - traefik.http.routers.dockge-secure.entrypoints=websecure
-      - traefik.http.routers.dockge-secure.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${DOCKGE_SLUG}`)
+      - traefik.http.routers.dockge-secure.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${DOCKGE_SLUG}`)
       - traefik.http.routers.dockge-secure.service=dockge
       - traefik.http.routers.dockge-secure.middlewares=dockge-stripprefix
       - traefik.http.routers.dockge-secure.tls=true
