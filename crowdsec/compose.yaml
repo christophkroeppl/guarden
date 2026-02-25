@@ -1,0 +1,28 @@
+# CrowdSec: Community-powered security engine
+# Using community blocklist only (no paid service, no API key)
+
+networks:
+  backends:
+    external: true
+
+services:
+  crowdsec:
+    container_name: crowdsec
+    image: crowdsecurity/crowdsec:latest-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - COLLECTIONS=crowdsecurity/linux crowdsecurity/traefik
+      - CROWDSEC_BOUNCER_KEY=
+    volumes:
+      - ./data:/var/lib/crowdsec/data
+      - ./config:/etc/crowdsec
+      - /var/log:/var/log/host:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+      - diun.include_tags=alpine

@@ -4,6 +4,7 @@ networks:
 
 services:
   vaultwarden:
+    container_name: vaultwarden
     image: vaultwarden/server:latest-alpine
     restart: unless-stopped
     security_opt:

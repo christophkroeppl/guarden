@@ -17,3 +17,11 @@ networks:
 include:
   - ./socket-proxy/compose.yaml
   - ./traefik/compose.yaml
+  - ./crowdsec/compose.yaml
+  - ./homepage/compose.yaml
+  - ./authelia/compose.yaml
+  - ./dockge/compose.yaml
+  - ./vaultwarden/compose.yaml
+  - ./jellyfin/compose.yaml
+  - ./resilio/compose.yaml
+  - ./jdownloader/compose.yaml

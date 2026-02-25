@@ -74,11 +74,14 @@ services:
       - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
 
       - traefik.http.routers.proxy.entrypoints=web
-      - traefik.http.routers.proxy.rule=Host(`${PROXY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.proxy.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${TRAEFIK_SLUG}`)
       - traefik.http.routers.proxy.middlewares=redirect-https
 
       - traefik.http.routers.proxy-secure.entrypoints=websecure
-      - traefik.http.routers.proxy-secure.rule=Host(`${PROXY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.proxy-secure.rule=Host(`srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${TRAEFIK_SLUG}`)
       - traefik.http.routers.proxy-secure.service=api@internal
+      - traefik.http.routers.proxy-secure.middlewares=proxy-stripprefix
       - traefik.http.routers.proxy-secure.tls=true
       - traefik.http.routers.proxy-secure.tls.certResolver=namecheap
+
+      - traefik.http.middlewares.proxy-stripprefix.stripprefix.prefixes=/${TRAEFIK_SLUG}

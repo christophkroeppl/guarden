@@ -1,0 +1,13 @@
+# Homepage snippet for JDownloader
+# Add this to your homepage services configuration
+
+- JDownloader:
+    href: https://srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}/${JDOWNLOADER_SLUG}
+    description: Download manager
+    icon: jdownloader.png
+    widget:
+      type: jdownloader
+      url: http://jdownloader:5800
+      # Optional: Add authentication if needed
+      # username: ${JDOWNLOADER_USERNAME}
+      # password: ${JDOWNLOADER_PASSWORD}

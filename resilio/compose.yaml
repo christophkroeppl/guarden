@@ -1,0 +1,42 @@
+# Resilio Sync: File synchronization service
+
+networks:
+  backends:
+    external: true
+
+services:
+  resilio:
+    container_name: resilio
+    image: lscr.io/linuxserver/resilio-sync:latest
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - ./data/config:/config
+      - ./data/downloads:/downloads
+      - ./data/sync:/sync
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.resilio.loadbalancer.server.port=8888
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.resilio.entrypoints=web
+      - traefik.http.routers.resilio.middlewares=redirect-https
+      - traefik.http.routers.resilio.rule=Host(`${SYNC_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+
+      - traefik.http.routers.resilio-secure.entrypoints=websecure
+      - traefik.http.routers.resilio-secure.rule=Host(`${SYNC_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.resilio-secure.service=resilio
+      - traefik.http.routers.resilio-secure.tls=true
+      - traefik.http.routers.resilio-secure.tls.certResolver=namecheap
