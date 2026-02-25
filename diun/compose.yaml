@@ -16,6 +16,8 @@ services:
     container_name: diun
     command: serve
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       - TZ=Europe/Prague
       - LOG_LEVEL=info

@@ -1,0 +1,20 @@
+---
+description: Docker Compose security options for all services
+globs: "**/compose.yaml,**/compose.yml,**/*compose*.yaml"
+alwaysApply: false
+---
+
+# Docker Compose – Security
+
+Add this to **every** service in Compose files so containers cannot gain new privileges:
+
+```yaml
+services:
+  some_service:
+    security_opt:
+      - no-new-privileges:true
+```
+
+Place it near the top of the service block (e.g. after `restart` or `container_name`).
+
+When adding new services, include this block so all containers follow the same hardening.

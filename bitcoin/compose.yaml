@@ -8,6 +8,8 @@ services:
   bitcoin-knots:
     image: bitcoinknots/bitcoin:29.3.knots20260210-bip110-v0.3-alpine
     container_name: bitcoind
+    security_opt:
+      - no-new-privileges:true
     environment:
       - TZ=Asia/Singapore
     networks:

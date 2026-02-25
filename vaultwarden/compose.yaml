@@ -6,6 +6,8 @@ services:
   vaultwarden:
     image: vaultwarden/server:latest-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       - TZ=Europe/Prague
       - WEBSOCKET_ENABLED=true
