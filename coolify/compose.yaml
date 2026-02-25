@@ -1,0 +1,39 @@
+networks:
+  backends:
+    external: true
+
+services:
+  coolify:
+    image: ghcr.io/coollabsio/coolify:latest
+    container_name: coolify
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - COOLIFY_APP_URL=https://${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+      - COOLIFY_DEFAULT_PROXY=traefik
+      - DOCKER_HOST=tcp://socket-proxy:2375
+    volumes:
+      - ./data:/data
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.coolify.loadbalancer.server.port=8000
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.coolify.entrypoints=web
+      - traefik.http.routers.coolify.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.coolify.middlewares=redirect-https
+
+      - traefik.http.routers.coolify-secure.entrypoints=websecure
+      - traefik.http.routers.coolify-secure.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.coolify-secure.service=coolify
+      - traefik.http.routers.coolify-secure.tls=true
+      - traefik.http.routers.coolify-secure.tls.certResolver=namecheap
