@@ -47,6 +47,17 @@ docker compose logs -f
 
 You should see Diun start, run a first check, and (if there are updates) send a Telegram message.
 
+### 5. Test notifications
+
+To send a test notification (e.g. to verify Telegram), run Diun’s [`notif test`](https://crazymax.dev/diun/usage/command-line/) **inside** the already-running Diun container so it can reach the gRPC server on localhost (avoids Docker DNS issues with one-off containers):
+
+From the `diun` directory:
+
+```bash
+docker compose run --rm diun notif test
+```
+
+
 ## Which images are watched?
 
 By default only containers with the label **`diun.enable=true`** are watched. Add that label to any service you want to track.
@@ -62,7 +73,7 @@ Optional labels (see [Docker provider docs](https://crazymax.dev/diun/providers/
 
 - `diun.watch_repo` – watch all tags of the image (use with care, can hit rate limits)
 - `diun.notify_on` – e.g. `new;update` (default)
-- `diun.include_tags` / `diun.exclude_tags` – regex for which tags to consider
+- `diun.include_tags` / `diun.exclude_tags` – semi-colon separated list or regex for which tags to consider
 
 ## Schedule
 
