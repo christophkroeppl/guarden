@@ -62,6 +62,9 @@ services:
       - NAMECHEAP_API_USER=${NAMECHEAP_API_USER}
       - NAMECHEAP_API_KEY=${NAMECHEAP_API_KEY}
     labels:
+      - diun.enable=true
+      - diun.include_tags=alpine
+
       - traefik.enable=true
 
       - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true

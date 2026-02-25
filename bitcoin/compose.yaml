@@ -23,3 +23,6 @@ services:
       # - -rpcallowip=172.100.0.0/16 # as per edge network
       # - -rpcauth=${RPC_AUTH}
       - -prune=500000
+    labels:
+      - diun.enable=true
+      - diun.include_tags=.*bip110.*alpine.*

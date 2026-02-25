@@ -32,6 +32,9 @@ services:
     networks:
       - backends
     labels:
+      - diun.enable=true
+      - diun.include_tags=alpine
+
       - traefik.enable=true
       - traefik.docker.network=backends
       - traefik.http.services.vaultwarden.loadbalancer.server.port=80
