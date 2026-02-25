@@ -11,12 +11,12 @@ services:
     networks:
       - backends
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
       - /home/docker/srv:/home/docker/srv
     environment:
       - TZ=${TZ}
       - DOCKGE_STACKS_DIR=/home/docker/srv
+      - DOCKER_HOST=tcp://socket-proxy:2375
     labels:
       - diun.enable=true
 

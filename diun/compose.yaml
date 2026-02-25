@@ -24,6 +24,7 @@ services:
       - LOG_JSON=false
       - DIUN_WATCH_FIRSTCHECKNOTIF=true
       - DIUN_PROVIDERS_DOCKER=true
+      - DIUN_PROVIDERS_DOCKER_ENDPOINT=tcp://socket-proxy:2375
       - DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT=false
       - DIUN_PROVIDERS_DOCKER_WATCHSTOPPED=false
       # Telegram (set in .env)
@@ -31,6 +32,5 @@ services:
       - DIUN_NOTIF_TELEGRAM_CHATIDS=${DIUN_NOTIF_TELEGRAM_CHATIDS}
     volumes:
       - ./data:/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - backends

@@ -1,0 +1,26 @@
+---
+description: Use socket-proxy for Docker API; never mount the host socket in app containers
+globs: "**/compose.yaml,**/compose.yml,**/*compose*.yaml"
+alwaysApply: false
+---
+
+# Docker socket – use socket-proxy only
+
+Any service that needs the Docker API (Traefik, Diun, Dockge, Portainer, etc.) must **not** mount `/var/run/docker.sock` directly. Use the **socket-proxy** instead.
+
+- **Traefik:** `--providers.docker.endpoint=tcp://socket-proxy:2375` (no socket volume).
+- **Diun:** `DIUN_PROVIDERS_DOCKER_ENDPOINT=tcp://socket-proxy:2375` (no socket volume).
+- **Dockge / Portainer / others:** `DOCKER_HOST=tcp://socket-proxy:2375` (no socket volume).
+
+The service must be on the **backends** network so it can reach `socket-proxy:2375`. Only the `socket-proxy` container may mount `/var/run/docker.sock`.
+
+```yaml
+# ❌ BAD – direct socket mount in app
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+
+# ✅ GOOD – use proxy
+environment:
+  - DOCKER_HOST=tcp://socket-proxy:2375
+# and no docker.sock volume
+```

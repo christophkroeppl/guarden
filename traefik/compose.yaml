@@ -18,6 +18,7 @@ services:
       #
       - --api=true
       - --providers.docker=true
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=backends
       - --providers.file.directory=/etc/traefik/config
@@ -57,7 +58,6 @@ services:
     volumes:
       - ./data:/etc/traefik/data
       - ./config:/etc/traefik/config:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - TZ=${TZ}
       - ACME_EMAIL=${ACME_EMAIL}

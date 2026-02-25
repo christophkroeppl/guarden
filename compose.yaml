@@ -15,4 +15,5 @@ networks:
       com.docker.network.bridge.name: docker_backends
 
 include:
+  - ./socket-proxy/compose.yaml
   - ./traefik/compose.yaml
