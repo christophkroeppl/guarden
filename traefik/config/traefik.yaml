@@ -1,4 +1,4 @@
-# Dynamic configuration (loaded by file provider). Compatible with Traefik v3.
+
 http:
   middlewares:
     srv-fail2ban:

@@ -30,9 +30,10 @@ services:
       - homepage.href=https://${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}/${JDOWNLOADER_SLUG}
       - homepage.description=Download manager
       - homepage.widget.type=jdownloader
-      - homepage.widget.username=${JDOWNLOADER_USER}
-      - homepage.widget.password=${JDOWNLOADER_PASSWORD}
-      - homepage.widget.client=jdownloader
+      # - homepage.widget.username=${JDOWNLOADER_USER}
+      # - homepage.widget.password=${JDOWNLOADER_PASSWORD}
+      - homepage.widget.client=docker
+      - homepage.widget.fields=downloadCount,downloadTotalBytes,downloadBytesRemaining,downloadSpeed
 
       - traefik.enable=true
       - traefik.docker.network=backends

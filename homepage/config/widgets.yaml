@@ -1,0 +1,21 @@
+---
+# For configuration options and examples, please see:
+# https://gethomepage.dev/configs/info-widgets/
+
+- resources:
+    text_size: 2xl
+    cpu: true
+    memory: true
+    disk: /
+    uptime: true
+
+- greeting:
+    text_size: 2xl
+    text: Nothing Is True; Except Out Is Through
+
+- datetime:
+    text_size: 2xl
+    locale: de
+    format:
+      dateStyle: long
+      timeStyle: long

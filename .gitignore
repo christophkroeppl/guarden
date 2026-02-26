@@ -1,5 +1,5 @@
 # ignore nested volumes (state)
-/*/*/**
+**/data/*
 
 # keep data folders (exception for .gitkeep)
 !**/.gitkeep
@@ -10,5 +10,5 @@
 # .env holds secrets
 .env
 
-# from install.sh
-install.log
+# logs
+*.log
