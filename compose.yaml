@@ -20,3 +20,4 @@ include:
   - ./coolify/compose.yaml
   - ./vscode/compose.yaml
   - ./immich/compose.yaml
+  - ./photoprism/compose.yaml

@@ -16,3 +16,8 @@ Because VS Code server is published through Traefik, external access continues t
 This stack includes an Immich deployment (`immich/compose.yaml`) behind Traefik at:
 
 - `https://${IMMICH_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`
+
+## PhotoPrism
+This stack includes a PhotoPrism deployment (`photoprism/compose.yaml`) behind Traefik at:
+
+- `https://${PHOTOPRISM_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`

@@ -1,0 +1,70 @@
+networks:
+  backends:
+    external: true
+
+services:
+  photoprism:
+    image: photoprism/photoprism:latest
+    container_name: photoprism
+    restart: unless-stopped
+    depends_on:
+      - photoprism-db
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - PHOTOPRISM_ADMIN_USER=${PHOTOPRISM_ADMIN_USER:-admin}
+      - PHOTOPRISM_ADMIN_PASSWORD=${PHOTOPRISM_ADMIN_PASSWORD}
+      - PHOTOPRISM_SITE_URL=https://${PHOTOPRISM_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}/
+      - PHOTOPRISM_ORIGINALS_LIMIT=5000
+      - PHOTOPRISM_HTTP_COMPRESSION=gzip
+      - PHOTOPRISM_HTTP_PORT=2342
+      - PHOTOPRISM_DATABASE_DRIVER=mysql
+      - PHOTOPRISM_DATABASE_SERVER=photoprism-db:3306
+      - PHOTOPRISM_DATABASE_NAME=photoprism
+      - PHOTOPRISM_DATABASE_USER=photoprism
+      - PHOTOPRISM_DATABASE_PASSWORD=${PHOTOPRISM_DB_PASSWORD}
+      - PHOTOPRISM_DISABLE_TLS=true
+    volumes:
+      - ./storage:/photoprism/storage
+      - ./originals:/photoprism/originals
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.photoprism.loadbalancer.server.port=2342
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.photoprism.entrypoints=web
+      - traefik.http.routers.photoprism.rule=Host(`${PHOTOPRISM_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.photoprism.middlewares=redirect-https
+
+      - traefik.http.routers.photoprism-secure.entrypoints=websecure
+      - traefik.http.routers.photoprism-secure.rule=Host(`${PHOTOPRISM_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.photoprism-secure.service=photoprism
+      - traefik.http.routers.photoprism-secure.tls=true
+      - traefik.http.routers.photoprism-secure.tls.certResolver=namecheap
+
+  photoprism-db:
+    image: mariadb:11
+    container_name: photoprism-db
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - MARIADB_AUTO_UPGRADE=1
+      - MARIADB_INITDB_SKIP_TZINFO=1
+      - MARIADB_DATABASE=photoprism
+      - MARIADB_USER=photoprism
+      - MARIADB_PASSWORD=${PHOTOPRISM_DB_PASSWORD}
+      - MARIADB_ROOT_PASSWORD=${PHOTOPRISM_DB_ROOT_PASSWORD}
+    volumes:
+      - ./database:/var/lib/mysql
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
