@@ -29,7 +29,7 @@ services:
       - homepage.group=Downloads
       - homepage.name=JDownloader
       - homepage.icon=jdownloader.png
-      - homepage.href=https://my.jdownloader.org/index.html?deviceId=${MYJDOWNLOADER_DEVICE_ID}#webinterface
+      - homepage.href=https://my.jdownloader.org/index.html
       - homepage.description=Download manager
       - homepage.widget.type=jdownloader
       - homepage.widget.url=http://${JDOWNLOADER_SLUG}:5800
