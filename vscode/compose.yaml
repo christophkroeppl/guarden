@@ -11,8 +11,8 @@ services:
       - no-new-privileges:true
     environment:
       - TZ=${TZ}
-      - PUID=1000
-      - PGID=1000
+      - PUID=${USERID}
+      - PGID=${GROUPID}
       - PASSWORD=${VSCODE_PASSWORD}
       - SUDO_PASSWORD=${VSCODE_SUDO_PASSWORD}
       - DEFAULT_WORKSPACE=/workspace

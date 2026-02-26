@@ -11,8 +11,8 @@ services:
       - no-new-privileges:true
     environment:
       - TZ=${TZ}
-      - PUID=1000
-      - PGID=1000
+      - PUID=${USERID}
+      - PGID=${GROUPID}
       - JELLYFIN_PublishedServerUrl=https://${JELLYFIN_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
     volumes:
       - ./data:/config

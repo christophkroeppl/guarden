@@ -11,8 +11,8 @@ services:
       - no-new-privileges:true
     environment:
       - TZ=${TZ}
-      - PUID=1000
-      - PGID=1000
+      - PUID=${USERID}
+      - PGID=${GROUPID}
     volumes:
       - ./data:/config
       - ./sync:/sync

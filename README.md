@@ -21,3 +21,8 @@ This stack includes an Immich deployment (`immich/compose.yaml`) behind Traefik 
 This stack includes a PhotoPrism deployment (`photoprism/compose.yaml`) behind Traefik at:
 
 - `https://${PHOTOPRISM_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`
+
+## Runtime UID/GID and Bitcoin prune settings
+Use `USERID` and `GROUPID` in `.env` for containers that support `PUID` / `PGID` (Jellyfin, Resilio, JDownloader, VS Code).
+
+Set `BITCOIN_PRUNE_MB` to control `bitcoind` prune size (for example `500000`).
