@@ -24,6 +24,15 @@ services:
     labels:
       - diun.enable=true
 
+      - homepage.group=Media
+      - homepage.name=Jellyfin
+      - homepage.icon=jellyfin.png
+      - homepage.href=https://${JELLYFIN_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+      - homepage.description=Media server
+      - homepage.widget.type=jellyfin
+      - homepage.widget.url=http://jellyfin:8096
+      - homepage.widget.key=${JELLYFIN_API_KEY}
+
       - traefik.enable=true
       - traefik.docker.network=backends
       - traefik.http.services.jellyfin.loadbalancer.server.port=8096

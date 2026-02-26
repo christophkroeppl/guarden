@@ -24,6 +24,16 @@ services:
     labels:
       - diun.enable=true
 
+      - homepage.group=Downloads
+      - homepage.name=JDownloader
+      - homepage.icon=jdownloader.png
+      - homepage.href=https://srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}/${JDOWNLOADER_SLUG}
+      - homepage.description=Download manager
+      - homepage.widget.type=jdownloader
+      - homepage.widget.username=${JDOWNLOADER_USERNAME}
+      - homepage.widget.password=${JDOWNLOADER_PASSWORD}
+      - homepage.widget.client=jdownloader
+
       - traefik.enable=true
       - traefik.docker.network=backends
       - traefik.http.services.jdownloader.loadbalancer.server.port=5800

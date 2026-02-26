@@ -26,3 +26,13 @@ services:
     labels:
       - diun.enable=true
       - diun.include_tags=alpine
+
+      - homepage.group=Security
+      - homepage.name=CrowdSec
+      - homepage.icon=crowdsec.png
+      - homepage.href=
+      - homepage.description=Community-powered security engine
+      - homepage.widget.type=crowdsec
+      - homepage.widget.url=http://crowdsec:8080
+      - homepage.widget.username=localhost
+      - homepage.widget.password=${CROWDSEC_API_PASSWORD}

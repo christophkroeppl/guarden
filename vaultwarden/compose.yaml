@@ -39,6 +39,12 @@ services:
       - diun.enable=true
       - diun.include_tags=alpine
 
+      - homepage.group=Security
+      - homepage.name=Vaultwarden
+      - homepage.icon=vaultwarden.png
+      - homepage.href=https://${VAULTWARDEN_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+      - homepage.description=Password manager
+
       - traefik.enable=true
       - traefik.docker.network=backends
       - traefik.http.services.vaultwarden.loadbalancer.server.port=80

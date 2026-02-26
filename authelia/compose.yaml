@@ -21,6 +21,12 @@ services:
       - diun.enable=true
       - diun.include_tags=alpine
 
+      - homepage.group=Security
+      - homepage.name=Authelia
+      - homepage.icon=authelia.png
+      - homepage.href=https://${AUTHELIA_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+      - homepage.description=Authentication and authorization server
+
       - traefik.enable=true
       - traefik.docker.network=backends
       - traefik.http.services.authelia.loadbalancer.server.port=9091

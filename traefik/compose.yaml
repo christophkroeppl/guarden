@@ -68,6 +68,14 @@ services:
       - diun.enable=true
       - diun.include_tags=alpine
 
+      - homepage.group=Infrastructure
+      - homepage.name=Traefik
+      - homepage.icon=traefik.png
+      - homepage.href=https://srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}/${TRAEFIK_SLUG}
+      - homepage.description=Reverse proxy and load balancer
+      - homepage.widget.type=traefik
+      - homepage.widget.url=http://proxy:8080
+
       - traefik.enable=true
 
       - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true

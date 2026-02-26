@@ -29,6 +29,12 @@ services:
     labels:
       - diun.enable=true
 
+      - homepage.group=Storage
+      - homepage.name=Resilio Sync
+      - homepage.icon=resilio.png
+      - homepage.href=https://${SYNC_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+      - homepage.description=File synchronization service
+
       - traefik.enable=true
       - traefik.docker.network=backends
       - traefik.http.services.resilio.loadbalancer.server.port=8888
