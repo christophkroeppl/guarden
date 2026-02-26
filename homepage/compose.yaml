@@ -11,6 +11,7 @@ services:
       - no-new-privileges:true
     environment:
       - TZ=${TZ}
+      - HOMEPAGE_ALLOWED_HOSTS=${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
       - DOCKER_HOST=tcp://socket-proxy:2375
     volumes:
       - ./config:/app/config
