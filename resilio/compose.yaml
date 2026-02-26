@@ -1,6 +1,8 @@
 # Resilio Sync: File synchronization service
 
 networks:
+  edge:
+    external: true
   backends:
     external: true
 
@@ -19,7 +21,10 @@ services:
       - ./data/config:/config
       - ./data/downloads:/downloads
       - ./data/sync:/sync
+    ports:
+      - 55555:55555 # Resilio Sync port
     networks:
+      - edge
       - backends
     labels:
       - diun.enable=true
