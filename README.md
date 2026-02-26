@@ -11,3 +11,8 @@ This stack now includes a `code-server` deployment (`vscode/compose.yaml`) expos
 - `https://${VSCODE_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`
 
 Because VS Code server is published through Traefik, external access continues to use ports **80/443** only.
+
+## Immich
+This stack includes an Immich deployment (`immich/compose.yaml`) behind Traefik at:
+
+- `https://${IMMICH_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`

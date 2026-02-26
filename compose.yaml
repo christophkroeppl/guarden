@@ -19,3 +19,4 @@ include:
   - ./traefik/compose.yaml
   - ./coolify/compose.yaml
   - ./vscode/compose.yaml
+  - ./immich/compose.yaml
