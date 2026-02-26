@@ -1,10 +1,6 @@
 # Coolify integration
 
-This stack integrates [Coolify](https://coolify.io/) as the dynamic deployment layer while keeping your existing static compose services.
-
-## What this replaces
-- Removed the custom `dynamic-deployer` service.
-- Replaced it with Coolify as the control-plane for dynamic app lifecycle.
+This stack uses [Coolify](https://coolify.io/) as the dynamic deployment layer while keeping your existing static compose services.
 
 ## Routing / domain model
 Set app domains inside Coolify to match your desired pattern:
@@ -24,7 +20,7 @@ Recommended Coolify config for feature branches:
 ## Build behavior
 - Configure GitHub webhook from your app repo to Coolify.
 - Coolify builds on push.
-- For rapid pushes, Coolify's queue and per-resource deployment locking avoid overlapping active deploys; newer deploys replace older running targets.
+- For rapid pushes, Coolify's queue and per-resource deployment locking avoid overlapping active deploys.
 
 ## Shared DB with per-branch database
 Use one shared DB server resource (Postgres or MySQL) in Coolify, then per deployment:

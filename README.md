@@ -3,7 +3,7 @@
 Home server compose stack with a static baseline (`traefik`, socket-proxy, apps) plus a dynamic deployment control-plane powered by Coolify.
 
 ## Dynamic deployments with Coolify (OSS)
-Instead of a custom deployer, this stack now extends your baseline with **Coolify** (`coolify/compose.yaml`).
+This stack extends your baseline with **Coolify** (`coolify/compose.yaml`).
 
 Why this matches your requirements:
 - Open-source deployment platform (no cluster-heavy platform required).
