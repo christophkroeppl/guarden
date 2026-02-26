@@ -10,5 +10,8 @@
 # .env holds secrets
 .env
 
+# Traefik Basic Auth credentials (use htpasswd.example as template)
+traefik/config/htpasswd
+
 # logs
 *.log

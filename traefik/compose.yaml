@@ -93,6 +93,8 @@ services:
       - traefik.http.routers.proxy-secure.entrypoints=websecure
       - traefik.http.routers.proxy-secure.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${TRAEFIK_SLUG}`)
       - traefik.http.routers.proxy-secure.service=api@internal
-      - traefik.http.routers.proxy-secure.middlewares=proxy-stripprefix
+      - traefik.http.routers.proxy-secure.middlewares=traefik-basicauth@docker,proxy-stripprefix
       - traefik.http.routers.proxy-secure.tls=true
       - traefik.http.routers.proxy-secure.tls.certResolver=namecheap
+
+      - traefik.http.middlewares.traefik-basicauth.basicauth.usersfile=/etc/traefik/config/htpasswd

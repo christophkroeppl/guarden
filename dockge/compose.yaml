@@ -44,6 +44,6 @@ services:
       - traefik.http.routers.dockge-secure.entrypoints=websecure
       - traefik.http.routers.dockge-secure.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${DOCKGE_SLUG}`)
       - traefik.http.routers.dockge-secure.service=dockge
-      - traefik.http.routers.dockge-secure.middlewares=dockge-stripprefix
+      - traefik.http.routers.dockge-secure.middlewares=traefik-basicauth@docker,dockge-stripprefix
       - traefik.http.routers.dockge-secure.tls=true
       - traefik.http.routers.dockge-secure.tls.certResolver=namecheap

@@ -51,6 +51,6 @@ services:
       - traefik.http.routers.jdownloader-secure.entrypoints=websecure
       - traefik.http.routers.jdownloader-secure.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${JDOWNLOADER_SLUG}`)
       - traefik.http.routers.jdownloader-secure.service=jdownloader
-      - traefik.http.routers.jdownloader-secure.middlewares=jdownloader-stripprefix
+      - traefik.http.routers.jdownloader-secure.middlewares=traefik-basicauth@docker,jdownloader-stripprefix
       - traefik.http.routers.jdownloader-secure.tls=true
       - traefik.http.routers.jdownloader-secure.tls.certResolver=namecheap

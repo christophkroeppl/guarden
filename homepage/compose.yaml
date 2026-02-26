@@ -35,5 +35,6 @@ services:
       - traefik.http.routers.homepage-secure.entrypoints=websecure
       - traefik.http.routers.homepage-secure.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
       - traefik.http.routers.homepage-secure.service=homepage
+      - traefik.http.routers.homepage-secure.middlewares=traefik-basicauth@docker
       - traefik.http.routers.homepage-secure.tls=true
       - traefik.http.routers.homepage-secure.tls.certResolver=namecheap
