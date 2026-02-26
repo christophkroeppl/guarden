@@ -1,5 +1,3 @@
-# JDownloader: Download manager
-
 networks:
   backends:
     external: true
@@ -16,6 +14,10 @@ services:
       - USER_ID=${USER_ID}
       - GROUP_ID=${GROUP_ID}
       - DARK_MODE=1
+      - JDOWNLOADER_HEADLESS=1
+      - MYJDOWNLOADER_EMAIL=${MYJDOWNLOADER_EMAIL}
+      - MYJDOWNLOADER_PASSWORD=${MYJDOWNLOADER_PASSWORD}
+      - MYJDOWNLOADER_DEVICE_NAME=${SRV_SUBDOMAIN}
     volumes:
       - ./data/config:/config
       - ./data/downloads:/output
@@ -27,12 +29,12 @@ services:
       - homepage.group=Downloads
       - homepage.name=JDownloader
       - homepage.icon=jdownloader.png
-      - homepage.href=https://${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}/${JDOWNLOADER_SLUG}
+      - homepage.href=https://my.jdownloader.org/index.html?deviceId=${MYJDOWNLOADER_DEVICE_ID}#webinterface
       - homepage.description=Download manager
       - homepage.widget.type=jdownloader
-      # - homepage.widget.username=${JDOWNLOADER_USER}
-      # - homepage.widget.password=${JDOWNLOADER_PASSWORD}
-      - homepage.widget.client=docker
+      - homepage.widget.url=http://${JDOWNLOADER_SLUG}:5800
+      - homepage.widget.username=${MYJDOWNLOADER_EMAIL}
+      - homepage.widget.password=${MYJDOWNLOADER_PASSWORD}
       - homepage.widget.fields=downloadCount,downloadTotalBytes,downloadBytesRemaining,downloadSpeed
 
       - traefik.enable=true
