@@ -77,7 +77,7 @@ services:
       - homepage.href=https://${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}/${TRAEFIK_SLUG}
       - homepage.description=Reverse proxy and load balancer
       - homepage.widget.type=traefik
-      - homepage.widget.url=http://{TRAEFIK_SLUG}:8080
+      - homepage.widget.url=http://${TRAEFIK_SLUG}:8080
 
       - traefik.enable=true
 
