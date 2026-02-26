@@ -71,3 +71,39 @@ echo -n "Installing and configuring ferm..."
 } >> install.log 2>&1
 
 echo -e "\\r${CHECK_MARK} Succesfully installed ferm."
+
+echo -n "Configuring systemd auto-start for root Docker Compose stack..."
+{
+    SERVICE_NAME="srv-compose.service"
+    SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+    TEMP_SERVICE="$(mktemp)"
+
+    cat > "${TEMP_SERVICE}" <<EOF
+[Unit]
+Description=Server Root Docker Compose Stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=${SCRIPT_DIR}
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker compose -f ${SCRIPT_DIR}/compose.yaml up -d
+ExecStop=/usr/bin/docker compose -f ${SCRIPT_DIR}/compose.yaml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    if [ ! -f "${SERVICE_PATH}" ] || ! cmp -s "${TEMP_SERVICE}" "${SERVICE_PATH}"; then
+        install -m 0644 "${TEMP_SERVICE}" "${SERVICE_PATH}"
+        systemctl daemon-reload
+    fi
+
+    rm -f "${TEMP_SERVICE}"
+    systemctl enable --now "${SERVICE_NAME}"
+} >> install.log 2>&1
+
+echo -e "\r${CHECK_MARK} Successfully configured systemd auto-start for the root compose stack."
