@@ -1,0 +1,55 @@
+# JDownloader: Download manager
+
+networks:
+  backends:
+    external: true
+
+services:
+  jdownloader:
+    container_name: jdownloader
+    image: jlesage/jdownloader-2:latest
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - USER_ID=${USER_ID}
+      - GROUP_ID=${GROUP_ID}
+      - DARK_MODE=1
+    volumes:
+      - ./data/config:/config
+      - ./data/downloads:/output
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+
+      - homepage.group=Downloads
+      - homepage.name=JDownloader
+      - homepage.icon=jdownloader.png
+      - homepage.href=https://${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}/${JDOWNLOADER_SLUG}
+      - homepage.description=Download manager
+      - homepage.widget.type=jdownloader
+      - homepage.widget.username=${JDOWNLOADER_USER}
+      - homepage.widget.password=${JDOWNLOADER_PASSWORD}
+      - homepage.widget.client=jdownloader
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.jdownloader.loadbalancer.server.port=5800
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.middlewares.jdownloader-stripprefix.stripprefix.prefixes=/${JDOWNLOADER_SLUG}
+
+      - traefik.http.routers.jdownloader.entrypoints=web
+      - traefik.http.routers.jdownloader.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${JDOWNLOADER_SLUG}`)
+      - traefik.http.routers.jdownloader.middlewares=redirect-https
+
+      - traefik.http.routers.jdownloader-secure.entrypoints=websecure
+      - traefik.http.routers.jdownloader-secure.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${JDOWNLOADER_SLUG}`)
+      - traefik.http.routers.jdownloader-secure.service=jdownloader
+      - traefik.http.routers.jdownloader-secure.middlewares=jdownloader-stripprefix
+      - traefik.http.routers.jdownloader-secure.tls=true
+      - traefik.http.routers.jdownloader-secure.tls.certResolver=namecheap

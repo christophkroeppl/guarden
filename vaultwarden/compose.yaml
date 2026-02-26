@@ -5,6 +5,7 @@ networks:
 services:
   vaultwarden:
     image: vaultwarden/server:latest-alpine
+    container_name: vaultwarden
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -37,6 +38,12 @@ services:
     labels:
       - diun.enable=true
       - diun.include_tags=alpine
+
+      - homepage.group=Security
+      - homepage.name=Vaultwarden
+      - homepage.icon=vaultwarden.png
+      - homepage.href=https://${VAULTWARDEN_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+      - homepage.description=Password manager
 
       - traefik.enable=true
       - traefik.docker.network=backends

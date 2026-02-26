@@ -5,6 +5,7 @@ networks:
 services:
   dockge:
     image: louislam/dockge:1
+    container_name: dockge
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -20,6 +21,12 @@ services:
     labels:
       - diun.enable=true
 
+      - homepage.group=Infrastructure
+      - homepage.name=Dockge
+      - homepage.icon=dockge.png
+      - homepage.href=https://srv.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}/${DOCKGE_SLUG}
+      - homepage.description=Docker compose stack manager
+
       - traefik.enable=true
       - traefik.docker.network=backends
       - traefik.http.services.dockge.loadbalancer.server.port=5001
@@ -29,10 +36,14 @@ services:
 
       - traefik.http.routers.dockge.entrypoints=web
       - traefik.http.routers.dockge.middlewares=redirect-https
-      - traefik.http.routers.dockge.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.dockge.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${DOCKGE_SLUG}`)
+      - traefik.http.routers.dockge.middlewares=dockge-stripprefix
+
+      - traefik.http.middlewares.dockge-stripprefix.stripprefix.prefixes=/${DOCKGE_SLUG}
 
       - traefik.http.routers.dockge-secure.entrypoints=websecure
-      - traefik.http.routers.dockge-secure.rule=Host(`${ORCHESTRATOR_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.dockge-secure.rule=Host(`${SRV_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/${DOCKGE_SLUG}`)
       - traefik.http.routers.dockge-secure.service=dockge
+      - traefik.http.routers.dockge-secure.middlewares=dockge-stripprefix
       - traefik.http.routers.dockge-secure.tls=true
       - traefik.http.routers.dockge-secure.tls.certResolver=namecheap
