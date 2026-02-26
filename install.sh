@@ -78,24 +78,7 @@ echo -n "Configuring systemd auto-start for root Docker Compose stack..."
     SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
     TEMP_SERVICE="$(mktemp)"
 
-    cat > "${TEMP_SERVICE}" <<EOF
-[Unit]
-Description=Server Root Docker Compose Stack
-Requires=docker.service
-After=docker.service network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-WorkingDirectory=${SCRIPT_DIR}
-RemainAfterExit=yes
-ExecStart=/usr/bin/docker compose -f ${SCRIPT_DIR}/compose.yaml up -d
-ExecStop=/usr/bin/docker compose -f ${SCRIPT_DIR}/compose.yaml down
-TimeoutStartSec=0
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    sed "s|__SCRIPT_DIR__|${SCRIPT_DIR}|g" "${SCRIPT_DIR}/.systemd/${SERVICE_NAME}" > "${TEMP_SERVICE}"
 
     if [ ! -f "${SERVICE_PATH}" ] || ! cmp -s "${TEMP_SERVICE}" "${SERVICE_PATH}"; then
         install -m 0644 "${TEMP_SERVICE}" "${SERVICE_PATH}"
