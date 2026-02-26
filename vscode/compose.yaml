@@ -1,0 +1,42 @@
+networks:
+  backends:
+    external: true
+
+services:
+  vscode:
+    image: lscr.io/linuxserver/code-server:latest
+    container_name: vscode
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - TZ=${TZ}
+      - PUID=1000
+      - PGID=1000
+      - PASSWORD=${VSCODE_PASSWORD}
+      - SUDO_PASSWORD=${VSCODE_SUDO_PASSWORD}
+      - DEFAULT_WORKSPACE=/workspace
+    volumes:
+      - ./data:/config
+      - /home/docker:/workspace
+    networks:
+      - backends
+    labels:
+      - diun.enable=true
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.vscode.loadbalancer.server.port=8443
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+
+      - traefik.http.routers.vscode.entrypoints=web
+      - traefik.http.routers.vscode.rule=Host(`${VSCODE_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.vscode.middlewares=redirect-https
+
+      - traefik.http.routers.vscode-secure.entrypoints=websecure
+      - traefik.http.routers.vscode-secure.rule=Host(`${VSCODE_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.vscode-secure.service=vscode
+      - traefik.http.routers.vscode-secure.tls=true
+      - traefik.http.routers.vscode-secure.tls.certResolver=namecheap

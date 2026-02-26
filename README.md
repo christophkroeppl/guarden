@@ -1,15 +1,13 @@
 # srv
 
-Home server compose stack with a static baseline (`traefik`, socket-proxy, apps) plus a dynamic deployment control-plane powered by Coolify.
+Home server compose stack with a static baseline (`traefik`, socket-proxy, apps) plus optional control-plane services.
 
 ## Dynamic deployments with Coolify (OSS)
 This stack extends your baseline with **Coolify** (`coolify/compose.yaml`).
 
-Why this matches your requirements:
-- Open-source deployment platform (no cluster-heavy platform required).
-- Handles dynamic app add/remove and branch deployments.
-- Uses your existing Traefik setup for ingress.
-- Supports GitHub-driven deployments and cancel/redeploy behavior via branch webhooks and build queue handling.
-- Allows one shared DB server with separate per-environment databases managed through deployment hooks.
+## VS Code dev server
+This stack now includes a `code-server` deployment (`vscode/compose.yaml`) exposed through Traefik at:
 
-See `coolify/README.md` for the exact flow and setup.
+- `https://${VSCODE_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`
+
+Because VS Code server is published through Traefik, external access continues to use ports **80/443** only.

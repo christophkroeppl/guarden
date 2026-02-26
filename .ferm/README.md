@@ -47,3 +47,6 @@ Test without applying:
 ```bash
 sudo ferm --noexec /etc/ferm/ferm.conf
 ```
+
+## VS Code server note
+The VS Code server is exposed through Traefik on HTTPS and does **not** require opening any additional host ports in `DOCKER-USER`. Existing public allowances for 80/443 are sufficient.

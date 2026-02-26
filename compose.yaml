@@ -18,3 +18,4 @@ include:
   - ./socket-proxy/compose.yaml
   - ./traefik/compose.yaml
   - ./coolify/compose.yaml
+  - ./vscode/compose.yaml
