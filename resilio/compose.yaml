@@ -13,8 +13,8 @@ services:
       - no-new-privileges:true
     environment:
       - TZ=${TZ}
-      - PUID=1000
-      - PGID=1000
+      - PUID=${USER_ID}
+      - PGID=${GROUP_ID}
     volumes:
       - ./data/config:/config
       - ./data/downloads:/downloads

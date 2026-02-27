@@ -7,12 +7,11 @@ services:
     image: lscr.io/linuxserver/jellyfin:latest
     container_name: jellyfin
     restart: unless-stopped
+    user: "${USER_ID}:${GROUP_ID}"
     security_opt:
       - no-new-privileges:true
     environment:
       - TZ=${TZ}
-      - PUID=${USER_ID}
-      - PGID=${GROUP_ID}
       - JELLYFIN_PublishedServerUrl=https://${JELLYFIN_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
     volumes:
       - ./config:/config
