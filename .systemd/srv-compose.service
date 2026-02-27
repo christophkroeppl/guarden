@@ -1,0 +1,18 @@
+[Unit]
+Description=Server Root Docker Compose Stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER_ID__
+Group=__GROUP_ID__
+WorkingDirectory=__SCRIPT_DIR__
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker compose -f __SCRIPT_DIR__/compose.yaml up -d
+ExecStop=/usr/bin/docker compose -f __SCRIPT_DIR__/compose.yaml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

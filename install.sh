@@ -71,3 +71,30 @@ echo -n "Installing and configuring ferm..."
 } >> install.log 2>&1
 
 echo -e "\\r${CHECK_MARK} Succesfully installed ferm."
+
+echo -n "Configuring systemd auto-start for root Docker Compose stack..."
+if [ -z "${USER_ID:-}" ] || [ -z "${GROUP_ID:-}" ]; then
+    echo "Aborting: USER_ID and GROUP_ID must be set to configure the systemd service."
+    exit 1
+fi
+
+{
+    SERVICE_NAME="srv-compose.service"
+    SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+    TEMP_SERVICE="$(mktemp)"
+
+    sed -e "s|__SCRIPT_DIR__|${SCRIPT_DIR}|g" \
+        -e "s|__USER_ID__|${USER_ID}|g" \
+        -e "s|__GROUP_ID__|${GROUP_ID}|g" \
+        "${SCRIPT_DIR}/.systemd/${SERVICE_NAME}" > "${TEMP_SERVICE}"
+
+    if [ ! -f "${SERVICE_PATH}" ] || ! cmp -s "${TEMP_SERVICE}" "${SERVICE_PATH}"; then
+        install -m 0644 "${TEMP_SERVICE}" "${SERVICE_PATH}"
+        systemctl daemon-reload
+    fi
+
+    rm -f "${TEMP_SERVICE}"
+    systemctl enable --now "${SERVICE_NAME}"
+} >> install.log 2>&1
+
+echo -e "\r${CHECK_MARK} Successfully configured systemd auto-start for the root compose stack."
