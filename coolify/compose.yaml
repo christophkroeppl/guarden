@@ -1,0 +1,161 @@
+# Coolify requires PostgreSQL, Redis, and Soketi (realtime). All are on an internal
+# network; only the app is also on backends for Traefik.
+# Set COOLIFY_* env vars in project .env (see example.env).
+
+networks:
+  coolify:
+    name: coolify
+    driver: bridge
+  backends:
+    external: true
+
+volumes:
+  coolify-pg:
+    name: coolify-pg
+  coolify-redis:
+    name: coolify-redis
+
+services:
+  coolify:
+    image: ghcr.io/coollabsio/coolify:latest
+    container_name: coolify
+    restart: unless-stopped
+    user: "${USER_ID:-9999}:${GROUP_ID:-9999}"
+    security_opt:
+      - no-new-privileges:true
+    working_dir: /var/www/html
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    environment:
+      - TZ=${TZ}
+      - USER_ID=${USER_ID:-9999}
+      - GROUP_ID=${GROUP_ID:-9999}
+      - COOLIFY_APP_URL=https://${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+      - COOLIFY_DEFAULT_PROXY=traefik
+      - DOCKER_HOST=tcp://socket-proxy:2375
+      # Database (host = postgres container name for DNS)
+      - DB_CONNECTION=pgsql
+      - DB_HOST=coolify-pg
+      - DB_PORT=5432
+      - DB_DATABASE=${COOLIFY_DB_DATABASE:-coolify}
+      - DB_USERNAME=${COOLIFY_DB_USERNAME:-coolify}
+      - DB_PASSWORD=${COOLIFY_DB_PASSWORD}
+      # Redis
+      - REDIS_HOST=coolify-redis
+      - REDIS_PASSWORD=${COOLIFY_REDIS_PASSWORD}
+      # Soketi / Laravel Pusher
+      - PUSHER_APP_ID=${COOLIFY_PUSHER_APP_ID}
+      - PUSHER_APP_KEY=${COOLIFY_PUSHER_APP_KEY}
+      - PUSHER_APP_SECRET=${COOLIFY_PUSHER_APP_SECRET}
+      # Laravel app
+      - APP_NAME=${COOLIFY_APP_NAME:-Coolify}
+      - APP_KEY=${COOLIFY_APP_KEY}
+      - APP_URL=https://${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+    volumes:
+      - ./data:/data
+      # SSH keys for deployments; must exist so onboarding select-server-type does not throw getPublicKey() on null
+      - ./data/ssh:/var/www/html/storage/app/ssh
+    networks:
+      - coolify
+      - backends
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      soketi:
+        condition: service_healthy
+    labels:
+      - diun.enable=true
+
+      - homepage.group=Infrastructure
+      - homepage.name=Coolify
+      - homepage.icon=coolify.png
+      - homepage.href=https://${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
+      - homepage.description=Self-hosted PaaS and deployment control-plane
+
+      - traefik.enable=true
+      - traefik.docker.network=backends
+      - traefik.http.services.coolify.loadbalancer.server.port=8080
+
+      - traefik.http.middlewares.redirect-https.redirectScheme.permanent=true
+      - traefik.http.middlewares.redirect-https.redirectScheme.scheme=https
+      - traefik.http.routers.coolify.entrypoints=web
+      - traefik.http.routers.coolify.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.coolify.middlewares=redirect-https
+
+      - traefik.http.routers.coolify-secure.entrypoints=websecure
+      - traefik.http.routers.coolify-secure.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
+      - traefik.http.routers.coolify-secure.service=coolify
+      - traefik.http.routers.coolify-secure.middlewares=traefik-basicauth@docker
+      - traefik.http.routers.coolify-secure.tls=true
+      - traefik.http.routers.coolify-secure.tls.certResolver=namecheap
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: coolify-pg
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - POSTGRES_USER=${COOLIFY_DB_USERNAME:-coolify}
+      - POSTGRES_PASSWORD=${COOLIFY_DB_PASSWORD}
+      - POSTGRES_DB=${COOLIFY_DB_DATABASE:-coolify}
+    volumes:
+      - coolify-pg:/var/lib/postgresql/data
+    networks:
+      - coolify
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${COOLIFY_DB_USERNAME:-coolify} -d ${COOLIFY_DB_DATABASE:-coolify}']
+      interval: 5s
+      retries: 10
+      timeout: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: coolify-redis
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - redis-server
+      - --save
+      - "20"
+      - "1"
+      - --loglevel
+      - warning
+      - --requirepass
+      - ${COOLIFY_REDIS_PASSWORD}
+    volumes:
+      - coolify-redis:/data
+    networks:
+      - coolify
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${COOLIFY_REDIS_PASSWORD}', 'ping']
+      interval: 5s
+      retries: 10
+      timeout: 2s
+
+  soketi:
+    image: ghcr.io/coollabsio/coolify-realtime:1.0.10
+    container_name: coolify-realtime
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    environment:
+      - APP_NAME=${COOLIFY_APP_NAME:-Coolify}
+      - SOKETI_DEBUG=${COOLIFY_SOKETI_DEBUG:-false}
+      - SOKETI_DEFAULT_APP_ID=${COOLIFY_PUSHER_APP_ID}
+      - SOKETI_DEFAULT_APP_KEY=${COOLIFY_PUSHER_APP_KEY}
+      - SOKETI_DEFAULT_APP_SECRET=${COOLIFY_PUSHER_APP_SECRET}
+    volumes:
+      - ./data/ssh:/var/www/html/storage/app/ssh
+    networks:
+      - coolify
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:6001/ready && wget -qO- http://127.0.0.1:6002/ready || exit 1']
+      interval: 5s
+      retries: 10
+      timeout: 5s

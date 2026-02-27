@@ -19,7 +19,7 @@ services:
       - AUTH=0
       - SECRETS=0
       - POST=1   # Dockge, stack operations
-      - BUILD=0
+      - BUILD=1   # Coolify build operations
       - COMMIT=0
       - CONFIGS=0
       - CONTAINERS=1  # Traefik, Diun, Dockge
