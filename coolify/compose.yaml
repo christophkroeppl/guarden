@@ -20,7 +20,6 @@ services:
     image: ghcr.io/coollabsio/coolify:latest
     container_name: coolify
     restart: unless-stopped
-    user: "${USER_ID:-9999}:${GROUP_ID:-9999}"
     security_opt:
       - no-new-privileges:true
     working_dir: /var/www/html
@@ -28,8 +27,6 @@ services:
       - host.docker.internal:host-gateway
     environment:
       - TZ=${TZ}
-      - USER_ID=${USER_ID:-9999}
-      - GROUP_ID=${GROUP_ID:-9999}
       - COOLIFY_APP_URL=https://${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}
       - COOLIFY_DEFAULT_PROXY=traefik
       - DOCKER_HOST=tcp://socket-proxy:2375
