@@ -9,7 +9,7 @@ This stack uses [Coolify](https://coolify.io/) as the dynamic deployment layer w
 - **coolify-redis** – Redis 7 (Alpine); required by Coolify.
 - **coolify-realtime** – Soketi for realtime; required by Coolify.
 
-All share an internal `coolify` network; only the app is on `backends` for Traefik. The dashboard is behind Traefik Basic Auth; requests to `/api/` (webhooks, API) bypass Basic Auth so GitHub and deployment callbacks can reach Coolify.
+All share an internal `coolify` network; only the app is on `backends` for Traefik. The dashboard is behind Traefik Basic Auth; requests to `/api/` and `/webhooks/` (e.g. GitHub App webhooks at `/webhooks/source/github/events`) bypass Basic Auth so GitHub and deployment callbacks can reach Coolify.
 
 ## First-time setup (step-by-step)
 

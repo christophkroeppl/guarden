@@ -81,9 +81,9 @@ services:
       - traefik.http.routers.coolify.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
       - traefik.http.routers.coolify.middlewares=redirect-https
 
-      # API/webhooks: no Basic Auth so GitHub (and other callers) can reach deploy webhooks
+      # API and webhooks: no Basic Auth so GitHub App / webhooks (and other callers) can reach Coolify
       - traefik.http.routers.coolify-secure-api.entrypoints=websecure
-      - traefik.http.routers.coolify-secure-api.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/api/`)
+      - traefik.http.routers.coolify-secure-api.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && (PathPrefix(`/api/`) || PathPrefix(`/webhooks/`))
       - traefik.http.routers.coolify-secure-api.service=coolify
       - traefik.http.routers.coolify-secure-api.priority=100
       - traefik.http.routers.coolify-secure-api.tls=true
