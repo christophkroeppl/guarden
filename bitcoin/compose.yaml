@@ -8,12 +8,11 @@ services:
   bitcoin-knots:
     image: bitcoinknots/bitcoin:29.3.knots20260210-bip110-v0.3-alpine
     container_name: bitcoind
-    user: "${USER_ID:-100}:${GROUP_ID:-101}"
     security_opt:
       - no-new-privileges:true
     environment:
       - TZ=${TZ}
-      # https://hub.docker.com/r/bitcoinknots/bitcoin#using-a-custom-user-id-uid-and-group-id-gid
+      # Runtime UID/GID: https://hub.docker.com/r/bitcoinknots/bitcoin#using-a-custom-user-id-uid-and-group-id-gid
       - UID=${USER_ID:-100}
       - GID=${GROUP_ID:-101}
     networks:
@@ -34,3 +33,9 @@ services:
     labels:
       - diun.enable=true
       - diun.include_tags=.*bip110.*alpine.*
+
+      - homepage.group=Infrastructure
+      - homepage.name=Bitcoin Knots
+      - homepage.icon=https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/bitcoin-knots-logo.png
+      - homepage.href=https://bip110.org/
+      - homepage.description=Bitcoin full node implementing BIP110
