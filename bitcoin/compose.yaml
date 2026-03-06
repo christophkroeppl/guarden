@@ -14,7 +14,8 @@ services:
       - TZ=${TZ}
       # Runtime UID/GID: https://hub.docker.com/r/bitcoinknots/bitcoin#using-a-custom-user-id-uid-and-group-id-gid
       - UID=${USER_ID:-100}
-      - GID=${GROUP_ID:-101}
+      # groupmod: GID '100' already exists
+      # - GID=${GROUP_ID:-101}
     networks:
       - edge
       - bitcoin-net
