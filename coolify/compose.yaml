@@ -84,6 +84,15 @@ services:
       - traefik.http.routers.coolify.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
       - traefik.http.routers.coolify.middlewares=redirect-https
 
+      # API/webhooks: no Basic Auth so GitHub (and other callers) can reach deploy webhooks
+      - traefik.http.routers.coolify-secure-api.entrypoints=websecure
+      - traefik.http.routers.coolify-secure-api.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`) && PathPrefix(`/api/`)
+      - traefik.http.routers.coolify-secure-api.service=coolify
+      - traefik.http.routers.coolify-secure-api.priority=100
+      - traefik.http.routers.coolify-secure-api.tls=true
+      - traefik.http.routers.coolify-secure-api.tls.certResolver=namecheap
+
+      # Dashboard and rest: protected by Basic Auth
       - traefik.http.routers.coolify-secure.entrypoints=websecure
       - traefik.http.routers.coolify-secure.rule=Host(`${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}`)
       - traefik.http.routers.coolify-secure.service=coolify
@@ -106,7 +115,7 @@ services:
     networks:
       - coolify
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${COOLIFY_DB_USERNAME:-coolify} -d ${COOLIFY_DB_DATABASE:-coolify}']
+      test: [ 'CMD-SHELL', 'pg_isready -U ${COOLIFY_DB_USERNAME:-coolify} -d ${COOLIFY_DB_DATABASE:-coolify}' ]
       interval: 5s
       retries: 10
       timeout: 5s
@@ -131,7 +140,7 @@ services:
     networks:
       - coolify
     healthcheck:
-      test: ['CMD', 'redis-cli', '-a', '${COOLIFY_REDIS_PASSWORD}', 'ping']
+      test: [ 'CMD', 'redis-cli', '-a', '${COOLIFY_REDIS_PASSWORD}', 'ping' ]
       interval: 5s
       retries: 10
       timeout: 2s
@@ -155,7 +164,7 @@ services:
     networks:
       - coolify
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:6001/ready && wget -qO- http://127.0.0.1:6002/ready || exit 1']
+      test: [ 'CMD-SHELL', 'wget -qO- http://127.0.0.1:6001/ready && wget -qO- http://127.0.0.1:6002/ready || exit 1' ]
       interval: 5s
       retries: 10
       timeout: 5s
