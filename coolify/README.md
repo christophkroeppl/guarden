@@ -12,7 +12,6 @@ This stack uses [Coolify](https://coolify.io/) as the dynamic deployment layer w
 All share an internal `coolify` network; only the app is on `backends` for Traefik.
 
 ## First-time setup (step-by-step)
-https://github.com/coollabsio/coolify/blob/v4.x/docker-compose.dev.yml
 
 ### 1. Set environment variables
 
@@ -30,15 +29,13 @@ In the project `.env` set:
 
 ### 2. Create SSH directory and ensure ownership (required before onboarding)
 
-Coolify expects SSH keys at `./data/ssh`. Create it and ensure it (and `./data`) are owned by `USER_ID:GROUP_ID` so the container can write:
+Coolify expects SSH keys under `./data/ssh` (see [Coolify FAQ](https://coolify.io/docs/knowledge-base/faq#permission-denied-publickey)). Use the same path layout as the [official install script](https://github.com/coollabsio/coolify/blob/main/scripts/install.sh): a `keys/` subdirectory and, for localhost, a key named `id.<user>@host.docker.internal` (e.g. `id.root@host.docker.internal`). Create the dirs and ensure ownership:
 
 ```bash
-mkdir -p coolify/data/ssh
+mkdir -p coolify/data/ssh/keys
 # If USER_ID/GROUP_ID are set, e.g. 1000:1000:
 chown -R "${USER_ID:-1000}:${GROUP_ID:-1000}" coolify/data
 ```
-
-This also avoids the onboarding error **Select server type** (`/onboarding?step=select-server-type`): `Call to a member function getPublicKey() on null` when a key is generated in step 4.
 
 ### 3. Start the stack
 
@@ -48,31 +45,59 @@ From repo root (so the stack that includes Coolify is used):
 docker compose up -d
 ```
 
-### 4. Generate SSH key inside the container (before onboarding server step)
+### 4. Generate SSH key and register it in Coolify (required before "Select server type")
 
-Before or when you reach **Select server type** in the Coolify UI, create an SSH key so Coolify has a key to use. With `user: USER_ID:GROUP_ID`, the container runs as that user; if the mount is owned by the same user, a normal exec works. If you get “Permission denied”, run as root and fix ownership:
+Coolify stores keys in the **database** (PrivateKey model) and assigns them to servers. The "Select server type" step loads the default server and calls `$server->privateKey->getPublicKey()`; if no key is assigned, you get **`Call to a member function getPublicKey() on null`**. You must both create a key **file** and **register it in Coolify and assign it to the localhost server** before that step.
+
+**4a. Create the key file** (match the [install script](https://github.com/coollabsio/coolify/blob/main/scripts/install.sh) layout):
 
 ```bash
-# Container runs as USER_ID:GROUP_ID; if data/ssh is owned by that user, this works:
-docker exec -it coolify sh -c 'mkdir -p /var/www/html/storage/app/ssh && ssh-keygen -t ed25519 -f /var/www/html/storage/app/ssh/id_ed25519 -N ""'
-
-# If you get "Permission denied", create as root then chown to container user (e.g. 1000:1000):
-docker exec -u root -it coolify sh -c 'mkdir -p /var/www/html/storage/app/ssh && ssh-keygen -t ed25519 -f /var/www/html/storage/app/ssh/id_ed25519 -N ""'
-docker exec -u root coolify chown -R "${USER_ID:-9999}:${GROUP_ID:-9999}" /var/www/html/storage/app/ssh
+# Use the same key name as official install (replace root with your host user if different)
+docker exec -u root -it coolify sh -c 'mkdir -p /var/www/html/storage/app/ssh/keys && ssh-keygen -t ed25519 -a 100 -f /var/www/html/storage/app/ssh/keys/id.root@host.docker.internal -q -N "" -C coolify'
+docker exec -u root coolify chown -R "${USER_ID:-1000}:${GROUP_ID:-1000}" /var/www/html/storage/app/ssh
 ```
 
-Then continue the onboarding; the `getPublicKey() on null` error should be resolved.
+(If your host user is not `root`, use `id.$(whoami)@host.docker.internal` instead of `id.root@host.docker.internal`.)
+
+**4b. Register the key in Coolify and assign it to the localhost server** — choose one:
+
+- **Option A – UI (recommended):** Before continuing onboarding to "Select server type", go to **Security → Private Keys**, add a new key and paste the contents of `coolify/data/ssh/keys/id.root@host.docker.internal`. Then go to **Servers → localhost** (or the default server) → **Private key** tab and select that key. Then continue onboarding.
+- **Option B – One-off script:** If you cannot leave onboarding, run this once so the default server has a key in the database (replace the key path if you used a different name):
+
+```bash
+docker exec -it coolify php artisan tinker --execute="
+\$path = '/var/www/html/storage/app/ssh/keys/id.root@host.docker.internal';
+if (!is_file(\$path)) { \$path = '/var/www/html/storage/app/ssh/id_ed25519'; }
+\$content = file_get_contents(\$path);
+\$teamId = \App\Models\Team::first()->id;
+\$key = \App\Models\PrivateKey::createAndStore(['name' => 'Default', 'description' => 'Default', 'private_key' => \$content, 'is_git_related' => false, 'team_id' => \$teamId]);
+\$server = \App\Models\Server::first();
+\$server->private_key_id = \$key->id;
+\$server->save();
+echo 'Assigned key to server: ' . \$server->name . PHP_EOL;
+"
+```
+
+Then reload the onboarding page and continue to "Select server type".
+
+**4c. (Optional) Add public key to host `authorized_keys`** for localhost SSH access (see [Coolify FAQ](https://coolify.io/docs/knowledge-base/faq#permission-denied-publickey)):
+
+```bash
+cat coolify/data/ssh/keys/id.root@host.docker.internal.pub >> ~/.ssh/authorized_keys
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+```
 
 ### 5. Complete Coolify setup in the UI
 
-1. Open website (Traefik Basic Auth with your htpasswd user).
+1. Open `https://${COOLIFY_SUBDOMAIN}.${NAMECHEAP_DOMAIN__KROEPPL_ONLINE}` (Traefik Basic Auth with your htpasswd user).
 2. Register / create the initial Coolify admin account.
-3. Go through onboarding. At **Select server type** choose your server type (e.g. local Docker); the SSH key from step 4 will be used.
+3. Go through onboarding. At **Select server type** choose your server type (e.g. local Docker). The server should already have a key assigned from step 4.
 4. Finish any remaining onboarding steps (add server, connect Git, etc.) as needed.
 
 ### Troubleshooting
 
-- **`Call to a member function getPublicKey() on null`** at `/onboarding?step=select-server-type`: Coolify is looking for an SSH key that does not exist. Ensure `coolify/data/ssh` exists, the compose volume `./data/ssh:/var/www/html/storage/app/ssh` is in use, and run step 4 above to generate the key inside the container, then retry the step.
+- **`Call to a member function getPublicKey() on null`** at `/onboarding?step=select-server-type`: The default server has no **Private Key** assigned in the database. Coolify keys are stored in the DB and linked to servers; a key file alone is not enough. Follow step 4: create the key file, then either add the key in **Security → Private Keys** and assign it to the localhost server (option A), or run the one-off tinker script (option B).
 
 ## Routing / domain model
 Set app domains inside Coolify to match your desired pattern:
@@ -100,3 +125,12 @@ Use one shared DB server resource (Postgres or MySQL) in Coolify, then per deplo
 - Pre-deploy hook: `CREATE DATABASE IF NOT EXISTS <db_name>;`
 - Runtime env: set `DATABASE_URL` for that branch db.
 - Cleanup hook (on preview removal): drop branch DB.
+
+---
+
+## Sources:
+### Setup
+- [Coolify: Manual Installation](https://coolify.io/docs/get-started/installation#manual-installation)
+- [Coolify: Non-Root User](https://coolify.io/docs/knowledge-base/server/non-root-user)
+### Container Management
+- [Coolify: Docker Compose](https://coolify.io/docs/knowledge-base/docker/compose)
