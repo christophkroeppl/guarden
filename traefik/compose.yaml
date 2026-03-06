@@ -98,5 +98,3 @@ services:
       - traefik.http.routers.proxy-secure.tls.certResolver=namecheap
 
       - traefik.http.middlewares.traefik-basicauth.basicauth.usersfile=/etc/traefik/config/htpasswd
-
-      - traefik.http.middlewares.dailydose-basicauth.basicauth.users=${TRAEFIK_BASICAUTH_USERS}
