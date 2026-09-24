@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE="${GUARDEN_STATE:-/var/lib/guarden}"
+BEDS_DIR="$STATE/beds"
+EDGE_DIR="$STATE/edge"
+DOMAIN="${GUARDEN_DOMAIN:-example.com}"
+
+usage() {
+  cat <<'EOF'
+usage: roots [sync] [--help]
+
+roots — the routes accumulator: collects route configs from services in beds
+and writes Traefik dynamic config. Traefik itself is a separate process in a
+separate user.
+
+commands:
+  sync    regenerate Traefik dynamic config from every bed
+EOF
+}
+
+cmd_sync() {
+  mkdir -p "$EDGE_DIR"
+  python3 - "$BEDS_DIR" "$EDGE_DIR" "$DOMAIN" <<'PYEOF'
+import os, re, sys
+
+beds_dir, edge_dir, domain = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def parse_meta(path):
+    meta = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if "=" in line:
+                k, _, v = line.partition("=")
+                meta[k] = v
+    return meta
+
+def parse_bed_yaml(path):
+    routes = {}
+    repo = None
+    in_routes = False
+    with open(path) as f:
+        for line in f:
+            raw = line.rstrip("\n")
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(raw) - len(raw.lstrip())
+            if indent == 0:
+                in_routes = stripped == "routes:"
+                if stripped.startswith("repo:"):
+                    repo = stripped.split(":", 1)[1].strip().strip("\"'")
+                continue
+            if in_routes and indent == 2:
+                m = re.match(r'(\S+):\s*"([^"]*)"', stripped)
+                if m:
+                    routes[m.group(1)] = m.group(2)
+                else:
+                    m = re.match(r"(\S+):\s*(\S+)", stripped)
+                    if m:
+                        routes[m.group(1)] = m.group(2).strip("\"'")
+    return routes, repo
+
+def parse_compose_ports(path):
+    ports = {}
+    in_services = False
+    current = None
+    in_ports = False
+    with open(path) as f:
+        for line in f:
+            raw = line.rstrip("\n")
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(raw) - len(raw.lstrip())
+            if indent == 0:
+                in_services = stripped == "services:"
+                current = None
+                in_ports = False
+                continue
+            if not in_services:
+                continue
+            if indent == 2 and stripped.endswith(":"):
+                current = stripped[:-1]
+                in_ports = False
+                continue
+            if current and indent == 4:
+                if stripped == "ports:":
+                    in_ports = True
+                    continue
+                in_ports = False
+            if current and in_ports and indent >= 6:
+                entry = stripped.lstrip("- ").strip().strip("\"'")
+                host_port = entry.split(":")[0]
+                if host_port.isdigit():
+                    ports.setdefault(current, host_port)
+    return ports
+
+def safe_env(env):
+    return re.sub(r"[:/]", "-", env)
+
+def env_kind(env):
+    if env == "production":
+        return "production"
+    if env == "staging":
+        return "staging"
+    if env.startswith("preview:"):
+        return "preview"
+    return "other"
+
+def default_rule(env, domain):
+    kind = env_kind(env)
+    if kind == "staging":
+        return "Host(`staging.%s`)" % domain
+    if kind == "preview":
+        ref = env.split(":", 1)[1]
+        return "Host(`preview.%s`) && PathPrefix(`/%s`)" % (domain, ref)
+    if kind == "production":
+        return "Host(`%s`)" % domain
+    return "Host(`%s.%s`)" % (safe_env(env), domain)
+
+def substitute(pattern, env, domain):
+    return pattern.replace("${env}", safe_env(env)).replace("${domain}", domain)
+
+def write_config(path, routers, services):
+    lines = ["http:", "  routers:"]
+    for name in sorted(routers):
+        lines.append("    %s:" % name)
+        lines.append('      rule: "%s"' % routers[name])
+        lines.append("      service: %s" % name)
+    lines.append("  services:")
+    for name in sorted(services):
+        lines.append("    %s:" % name)
+        lines.append("      loadBalancer:")
+        lines.append("        servers:")
+        lines.append('          - url: "http://127.0.0.1:%s"' % services[name])
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+expected = set()
+if os.path.isdir(beds_dir):
+    for bed_name in sorted(os.listdir(beds_dir)):
+        bed_dir = os.path.join(beds_dir, bed_name)
+        if not os.path.isdir(bed_dir):
+            continue
+        meta_path = os.path.join(bed_dir, "meta")
+        if not os.path.isfile(meta_path):
+            continue
+        meta = parse_meta(meta_path)
+        env = meta.get("env", "staging")
+        routes, repo = ({}, None)
+        bed_yaml = os.path.join(bed_dir, "bed.yaml")
+        if os.path.isfile(bed_yaml):
+            routes, repo = parse_bed_yaml(bed_yaml)
+        ports = {}
+        compose = os.path.join(bed_dir, "compose.yaml")
+        if os.path.isfile(compose):
+            ports = parse_compose_ports(compose)
+        routers = {}
+        services = {}
+        if routes:
+            for svc, pattern in sorted(routes.items()):
+                port = ports.get(svc)
+                if not port:
+                    continue
+                router_name = "%s-%s" % (bed_name, svc)
+                routers[router_name] = "Host(`%s`)" % substitute(pattern, env, domain)
+                services[router_name] = port
+        else:
+            if not ports:
+                continue
+            router_name = bed_name
+            routers[router_name] = default_rule(env, domain)
+            first_svc = sorted(ports)[0]
+            services[router_name] = ports[first_svc]
+        out_path = os.path.join(edge_dir, "%s.yml" % bed_name)
+        write_config(out_path, routers, services)
+        expected.add("%s.yml" % bed_name)
+
+for fname in os.listdir(edge_dir):
+    if fname.endswith(".yml") and fname not in expected:
+        os.remove(os.path.join(edge_dir, fname))
+PYEOF
+  echo "roots: dynamic config written to $EDGE_DIR"
+}
+
+case "${1:-}" in
+  ""|-h|--help)
+    usage
+    exit 0
+    ;;
+  sync)
+    cmd_sync
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

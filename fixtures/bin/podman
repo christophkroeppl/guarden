@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "podman $*" >> "${GUARDEN_CALL_LOG:-/dev/null}"
+exit 0

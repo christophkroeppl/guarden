@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "dracut $*" >> "${GUARDEN_CALL_LOG:-/dev/null}"
+exit 0

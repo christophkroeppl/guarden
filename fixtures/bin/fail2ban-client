@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "fail2ban-client $*" >> "${GUARDEN_CALL_LOG:-/dev/null}"
+exit 0

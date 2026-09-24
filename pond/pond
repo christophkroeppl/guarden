@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE="${GUARDEN_STATE:-/var/lib/guarden}"
+HOSTS_FILE="$STATE/hosts"
+
+usage() {
+  cat <<'EOF'
+usage: pond <command>
+
+pond — shared state services offered to beds (postgres first). Exactly two
+instances: pond-prod (snapshotted, 127.0.0.1:5432) and pond-nonprod
+(rebuildable, 127.0.0.1:5433). Beds get databases inside a pond, never their
+own pond. Podman runs as user pond.
+
+commands:
+  up      run pond-prod and pond-nonprod
+  down    remove pond-prod and pond-nonprod
+EOF
+}
+
+as_pond() {
+  runuser -u pond -- "$@"
+}
+
+write_hyphae_pond() {
+  mkdir -p "$(dirname "$HOSTS_FILE")"
+  if ! grep -qF " pond.internal" "$HOSTS_FILE" 2>/dev/null; then
+    echo "127.0.0.1 pond.internal" >> "$HOSTS_FILE"
+  fi
+}
+
+cmd_up() {
+  as_pond podman run -d --name pond-prod --publish 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" postgres
+  as_pond podman run -d --name pond-nonprod --publish 127.0.0.1:5433:5432 -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" postgres
+  write_hyphae_pond
+  echo "pond up: pond-prod 127.0.0.1:5432, pond-nonprod 127.0.0.1:5433"
+}
+
+cmd_down() {
+  as_pond podman rm -f pond-prod pond-nonprod
+  echo "pond down"
+}
+
+case "${1:-}" in
+  ""|-h|--help)
+    usage
+    exit 0
+    ;;
+  up)
+    cmd_up
+    ;;
+  down)
+    cmd_down
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

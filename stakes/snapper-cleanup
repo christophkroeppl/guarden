@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -u
+
+STATE="${GUARDEN_STATE:-/var/lib/guarden}"
+PINS_FILE="$STATE/stakes/pins"
+
+for id in "$@"; do
+  if [ -f "$PINS_FILE" ] && grep -qE "^${id}( |\$)" "$PINS_FILE"; then
+    continue
+  fi
+  echo "$id"
+done
+
+exit 0

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+echo "podlet $*" >> "${GUARDEN_CALL_LOG:-/dev/null}"
+compose=""
+outdir="."
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -f|--file) compose="$2"; shift 2 ;;
+    -d|--directory) outdir="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ -n "$compose" ] && [ -f "$compose" ]; then
+  mkdir -p "$outdir"
+  services=$(awk '/^services:/{s=1;next} /^[^ ]/{s=0} s && /^  [^ ]+:[ ]*$/{gsub(/^  /,"");gsub(/:$/,"");print}' "$compose")
+  for svc in $services; do
+    printf '[Container]\nImage=stub\n' > "$outdir/$svc.container"
+  done
+fi
+exit 0

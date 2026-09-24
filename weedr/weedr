@@ -1,0 +1,937 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE="${GUARDEN_STATE:-/var/lib/guarden}"
+BEDS_DIR="$STATE/beds"
+HOMES_DIR="$STATE/homes"
+HOSTS_FILE="$STATE/hosts"
+
+usage() {
+  cat <<'EOF'
+usage: weedr <command> [args]
+
+weedr — the admin CLI that creates and removes beds and services without gitops.
+The only privileged mutator.
+
+commands:
+  bed new <project> --env <env> [--from <dir>]
+  bed start <bed>
+  bed stop <bed>
+  bed restart <bed>
+  bed drop <bed> [--yes]
+  secret set <bed> KEY
+  pond mint <bed>
+  pond drop <bed> [--yes]
+  pond restore <bed> --from <dump.sql>
+  preview new <project> --ref <ref> [--from <dir>]
+  preview drop <project> --ref <ref>
+  redeploy <bed> [--from <dir>] [--yes]
+EOF
+}
+
+bed_name_from() {
+  local project="$1" env="$2"
+  echo "${project}-${env//[:\/]/-}"
+}
+
+env_class() {
+  case "$1" in
+    production) echo production ;;
+    staging|preview:*) echo nonprod ;;
+    *) echo nonprod ;;
+  esac
+}
+
+write_hyphae() {
+  local bed_user="$1"
+  shift
+  mkdir -p "$(dirname "$HOSTS_FILE")"
+  local names=("$@")
+  for name in "${names[@]}"; do
+    if ! grep -qF " ${name}" "$HOSTS_FILE" 2>/dev/null; then
+      echo "127.0.0.1 ${name}" >> "$HOSTS_FILE"
+    fi
+  done
+}
+
+remove_hyphae() {
+  local bed_user="$1"
+  shift
+  local names=("$@")
+  if [ -f "$HOSTS_FILE" ]; then
+    local tmp
+    tmp="$(mktemp)"
+    for name in "${names[@]}"; do
+      grep -vF " ${name}" "$HOSTS_FILE" > "$tmp" || true
+      mv "$tmp" "$HOSTS_FILE"
+    done
+  fi
+}
+
+hyphae_names_for() {
+  local bed_user="$1" bed_name="$2" project_dir="${3:-}"
+  local names=("${bed_user}.internal")
+  if [ -n "$project_dir" ] && [ -f "$project_dir/bed.yaml" ]; then
+    local aliases
+    aliases=$(sed -n '/^hyphae:/,/^[^ ]/p' "$project_dir/bed.yaml" | grep -oP '(?<=aliases:\s\[)[^]]*' | tr ',' '\n' | tr -d ' "' || true)
+    while IFS= read -r alias; do
+      [ -n "$alias" ] && names+=("$alias")
+    done <<< "$aliases"
+  fi
+  printf '%s\n' "${names[@]}"
+}
+
+compose_to_quadlet() {
+  local compose_file="$1" output_dir="$2"
+  if command -v podlet >/dev/null 2>&1; then
+    podlet compose -f "$compose_file" -d "$output_dir"
+  else
+    echo "podlet compose -f $compose_file" >> "${GUARDEN_CALL_LOG:-/dev/null}"
+  fi
+  emit_bare_volume_units "$compose_file" "$output_dir"
+}
+
+emit_bare_volume_units() {
+  local compose_file="$1" output_dir="$2"
+  python3 - "$compose_file" "$output_dir" <<'PYEOF'
+import sys, os
+compose_path, output_dir = sys.argv[1], sys.argv[2]
+def bare_volumes(path):
+    vols = []
+    in_volumes = False
+    current = None
+    current_bare = True
+    with open(path) as f:
+        for line in f:
+            raw = line.rstrip('\n')
+            stripped = raw.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            indent = len(raw) - len(raw.lstrip())
+            if indent == 0:
+                if current and current_bare:
+                    vols.append(current)
+                in_volumes = (stripped == 'volumes:')
+                current = None
+                current_bare = True
+                continue
+            if not in_volumes:
+                continue
+            if indent == 2:
+                if current and current_bare:
+                    vols.append(current)
+                if ':' in stripped:
+                    name, _, rest = stripped.partition(':')
+                    current = name.strip()
+                    current_bare = rest.strip() in ('', '{}', 'null', '~')
+                else:
+                    current = stripped
+                    current_bare = True
+            elif indent > 2 and current:
+                current_bare = False
+    if current and current_bare:
+        vols.append(current)
+    return vols
+os.makedirs(output_dir, exist_ok=True)
+for vol in bare_volumes(compose_path):
+    vol_path = os.path.join(output_dir, vol + '.volume')
+    if not os.path.exists(vol_path):
+        with open(vol_path, 'w') as f:
+            f.write('[Volume]\n')
+PYEOF
+}
+
+write_dropins() {
+  local units_dir="$1" env="$2"
+  local safe_env="${env//[:\/]/-}"
+  for f in "$units_dir"/*.container; do
+    [ -e "$f" ] || continue
+    local base
+    base="$(basename "$f" .container)"
+    local dropin_dir="$units_dir/${base}.container.d"
+    mkdir -p "$dropin_dir"
+    cat > "$dropin_dir/bed.env" <<EOF
+[Container]
+EnvironmentFile=%h/.env
+EnvironmentFile=-%h/.env.${safe_env}
+EnvironmentFile=-%h/.env.${safe_env}.local
+EOF
+  done
+}
+
+rand_hex() {
+  head -c 16 /dev/urandom | od -A n -t x | tr -d ' \n'
+}
+
+materialize_env() {
+  local bed_user="$1" schema_file="$2" class="$3" project_dir="$4" env="$5"
+  local bed_home="$HOMES_DIR/$bed_user"
+  local out_file="$bed_home/.env"
+  : > "$out_file"
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue ;; esac
+    local key="${line%%=*}"
+    local rest="${line#*=}"
+    local value="${rest%%@*}"
+    value="${value%"${value##*[![:space:]]}"}"
+    local has_sensitive=0
+    [[ "$rest" == *@sensitive* ]] && has_sensitive=1
+    if [ "$has_sensitive" -eq 1 ] && [ "$class" = "nonprod" ]; then
+      echo "${key}=$(rand_hex)" >> "$out_file"
+    elif [ "$has_sensitive" -eq 1 ]; then
+      echo "${key}=" >> "$out_file"
+    else
+      echo "${key}=${value}" >> "$out_file"
+    fi
+  done < "$schema_file"
+  local safe_env="${env//[:\/]/-}"
+  for layer in ".env" ".env.${safe_env}" ".env.${safe_env}.local"; do
+    if [ -f "$project_dir/$layer" ]; then
+      cp "$project_dir/$layer" "$bed_home/$layer"
+    fi
+  done
+}
+
+generate_env_example() {
+  local schema_file="$1" out_file="$2"
+  : > "$out_file"
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue ;; esac
+    local key="${line%%=*}"
+    local rest="${line#*=}"
+    local value="${rest%%@*}"
+    value="${value%"${value##*[![:space:]]}"}"
+    local ann="${rest#*@}"
+    local has_sensitive=0 has_example="" has_required=0
+    [[ "$rest" == *@sensitive* ]] && has_sensitive=1
+    [[ "$rest" == *@required* ]] && has_required=1
+    if [[ "$rest" == *@example* ]]; then
+      has_example=$(echo "$rest" | grep -oP '(?<=@example\s)\S+' || true)
+    fi
+    if [ "$has_sensitive" -eq 1 ]; then
+      if [ -n "$has_example" ]; then
+        echo "${key}=${has_example}" >> "$out_file"
+      else
+        echo "${key}=EXAMPLE-${key}" >> "$out_file"
+      fi
+    elif [ -n "$value" ]; then
+      echo "${key}=${value}" >> "$out_file"
+    elif [ "$has_required" -eq 1 ]; then
+      echo "${key}=EXAMPLE-${key}" >> "$out_file"
+    else
+      echo "${key}=" >> "$out_file"
+    fi
+  done < "$schema_file"
+}
+
+cmd_bed_new() {
+  shift 2
+  local project="" env="" from="."
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --env) env="$2"; shift 2 ;;
+      --from) from="$2"; shift 2 ;;
+      -*) echo "weedr: unknown option: $1" >&2; exit 2 ;;
+      *) if [ -z "$project" ]; then project="$1"; else echo "weedr: unexpected argument: $1" >&2; exit 2; fi; shift ;;
+    esac
+  done
+  if [ -z "$project" ] || [ -z "$env" ]; then
+    echo "weedr bed new: requires <project> and --env" >&2
+    exit 2
+  fi
+
+  local bed_name bed_user
+  bed_name="$(bed_name_from "$project" "$env")"
+  bed_user="bed-${bed_name}"
+
+  if [ -d "$BEDS_DIR/$bed_name" ]; then
+    echo "weedr: bed already exists: $bed_name" >&2
+    exit 2
+  fi
+
+  local bed_home="$HOMES_DIR/$bed_user"
+  local units_dir="$bed_home/.config/containers/systemd"
+
+  mkdir -p "$BEDS_DIR/$bed_name"
+  mkdir -p "$units_dir"
+  {
+    echo "project=$project"
+    echo "env=$env"
+    echo "user=$bed_user"
+  } > "$BEDS_DIR/$bed_name/meta"
+
+  useradd --system --create-home --home-dir "$bed_home" "$bed_user"
+  loginctl enable-linger "$bed_user"
+
+  echo "$bed_user:100000:65536" >> "$STATE/subuid"
+  echo "$bed_user:100000:65536" >> "$STATE/subgid"
+
+  if [ -f "$from/.env.schema" ]; then
+    generate_env_example "$from/.env.schema" "$from/.env.example"
+    cp "$from/.env.schema" "$bed_home/.env.schema"
+    local class
+    class="$(env_class "$env")"
+    materialize_env "$bed_user" "$from/.env.schema" "$class" "$from" "$env"
+  fi
+
+  local names
+  mapfile -t names < <(hyphae_names_for "$bed_user" "$bed_name" "$from")
+  write_hyphae "$bed_user" "${names[@]}"
+
+  if [ -f "$from/compose.yaml" ]; then
+    compose_to_quadlet "$from/compose.yaml" "$units_dir"
+  fi
+  write_dropins "$units_dir" "$env"
+
+  echo "created bed: $bed_name"
+}
+
+resolve_env_value() {
+  local bed_home="$1" env="$2" key="$3"
+  local safe_env="${env//[:\/]/-}"
+  local val=""
+  for layer in ".env" ".env.${safe_env}" ".env.${safe_env}.local"; do
+    if [ -f "$bed_home/$layer" ]; then
+      local v
+      v=$(grep "^${key}=" "$bed_home/$layer" | tail -1 | cut -d= -f2- || true)
+      [ -n "$v" ] && val="$v"
+    fi
+  done
+  echo "$val"
+}
+
+check_prod_gate() {
+  local bed_home="$1" schema_file="$2" class="$3" env="$4"
+  local errors=0
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue ;; esac
+    local key="${line%%=*}"
+    local rest="${line#*=}"
+    local has_required=0
+    [[ "$rest" == *@required* ]] && has_required=1
+    [ "$has_required" -eq 0 ] && continue
+    local val
+    val="$(resolve_env_value "$bed_home" "$env" "$key")"
+    if [ -z "$val" ]; then
+      echo "missing: $key"
+      errors=$((errors + 1))
+    elif [[ "$val" == EXAMPLE-* ]] || [[ "$val" == changeme ]]; then
+      echo "example value: $key"
+      errors=$((errors + 1))
+    fi
+  done < "$schema_file"
+  [ "$errors" -gt 0 ] && return 1
+  return 0
+}
+
+cmd_bed_start() {
+  shift 2
+  local bed="${1:-}"
+  if [ -z "$bed" ]; then echo "weedr bed start: requires <bed>" >&2; exit 2; fi
+  if [ ! -d "$BEDS_DIR/$bed" ]; then echo "weedr: no such bed: $bed" >&2; exit 1; fi
+  local bed_user env project
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  env=$(grep '^env=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  project=$(grep '^project=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local bed_home="$HOMES_DIR/$bed_user"
+  local class
+  class="$(env_class "$env")"
+
+  local schema_file=""
+  if [ -f "$bed_home/.env.schema" ]; then
+    schema_file="$bed_home/.env.schema"
+  fi
+
+  if [ -n "$schema_file" ]; then
+    local gate_rc=0
+    local gate_output
+    gate_output="$(check_prod_gate "$bed_home" "$schema_file" "$class" "$env")" || gate_rc=$?
+    if [ "$gate_rc" -ne 0 ]; then
+      if [ "$class" = "production" ]; then
+        echo "$gate_output" >&2
+        echo "weedr: refusing to start production bed: $bed" >&2
+        exit 1
+      else
+        echo "$gate_output" >&2
+        echo "weedr: warning: gate issues on non-prod bed: $bed" >&2
+      fi
+    fi
+  fi
+
+  local units_dir="$bed_home/.config/containers/systemd"
+  local units=()
+  for f in "$units_dir"/*.container; do
+    [ -e "$f" ] || continue
+    units+=("$(basename "$f" .container).service")
+  done
+  [ ${#units[@]} -gt 0 ] && systemctl --user start "${units[@]}"
+  echo "started bed: $bed"
+}
+
+cmd_bed_stop() {
+  shift 2
+  local bed="${1:-}"
+  if [ -z "$bed" ]; then echo "weedr bed stop: requires <bed>" >&2; exit 2; fi
+  if [ ! -d "$BEDS_DIR/$bed" ]; then echo "weedr: no such bed: $bed" >&2; exit 1; fi
+  local bed_user
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local units_dir="$HOMES_DIR/$bed_user/.config/containers/systemd"
+  local units=()
+  for f in "$units_dir"/*.container; do
+    [ -e "$f" ] || continue
+    units+=("$(basename "$f" .container).service")
+  done
+  [ ${#units[@]} -gt 0 ] && systemctl --user stop "${units[@]}"
+  echo "stopped bed: $bed"
+}
+
+cmd_bed_restart() {
+  local bed="${3:-}"
+  cmd_bed_stop bed stop "$bed"
+  cmd_bed_start bed start "$bed"
+}
+
+stop_bed_units() {
+  local bed="$1"
+  local bed_user
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local units_dir="$HOMES_DIR/$bed_user/.config/containers/systemd"
+  local units=()
+  for f in "$units_dir"/*.container; do
+    [ -e "$f" ] || continue
+    units+=("$(basename "$f" .container).service")
+  done
+  [ ${#units[@]} -gt 0 ] && systemctl --user stop "${units[@]}"
+}
+
+remove_bed_volumes() {
+  local bed="$1"
+  local bed_user
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local units_dir="$HOMES_DIR/$bed_user/.config/containers/systemd"
+  for f in "$units_dir"/*.volume; do
+    [ -e "$f" ] || continue
+    runuser -u "$bed_user" -- podman volume rm -f "$(basename "$f" .volume)"
+  done
+}
+
+teardown_bed() {
+  local bed="$1"
+  local bed_user
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  remove_bed_volumes "$bed"
+  userdel "$bed_user"
+  local names
+  mapfile -t names < <(hyphae_names_for "$bed_user" "$bed" "$BEDS_DIR/$bed")
+  remove_hyphae "$bed_user" "${names[@]}"
+  rm -rf "$BEDS_DIR/$bed" "$HOMES_DIR/$bed_user"
+}
+
+cmd_bed_drop() {
+  shift 2
+  local bed="" yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes) yes=1; shift ;;
+      -*) echo "weedr: unknown option: $1" >&2; exit 2 ;;
+      *) bed="$1"; shift ;;
+    esac
+  done
+  if [ -z "$bed" ]; then echo "weedr bed drop: requires <bed>" >&2; exit 2; fi
+  if [ ! -d "$BEDS_DIR/$bed" ]; then echo "weedr: no such bed: $bed" >&2; exit 1; fi
+
+  local project env
+  project=$(grep '^project=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  env=$(grep '^env=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local class
+  class="$(env_class "$env")"
+
+  if [ "$class" = "production" ] && [ "$yes" -ne 1 ]; then
+    echo "weedr: refusing to drop production bed without --yes: $bed" >&2
+    exit 2
+  fi
+
+  stop_bed_units "$bed"
+  teardown_bed "$bed"
+  echo "dropped bed: $bed"
+}
+
+cmd_secret_set() {
+  shift 2
+  local bed="${1:-}" key="${2:-}"
+  if [ -z "$bed" ] || [ -z "$key" ]; then echo "weedr secret set: requires <bed> and KEY" >&2; exit 2; fi
+  if [ ! -d "$BEDS_DIR/$bed" ]; then echo "weedr: no such bed: $bed" >&2; exit 1; fi
+  local value
+  value=$(cat)
+  local bed_user env
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  env=$(grep '^env=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local local_file="$HOMES_DIR/$bed_user/.env.${env//[:\/]/-}.local"
+  if [ -f "$local_file" ]; then
+    grep -v "^${key}=" "$local_file" > "$local_file.tmp" || true
+    mv "$local_file.tmp" "$local_file"
+  fi
+  echo "${key}=${value}" >> "$local_file"
+  echo "set ${key} in bed: $bed"
+}
+
+as_pond() {
+  runuser -u pond -- "$@"
+}
+
+pond_container_for() {
+  if [ "$1" = "production" ]; then echo "pond-prod"; else echo "pond-nonprod"; fi
+}
+
+pond_port_for() {
+  if [ "$1" = "production" ]; then echo "5432"; else echo "5433"; fi
+}
+
+pg_ident() {
+  echo "${1//-/_}"
+}
+
+plant_database_url() {
+  local bed_user="$1" env="$2" role="$3" password="$4" port="$5" db="$6"
+  local safe_env="${env//[:\/]/-}"
+  local local_file="$HOMES_DIR/$bed_user/.env.${safe_env}.local"
+  if [ -f "$local_file" ]; then
+    grep -v "^DATABASE_URL=" "$local_file" > "$local_file.tmp" || true
+    mv "$local_file.tmp" "$local_file"
+  fi
+  echo "DATABASE_URL=postgres://${role}:${password}@pond.internal:${port}/${db}" >> "$local_file"
+}
+
+clear_database_url() {
+  local bed_user="$1" env="$2"
+  local safe_env="${env//[:\/]/-}"
+  local local_file="$HOMES_DIR/$bed_user/.env.${safe_env}.local"
+  if [ -f "$local_file" ]; then
+    grep -v "^DATABASE_URL=" "$local_file" > "$local_file.tmp" || true
+    mv "$local_file.tmp" "$local_file"
+  fi
+}
+
+pond_bed_meta() {
+  if [ ! -d "$BEDS_DIR/$1" ]; then echo "weedr: no such bed: $1" >&2; exit 1; fi
+}
+
+cmd_pond_mint() {
+  shift 2
+  local bed="${1:-}"
+  if [ -z "$bed" ]; then echo "weedr pond mint: requires <bed>" >&2; exit 2; fi
+  pond_bed_meta "$bed"
+  local env bed_user
+  env=$(grep '^env=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local class container port
+  class="$(env_class "$env")"
+  container="$(pond_container_for "$class")"
+  port="$(pond_port_for "$class")"
+  local role db password
+  role="$(pg_ident "$bed")"
+  db="$role"
+  password="$(openssl rand -hex 16)"
+  as_pond podman exec "$container" psql -U postgres -c "CREATE ROLE $role LOGIN PASSWORD '$password'"
+  as_pond podman exec "$container" psql -U postgres -c "CREATE DATABASE $db OWNER $role"
+  write_hyphae "$bed_user" "pond.internal"
+  plant_database_url "$bed_user" "$env" "$role" "$password" "$port" "$db"
+  unset password
+  echo "minted pond database: $bed in $container"
+}
+
+cmd_pond_drop() {
+  shift 2
+  local bed="" yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes) yes=1; shift ;;
+      -*) echo "weedr: unknown option: $1" >&2; exit 2 ;;
+      *) bed="$1"; shift ;;
+    esac
+  done
+  if [ -z "$bed" ]; then echo "weedr pond drop: requires <bed>" >&2; exit 2; fi
+  pond_bed_meta "$bed"
+  local env bed_user
+  env=$(grep '^env=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local class container
+  class="$(env_class "$env")"
+  container="$(pond_container_for "$class")"
+  if [ "$class" = "production" ] && [ "$yes" -ne 1 ]; then
+    echo "weedr: refusing to drop production pond database without --yes: $bed" >&2
+    exit 2
+  fi
+  local role db
+  role="$(pg_ident "$bed")"
+  db="$role"
+  as_pond podman exec "$container" psql -U postgres -c "DROP DATABASE IF EXISTS $db"
+  as_pond podman exec "$container" psql -U postgres -c "DROP ROLE IF EXISTS $role"
+  clear_database_url "$bed_user" "$env"
+  echo "dropped pond database: $bed from $container"
+}
+
+cmd_pond_restore() {
+  shift 2
+  local bed="" from=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) from="$2"; shift 2 ;;
+      -*) echo "weedr: unknown option: $1" >&2; exit 2 ;;
+      *) bed="$1"; shift ;;
+    esac
+  done
+  if [ -z "$bed" ]; then echo "weedr pond restore: requires <bed>" >&2; exit 2; fi
+  if [ -z "$from" ]; then echo "weedr pond restore: requires --from <dump.sql>" >&2; exit 2; fi
+  if [ ! -f "$from" ]; then echo "weedr: no such dump: $from" >&2; exit 1; fi
+  pond_bed_meta "$bed"
+  local env bed_user
+  env=$(grep '^env=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local class container port
+  class="$(env_class "$env")"
+  container="$(pond_container_for "$class")"
+  port="$(pond_port_for "$class")"
+  local db role password
+  db="$(pg_ident "$bed")"
+  role="${db}_$(openssl rand -hex 4)"
+  password="$(openssl rand -hex 16)"
+  as_pond podman exec "$container" psql -U postgres -c "CREATE ROLE $role LOGIN PASSWORD '$password'"
+  as_pond podman exec "$container" psql -U postgres -c "DROP DATABASE IF EXISTS $db"
+  as_pond podman exec "$container" psql -U postgres -c "CREATE DATABASE $db OWNER $role"
+  as_pond podman exec -i "$container" psql -U postgres -d "$db" < "$from"
+  as_pond podman exec "$container" psql -U postgres -d "$db" -c "REASSIGN OWNED BY CURRENT_USER TO $role"
+  write_hyphae "$bed_user" "pond.internal"
+  plant_database_url "$bed_user" "$env" "$role" "$password" "$port" "$db"
+  unset password
+  echo "restored pond database: $bed in $container"
+}
+
+FIFO_DIR="$STATE/previews"
+
+snapshot_id() {
+  if [ -f "$STATE/pond/snapshot" ]; then
+    cat "$STATE/pond/snapshot"
+  else
+    echo 1
+  fi
+}
+
+preview_env_for() {
+  if [ "$1" = "develop" ]; then echo "staging"; else echo "preview:$1"; fi
+}
+
+fifo_add() {
+  local project="$1" ref="$2"
+  mkdir -p "$FIFO_DIR"
+  echo "$ref" >> "$FIFO_DIR/$project"
+}
+
+fifo_remove() {
+  local project="$1" ref="$2"
+  [ -f "$FIFO_DIR/$project" ] || return 0
+  grep -vFx "$ref" "$FIFO_DIR/$project" > "$FIFO_DIR/$project.tmp" || true
+  mv "$FIFO_DIR/$project.tmp" "$FIFO_DIR/$project"
+}
+
+copy_manifests_into_bed() {
+  local from="$1" bed="$2"
+  [ -f "$from/compose.yaml" ] && cp "$from/compose.yaml" "$BEDS_DIR/$bed/compose.yaml"
+  [ -f "$from/bed.yaml" ] && cp "$from/bed.yaml" "$BEDS_DIR/$bed/bed.yaml"
+  if [ -d "$from/widgets" ]; then
+    rm -rf "$BEDS_DIR/$bed/widgets"
+    cp -r "$from/widgets" "$BEDS_DIR/$bed/widgets"
+  fi
+}
+
+preview_drop_body() {
+  local project="$1" ref="$2"
+  local env bed_name
+  env="$(preview_env_for "$ref")"
+  bed_name="$(bed_name_from "$project" "$env")"
+  if [ ! -d "$BEDS_DIR/$bed_name" ]; then
+    echo "weedr: no such preview: $bed_name" >&2
+    exit 1
+  fi
+  local snap
+  snap=$(grep '^snapshot=' "$BEDS_DIR/$bed_name/meta" | cut -d= -f2)
+  [ -n "$snap" ] || snap="$(snapshot_id)"
+  stop_bed_units "$bed_name"
+  cmd_pond_drop pond drop "$bed_name"
+  stakes unpin "$snap" --holder "$bed_name"
+  teardown_bed "$bed_name"
+  fifo_remove "$project" "$ref"
+  echo "dropped preview: $bed_name"
+}
+
+cmd_preview_new() {
+  shift 2
+  local project="" ref="" from="."
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --ref) ref="$2"; shift 2 ;;
+      --from) from="$2"; shift 2 ;;
+      -*) echo "weedr: unknown option: $1" >&2; exit 2 ;;
+      *) if [ -z "$project" ]; then project="$1"; else echo "weedr: unexpected argument: $1" >&2; exit 2; fi; shift ;;
+    esac
+  done
+  if [ -z "$project" ] || [ -z "$ref" ]; then
+    echo "weedr preview new: requires <project> and --ref" >&2
+    exit 2
+  fi
+  local env bed_name
+  env="$(preview_env_for "$ref")"
+  bed_name="$(bed_name_from "$project" "$env")"
+  if [ -d "$BEDS_DIR/$bed_name" ]; then
+    echo "weedr: bed already exists: $bed_name" >&2
+    exit 2
+  fi
+  cmd_bed_new bed new "$project" --env "$env" --from "$from"
+  copy_manifests_into_bed "$from" "$bed_name"
+  local snap
+  snap="$(snapshot_id)"
+  echo "snapshot=$snap" >> "$BEDS_DIR/$bed_name/meta"
+  stakes pin "$snap" --holder "$bed_name"
+  local prod_db dump
+  prod_db="$(pg_ident "${project}-production")"
+  dump="$(mktemp)"
+  as_pond podman exec pond-prod pg_dump -U postgres "$prod_db" > "$dump"
+  cmd_pond_restore pond restore "$bed_name" --from "$dump"
+  rm -f "$dump"
+  cmd_bed_start bed start "$bed_name"
+  roots sync
+  twig sync
+  if [ "$ref" != "develop" ]; then
+    fifo_add "$project" "$ref"
+    local fifo="$FIFO_DIR/$project"
+    while [ -f "$fifo" ] && [ "$(wc -l < "$fifo")" -gt 3 ]; do
+      local oldest
+      oldest="$(head -1 "$fifo")"
+      preview_drop_body "$project" "$oldest"
+    done
+  fi
+  echo "created preview: $bed_name"
+}
+
+cmd_preview_drop() {
+  shift 2
+  local project="" ref=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --ref) ref="$2"; shift 2 ;;
+      -*) echo "weedr: unknown option: $1" >&2; exit 2 ;;
+      *) if [ -z "$project" ]; then project="$1"; else echo "weedr: unexpected argument: $1" >&2; exit 2; fi; shift ;;
+    esac
+  done
+  if [ -z "$project" ] || [ -z "$ref" ]; then
+    echo "weedr preview drop: requires <project> and --ref" >&2
+    exit 2
+  fi
+  preview_drop_body "$project" "$ref"
+}
+
+compose_services_dump() {
+  python3 - "$1" <<'PYEOF'
+import sys
+path = sys.argv[1]
+svcs = {}
+in_services = False
+current = None
+try:
+    f = open(path)
+except OSError:
+    sys.exit(0)
+with f:
+    for line in f:
+        raw = line.rstrip("\n")
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        if indent == 0:
+            in_services = (stripped == "services:")
+            current = None
+            continue
+        if not in_services:
+            continue
+        if indent == 2 and stripped.endswith(":"):
+            current = stripped[:-1]
+            svcs[current] = {"image": "", "ports": []}
+            continue
+        if current and indent == 4:
+            if stripped.startswith("image:"):
+                svcs[current]["image"] = stripped.split(":", 1)[1].strip().strip("\"'")
+            elif stripped == "ports:":
+                svcs[current]["ports"] = []
+            elif stripped.startswith("- ") and isinstance(svcs[current]["ports"], list) and stripped not in ("ports:",):
+                pass
+        if current and indent >= 6 and stripped.startswith("- "):
+            entry = stripped.lstrip("- ").strip().strip("\"'")
+            if ":" in entry:
+                svcs[current]["ports"].append(entry)
+for name in sorted(svcs):
+    print("%s\t%s\t%s" % (name, svcs[name]["image"], ",".join(svcs[name]["ports"])))
+PYEOF
+}
+
+changed_services() {
+  python3 - "$1" "$2" <<'PYEOF'
+import sys
+
+def parse(path):
+    svcs = {}
+    try:
+        f = open(path)
+    except OSError:
+        return svcs
+    in_services = False
+    current = None
+    with f:
+        for line in f:
+            raw = line.rstrip("\n")
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(raw) - len(raw.lstrip())
+            if indent == 0:
+                in_services = (stripped == "services:")
+                current = None
+                continue
+            if not in_services:
+                continue
+            if indent == 2 and stripped.endswith(":"):
+                current = stripped[:-1]
+                svcs[current] = {"image": "", "ports": []}
+                continue
+            if current and indent == 4 and stripped.startswith("image:"):
+                svcs[current]["image"] = stripped.split(":", 1)[1].strip().strip("\"'")
+            if current and indent >= 6 and stripped.startswith("- "):
+                entry = stripped.lstrip("- ").strip().strip("\"'")
+                if ":" in entry:
+                    svcs[current]["ports"].append(entry)
+    return svcs
+
+old = parse(sys.argv[1])
+new = parse(sys.argv[2])
+for name in sorted(set(old) | set(new)):
+    if old.get(name) != new.get(name):
+        print(name)
+PYEOF
+}
+
+all_services() {
+  compose_services_dump "$1" | cut -f1
+}
+
+cmd_redeploy() {
+  shift
+  local bed="" from="" yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) from="$2"; shift 2 ;;
+      --yes) yes=1; shift ;;
+      -*) echo "weedr: unknown option: $1" >&2; exit 2 ;;
+      *) bed="$1"; shift ;;
+    esac
+  done
+  if [ -z "$bed" ]; then echo "weedr redeploy: requires <bed>" >&2; exit 2; fi
+  if [ ! -d "$BEDS_DIR/$bed" ]; then echo "weedr: no such bed: $bed" >&2; exit 1; fi
+  local env bed_user project
+  env=$(grep '^env=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  bed_user=$(grep '^user=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  project=$(grep '^project=' "$BEDS_DIR/$bed/meta" | cut -d= -f2)
+  local class
+  class="$(env_class "$env")"
+  if [ "$class" = "production" ] && [ "$yes" -ne 1 ]; then
+    echo "weedr: refusing to redeploy production bed without --yes: $bed" >&2
+    exit 2
+  fi
+  if [ -n "$from" ] && [ ! -d "$from" ]; then
+    echo "weedr: no such source dir: $from" >&2
+    exit 1
+  fi
+
+  local backup changed
+  backup="$(mktemp -d)"
+  [ -f "$BEDS_DIR/$bed/compose.yaml" ] && cp "$BEDS_DIR/$bed/compose.yaml" "$backup/compose.yaml"
+  [ -f "$BEDS_DIR/$bed/bed.yaml" ] && cp "$BEDS_DIR/$bed/bed.yaml" "$backup/bed.yaml"
+  [ -d "$BEDS_DIR/$bed/widgets" ] && cp -r "$BEDS_DIR/$bed/widgets" "$backup/widgets"
+
+  if [ -n "$from" ]; then
+    mapfile -t changed < <(changed_services "$backup/compose.yaml" "$from/compose.yaml")
+    copy_manifests_into_bed "$from" "$bed"
+    local units_dir="$HOMES_DIR/$bed_user/.config/containers/systemd"
+    if [ -f "$from/compose.yaml" ]; then
+      compose_to_quadlet "$from/compose.yaml" "$units_dir"
+    fi
+    write_dropins "$units_dir" "$env"
+  else
+    mapfile -t changed < <(all_services "$BEDS_DIR/$bed/compose.yaml")
+  fi
+
+  local svc
+  for svc in ${changed[@]+"${changed[@]}"}; do
+    [ -n "$svc" ] || continue
+    systemctl --user stop "${svc}.service" || true
+    if ! systemctl --user start "${svc}.service"; then
+      [ -f "$backup/compose.yaml" ] && cp "$backup/compose.yaml" "$BEDS_DIR/$bed/compose.yaml"
+      [ -f "$backup/bed.yaml" ] && cp "$backup/bed.yaml" "$BEDS_DIR/$bed/bed.yaml"
+      if [ -d "$backup/widgets" ]; then
+        rm -rf "$BEDS_DIR/$bed/widgets"
+        cp -r "$backup/widgets" "$BEDS_DIR/$bed/widgets"
+      fi
+      rm -rf "$backup"
+      echo "weedr: unit ${svc}.service failed to start; leaving unit failed and routes unchanged: $bed" >&2
+      exit 1
+    fi
+  done
+  rm -rf "$backup"
+  roots sync
+  twig sync
+  echo "redeployed bed: $bed"
+}
+
+case "${1:-}" in
+  ""|-h|--help)
+    usage
+    exit 0
+    ;;
+  bed)
+    case "${2:-}" in
+      new) cmd_bed_new "$@" ;;
+      start) cmd_bed_start "$@" ;;
+      stop) cmd_bed_stop "$@" ;;
+      restart) cmd_bed_restart "$@" ;;
+      drop) cmd_bed_drop "$@" ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    ;;
+  secret)
+    case "${2:-}" in
+      set) cmd_secret_set "$@" ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    ;;
+  pond)
+    case "${2:-}" in
+      mint) cmd_pond_mint "$@" ;;
+      drop) cmd_pond_drop "$@" ;;
+      restore) cmd_pond_restore "$@" ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    ;;
+  preview)
+    case "${2:-}" in
+      new) cmd_preview_new "$@" ;;
+      drop) cmd_preview_drop "$@" ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    ;;
+  redeploy)
+    cmd_redeploy "$@"
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

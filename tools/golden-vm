@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+usage: golden-vm <target>
+
+Golden-VM runner: points at a throwaway Ubuntu (LXD or QEMU + cloud-init) and
+replays soil phases with real tools. Target examples: lxd:guarden-golden,
+qemu:guarden-golden.
+
+skeleton stub: the harness body is not built yet; no phases run.
+EOF
+}
+
+if [ $# -lt 1 ]; then
+  usage >&2
+  exit 2
+fi
+
+echo "golden-vm: target=$1: no phases yet"

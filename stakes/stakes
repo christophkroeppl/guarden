@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE="${GUARDEN_STATE:-/var/lib/guarden}"
+PINS_DIR="$STATE/stakes"
+PINS_FILE="$PINS_DIR/pins"
+
+usage() {
+  cat <<'EOF'
+usage: stakes <command>
+
+stakes — standalone pin registry. Holds snapshot pins so ladders cannot prune
+pinned data. Holder refcount lives in one state file; no long-lived daemon.
+
+commands:
+  pin <snapshot> --holder <bed>    hold a snapshot for a bed
+  unpin <snapshot> --holder <bed>  release a hold; frees the pin at zero holders
+  query [snapshot]                 print holders=N
+EOF
+}
+
+parse_pin_args() {
+  snapshot=""
+  holder=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --holder) holder="${2:-}"; shift 2 ;;
+      -*) echo "stakes: unknown option: $1" >&2; exit 2 ;;
+      *) snapshot="$1"; shift ;;
+    esac
+  done
+}
+
+holders_of() {
+  local id="$1"
+  [ -f "$PINS_FILE" ] || { echo 0; return; }
+  awk -v id="$id" '$1 == id { print NF - 1; found = 1 } END { if (!found) print 0 }' "$PINS_FILE"
+}
+
+ensure_pins() {
+  mkdir -p "$PINS_DIR"
+  touch "$PINS_FILE"
+  chmod 600 "$PINS_FILE"
+}
+
+cmd_pin() {
+  shift
+  parse_pin_args "$@"
+  if [ -z "$snapshot" ] || [ -z "$holder" ]; then
+    echo "stakes pin: requires <snapshot> and --holder <bed>" >&2
+    exit 2
+  fi
+  ensure_pins
+  local tmp line lid found=0
+  tmp="$(mktemp)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    lid="${line%% *}"
+    if [ "$lid" = "$snapshot" ]; then
+      found=1
+      case " $line " in
+        *" $holder "*) printf '%s\n' "$line" >> "$tmp" ;;
+        *) printf '%s %s\n' "$line" "$holder" >> "$tmp" ;;
+      esac
+    else
+      printf '%s\n' "$line" >> "$tmp"
+    fi
+  done < "$PINS_FILE"
+  if [ "$found" -eq 0 ]; then
+    printf '%s %s\n' "$snapshot" "$holder" >> "$tmp"
+  fi
+  mv "$tmp" "$PINS_FILE"
+  chmod 600 "$PINS_FILE"
+  echo "pinned $snapshot holder=$holder holders=$(holders_of "$snapshot")"
+}
+
+cmd_unpin() {
+  shift
+  parse_pin_args "$@"
+  if [ -z "$snapshot" ] || [ -z "$holder" ]; then
+    echo "stakes unpin: requires <snapshot> and --holder <bed>" >&2
+    exit 2
+  fi
+  ensure_pins
+  local tmp line lid rest h out
+  tmp="$(mktemp)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    lid="${line%% *}"
+    if [ "$lid" = "$snapshot" ]; then
+      rest="${line#"$lid"}"
+      out="$lid"
+      for h in $rest; do
+        if [ "$h" != "$holder" ]; then
+          out="$out $h"
+        fi
+      done
+      if [ "$out" != "$lid" ]; then
+        printf '%s\n' "$out" >> "$tmp"
+      fi
+    else
+      printf '%s\n' "$line" >> "$tmp"
+    fi
+  done < "$PINS_FILE"
+  mv "$tmp" "$PINS_FILE"
+  chmod 600 "$PINS_FILE"
+  echo "unpinned $snapshot holder=$holder holders=$(holders_of "$snapshot")"
+}
+
+cmd_query() {
+  shift
+  local snapshot="${1:-}"
+  if [ -n "$snapshot" ]; then
+    echo "holders=$(holders_of "$snapshot")"
+    return 0
+  fi
+  [ -f "$PINS_FILE" ] || return 0
+  local line lid
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    lid="${line%% *}"
+    echo "$lid holders=$(holders_of "$lid")"
+  done < "$PINS_FILE"
+}
+
+case "${1:-}" in
+  ""|-h|--help)
+    usage
+    exit 0
+    ;;
+  pin)
+    cmd_pin "$@"
+    ;;
+  unpin)
+    cmd_unpin "$@"
+    ;;
+  query)
+    cmd_query "$@"
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,15 @@
+services:
+  api:
+    image: example/nutristack-api:latest
+    volumes:
+      - data:/app/data
+  web:
+    image: example/nutristack-web:latest
+    ports:
+      - "8080:80"
+
+volumes:
+  data:
+  cache:
+    driver_opts:
+      type: tmpfs

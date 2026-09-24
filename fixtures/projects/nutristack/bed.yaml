@@ -1,0 +1,7 @@
+routes:
+  api: "api.${env}.${domain}"
+  web: "${env}.${domain}"
+pond:
+  databases: ["app"]
+hyphae:
+  aliases: ["nutristack.internal"]

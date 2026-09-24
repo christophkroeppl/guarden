@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "usermod $*" >> "${GUARDEN_CALL_LOG:-/dev/null}"
+exit 0

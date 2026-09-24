@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+echo "systemctl $*" >> "${GUARDEN_CALL_LOG:-/dev/null}"
+if [ -n "${GUARDEN_FAIL_UNIT:-}" ]; then
+  seen_start=0
+  for a in "$@"; do
+    if [ "$seen_start" -eq 1 ] && [ "$a" = "$GUARDEN_FAIL_UNIT" ]; then
+      exit 1
+    fi
+    if [ "$a" = "start" ]; then
+      seen_start=1
+    fi
+  done
+fi
+exit 0
