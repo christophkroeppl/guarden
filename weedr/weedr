@@ -638,9 +638,13 @@ copy_manifests_into_bed() {
   local from="$1" bed="$2"
   [ -f "$from/compose.yaml" ] && cp "$from/compose.yaml" "$BEDS_DIR/$bed/compose.yaml"
   [ -f "$from/bed.yaml" ] && cp "$from/bed.yaml" "$BEDS_DIR/$bed/bed.yaml"
+  [ -f "$from/compose.yaml" ] || rm -f "$BEDS_DIR/$bed/compose.yaml"
+  [ -f "$from/bed.yaml" ] || rm -f "$BEDS_DIR/$bed/bed.yaml"
   if [ -d "$from/widgets" ]; then
     rm -rf "$BEDS_DIR/$bed/widgets"
     cp -r "$from/widgets" "$BEDS_DIR/$bed/widgets"
+  else
+    rm -rf "$BEDS_DIR/$bed/widgets"
   fi
 }
 

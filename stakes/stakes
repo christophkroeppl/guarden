@@ -51,6 +51,8 @@ cmd_pin() {
     exit 2
   fi
   ensure_pins
+  exec 9>"$PINS_DIR/pins.lock"
+  flock 9
   local tmp line lid found=0
   tmp="$(mktemp)"
   while IFS= read -r line; do
@@ -82,6 +84,8 @@ cmd_unpin() {
     exit 2
   fi
   ensure_pins
+  exec 9>"$PINS_DIR/pins.lock"
+  flock 9
   local tmp line lid rest h out
   tmp="$(mktemp)"
   while IFS= read -r line; do
