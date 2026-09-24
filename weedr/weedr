@@ -654,7 +654,7 @@ preview_drop_body() {
     exit 1
   fi
   local snap
-  snap=$(grep '^snapshot=' "$BEDS_DIR/$bed_name/meta" | cut -d= -f2)
+  snap=$(grep '^snapshot=' "$BEDS_DIR/$bed_name/meta" | cut -d= -f2 || true)
   [ -n "$snap" ] || snap="$(snapshot_id)"
   stop_bed_units "$bed_name"
   cmd_pond_drop pond drop "$bed_name"
