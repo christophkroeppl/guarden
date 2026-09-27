@@ -78,7 +78,7 @@ hyphae                 loopback ports + host names (optional; not a podman netwo
 
 A **bed** owns one Linux user (`bed-<env>-<name>`), one quadlet unit directory, its volumes, and its hyphae names. The environment is always explicit: `weedr bed plow` requires `--env` and a git manifest declares `environment`.
 
-A **pond** is a named shared-state instance (Postgres first, others later); a member bed gets a database and a role inside one. Ponds are optional — a manifest with no `pond:` section needs none.
+A **pond** is a named shared-state instance (Postgres first, others later); a member bed gets a database and a role inside one. A pond owns one Linux user `pond-<env>-<name>` of the same name, created by `weedr pond dig`. Ponds are optional — a manifest with no `pond:` section needs none.
 
 A **preview** is one bed per project (`bed-preview-<project>`) with one nested instance directory per ref under its home; the **fence** bed (`bed-fence-traefik`) runs Traefik for the whole host. **hyphae** is an optional connectivity contract a bed may declare (§5) — a bed without it has no stable names and no group membership.
 
@@ -107,7 +107,7 @@ Watchers are systemd `.path` units with globs over the `bed-*` / `pond-*` folder
 | process | user | notes |
 |---|---|---|
 | bed services | `bed-<env>-<name>` | rootless podman, linger enabled |
-| pond instances | `pond` | one user runs every pond; ports published on `127.0.0.1` |
+| pond instances | `pond-<env>-<name>` | one user per pond, created by `weedr pond dig`; ports published on `127.0.0.1` |
 | traefik | `bed-fence-traefik` | fence bed; binds :80/:443, reads `/var/lib/roots/dynamic/` |
 | roots | `roots` | writes `/var/lib/roots/dynamic/` |
 | stakes | `stakes` | state in `/var/lib/stakes/pins.json`; root snapper hook reads the file |
@@ -116,7 +116,7 @@ Watchers are systemd `.path` units with globs over the `bed-*` / `pond-*` folder
 | weedr | admin (sudo) | creates beds, plants secrets, mints pond roles |
 | soil scripts | root | install-time convergers + snapper/ferm/fail2ban timers |
 
-All pond instances run under a single `pond` user; separation between ponds is the database plus the hyphae group rules (§5), not a user boundary.
+Each pond instance runs under its own user `pond-<env>-<name>` — created by `weedr pond dig` with linger, subuid/subgid, and its own quadlet dir, exactly like a bed. Separation between ponds is a real user boundary, on top of the database roles plus the hyphae group rules (§5); there is no shared `pond` user.
 
 The shared surface between `roots` and the traefik bed is **one directory and one group** (`fence`): `roots` writes `/var/lib/roots/dynamic/`, the traefik bed reads it. They never share a user. Traefik binds :80/:443 rootless because soil sets `net.ipv4.ip_unprivileged_port_start=0`.
 
@@ -135,7 +135,7 @@ Rootless podman networks are **per-user**. A bed cannot join another bed's or a 
 - Shared services publish on loopback (pasta).
 - Each group of members gets its own loopback block: `127.1.<g>.<n>` — a pond and its member beds talk inside their block, nobody else reaches it.
 - `weedr` writes stable names into `/etc/hosts`: `<pond>.internal`, `bed-<env>-<name>.internal`.
-- ferm OUTPUT rules with `uid-owner` match allow only member bed users to reach a group's block.
+- ferm OUTPUT rules with `uid-owner` match allow only the group's members — the pond user and its member bed users — to reach a group's block.
 
 ```
                 internet
@@ -295,6 +295,8 @@ Default routes: `staging.<domain>` and `preview.<domain>/<ref>`, overridable per
   .env, .env.<env>, .env.<env>.local
   overrides.yaml                  admin overrides: root:root 0444 (root writes)
   <ref>/                          nested preview instances (preview beds only)
+/home/pond-<env>-<name>/
+  .config/containers/systemd/     pond quadlet units
 /var/lib/guarden/beds/<bed>/      bed-owned state (subvolumes when the bed has them)
 /var/lib/guarden/ponds/<pond>/    pond data subvolumes
 /var/lib/roots/dynamic/           traefik dynamic config (group fence)
@@ -303,7 +305,7 @@ Default routes: `staging.<domain>` and `preview.<domain>/<ref>`, overridable per
 /etc/containers/systemd/users/<uid>/   admin-injected quadlet units
 ```
 
-Bed users are `bed-<env>-<name>` (`bed-production-bitcoin`, `bed-staging-myapp`, `bed-preview-myapp`, `bed-fence-traefik`). Linger on; subuid/subgid allocated by `weedr`.
+Bed users are `bed-<env>-<name>` (`bed-production-bitcoin`, `bed-staging-myapp`, `bed-preview-myapp`, `bed-fence-traefik`). Linger on; subuid/subgid allocated by `weedr`. Pond users are `pond-<env>-<name>`, created by `weedr pond dig` with the same linger and subuid/subgid treatment.
 
 Admin overrides are gitops-proof and bed-scoped: `overrides.yaml` is root-owned and mode 0444 — readable by the bed user and the CLIs, writable only by root — plus root-owned admin drop-ins in the bed's quadlet dir, with unit-level overrides as `<unit>.container.d/` drop-ins. Regeneration and `hose` never touch root-owned paths.
 
@@ -334,7 +336,7 @@ The golden VM's behaviour phases exercise **production- and staging-named ponds*
 - Admin overrides are root-owned: `overrides.yaml` (root:root, 0444) and root-owned drop-ins in the bed's quadlet dir. Regeneration and `hose` never write root-owned paths.
 - The `fence` group shares exactly one directory: `roots` writes, the traefik bed reads; no two parts share a user.
 - Fail2ban + ferm (ufw disabled by soil).
-- Future SELinux/AppArmor: no daemon runs as root; users are per bed; drop-in files are the extension point — nothing here requires `unconfined`.
+- Future SELinux/AppArmor: no daemon runs as root; users are per bed and per pond; drop-in files are the extension point — nothing here requires `unconfined`.
 - UNIX security rule: manual and gitops beds share the layout; there is no "privileged mode" in a bed.
 
 ---

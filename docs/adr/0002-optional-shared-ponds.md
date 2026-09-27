@@ -3,8 +3,11 @@
 A **pond** is a named shared-state instance — Postgres first, others later — named on the
 bed schema with the class prefix swapped: `pond-<env>-<name>` (`pond-production-postgres`,
 `pond-staging-postgres`). Ponds are optional: host prep creates none. `weedr pond dig
-<name>` creates one, `weedr pond fill <bed>` provisions a database and role for a bed,
-`weedr pond drain <bed>` takes them away.
+<name>` creates one — including its own Linux user `pond-<env>-<name>` (linger on,
+subuid/subgid, its own quadlet dir, its own data directory), exactly like a bed, so
+ponds are separated from each other by a real user boundary — and `weedr pond fill
+<bed>` provisions a database and role for a bed, `weedr pond drain <bed>` takes them
+away.
 
 Why: N state containers mean N backups, N credential sets to restore, and N ladders where
 a snapshot can go wrong. The `pond-production-*` and `pond-staging-*` ponds are the

@@ -11,9 +11,9 @@ per-bed isolation intact. Hyphae is optional — a bed that talks to no shared s
 needs none.
 
 Isolation is per group. Each pond group owns its own loopback block (`127.1.<g>.<n>`),
-and ferm OUTPUT rules matched on `uid-owner` let only that group's member bed users reach
-the block; database roles are the second layer inside it. A bed outside the group cannot
-open the port at all.
+and ferm OUTPUT rules matched on `uid-owner` let only that group's members — the pond's
+own user and its member bed users — reach the block; database roles are the second layer
+inside it. A bed outside the group cannot open the port at all.
 
 Considered: a rootful shared network for the shared tier (mixed privilege), one shared
 network namespace (kills per-bed isolation).

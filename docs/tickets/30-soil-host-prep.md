@@ -6,7 +6,8 @@
 
 **Status:** ready-for-agent
 
-- [ ] `soil users --check` / `--apply` converges the shared-tier users and groups (`pond`, `roots`, `traefik`, `stakes`, `twig`, `hose`) and the `fence` group
+- [ ] `soil users --check` / `--apply` converges the shared-tier users and groups (`roots`, `traefik`, `stakes`, `twig`, `hose`) and the `fence` group
+- [ ] `soil users` creates no shared `pond` user — pond users are created by `weedr pond dig` (ADR-0002)
 - [ ] `soil firewall --check` / `--apply` disables the preinstalled firewall (ufw) and installs and configures ferm + fail2ban
 - [ ] `soil sysctl --check` / `--apply` sets `net.ipv4.ip_unprivileged_port_start=0` so Traefik can bind :80/:443 without root
 - [ ] `--check` reports drift without changing the host and exits non-zero when drift exists

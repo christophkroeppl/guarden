@@ -25,7 +25,7 @@ The dashboard generator that merges each bed's per-service widget files into Hom
 _Avoid_: arbor, dashboard service
 
 **pond**:
-A named shared-state instance offered to beds — Postgres first, others later — named `pond-<env>-<name>`, such as `pond-production-postgres` or `pond-staging-postgres`, the same schema as a bed with the class prefix swapped. Ponds are optional: a bed that needs no shared state simply has none.
+A named shared-state instance offered to beds — Postgres first, others later — named `pond-<env>-<name>`, such as `pond-production-postgres` or `pond-staging-postgres`, the same schema as a bed with the class prefix swapped. A pond runs as its own user of that same name, created by `weedr pond dig`, like a bed. Ponds are optional: a bed that needs no shared state simply has none.
 _Avoid_: bed, shared pg, shared services, database
 
 **project**:
@@ -61,7 +61,7 @@ The boundary layer: the traefik bed `bed-fence-traefik` running in the `fence` e
 _Avoid_: perimeter, gateway, front door
 
 **hyphae**:
-The optional connectivity contract: loopback-published ports plus stable host names (`<pond>.internal`, `bed-<env>-<name>.internal`). Each pond group gets its own loopback block that only its member bed users can reach — never a shared podman network.
+The optional connectivity contract: loopback-published ports plus stable host names (`<pond>.internal`, `bed-<env>-<name>.internal`). Each pond group gets its own loopback block that only its members (the pond user and its member bed users) can reach — never a shared podman network.
 _Avoid_: mycelium, mycellia, shared network
 
 **ladder**:
@@ -77,4 +77,6 @@ Naming facts only:
   fence bed.
 - Environments are always explicit: `production`, `staging`, `preview`, `fence`.
 - Pond names: `pond-<env>-<name>` — `pond-production-postgres`, `pond-staging-postgres`.
+- Pond user and home: the same `pond-<env>-<name>`, created by `weedr pond dig` — no
+  shared `pond` user.
 - One preview bed per project; each ref is a nested instance inside it.

@@ -7,6 +7,7 @@
 **Status:** ready-for-agent
 
 - [ ] `weedr pond dig <name>` creates a named pond instance under the fixed pond directory schema; default host prep creates no ponds (ticket 130)
+- [ ] `weedr pond dig` also creates the pond user `pond-<env>-<name>` with linger, allocated subuid/subgid, its home and quadlet dir, and the data directory owned by it; no shared `pond` user exists anywhere in the call log
 - [ ] A pond publishes its ports on `127.0.0.1` and its hyphae name resolves so a connected bed can open `:5432` through the host loopback
 - [ ] `weedr pond fill <bed>` creates one Postgres role and one database in the pond that bed is connected to
 - [ ] `weedr` mints the password (never human-chosen) and plants it into the bed, then forgets it

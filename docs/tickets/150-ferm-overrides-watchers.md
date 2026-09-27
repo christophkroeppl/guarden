@@ -1,6 +1,6 @@
 # 150: ferm, overrides, watchers
 
-**What to build:** Firewall openings come from `.guarden/bed.yaml` `ports:` plus bed-scoped admin overrides: an `overrides.yaml` in the bed (root:root 0444) and root-owned `<unit>.container.d/` drop-ins in the bed, paths that `hose` and unit regeneration never touch. `weedr` can list the active ferm rules. Connectivity stays per-group: loopback blocks `127.1.<g>.<n>` plus ferm OUTPUT uid-owner rules so only member bed users of a group reach that group's block (DB roles are the second layer). systemd `.path` units with recursive globs over the `bed-*` / `pond-*` schema watch for changes and trigger `daemon-reload` only.
+**What to build:** Firewall openings come from `.guarden/bed.yaml` `ports:` plus bed-scoped admin overrides: an `overrides.yaml` in the bed (root:root 0444) and root-owned `<unit>.container.d/` drop-ins in the bed, paths that `hose` and unit regeneration never touch. `weedr` can list the active ferm rules. Connectivity stays per-group: loopback blocks `127.1.<g>.<n>` plus ferm OUTPUT uid-owner rules so only the group's members (the pond user and its member bed users) reach that group's block (DB roles are the second layer). systemd `.path` units with recursive globs over the `bed-*` / `pond-*` schema watch for changes and trigger `daemon-reload` only.
 
 **Blocked by:** T130 (soil: optional ponds, fixed dir schema, ladder ownership)
 

@@ -150,6 +150,10 @@ Dig a pond only when you want shared state:
 weedr pond dig pond-production-postgres  # none exist by default; name is pond-<env>-<name>
 ```
 
+The dig gives the pond its own Linux user and quadlet dir — `pond-production-postgres`
+here — exactly like a bed. Ponds are separated from each other by that user boundary,
+not just by database roles.
+
 Not everything wants a pond. A bitcoin node, say, keeps its own chainstate — it may own
 its own container, its own subvolume, ladder, and state:
 

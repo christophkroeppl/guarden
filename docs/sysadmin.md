@@ -76,6 +76,8 @@ weedr pond drain <bed> -p <name>           # remove them; production asks first
 ```
 
 Pond data lives in `/var/lib/guarden/ponds/<pond>/` and gets its ladder from its owner.
+Each pond runs as its own user `pond-<env>-<name>` — created by `weedr pond dig` with
+linger and its quadlet dir, exactly like a bed; there is no shared `pond` user.
 
 ## snapshots day to day
 

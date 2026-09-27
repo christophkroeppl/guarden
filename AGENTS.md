@@ -32,10 +32,10 @@ short version:
 
 - No web UI, ever. `weedr` is the only thing that creates or rewrites bed units.
 - Ponds are optional and named `pond-<env>-<name>` (`pond-production-postgres`,
-  `pond-staging-postgres`), the bed schema with the class prefix swapped. Prefer a shared
-  pond over a state service per bed. A self-contained bed — its own service/DB container,
-  subvolume, ladder, and state — is allowed, but it must be an explicit choice, never the
-  default.
+  `pond-staging-postgres`), the bed schema with the class prefix swapped, each with its
+  own user of that name. Prefer a shared pond over a state service per bed. A
+  self-contained bed — its own service/DB container, subvolume, ladder, and state — is
+  allowed, but it must be an explicit choice, never the default.
 - hyphae is loopback ports and host names, not a shared podman network. Rootless podman
   networks are per-user and cannot cross users.
 - No secrets in git and none in GH Actions. Production secrets are hand-set via
@@ -82,6 +82,8 @@ Rules that hold for every test:
   declare it. Quadlet units live in that user's
   `.config/containers/systemd/`. Bed-specific overrides are unit drop-ins so a regenerate
   cannot clobber them.
+- Pond user is `pond-<env>-<name>`, created by `weedr pond dig` — same treatment as a
+  bed user. There is no shared `pond` user.
 - `stakes` state is one root-readable file. `stakes` never blocks `snapper`; the cleanup
   hook reads the file and exits 0 regardless.
 
