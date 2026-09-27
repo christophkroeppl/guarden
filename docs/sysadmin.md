@@ -70,7 +70,7 @@ regardless.
 ## ponds
 
 ```
-weedr pond dig <name>                      # create a pond (arbitrary name, none by default)
+weedr pond dig <name>                      # create a pond (name is pond-<env>-<name>; none by default)
 weedr pond fill <bed> -p <name>            # db + role for the bed
 weedr pond drain <bed> -p <name>           # remove them; production asks first
 ```

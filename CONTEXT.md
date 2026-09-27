@@ -25,7 +25,7 @@ The dashboard generator that merges each bed's per-service widget files into Hom
 _Avoid_: arbor, dashboard service
 
 **pond**:
-A named shared-state instance offered to beds — Postgres first, others later — with an arbitrary name such as `production-postgres` or `staging-postgres`. Ponds are optional: a bed that needs no shared state simply has none.
+A named shared-state instance offered to beds — Postgres first, others later — named `pond-<env>-<name>`, such as `pond-production-postgres` or `pond-staging-postgres`, the same schema as a bed with the class prefix swapped. Ponds are optional: a bed that needs no shared state simply has none.
 _Avoid_: bed, shared pg, shared services, database
 
 **project**:
@@ -76,5 +76,5 @@ Naming facts only:
   `bed-preview-myapp`, `bed-fence-traefik`. `<name>` is the project, or `traefik` for the
   fence bed.
 - Environments are always explicit: `production`, `staging`, `preview`, `fence`.
-- Ponds carry arbitrary names: `production-postgres`, `staging-postgres`.
+- Pond names: `pond-<env>-<name>` — `pond-production-postgres`, `pond-staging-postgres`.
 - One preview bed per project; each ref is a nested instance inside it.

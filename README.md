@@ -21,7 +21,7 @@ next one over files.
 | **roots** | Reads `.guarden/bed.yaml` from every bed and writes Traefik config. |
 | **fence** | The boundary: Traefik's own bed, `bed-fence-traefik`, on 80/443, sharing one config directory with `roots`. |
 | **stakes** | Remembers which snapshots you care about — and shows who is holding each one. |
-| **pond** | Named Postgres instances you dig when you want one. Arbitrarily named, entirely optional. |
+| **pond** | Named Postgres instances you dig when you want one. Named like a bed (`pond-production-postgres`), entirely optional. |
 | **twig** | Renders your Homepage dashboard from one small file per service. |
 | **hose** | Optional. Watches git and keeps beds in sync with what is on a branch. |
 
@@ -124,12 +124,12 @@ icon: mdi-api
 Then, on the VPS:
 
 ```sh
-weedr bed plow myapp --env production --from /path/to/myapp -p production-postgres
+weedr bed plow myapp --env production --from /path/to/myapp -p pond-production-postgres
 ```
 
 Every bed says its environment out loud — `--env` is required, and git manifests declare
 it too. That single command creates the Linux user, writes the quadlet units, connects the
-bed's hyphae to `production-postgres` (`-p` / `--pond`), mints a database role and
+bed's hyphae to `pond-production-postgres` (`-p` / `--pond`), mints a database role and
 password, writes the hostnames, and brings the services up. Traefik starts routing to
 `api.yourdomain.com` on its own. Ask for a pond nobody has dug yet and `weedr` lists the
 ponds it knows and offers to dig it for you.
@@ -147,7 +147,7 @@ Production asks first.
 Dig a pond only when you want shared state:
 
 ```sh
-weedr pond dig production-postgres       # none exist by default; name them freely
+weedr pond dig pond-production-postgres  # none exist by default; name is pond-<env>-<name>
 ```
 
 Not everything wants a pond. A bitcoin node, say, keeps its own chainstate — it may own
@@ -174,9 +174,9 @@ weedr bed remove myapp --env staging
 weedr secret set bed-production-myapp STRIPE_KEY    # paste a real secret
 weedr secret set bed-production-myapp               # see what is missing
 
-weedr pond dig   staging-postgres                              # create a pond
-weedr pond fill  myapp --env staging -p staging-postgres       # database + role for the bed
-weedr pond drain myapp --env staging -p staging-postgres       # take them away (production asks first)
+weedr pond dig   pond-staging-postgres                            # create a pond
+weedr pond fill  myapp --env staging -p pond-staging-postgres     # database + role for the bed
+weedr pond drain myapp --env staging -p pond-staging-postgres     # take them away (production asks first)
 
 stakes pin   1234 --holder bed-staging-myapp       # hold a snapshot
 stakes query 1234                                  # who is holding it
@@ -310,7 +310,7 @@ yourself out of the firewall, wait — the dead-man timer will let you back in.
    ┌─────┼─────────────────────────┐
    │     │                         │
 ┌──▼───────────┐ ┌───────────────┐ ┌▼──────────────┐
-│ pond         │ │ bed-production│ │ bed-staging-  │  each bed is its own
+│ pond-        │ │ bed-production│ │ bed-staging-  │  each bed is its own
 │production-   │ │ -myapp        │ │ myapp         │  Linux user + podman
 │postgres      │ └───────────────┘ └───────────────┘
 └──────────────┘

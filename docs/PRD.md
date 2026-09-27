@@ -28,7 +28,7 @@ Constraints: one human, one VPS, KISS, UNIX-flavoured, loosely coupled parts, no
 - **soil** converges a fresh Ubuntu (cloud-init → btrfs convert → firewall → podman/quadlet → snapper ladders) and is testable in a golden VM. cloud-init performs most host prep by inlining the install scripts; the scripts-based install remains for hosts without cloud-init.
 - **weedr** creates and removes **beds** (project × environment) with their user, units, volumes, hyphae names, optional pond database, and secrets. No web UI.
 - **Explicit environments.** The track is always named: `production | staging | preview | fence`. `weedr bed plow` requires `--env`, and a git manifest declares its environment. There is no implicit default.
-- **pond** is a primitive, not a fixture: optional named instances (Postgres first), arbitrary names such as `production-postgres` and `staging-postgres`. Verbs: `weedr pond dig <name>` create, `weedr pond fill <bed>` provision, `weedr pond drain <bed>` remove. Default host prep never creates a pond.
+- **pond** is a primitive, not a fixture: optional named instances (Postgres first) on the bed schema with the class prefix swapped — `pond-production-postgres`, `pond-staging-postgres`. Verbs: `weedr pond dig <name>` create, `weedr pond fill <bed>` provision, `weedr pond drain <bed>` remove. Default host prep never creates a pond.
 - **fence**: Traefik runs as its own bed (`bed-fence-traefik`) in the `fence` environment track with its own user and quadlet dir; its `bed.yaml` declares ports 80/443 plus safe defaults. The shared dynamic-config dir `/var/lib/roots/dynamic/` is written by unprivileged **roots** and read by the traefik bed through the `fence` group, so a roots bug cannot run containers.
 - **roots** accumulates route config from beds and writes Traefik dynamic config. Traefik is a separate process in a separate user.
 - **stakes** holds snapshot pins as sets of holders so ladders cannot prune data a bed still needs.
@@ -95,7 +95,7 @@ A **preview** is one bed per project (`bed-preview-<project>`) with one nested i
 | **weedr** | base | CLI | `bed plow` / `bed remove`, `pond dig` / `pond fill` / `pond drain`, mint pond roles, plant secrets, convert Compose → quadlet, apply ferm ports, production gate |
 | **stakes** | base | tiny service + state file | pin/unpin snapshot ids with holder identity; `stakes query` shows the holders of one id, `stakes lists` shows ladders and pins |
 | **twig** | addon | watcher/timer | merge `widgets/<service>.yml` into Homepage config |
-| **pond** | addon | optional named instances | Postgres first: arbitrary names (`production-postgres`, `staging-postgres`, …); one database + one role per member bed |
+| **pond** | addon | optional named instances | Postgres first: named `pond-<env>-<name>` (`pond-production-postgres`, `pond-staging-postgres`, …); one database + one role per member bed |
 | **hose** | addon | timer or path unit | `git pull` an explicitly listed project repo, call `weedr` to apply, restart changed units — queued like every other build |
 
 Parts talk over files and paths. There is no internal HTTP API.

@@ -1,6 +1,6 @@
 # 130: soil: optional ponds, fixed dir schema, ladder ownership
 
-**What to build:** Default host prep creates no ponds and no pond hyphae: `soil storage --apply` lays down the fixed directory schema only (`/var/lib/guarden/beds/<bed>/` with nested preview `<ref>/` instance dirs, `/var/lib/guarden/ponds/<pond>/`), and pond instances appear only when a pond is dug or when tests create them. Ladder (snapper) config is owned by the subvolume it protects — a pond subvolume's ladder lives with the pond, a bed subvolume's ladder lives with the bed — instead of being baked into soil, and `stakes` can list the ladders as well as query pins. Production- and staging-named ponds exist only in tests as the reference use-case.
+**What to build:** Default host prep creates no ponds and no pond hyphae: `soil storage --apply` lays down the fixed directory schema only (`/var/lib/guarden/beds/<bed>/` with nested preview `<ref>/` instance dirs, `/var/lib/guarden/ponds/<pond>/`), and pond instances appear only when a pond is dug or when tests create them. Ladder (snapper) config is owned by the subvolume it protects — a pond subvolume's ladder lives with the pond, a bed subvolume's ladder lives with the bed — instead of being baked into soil, and `stakes` can list the ladders as well as query pins. The reference ponds (`pond-production-postgres`, `pond-staging-postgres`) exist only in tests.
 
 **Blocked by:** T40 (soil: btrfs convert + snapper ladders)
 
