@@ -3,8 +3,9 @@
 Every bed declares its environment — `production`, `staging`, `preview`, or `fence` — and
 `weedr bed plow` requires `--env`; a git manifest must declare it too. There is no
 implicit default, so "which track is this" is never a guess. Names carry the track: bed
-users and homes are `bed-<env>-<project>`, ponds take prefix-style names
-(`production-postgres`).
+users and homes are `bed-<env>-<name>` — `<name>` is the project for a project bed,
+and the workload name otherwise (`traefik` for the fence bed) — and ponds take
+prefix-style names (`production-postgres`).
 
 A project has one bed per environment, each its own user and folder. Preview is one
 shared `bed-preview-<project>` per project, with instances nested per ref under the bed

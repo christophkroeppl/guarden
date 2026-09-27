@@ -5,7 +5,7 @@ network, and user-scope units stay isolated. A shared L2 network is impossible w
 giving up rootless multi-user podman.
 
 We define **hyphae** as a contract, not a network: shared services publish on
-`127.0.0.1`, `weedr` writes stable names (`<pond>.internal`, `bed-<name>.internal`) into
+`127.0.0.1`, `weedr` writes stable names (`<pond>.internal`, `bed-<env>-<name>.internal`) into
 `/etc/hosts`, and beds reach them over the host loopback with `pasta`. No new daemon,
 per-bed isolation intact. Hyphae is optional — a bed that talks to no shared service
 needs none.

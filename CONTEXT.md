@@ -53,7 +53,7 @@ Optional layer on base: twig, pond, hose.
 _Avoid_: plugins, modules
 
 **bed**:
-A runtime slot for one project in one environment: the user `bed-<env>-<project>`, its home, its units, and whatever state it owns. Beds usually take their state from a shared pond; a bed may instead own its subvolume, ladder, and state — allowed, but not the default.
+A runtime slot for one workload in one environment: the user `bed-<env>-<name>`, where `<name>` is the project for a project bed and the workload name otherwise — `traefik` for the fence bed — plus its home, its units, and whatever state it owns. Beds usually take their state from a shared pond; a bed may instead own its subvolume, ladder, and state — allowed, but not the default.
 _Avoid_: compartment, stack, slot
 
 **fence**:
@@ -61,7 +61,7 @@ The boundary layer: the traefik bed `bed-fence-traefik` running in the `fence` e
 _Avoid_: perimeter, gateway, front door
 
 **hyphae**:
-The optional connectivity contract: loopback-published ports plus stable host names (`<pond>.internal`, `bed-<name>.internal`). Each pond group gets its own loopback block that only its member bed users can reach — never a shared podman network.
+The optional connectivity contract: loopback-published ports plus stable host names (`<pond>.internal`, `bed-<env>-<name>.internal`). Each pond group gets its own loopback block that only its member bed users can reach — never a shared podman network.
 _Avoid_: mycelium, mycellia, shared network
 
 **ladder**:
@@ -72,8 +72,9 @@ _Avoid_: retention, prune schedule, snapshot policy
 
 Naming facts only:
 
-- Bed user and home: `bed-<env>-<project>` — `bed-production-bitcoin`, `bed-staging-myapp`,
-  `bed-preview-myapp`, `bed-fence-traefik`.
+- Bed user and home: `bed-<env>-<name>` — `bed-production-bitcoin`, `bed-staging-myapp`,
+  `bed-preview-myapp`, `bed-fence-traefik`. `<name>` is the project, or `traefik` for the
+  fence bed.
 - Environments are always explicit: `production`, `staging`, `preview`, `fence`.
 - Ponds carry arbitrary names: `production-postgres`, `staging-postgres`.
 - One preview bed per project; each ref is a nested instance inside it.

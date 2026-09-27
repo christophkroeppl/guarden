@@ -76,7 +76,7 @@ Rules that hold for every test:
 - `weedr` plants secrets and forgets. It never keeps a long-term secret store. The
   production gate refuses to start when a `@required` key is empty or still `EXAMPLE-` /
   `changeme`, and it is checked before the old container is shut down.
-- Bed user is `bed-<env>-<project>`. The environment is always explicit: `production`,
+- Bed user is `bed-<env>-<name>`. The environment is always explicit: `production`,
   `staging`, `preview`, `fence` — `weedr bed plow` requires `--env` and git manifests
   declare it. Quadlet units live in that user's
   `.config/containers/systemd/`. Bed-specific overrides are unit drop-ins so a regenerate

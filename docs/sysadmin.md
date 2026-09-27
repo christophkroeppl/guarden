@@ -101,10 +101,10 @@ Open ports come from `.guarden/bed.yaml` (`ports:`) plus the bed's admin overrid
 
 ## bed overrides (root-owned)
 
-- `/home/bed-<env>-<project>/overrides.yaml` — root:root, `0444`. Readable by the bed
+- `/home/bed-<env>-<name>/overrides.yaml` — root:root, `0444`. Readable by the bed
   user and the CLIs, writable only by root.
 - Root-owned admin drop-ins in the bed's quadlet dir
-  (`/home/bed-<env>-<project>/.config/containers/systemd/`), unit-level ones as
+  (`/home/bed-<env>-<name>/.config/containers/systemd/`), unit-level ones as
   `<unit>.container.d/`.
 - Regeneration and `hose` never touch root-owned paths.
 

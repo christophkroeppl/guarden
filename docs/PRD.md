@@ -76,7 +76,7 @@ addons                 twig + pond + hose
 hyphae                 loopback ports + host names (optional; not a podman network)
 ```
 
-A **bed** owns one Linux user (`bed-<env>-<project>`), one quadlet unit directory, its volumes, and its hyphae names. The environment is always explicit: `weedr bed plow` requires `--env` and a git manifest declares `environment`.
+A **bed** owns one Linux user (`bed-<env>-<name>`), one quadlet unit directory, its volumes, and its hyphae names. The environment is always explicit: `weedr bed plow` requires `--env` and a git manifest declares `environment`.
 
 A **pond** is a named shared-state instance (Postgres first, others later); a member bed gets a database and a role inside one. Ponds are optional — a manifest with no `pond:` section needs none.
 
@@ -106,7 +106,7 @@ Watchers are systemd `.path` units with globs over the `bed-*` / `pond-*` folder
 
 | process | user | notes |
 |---|---|---|
-| bed services | `bed-<env>-<project>` | rootless podman, linger enabled |
+| bed services | `bed-<env>-<name>` | rootless podman, linger enabled |
 | pond instances | `pond` | one user runs every pond; ports published on `127.0.0.1` |
 | traefik | `bed-fence-traefik` | fence bed; binds :80/:443, reads `/var/lib/roots/dynamic/` |
 | roots | `roots` | writes `/var/lib/roots/dynamic/` |
@@ -134,7 +134,7 @@ Rootless podman networks are **per-user**. A bed cannot join another bed's or a 
 
 - Shared services publish on loopback (pasta).
 - Each group of members gets its own loopback block: `127.1.<g>.<n>` — a pond and its member beds talk inside their block, nobody else reaches it.
-- `weedr` writes stable names into `/etc/hosts`: `<pond>.internal`, `bed-<name>.internal`.
+- `weedr` writes stable names into `/etc/hosts`: `<pond>.internal`, `bed-<env>-<name>.internal`.
 - ferm OUTPUT rules with `uid-owner` match allow only member bed users to reach a group's block.
 
 ```
@@ -290,7 +290,7 @@ Default routes: `staging.<domain>` and `preview.<domain>/<ref>`, overridable per
 ## 11. Host layout
 
 ```
-/home/bed-<env>-<project>/
+/home/bed-<env>-<name>/
   .config/containers/systemd/     quadlet units + <unit>.container.d/ drop-ins
   .env, .env.<env>, .env.<env>.local
   overrides.yaml                  admin overrides: root:root 0444 (root writes)
@@ -303,7 +303,7 @@ Default routes: `staging.<domain>` and `preview.<domain>/<ref>`, overridable per
 /etc/containers/systemd/users/<uid>/   admin-injected quadlet units
 ```
 
-Bed users are `bed-<env>-<project>` (`bed-production-bitcoin`, `bed-staging-myapp`, `bed-preview-myapp`, `bed-fence-traefik`). Linger on; subuid/subgid allocated by `weedr`.
+Bed users are `bed-<env>-<name>` (`bed-production-bitcoin`, `bed-staging-myapp`, `bed-preview-myapp`, `bed-fence-traefik`). Linger on; subuid/subgid allocated by `weedr`.
 
 Admin overrides are gitops-proof and bed-scoped: `overrides.yaml` is root-owned and mode 0444 — readable by the bed user and the CLIs, writable only by root — plus root-owned admin drop-ins in the bed's quadlet dir, with unit-level overrides as `<unit>.container.d/` drop-ins. Regeneration and `hose` never touch root-owned paths.
 

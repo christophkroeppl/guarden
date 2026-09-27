@@ -6,9 +6,9 @@
 
 **Status:** ready-for-agent
 
-- [ ] `weedr bed plow <project> --env <env>` reads `compose.yaml` and creates the bed user `bed-<env>-<project>` with linger, a user-scope quadlet unit directory, and allocated subuid/subgid
+- [ ] `weedr bed plow <project> --env <env>` reads `compose.yaml` and creates the bed user `bed-<env>-<name>` with linger, a user-scope quadlet unit directory, and allocated subuid/subgid
 - [ ] `compose.yaml` converts to quadlet units; bare named volumes also get `.volume` units; per-bed overrides land in unit drop-ins so regeneration cannot clobber them
-- [ ] `weedr` writes and removes hyphae names (`bed-<env>-<project>.internal` and peers) with the bed
+- [ ] `weedr` writes and removes hyphae names (`bed-<env>-<name>.internal` and peers) with the bed
 - [ ] `weedr bed start` / `stop` / `restart` drive the bed's units as the bed user (visible in the fake `systemctl` call log)
 - [ ] `weedr secret set <bed> KEY` plants one value into the bed and keeps no long-term copy inside `weedr`
 - [ ] staging beds get generated `@sensitive` values at create, stable until the bed is removed; a local override file always wins

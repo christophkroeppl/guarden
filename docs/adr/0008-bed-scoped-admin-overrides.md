@@ -3,7 +3,7 @@
 Any bed setting must be overridable by the server admin and stay overridden across
 redeploys: the admin wins over git. Two mechanisms, both bed-scoped and root-owned:
 
-- `/home/bed-<env>-<project>/overrides.yaml` — root:root, mode 0444, readable by the bed
+- `/home/bed-<env>-<name>/overrides.yaml` — root:root, mode 0444, readable by the bed
   user and the CLIs, writable only by root.
 - Root-owned drop-ins in the bed's quadlet dir (`<unit>.container.d/`) for unit-level
   overrides.
