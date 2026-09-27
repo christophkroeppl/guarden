@@ -124,9 +124,10 @@ jumps to the front of whichever lane frees up first.
 
 ## boot ordering
 
-Production services start first. Staging and preview start only after **all** production
-services have started, plus a fixed delay. `weedr` writes the systemd ordering drop-ins;
-the delay is fixed in v1.
+The fence bed starts first, then production ponds, then production beds. Staging and
+preview start only after **all** production services have started, plus a fixed delay.
+Container dependencies order the units inside each wave — a pond before the beds that
+consume it. `weedr` writes the systemd ordering drop-ins; the delay is fixed in v1.
 
 ## lockout drill
 

@@ -284,7 +284,7 @@ Default routes: `staging.<domain>` and `preview.<domain>/<ref>`, overridable per
 - Migrations run **in-app on start**, before the service accepts traffic. A failing migration leaves the unit failed and `roots` keeps the old route target until the unit is healthy again (v1: route stays, service is down — simpler).
 - **Build queue.** Never more than one container build at a time on the VPS — by default. FIFO, production always prioritized, debounced and deduped. The queue is respected by gitops (a GH Action pokes `hose`) and by manual redeploys of multi-service beds. `weedr redeploy --now` bypasses queue position for one request; the lane count itself is a root-owned host override (`weedr queue lanes <n>`, default 1) that applies between builds and never kills an in-flight one — more lanes when the box has headroom, back to one when it has not.
 - `weedr redeploy <bed>` is the manual trigger. Production requires confirmation.
-- **Boot ordering.** Production services start first. Staging and preview start only after ALL production services have started, plus a fixed delay. `weedr` writes the systemd ordering drop-ins; the delay is fixed, not configurable in v1.
+- **Boot ordering.** The fence bed starts first, then production ponds, then production beds. Staging and preview start only after ALL production services have started, plus a fixed delay. Container dependencies (`After=`, quadlet dependencies) order units inside each wave — a pond before the beds that consume it. `weedr` writes the systemd ordering drop-ins; the delay is fixed, not configurable in v1.
 
 ---
 

@@ -14,9 +14,12 @@ home, capped at three concurrent refs by default (FIFO eviction, overridable). T
 `fence` track is the boundary: `bed-fence-traefik` runs Traefik with ports 80/443 and
 safe defaults.
 
-Boot ordering follows the track: production services start first; staging and preview
-start only after all production services have started, plus a fixed delay, written by
-`weedr` as systemd ordering drop-ins.
+Boot ordering follows the track and the dependency chain: the fence bed starts first,
+then production ponds, then production beds; staging and preview — ponds and beds — start
+only after all production services have started, plus a fixed delay. Inside each wave
+container dependencies (`After=`, quadlet dependencies) decide the exact order, so a pond
+always precedes the beds that consume it. `weedr` writes the ordering as systemd
+ordering drop-ins.
 
 Why: an implicit production default turns a forgotten flag into a production deploy, and
 one bed per PR multiplies users, homes, and ladders for a single review slot.
