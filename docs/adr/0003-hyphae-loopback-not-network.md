@@ -1,7 +1,19 @@
 # hyphae is loopback ports and host names, not a podman network
 
-Rootless podman networks are per-user. A `bed-*` user cannot join another user's podman network. Every candidate that looked like "shared networking for rootless multi-user podman" was either rootful (Docker, Swarm, Coolify, Dokploy) or a no-op (user-scope quadlet units stay isolated and fall back to `pasta`/`host`).
+Rootless podman networks are per-user: a `bed-*` user cannot join another user's podman
+network, and user-scope units stay isolated. A shared L2 network is impossible without
+giving up rootless multi-user podman.
 
-We therefore define **hyphae** as a contract: shared services publish on `127.0.0.1`, `weedr` writes stable names (`pond.internal`, `bed-<name>.internal`) into `/etc/hosts`, and beds use `pasta` to reach the host loopback. No shared L2 network, no new daemon, per-bed isolation intact.
+We define **hyphae** as a contract, not a network: shared services publish on
+`127.0.0.1`, `weedr` writes stable names (`<pond>.internal`, `bed-<name>.internal`) into
+`/etc/hosts`, and beds reach them over the host loopback with `pasta`. No new daemon,
+per-bed isolation intact. Hyphae is optional — a bed that talks to no shared service
+needs none.
 
-Considered: rootful shared network for the shared tier only (more moving parts, mixed privilege), one shared netns (kills per-bed isolation), everything rootful (becomes Docker).
+Isolation is per group. Each pond group owns its own loopback block (`127.1.<g>.<n>`),
+and ferm OUTPUT rules matched on `uid-owner` let only that group's member bed users reach
+the block; database roles are the second layer inside it. A bed outside the group cannot
+open the port at all.
+
+Considered: a rootful shared network for the shared tier (mixed privilege), one shared
+network namespace (kills per-bed isolation).

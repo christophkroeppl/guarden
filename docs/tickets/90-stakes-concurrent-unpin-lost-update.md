@@ -1,6 +1,6 @@
 # 90: stakes unpin can lose a concurrent update
 
-**What to build:** Two previews drop at the same time and both release their hold on the same snapshot. `stakes unpin` must not lose one of the updates, so the snapshot is freed only when every holder is gone. Today the read-modify-write of the pin state file is not serialised, so a concurrent `unpin` can clobber the other and the refcount ends up wrong — either the pin is freed too early (a ladder prunes data a preview still needs) or never (disk fills).
+**What to build:** Two previews drop at the same time and both release their hold on the same snapshot. `stakes unpin` must not lose one of the updates, so the snapshot is freed only when every holder is gone. Today the read-modify-write of the pin state file is not serialised, so a concurrent `unpin` can clobber the other and the holder set ends up wrong — either the pin is freed too early (a ladder prunes data a preview still needs) or never (disk fills).
 
 **Blocked by:** None (can start immediately)
 

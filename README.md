@@ -4,8 +4,8 @@ One VPS. A handful of projects. No Kubernetes, no dashboard you have to learn.
 
 `guarden` turns a fresh Ubuntu box into a small, honest deployment host. It puts each
 project into a **bed** (its own Linux user, its own containers, its own volumes), routes
-traffic to it through Traefik, shares one Postgres for production and one for everything
-else, and takes btrfs snapshots so you can undo a bad deploy.
+traffic to it through Traefik at the **fence**, shares Postgres through optional named
+ponds when a project wants one, and takes btrfs snapshots so you can undo a bad deploy.
 
 There is no web UI. Everything is a command you can read, and every piece talks to the
 next one over files.
@@ -17,10 +17,11 @@ next one over files.
 | piece | what it does |
 |---|---|
 | **soil** | Prepares the host: btrfs, snapper, ferm, rootless podman. |
-| **weedr** | The one command that creates and removes beds, secrets, and databases. |
-| **roots** | Reads `bed.yaml` from every bed and writes Traefik config. |
-| **stakes** | Remembers which snapshots you care about so the ladder cannot delete them. |
-| **pond** | Two Postgres instances. Production one is snapshotted, the other is disposable. |
+| **weedr** | The one command that creates and removes beds, ponds, secrets, and databases. |
+| **roots** | Reads `.guarden/bed.yaml` from every bed and writes Traefik config. |
+| **fence** | The boundary: Traefik's own bed, `bed-fence-traefik`, on 80/443, sharing one config directory with `roots`. |
+| **stakes** | Remembers which snapshots you care about — and shows who is holding each one. |
+| **pond** | Named Postgres instances you dig when you want one. Arbitrarily named, entirely optional. |
 | **twig** | Renders your Homepage dashboard from one small file per service. |
 | **hose** | Optional. Watches git and keeps beds in sync with what is on a branch. |
 
@@ -40,7 +41,9 @@ You can run `soil` + `weedr` + `roots` + `stakes` and stop there. `pond`, `twig`
 
 ## Install
 
-Log in as root and run the cloud-init or the install scripts. The short version:
+Log in as root. On a cloud-init host most of this is already done for you — the install
+scripts are inlined and the packages come up with the box. On any other host, run the
+scripts by hand. The short version:
 
 ```sh
 # 1. Install the base. This reboots once to convert the disk to btrfs.
@@ -64,33 +67,56 @@ The full command list lives in [`docs/sysadmin.md`](docs/sysadmin.md).
 
 ## Put a project on the box
 
-A project repo needs three files at its root. Nothing else.
+A project repo needs three tracked files: `compose.yaml` at the root, `.guarden/bed.yaml`,
+and `.guarden/widgets/…`. A `.guarden/.env.schema` describes your env keys — values never
+live in the repo.
+
+```
+myapp/
+├── compose.yaml              # the app, as plain Compose ...
+└── .guarden/
+    ├── quadlet/              # ... or your own quadlet units in here instead
+    ├── bed.yaml              # routes, databases, hostnames, ports
+    ├── .env.schema           # the shape of every key. never values
+    └── widgets/
+        └── api.yml           # one file per service. what the dashboard shows
+```
+
+`compose.yaml` and `.guarden/quadlet/` are an either/or: exactly one of them, and a
+pre-commit hook stops you when neither is there.
 
 ```yaml
 # compose.yaml  —  a normal Compose file. Services, volumes, networks.
 services:
   api:
-    image: ghcr.io/you/nutristack-api
+    image: ghcr.io/you/myapp-api
     ports: ["8080"]
   web:
-    image: ghcr.io/you/nutristack-web
+    image: ghcr.io/you/myapp-web
     ports: ["3000"]
 ```
 
 ```yaml
-# bed.yaml  —  what guarden needs to know. Routes, databases, hostnames.
+# .guarden/bed.yaml  —  what guarden needs to know. Environment, routes, databases, hostnames, ports.
+environment: production
 routes:
   api: "api.${env}.${domain}"
   web: "${env}.${domain}"
 pond:
-  databases: ["app"]
+  databases:
+    app:
+      roles:
+        - name: app
+          grants: ["ALL"]
 hyphae:
-  aliases: ["nutristack.internal"]
+  aliases: ["myapp.internal"]
+ports:
+  - 8080/tcp
 ```
 
 ```yaml
-# widgets/api.yml  —  one file per service. What the dashboard shows.
-description: Nutristack API
+# .guarden/widgets/api.yml  —  one file per service. What the dashboard shows.
+description: Myapp API
 href: "https://api.${env}.${domain}"
 icon: mdi-api
 ```
@@ -98,43 +124,71 @@ icon: mdi-api
 Then, on the VPS:
 
 ```sh
-weedr bed new nutristack --env production --from /path/to/nutristack
+weedr bed plow myapp --env production --from /path/to/myapp -p production-postgres
 ```
 
-That single command creates the Linux user, writes the quadlet units, makes the database
-in `pond-production`, plants a generated password, writes the hostnames, and brings the services
-up. Traefik starts routing to `api.yourdomain.com` on its own.
+Every bed says its environment out loud — `--env` is required, and git manifests declare
+it too. That single command creates the Linux user, writes the quadlet units, connects the
+bed's hyphae to `production-postgres` (`-p` / `--pond`), mints a database role and
+password, writes the hostnames, and brings the services up. Traefik starts routing to
+`api.yourdomain.com` on its own. Ask for a pond nobody has dug yet and `weedr` lists the
+ponds it knows and offers to dig it for you.
 
 To take it away:
 
 ```sh
-weedr bed drop nutristack --env production
+weedr bed remove myapp --env production
 ```
 
-Production asks first. Previews do not.
+Production asks first.
+
+### Ponds are optional
+
+Dig a pond only when you want shared state:
+
+```sh
+weedr pond dig production-postgres       # none exist by default; name them freely
+```
+
+Not everything wants a pond. A bitcoin node, say, keeps its own chainstate — it may own
+its own container, its own subvolume, ladder, and state:
+
+```sh
+weedr bed plow bitcoin --env production  # no -p: the bed carries its own state
+```
+
+That is allowed, just not the default. Prefer a shared pond for anything that behaves like
+an app database.
 
 ---
 
 ## Everyday commands
 
 ```sh
-weedr bed list                       # what is running
-weedr bed start nutristack --env staging
-weedr bed stop  nutristack --env staging
-weedr bed drop  nutristack --env staging
+weedr bed list                          # what is running
+weedr bed plow  myapp --env staging     # create or re-converge a bed
+weedr bed start myapp --env staging
+weedr bed stop  myapp --env staging
+weedr bed remove myapp --env staging
 
-weedr secret set nutristack-production STRIPE_KEY    # paste a real secret
-weedr secret set nutristack-production               # see what is missing
+weedr secret set bed-production-myapp STRIPE_KEY    # paste a real secret
+weedr secret set bed-production-myapp               # see what is missing
 
-weedr pond mint nutristack --env staging             # make the database
-weedr pond drop nutristack --env staging             # remove it
+weedr pond dig   staging-postgres                              # create a pond
+weedr pond fill  myapp --env staging -p staging-postgres       # database + role for the bed
+weedr pond drain myapp --env staging -p staging-postgres       # take them away (production asks first)
 
-stakes pin   1234 --holder nutristack-staging        # hold a snapshot
-stakes query 1234                                    # who is holding it
-stakes unpin 1234 --holder nutristack-staging        # let it go
+stakes pin   1234 --holder bed-staging-myapp       # hold a snapshot
+stakes query 1234                                  # who is holding it
+stakes list                                        # every ladder and its pins
 
-weedr redeploy nutristack --env production           # pull and restart
+weedr redeploy myapp --env production              # pull and restart
+weedr redeploy myapp --env production --now        # skip the queue
 ```
+
+Only one container build runs on the box at a time. The queue is FIFO with production
+jumped to the front, and repeat requests for the same bed collapse into one — `--now`
+overrides the queue.
 
 `weedr --help` and `stakes --help` list everything else.
 
@@ -151,21 +205,28 @@ There is no secrets service. There is no encrypted blob in git.
   created and reuses it until you drop the bed. Good enough for a staging login, not for
   a payment key.
 - **The gate:** a production service will not start if a required variable is empty or
-  still says `changeme`. This is deliberate. The error tells you which key is missing.
+  still says `changeme`. The gate is checked **before the old container is shut down**, so
+  a deploy that fails it leaves the running service untouched. The error tells you which
+  key is missing.
 
-The shape of every key lives in a tracked `.env.schema` in your project repo. Values
-never do.
+The shape of every key lives in a tracked `.guarden/.env.schema` in your project repo.
+Values never do.
 
 ---
 
 ## Staging and previews
 
-Every project has an `environment`: `production`, `staging`, or `preview:<ref>`.
+Every bed declares its environment out loud: `production`, `staging`, `preview`, or
+`fence`.
 
-- **staging** is `develop`. It drinks from `pond-staging`, which is not snapshotted. If
-  it breaks, throw it away and make it again from a production dump.
-- **preview** is a pull request. `hose` opens one when the branch appears and drops it
-  when the branch is gone. Up to three at a time; the oldest goes when a fourth shows up.
+- **staging** is `develop`. It drinks from a staging pond — rebuildable, its data carries
+  no ladder by default. If it breaks, throw it away and make it again from a production
+  dump.
+- **preview** is a pull request. There is one preview bed per project — `bed-preview-myapp` —
+  and each ref gets its own nested instance inside it
+  (`/home/bed-preview-myapp/<ref>/`). `hose` opens an instance when the branch appears and
+  drops it when the branch is gone. Up to three concurrent refs per project by default,
+  the oldest goes when a fourth shows up, and the cap is overridable.
 
 Both get a fresh database restored from a pinned production snapshot, with a fresh
 password. They never see a production credential.
@@ -174,9 +235,9 @@ password. They never see a production credential.
 
 ## Snapshots and pins
 
-`soil` puts snapper on root, home, and the production pond. The ladder prunes the oldest
-first, and keeps your free-disk margin by trimming home first, root second, and the
-production pond last.
+`soil` puts snapper on root and home. Every pond and every bed that owns a subvolume gets
+its own ladder next to the subvolume it protects. The ladder prunes the oldest first, and
+keeps your free-disk margin by trimming home first, root second, and pond data last.
 
 If a snapshot is important — a staging bed is reading it, or you are about to do
 something risky — pin it:
@@ -186,7 +247,8 @@ stakes pin <snapshot-id> --holder <bed>
 ```
 
 The snapper cleanup hook will not delete a pinned id. Drop the holder and it becomes
-prunable again. `stakes query <id>` shows who is holding what.
+prunable again. `stakes query <id>` shows who is holding what, and `stakes list` shows
+every ladder with its pins.
 
 ---
 
@@ -195,13 +257,14 @@ prunable again. `stakes query <id>` shows who is holding what.
 `hose` is the optional gitops piece. Point it at a list of project repos and it will:
 
 - create a staging bed for `develop` if it is not there,
-- create a preview bed for every feature branch,
+- open a preview instance for every feature branch,
 - drop a preview when its branch is merged away,
 - redeploy a bed when its manifests changed.
 
 It does this by calling `weedr` and nothing else. It has no root of its own — just a
-narrow `sudoers` rule that lets it run `weedr preview new`, `weedr preview drop`, and
-`weedr redeploy`. If you do not want gitops, do not install it.
+narrow `sudoers` rule for the `weedr` subcommands it needs. Deploys queue up like
+everything else (a GitHub Action just pokes `hose`). If you do not want gitops, do not
+install it.
 
 ---
 
@@ -214,6 +277,7 @@ soil --check                # did the host drift?
 weedr bed list              # what does guarden think is running?
 journalctl -u traefik -u roots -u stakes
 snapper list                # how many snapshots, how much room
+stakes list                 # every ladder and its pins
 stakes query <id>           # is something holding a snapshot?
 ```
 
@@ -228,7 +292,7 @@ yourself out of the firewall, wait — the dead-man timer will let you back in.
 |---|---|
 | [`CONTEXT.md`](CONTEXT.md) | The vocabulary. Read this before changing anything. |
 | [`docs/PRD.md`](docs/PRD.md) | Why the system is shaped this way. |
-| [`docs/adr/`](docs/adr/) | The five decisions we are not going to relitigate. |
+| [`docs/adr/`](docs/adr/) | The decisions that are hard to reverse. |
 | [`docs/sysadmin.md`](docs/sysadmin.md) | Recovery, backups, and the commands at 3am. |
 | [`AGENTS.md`](AGENTS.md) | How to work on the code. |
 
@@ -239,20 +303,21 @@ yourself out of the firewall, wait — the dead-man timer will let you back in.
 ```
       Internet
          │
-     ┌───▼────┐
-     │ traefik │   edge. Binds 80/443 without root.
-     └───┬────┘
+     ┌───▼─────────────┐
+     │bed-fence-traefik│   the fence. Binds 80/443 without root.
+     └───┬─────────────┘
          │  127.0.0.1   (this is "hyphae")
-   ┌─────┼──────────────────┐
-   │     │                  │
-┌──▼──┐ ┌▼─────────┐  ┌─────▼────┐
-│pond │ │ bed-a    │  │ bed-b    │  each bed is its own
-│prod │ │ api, web │  │ api      │  Linux user + podman
-└─────┘ └──────────┘  └──────────┘
+   ┌─────┼─────────────────────────┐
+   │     │                         │
+┌──▼───────────┐ ┌───────────────┐ ┌▼──────────────┐
+│ pond         │ │ bed-production│ │ bed-staging-  │  each bed is its own
+│production-   │ │ -myapp        │ │ myapp         │  Linux user + podman
+│postgres      │ └───────────────┘ └───────────────┘
+└──────────────┘
 
   weedr makes the beds. roots makes the routes.
   stakes holds the snapshots. twig makes the dashboard.
   hose (optional) keeps it all true to git.
 ```
 
-Welcome to the guarden.
+Welcome to guarden.
