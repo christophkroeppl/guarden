@@ -13,7 +13,7 @@ phases:
   firewall      disable ufw, converge ferm and fail2ban
   sysctl        net.ipv4.ip_unprivileged_port_start=0
   btrfs         ext4 to btrfs convert, @ and @home subvolumes
-  storage       data subvolumes, snapper ladders, pond-prod last
+  storage       data subvolumes, snapper ladders, pond-production last
   root-scripts  root-owned copies of anything root executes
   units         podman, quadlet, base units
 
@@ -234,7 +234,7 @@ EOF
     btrfs subvolume create "$sysroot/var/lib/guarden/volumes" 2>/dev/null || btrfs subvolume show "$sysroot/var/lib/guarden/volumes"
     snapper -c root create-config / 2>/dev/null || true
     snapper -c home create-config /home 2>/dev/null || true
-    snapper -c pond-prod create-config /var/lib/pond/prod 2>/dev/null || true
+    snapper -c pond-production create-config /var/lib/pond/prod 2>/dev/null || true
     for kv in NUMBER_CLEANUP=yes NUMBER_LIMIT=0-50 NUMBER_LIMIT_IMPORTANT=0-10 TIMELINE_CLEANUP=yes TIMELINE_LIMIT_HOURLY=0 TIMELINE_LIMIT_DAILY=1-7 TIMELINE_LIMIT_WEEKLY=1-4 TIMELINE_LIMIT_MONTHLY=1-3 TIMELINE_LIMIT_QUARTERLY=1-4 TIMELINE_LIMIT_YEARLY=0-1 EMPTY_PRE_POST_CLEANUP=yes FREE_LIMIT=0.12; do
       snapper -c root set-config "$kv"
     done
@@ -242,7 +242,7 @@ EOF
       snapper -c home set-config "$kv"
     done
     for kv in NUMBER_CLEANUP=yes NUMBER_LIMIT=0-60 NUMBER_LIMIT_IMPORTANT=0-50 TIMELINE_CLEANUP=yes TIMELINE_LIMIT_HOURLY=0 TIMELINE_LIMIT_DAILY=3-7 TIMELINE_LIMIT_WEEKLY=2-4 TIMELINE_LIMIT_MONTHLY=1-3 TIMELINE_LIMIT_QUARTERLY=1-4 TIMELINE_LIMIT_YEARLY=1-4 EMPTY_PRE_POST_CLEANUP=yes FREE_LIMIT=0.06; do
-      snapper -c pond-prod set-config "$kv"
+      snapper -c pond-production set-config "$kv"
     done
     cat > "$sysroot/etc/apt/apt.conf.d/80snapper" <<'EOF'
 DPkg::Pre-Invoke {"if command -v snapper >/dev/null 2>&1 && snapper -c root list >/dev/null 2>&1; then snapper -c root create --description 'apt pre' --cleanup-algorithm number >/dev/null 2>&1 || true; fi";};

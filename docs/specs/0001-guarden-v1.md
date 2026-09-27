@@ -1,6 +1,8 @@
 # guarden v1 — spec
 
-Status: ready-for-agent. Source: `docs/PRD.md`, `CONTEXT.md`, `docs/adr/0001`–`0005`. Test seam model: **A** (one seam, two harnesses).
+Status: ready-for-agent.
+Source: `docs/PRD.md`, `CONTEXT.md`, `docs/adr/0001`–`0005`.
+Test seam model: **A** (one seam, two harnesses).
 
 ## Problem Statement
 
@@ -21,7 +23,7 @@ The operator wants one small platform, **guarden**, that turns a fresh Ubuntu VP
 
 **addons** sit on top of base:
 
-- **pond** runs exactly two Postgres instances: `pond-prod` (snapshotted) and `pond-nonprod` (rebuildable). A bed gets a database and a role, never its own pond.
+- **pond** runs exactly two Postgres instances: `pond-production` (snapshotted) and `pond-staging` (rebuildable). A bed gets a database and a role, never its own pond.
 - **twig** renders one dashboard widget per service into Homepage config.
 - **hose** reconciles beds from git, by calling `weedr`.
 
@@ -36,9 +38,9 @@ The operator creates a bed with `weedr bed new`, sets production secrets with `w
 5. As an admin, I want `soil` to disable the preinstalled firewall and install ferm + fail2ban, so that one policy covers the host.
 6. As an admin, I want `soil` to install rootless podman, quadlet, and pasta, so that beds run without root.
 7. As an admin, I want `soil` to set `net.ipv4.ip_unprivileged_port_start=0`, so that Traefik can bind :80/:443 without root.
-8. As an admin, I want `soil` to configure snapper ladders for root, home, and `pond-prod`, so that I can roll back.
+8. As an admin, I want `soil` to configure snapper ladders for root, home, and `pond-production`, so that I can roll back.
 9. As an admin, I want `soil` to snapshot root on apt install and upgrade, so that a bad package is recoverable.
-10. As an admin, I want `soil` to skip snapper on `pond-nonprod`, so that rebuildable data does not eat disk.
+10. As an admin, I want `soil` to skip snapper on `pond-staging`, so that rebuildable data does not eat disk.
 11. As an admin, I want every `soil` phase to support `--check` and `--apply`, so that I can see drift before I change the host.
 12. As an admin, I want `soil` to install root-owned copies of anything root runs, so that root never runs deploy-writable code.
 13. As an admin, I want a sysadmin readme with the most important commands, so that I can operate the box at 3am.
@@ -52,14 +54,14 @@ The operator creates a bed with `weedr bed new`, sets production secrets with `w
 21. As an admin, I want `weedr` to refuse to drop a production bed without confirmation, so that I cannot fat-finger a prod outage.
 22. As an admin, I want `weedr secret set <bed> KEY` to plant one value into the bed, so that production secrets never touch git or CI.
 23. As an admin, I want `weedr` to plant into a materialized `.env` or a podman secret and then forget the value, so that `weedr` holds no long-term secret store.
-24. As an admin, I want `weedr` to generate non-prod secrets at bed create and keep them stable until the bed is dropped, so that previews work out of the box.
+24. As an admin, I want `weedr` to generate staging secrets at bed create and keep them stable until the bed is dropped, so that previews work out of the box.
 25. As an admin, I want a local override file to win over generated values, so that I can put a real value on staging when I need one.
 26. As an admin, I want `weedr` to refuse to start a production service if a `@required` key is empty, so that a missing secret cannot reach production.
 27. As an admin, I want `weedr` to refuse to start a production service if a value still looks like `EXAMPLE-` or `changeme`, so that placeholder values cannot reach production.
 28. As an admin, I want the gate to warn only on staging and previews, so that previews are cheap.
 29. As an admin, I want `weedr` to mint one Postgres role and one password per bed, so that beds do not share credentials.
-30. As an admin, I want `weedr` to create the bed database in the right pond, so that production data and non-prod data stay apart.
-31. As an admin, I want `weedr pond drop` to require explicit confirmation for `pond-prod`, so that production data cannot vanish by accident.
+30. As an admin, I want `weedr` to create the bed database in the right pond, so that production data and staging data stay apart.
+31. As an admin, I want `weedr pond drop` to require explicit confirmation for `pond-production`, so that production data cannot vanish by accident.
 32. As an admin, I want preview databases to drop automatically, so that a merged PR does not leak state.
 33. As an admin, I want `weedr` to reassign dump ownership to the new role on restore, so that staging never reuses a production password.
 34. As an admin, I want `stakes pin <snapshot> --holder <bed>` to hold a snapshot, so that a ladder cannot prune data I still need.
@@ -68,7 +70,7 @@ The operator creates a bed with `weedr bed new`, sets production secrets with `w
 37. As an admin, I want `stakes unpin` to release one holder, so that dropping one preview does not free a snapshot another preview still uses.
 38. As an admin, I want the snapper cleanup hook to read the pin state file and skip pinned ids, so that pins survive pruning.
 39. As an admin, I want `stakes` to never block snapper, so that a stuck pin cannot wedge the host.
-40. As an admin, I want space-aware pruning to keep my priority order (home and agents first, root, `pond-prod` last), so that the pond is the last thing to shrink.
+40. As an admin, I want space-aware pruning to keep my priority order (home and agents first, root, `pond-production` last), so that the pond is the last thing to shrink.
 41. As an admin, I want `roots` to read `bed.yaml` from every bed and write Traefik dynamic config, so that routes appear without me editing Traefik.
 42. As an admin, I want `roots` to run in its own user and share only one directory with the `traefik` user through the `edge` group, so that a bug in `roots` cannot control Traefik.
 43. As an admin, I want default routes `staging.<domain>` and `preview.<domain>/<ref>`, so that previews are predictable.
@@ -83,7 +85,7 @@ The operator creates a bed with `weedr bed new`, sets production secrets with `w
 52. As an admin, I want deploys to stop then start, so that v1 is simple and honest about the short downtime.
 53. As an admin, I want migrations to run in-app on start, so that I do not have to remember a second step.
 54. As an admin, I want `weedr redeploy <bed>` to ask before touching production, so that redeploys are deliberate.
-55. As an admin, I want a staging bed for `nutristack/develop` to restore one project database from a pinned `pond-prod` snapshot into `pond-nonprod`, so that staging has realistic data.
+55. As an admin, I want a staging bed for `nutristack/develop` to restore one project database from a pinned `pond-production` snapshot into `pond-staging`, so that staging has realistic data.
 56. As an admin, I want that staging bed to get a new role and a new password, so that staging cannot authenticate against production.
 57. As a developer, I want a preview bed for my PR to appear at `preview.<domain>/<ref>`, so that I can show work before merge.
 58. As a developer, I want that preview to be dropped when the PR merges, so that the box does not fill with dead beds.
@@ -118,16 +120,16 @@ The operator creates a bed with `weedr bed new`, sets production secrets with `w
 - A **bed** is one **project** in one **environment** (`production` | `staging` | `preview:<ref>`). A bed owns one Linux user `bed-<project>-<env>` (linger on), one user-scope quadlet unit directory, its volume subvolumes, and its hyphae names. A **service** is one container/process inside a bed. See ADR-0001 for the rejected third-party quadlet UI.
 - `weedr` is the only privileged mutator. `hose` calls `weedr`. `stakes`, `roots`, `twig`, and `pond` run unprivileged. `roots` and `traefik` never share a user; they share one directory and the `edge` group (`roots` writes, `traefik` reads).
 - **hyphae** is a contract, not a network: shared services publish on `127.0.0.1`, `weedr` writes stable names (`pond.internal`, `bed-<name>.internal`) into `/etc/hosts`, beds use `pasta` to reach the host loopback. Rootless podman networks are per-user; a shared L2 network is impossible without giving up rootless. See ADR-0003.
-- **pond** is exactly two Postgres instances: `pond-prod` (snapshotted) and `pond-nonprod` (rebuildable, not snapshotted). A bed gets one database and one role inside the right pond; a bed never gets its own pond. Production database drop is manual only. Preview database drop is automatic. See ADR-0002.
+- **pond** is exactly two Postgres instances: `pond-production` (snapshotted) and `pond-staging` (rebuildable, not snapshotted). A bed gets one database and one role inside the right pond; a bed never gets its own pond. Production database drop is manual only. Preview database drop is automatic. See ADR-0002.
 - The project repo carries three tracked YAML files and nothing else: `compose.yaml` (pure Compose), `bed.yaml` (routes for `roots`, databases for `pond`, hyphae aliases), `widgets/<service>.yml` (exactly one dashboard widget per service, for `twig`). Both `weedr` and `hose` read the same files. See ADR-0005.
 - `weedr` converts `compose.yaml` to quadlet using **podlet** as a pinned binary, plus a small pass that emits `.volume` units for bare named volumes. Bed-specific overrides are written as unit drop-ins so regeneration cannot clobber them.
 - Secrets never live in git and never live in GH Actions. SOPS is rejected. A tracked `.env.schema` (varlock syntax: `@required`, `@sensitive`, `@type`, `@example`) is the source of truth for names and types. `.env.example` is generated from the schema. Overrides layer as `.env` → `.env.<env>` → `.env.<env>.local` (gitignored). See ADR-0004.
-- Production: the admin sets values by hand with `weedr secret set`. A hard gate refuses to start a production service if a `@required` key is empty or still `EXAMPLE-`/`changeme`. Non-prod: `weedr` generates `@sensitive` values at bed create, stable until the bed is dropped; a local override always wins. `weedr` plants and forgets.
+- Production: the admin sets values by hand with `weedr secret set`. A hard gate refuses to start a production service if a `@required` key is empty or still `EXAMPLE-`/`changeme`. staging: `weedr` generates `@sensitive` values at bed create, stable until the bed is dropped; a local override always wins. `weedr` plants and forgets.
 - `stakes` holds pins as snapshot id → set of bed holders. A pin is released only when every holder is gone. The snapper cleanup hook reads the pin state file and skips pinned ids. `stakes` never blocks snapper. The state file is enough for one operator; a socket daemon is deferred until a second writer appears.
-- Preview create: `stakes` pins the current `pond-prod` snapshot, `weedr` dumps the project database and role, mints a new role and password in `pond-nonprod`, restores the dump, reassigns ownership, plants the new credential, converts `compose.yaml`, writes routes and widgets, then starts units. Preview drop: stop units, drop database and role, unpin, remove hyphae names, remove user and volumes.
+- Preview create: `stakes` pins the current `pond-production` snapshot, `weedr` dumps the project database and role, mints a new role and password in `pond-staging`, restores the dump, reassigns ownership, plants the new credential, converts `compose.yaml`, writes routes and widgets, then starts units. Preview drop: stop units, drop database and role, unpin, remove hyphae names, remove user and volumes.
 - Restoring a dump brings data, never secrets. `weedr` always mints new credentials on restore. If an app encrypts rows with a key from the secret store, that key stays stable across restores.
 - Deploy is stop-then-start. Migrations run in-app on start before the service accepts traffic. Rolling deploys are out of scope.
-- Host layout: bed homes under `/home/bed-<project>-<env>` with a user-scope quadlet unit directory; bed volume subvolumes under a `weedr`-owned volumes root; `pond-prod` data in its own snapshotted subvolume; `pond-nonprod` data in a no-snapper subvolume; `roots` writes dynamic config under a shared `edge`-group directory; `stakes` state in a root-readable file; hyphae names in `/etc/hosts`.
+- Host layout: bed homes under `/home/bed-<project>-<env>` with a user-scope quadlet unit directory; bed volume subvolumes under a `weedr`-owned volumes root; `pond-production` data in its own snapshotted subvolume; `pond-staging` data in a no-snapper subvolume; `roots` writes dynamic config under a shared `edge`-group directory; `stakes` state in a root-readable file; hyphae names in `/etc/hosts`.
 - Test seam model **A**: one seam at the command line of `weedr`, `stakes`, and the `soil` convergers (`--check`/`--apply`). Two harnesses on that seam: fake tools on `PATH` (fast) and a golden VM with real tools (slow). No pure-function tests.
 
 ## Testing Decisions

@@ -29,7 +29,7 @@ Constraints: one human, one VPS, KISS, UNIX-flavoured, loosely coupled parts, no
 - **weedr** creates and removes **beds** (project × environment) with their user, units, volumes, networks, pond database, and secrets — no web UI.
 - **roots** accumulates route config from beds and writes Traefik dynamic config. Traefik itself is a separate process.
 - **stakes** holds snapshot pins so ladders cannot prune pinned data.
-- **pond** runs exactly two Postgres instances (prod, non-prod). Beds get databases, never their own pond.
+- **pond** runs exactly two Postgres instances (prod, staging). Beds get databases, never their own pond.
 - **hose** (addon) reconciles beds from git using the same manifest `weedr` reads.
 - **twig** (addon) renders Homepage config from per-service widgets.
 - Production gate: refuse to start a production service whose required env/secret is empty or still an example value.
@@ -88,7 +88,7 @@ A **bed** owns one Linux user, one quadlet unit directory, its volumes, and its 
 | **weedr** | base | CLI | create/remove beds, mint pond roles, plant secrets, convert `compose.yaml` → quadlet, prod gate |
 | **stakes** | base | tiny service + state file | pin/unpin/refcount snapshot ids; readable by root snapper hooks |
 | **twig** | addon | watcher/timer | merge `widgets/<service>.yml` into Homepage config |
-| **pond** | addon | 2 containers | `pond-prod` (snapshotted) + `pond-nonprod` (rebuildable); DBs for beds |
+| **pond** | addon | 2 containers | `pond-production` (snapshotted) + `pond-staging` (rebuildable); DBs for beds |
 | **hose** | addon | timer or path unit | `git pull` a bed source of truth, call `weedr` to apply, restart changed units |
 
 Parts talk over files and paths. There is no internal HTTP API.
@@ -98,7 +98,7 @@ Parts talk over files and paths. There is no internal HTTP API.
 | process | user | notes |
 |---|---|---|
 | bed services | `bed-<project>-<env>` | rootless podman, linger enabled |
-| pond-prod, pond-nonprod | `pond` | ports published on `127.0.0.1` |
+| pond-production, pond-staging | `pond` | ports published on `127.0.0.1` |
 | roots | `roots` | writes `/var/lib/roots/dynamic/` |
 | traefik | `traefik` | reads `/var/lib/roots/dynamic/`, binds :80/:443 |
 | stakes | `stakes` | state in `/var/lib/stakes/pins.json`; root snapper hook reads the file |
@@ -197,7 +197,7 @@ No secrets in git. No secrets in GH Actions. SOPS rejected (ADR-0004).
 | staging / preview | `weedr` generates `@sensitive` values at bed create (stable until drop); local override always wins | warn only |
 
 - `weedr` stores nothing long-term. It plants into the bed (materialized `.env` or a podman secret) and forgets.
-- Non-prod values are minted once per bed (`openssl rand`), not per deploy. Dropping a preview bed drops its credentials.
+- staging values are minted once per bed (`openssl rand`), not per deploy. Dropping a preview bed drops its credentials.
 - Pond role passwords are always minted by `weedr`, never human-chosen, never reused across environments. Restoring a DB from a pinned snapshot brings data, not secrets — `weedr` makes a new role and reassigns ownership.
 - Admin owns the offline copy of production values for snapshot restore. Acceptable for one operator.
 
@@ -205,12 +205,12 @@ No secrets in git. No secrets in GH Actions. SOPS rejected (ADR-0004).
 
 ## 8. Snapshots, ladders, pins
 
-- **soil** configures snapper ladders for root, home, and `pond-prod` data. `pond-nonprod` is **not** snapshotted (rebuildable by design).
+- **soil** configures snapper ladders for root, home, and `pond-production` data. `pond-staging` is **not** snapshotted (rebuildable by design).
 - Volume subvolumes per bed are created by `weedr` and get their own snapper config (custom ladder or disabled, per bed).
 - A ladder prunes oldest first unless a snapshot is pinned.
 - **stakes** holds pins as `snapshot_id → { holders: [bed ids] }`. A pin is released only when every holder is gone.
 - `weedr`/`hose` call `stakes` to pin before a preview extract and unpin when the last holder is dropped. Snapper's root cleanup hook reads `/var/lib/stakes/pins.json` and skips pinned ids. `stakes` never blocks snapper; it only answers a query.
-- Space-aware pruning keeps the next-branch priority ladder (home/agents first, root, `pond-prod` last).
+- Space-aware pruning keeps the next-branch priority ladder (home/agents first, root, `pond-production` last).
 
 ---
 
@@ -218,24 +218,24 @@ No secrets in git. No secrets in GH Actions. SOPS rejected (ADR-0004).
 
 ```
 create staging/preview bed
-  1. stakes pin the current pond-prod snapshot  (refcount++)
+  1. stakes pin the current pond-production snapshot  (refcount++)
   2. pg_dump of the project DB + globals (role)
-  3. weedr mint a NEW role + NEW password in pond-nonprod
-  4. restore the dump into pond-nonprod
+  3. weedr mint a NEW role + NEW password in pond-staging
+  4. restore the dump into pond-staging
   5. REASSIGN OWNERSHIP to the new role
   6. weedr plant the new credential in the bed
   7. convert compose.yaml -> quadlet, write bed.yaml routes, twig widgets
-  8. start units (gate: warn only on non-prod)
+  8. start units (gate: warn only on staging)
 
 drop bed (merge or manual)
   1. stop units, remove quadlet files
-  2. drop the database and role in pond-nonprod
+  2. drop the database and role in pond-staging
   3. stakes unpin (refcount--); free the pin at zero
   4. remove hyphae names
   5. remove bed user + volumes (previews) or keep (staging, policy)
 ```
 
-Production database drop is **manual only** (`weedr pond drop --prod` with confirmation). Preview database drop is automatic.
+Production database drop is **manual only** (`weedr pond drop --production` with confirmation). Preview database drop is automatic.
 
 Default routes: `staging.<domain>` and `preview.<domain>/<ref>`, overridable per project in `bed.yaml`.
 
@@ -256,8 +256,8 @@ Default routes: `staging.<domain>` and `preview.<domain>/<ref>`, overridable per
   .config/containers/systemd/     quadlet units + .d/ drop-ins
   .env, .env.<env>, .env.<env>.local
 /var/lib/guarden/volumes/<bed>/…  bed volume subvolumes (btrfs)
-/var/lib/pond/prod/…              pond-prod data subvolume (snapshotted)
-/var/lib/pond/nonprod/…           pond-nonprod data (no snapper)
+/var/lib/pond/prod/…              pond-production data subvolume (snapshotted)
+/var/lib/pond/nonprod/…           pond-staging data (no snapper)
 /var/lib/roots/dynamic/           traefik dynamic config (group edge)
 /var/lib/stakes/pins.json         pin registry state
 /etc/hosts                        hyphae names (written by weedr)

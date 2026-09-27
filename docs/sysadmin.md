@@ -29,15 +29,15 @@ run after success reports `no drift`. `/boot` stays on ext4.
 ## storage: subvolumes and snapper ladders
 
 ```
-soil storage --apply      # data subvolumes (pond-prod, pond-nonprod, volumes root) + snapper ladders + apt hook
+soil storage --apply      # data subvolumes (pond-production, pond-staging, volumes root) + snapper ladders + apt hook
 soil storage --check      # ok when converged
 ```
 
-Ladders cover `root` (`/`), `home` (`/home`), and `pond-prod`
-(`/var/lib/pond/prod`). `pond-nonprod` is rebuildable and is never snapshotted.
+Ladders cover `root` (`/`), `home` (`/home`), and `pond-production`
+(`/var/lib/pond/prod`). `pond-staging` is rebuildable and is never snapshotted.
 
 Space-aware prune priority (FREE_LIMIT, reaped first to last): home and agents
-first (`0.20`), root (`0.12`), `pond-prod` last (`0.06`). The pond is the last
+first (`0.20`), root (`0.12`), `pond-production` last (`0.06`). The pond is the last
 thing to shrink.
 
 Ladder and retention settings change only through `soil storage --apply`.
@@ -53,7 +53,7 @@ hook `/etc/apt/apt.conf.d/80snapper`).
 ```
 snapper -c root list                 # root timeline and apt pre snapshots
 snapper -c home list
-snapper -c pond-prod list
+snapper -c pond-production list
 snapper -c root create -d "note"     # manual snapshot
 snapper -c root undochange <pre>..<post> /   # roll back an apt run
 snapper -c root delete <id>

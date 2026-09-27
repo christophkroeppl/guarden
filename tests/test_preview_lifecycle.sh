@@ -69,9 +69,9 @@ if ! grep -qF "warning: gate issues" <<< "$out"; then
   failures=$((failures + 1))
 fi
 assert_call_log_has "pg_dump"
-assert_call_log_has "pond-prod"
+assert_call_log_has "pond-production"
 assert_call_log_has "nutristack_production"
-assert_call_log_has "pond-nonprod"
+assert_call_log_has "pond-staging"
 assert_call_log_has "CREATE ROLE"
 assert_call_log_has "REASSIGN OWNED BY"
 assert_call_log_has "systemctl --user start"

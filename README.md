@@ -16,7 +16,7 @@ next one over files.
 
 | piece | what it does |
 |---|---|
-| **soil** | Prepares the host: btrfs, snapper, firewall, rootless podman. |
+| **soil** | Prepares the host: btrfs, snapper, ferm, rootless podman. |
 | **weedr** | The one command that creates and removes beds, secrets, and databases. |
 | **roots** | Reads `bed.yaml` from every bed and writes Traefik config. |
 | **stakes** | Remembers which snapshots you care about so the ladder cannot delete them. |
@@ -32,12 +32,9 @@ You can run `soil` + `weedr` + `roots` + `stakes` and stop there. `pond`, `twig`
 ## What you need
 
 - One VPS you do not mind reformatting.
-- Ubuntu 22.04 or 24.04. (26.04 works too.)
+- Ubuntu 26.04.
 - A domain whose DNS you control.
 - About 30 minutes the first time.
-
-You do **not** need: Docker, Kubernetes, a second machine, a secrets service, or a
-credit card.
 
 ---
 
@@ -105,7 +102,7 @@ weedr bed new nutristack --env production --from /path/to/nutristack
 ```
 
 That single command creates the Linux user, writes the quadlet units, makes the database
-in `pond-prod`, plants a generated password, writes the hostnames, and brings the services
+in `pond-production`, plants a generated password, writes the hostnames, and brings the services
 up. Traefik starts routing to `api.yourdomain.com` on its own.
 
 To take it away:
@@ -165,7 +162,7 @@ never do.
 
 Every project has an `environment`: `production`, `staging`, or `preview:<ref>`.
 
-- **staging** is `develop`. It drinks from `pond-nonprod`, which is not snapshotted. If
+- **staging** is `develop`. It drinks from `pond-staging`, which is not snapshotted. If
   it breaks, throw it away and make it again from a production dump.
 - **preview** is a pull request. `hose` opens one when the branch appears and drops it
   when the branch is gone. Up to three at a time; the oldest goes when a fourth shows up.
@@ -258,4 +255,4 @@ yourself out of the firewall, wait — the dead-man timer will let you back in.
   hose (optional) keeps it all true to git.
 ```
 
-Welcome to the garden.
+Welcome to the guarden.

@@ -14,6 +14,6 @@ assert_call_log_has "btrfs subvolume create"
 assert_exit 0 soil storage --check
 assert_output_has "ok" soil storage --check
 
-assert_call_log_lacks "snapper.*pond-nonprod|pond-nonprod.*snapper"
+assert_call_log_lacks "snapper.*pond-staging|pond-staging.*snapper"
 
 finish

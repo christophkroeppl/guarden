@@ -353,7 +353,7 @@ cmd_bed_start() {
         exit 1
       else
         echo "$gate_output" >&2
-        echo "weedr: warning: gate issues on non-prod bed: $bed" >&2
+        echo "weedr: warning: gate issues on staging bed: $bed" >&2
       fi
     fi
   fi
@@ -480,7 +480,7 @@ as_pond() {
 }
 
 pond_container_for() {
-  if [ "$1" = "production" ]; then echo "pond-prod"; else echo "pond-nonprod"; fi
+  if [ "$1" = "production" ]; then echo "pond-production"; else echo "pond-staging"; fi
 }
 
 pond_port_for() {
@@ -699,7 +699,7 @@ cmd_preview_new() {
   local prod_db dump
   prod_db="$(pg_ident "${project}-production")"
   dump="$(mktemp)"
-  as_pond podman exec pond-prod pg_dump -U postgres "$prod_db" > "$dump"
+  as_pond podman exec pond-production pg_dump -U postgres "$prod_db" > "$dump"
   cmd_pond_restore pond restore "$bed_name" --from "$dump"
   rm -f "$dump"
   cmd_bed_start bed start "$bed_name"

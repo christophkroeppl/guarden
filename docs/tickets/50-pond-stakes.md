@@ -6,9 +6,9 @@
 
 **Status:** ready-for-agent
 
-- [ ] `pond-prod` and `pond-nonprod` run as user `pond` with ports published on `127.0.0.1`
+- [ ] `pond-production` and `pond-staging` run as user `pond` with ports published on `127.0.0.1`
 - [ ] The hyphae name `pond.internal` resolves and a bed can open `pond.internal:5432` through the host loopback
-- [ ] `weedr pond mint <bed>` creates one Postgres role and one database in `pond-prod` for production beds and in `pond-nonprod` otherwise
+- [ ] `weedr pond mint <bed>` creates one Postgres role and one database in `pond-production` for production beds and in `pond-staging` otherwise
 - [ ] `weedr` mints the password (never human-chosen) and plants it into the bed, then forgets it
 - [ ] `weedr pond drop` on production requires explicit confirmation; on previews it runs automatically
 - [ ] Restoring a dump reassigns ownership to a freshly minted role so staging never reuses a production password

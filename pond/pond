@@ -9,13 +9,13 @@ usage() {
 usage: pond <command>
 
 pond — shared state services offered to beds (postgres first). Exactly two
-instances: pond-prod (snapshotted, 127.0.0.1:5432) and pond-nonprod
+instances: pond-production (snapshotted, 127.0.0.1:5432) and pond-staging
 (rebuildable, 127.0.0.1:5433). Beds get databases inside a pond, never their
 own pond. Podman runs as user pond.
 
 commands:
-  up      run pond-prod and pond-nonprod
-  down    remove pond-prod and pond-nonprod
+  up      run pond-production and pond-staging
+  down    remove pond-production and pond-staging
 EOF
 }
 
@@ -31,14 +31,14 @@ write_hyphae_pond() {
 }
 
 cmd_up() {
-  as_pond podman run -d --name pond-prod --publish 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" postgres
-  as_pond podman run -d --name pond-nonprod --publish 127.0.0.1:5433:5432 -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" postgres
+  as_pond podman run -d --name pond-production --publish 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" postgres
+  as_pond podman run -d --name pond-staging --publish 127.0.0.1:5433:5432 -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" postgres
   write_hyphae_pond
-  echo "pond up: pond-prod 127.0.0.1:5432, pond-nonprod 127.0.0.1:5433"
+  echo "pond up: pond-production 127.0.0.1:5432, pond-staging 127.0.0.1:5433"
 }
 
 cmd_down() {
-  as_pond podman rm -f pond-prod pond-nonprod
+  as_pond podman rm -f pond-production pond-staging
   echo "pond down"
 }
 

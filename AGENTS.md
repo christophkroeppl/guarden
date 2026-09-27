@@ -11,7 +11,7 @@ weedr/    the only privileged mutator (beds, secrets, pond, preview, redeploy)
 stakes/   pin registry + snapper-cleanup hook
 roots/    bed.yaml -> traefik dynamic config
 twig/     widgets/<service>.yml -> homepage config
-pond/     bring up pond-prod and pond-nonprod
+pond/     bring up pond-production and pond-staging
 hose/     optional gitops reconciler (calls weedr via sudoers)
 tests/    the one test seam
 fixtures/ fake binaries (PATH-first) and example project manifests
@@ -31,7 +31,7 @@ short version:
 - hyphae is loopback ports and host names, not a shared podman network. Rootless podman
   networks are per-user and cannot cross users.
 - No secret ciphertext in git. Production secrets are hand-set via `weedr secret set`.
-  Non-prod secrets are generated at bed create and stable until drop.
+  staging secrets are generated at bed create and stable until drop.
 - The manifest is pure Compose plus `bed.yaml` plus `widgets/<service>.yml`. `compose.yaml`
   stays valid Compose.
 

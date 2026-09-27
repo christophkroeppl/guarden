@@ -25,7 +25,7 @@ The dashboard generator that renders and aggregates dashboard config from beds.
 _Avoid_: arbor, dashboard service
 
 **pond**:
-Shared state services offered to beds (postgres first; others later). Exactly two instances: one production pond (snapshotted) and one non-prod pond (rebuildable, not snapshotted). Beds get databases inside a pond, never their own pond.
+Shared state services offered to beds (postgres first; others later). Exactly two instances: one production pond (snapshotted) and one staging pond (rebuildable, not snapshotted). Beds get databases inside a pond, never their own pond.
 _Avoid_: bed, shared pg, shared services
 
 **project**:
@@ -37,7 +37,7 @@ One process/container inside a bed (`api`, `worker`, `web`).
 _Avoid_: container, microservice, unit
 
 **environment**:
-The runtime track a bed runs in: `production`, `staging`, or `preview:<ref>`. Production beds drink from the production pond; staging and preview beds share the non-prod pond.
+The runtime track a bed runs in: `production`, `staging`, or `preview:<ref>`. Production beds drink from the production pond; staging and preview beds share the staging pond.
 _Avoid_: stage, env
 
 **hose**:
@@ -77,5 +77,5 @@ _Avoid_: mycelium, mycellia, shared network
 - Tracked `.env.schema` (varlock syntax: `@required`, `@sensitive`, `@type`, `@example`). Generated `.env.example` for staging dummies.
 - Layered overrides: `.env` → `.env.<env>` → `.env.<env>.local` (gitignored).
 - Production: admin sets values by hand (`weedr secret set`). Hard gate — refuse to start if a `@required` key is empty or still `EXAMPLE-`/`changeme`.
-- Non-prod: `weedr` generates `@sensitive` values at bed create (stable until drop). Local override always wins.
+- staging: `weedr` generates `@sensitive` values at bed create (stable until drop). Local override always wins.
 - weedr stores nothing long-term; it plants into the bed (materialized `.env` or podman secret). Admin owns the offline copy for snapshot restore.
