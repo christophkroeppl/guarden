@@ -110,6 +110,18 @@ Open ports come from `.guarden/bed.yaml` (`ports:`) plus the bed's admin overrid
   `<unit>.container.d/`.
 - Regeneration and `hose` never touch root-owned paths.
 
+## deploy queue
+
+One build at a time by default; the lane count is a root-owned override:
+
+```
+weedr queue lanes 2         # allow two concurrent builds (default 1)
+weedr redeploy <bed> --now  # jump the queue for one request
+```
+
+The new count applies between builds — it never kills an in-flight one. Production still
+jumps to the front of whichever lane frees up first.
+
 ## boot ordering
 
 Production services start first. Staging and preview start only after **all** production

@@ -190,9 +190,10 @@ weedr redeploy myapp --env production              # pull and restart
 weedr redeploy myapp --env production --now        # skip the queue
 ```
 
-Only one container build runs on the box at a time. The queue is FIFO with production
-jumped to the front, and repeat requests for the same bed collapse into one — `--now`
-overrides the queue.
+One container build runs on the box at a time — by default. The queue is FIFO with
+production jumped to the front, and repeat requests for the same bed collapse into one —
+`--now` skips the queue for one request. If the box has headroom, `weedr queue lanes 2`
+lets two builds run at once; the count applies between builds and never kills one.
 
 `weedr --help` and `stakes --help` list everything else.
 
