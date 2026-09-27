@@ -1,7 +1,7 @@
 # guarden v1 — spec
 
 Status: ready-for-agent.
-Source: `docs/PRD.md`, `CONTEXT.md`, `docs/adr/0001`–`0008`.
+Source: `docs/PRD.md`, `CONTEXT.md`, `docs/adr/0001`–`0009`.
 Test seam model: **A** (one seam, two harnesses).
 
 ## Problem Statement
@@ -19,7 +19,7 @@ The operator wants one small platform, **guarden**, that turns a fresh Ubuntu VP
 - **soil** converges a fresh Ubuntu: cloud-init inlines the install scripts, ext4 → btrfs convert, ferm + fail2ban, snapper ladders, rootless podman + quadlet, sysctl for unprivileged ports.
 - **weedr** is the one privileged mutator. It plows and removes **beds**, digs/fills/drains **ponds**, converts a Compose manifest to quadlet units, mints pond roles, plants secrets, applies ferm port openings, and gates production deploys before the old container is stopped.
 - **stakes** is the pin registry. It holds snapshot pins together with their holders so ladders cannot prune pinned data, and it lists ladders and pins.
-- **roots** collects route configs from beds and writes Traefik dynamic config. It runs unprivileged.
+- **roots** collects route configs from beds and writes Traefik dynamic config, including the forward-auth rule for beds that declare `auth: true`. It runs unprivileged.
 
 **addons** sit on top of base:
 
@@ -56,7 +56,7 @@ Traefik runs as its own bed in the `fence` environment track (`bed-fence-traefik
 23. As an admin, I want watchers to be systemd `.path` units with globs over the `bed-*`/`pond-*` folder schema — recursive, so nested preview refs are caught — and to trigger only `daemon-reload`, never an auto-restart.
 24. As a developer, I want `compose.yaml` at the repo root or quadlet units in `.guarden/quadlet/`, exactly one of them, so that the unit source is unambiguous.
 25. As a developer, I want a pre-commit error when my repo declares neither, so that a manifest without a unit source never lands.
-26. As a developer, I want `.guarden/bed.yaml` to hold routes, `pond:` databases with roles and grants, hyphae aliases, `ports:`, and the environment, so that the infra contract is visible in my repo.
+26. As a developer, I want `.guarden/bed.yaml` to hold routes, `pond:` databases with roles and grants, hyphae aliases, `ports:`, the environment, and `auth:`, so that the infra contract is visible in my repo.
 27. As a developer, I want `.guarden/bed.yaml` to declare the databases, roles, and grants my services get from a pond, so that the database contract lives next to the code.
 28. As a developer, I want `.guarden/widgets/<service>.yml` — exactly one per service — so that my service gets a dashboard card without a ticket.
 29. As a developer, I want `.guarden/.env.schema` tracked in varlock syntax (`@required`, `@sensitive`, `@type`, `@example`) with values never tracked, so that I know what to set without putting secrets in git.
@@ -128,6 +128,7 @@ Traefik runs as its own bed in the `fence` environment track (`bed-fence-traefik
 95. As an admin, I want the golden VM to exercise a production-named and a staging-named pond alongside the demo projects — seedling (api, worker, web on a pond), coldframe (staging only), and stonecrop (self-contained node with its own subvolume and state, no pond) — so that the reference use-case is proven on a real host.
 96. As an admin, I want every pond to run as its own user `pond-<env>-<name>` — created by `weedr pond dig` with linger and allocated subuid/subgid, like a bed — so that ponds are separated from each other by a real user boundary and not only by database roles and ferm rules.
 97. As an admin, I want the queue's lane count overridable from its default of 1 with `weedr queue lanes <n>`, applied between builds and never killing an in-flight one, so that I can trade responsiveness for throughput when the box has headroom and drop back to one when it has not.
+98. As an admin, I want a bed to opt into forward-auth with `auth: true` in `.guarden/bed.yaml`, so that routes are protected at the fence and no app ever integrates with the auth bed.
 
 ## Implementation Decisions
 
@@ -136,9 +137,10 @@ Traefik runs as its own bed in the `fence` environment track (`bed-fence-traefik
 - A **bed** is one **project** in one **environment**, and a project has one bed per environment. The environment is always explicit — `production` | `staging` | `preview` | `fence` — and never implicit: `weedr bed plow` requires `--env`, and a git manifest declares its environment. A bed owns one Linux user `bed-<env>-<name>` (linger on), one user-scope quadlet unit directory, its files, and its hyphae names. A **service** is one container/process inside a bed. Previews nest instances per ref: one bed per project (`bed-preview-<project>`), each ref under `/home/bed-preview-<project>/<ref>/`, capped at 3 concurrent refs per project by default with FIFO eviction, overridable.
 - `weedr` is the only privileged mutator. `hose` calls `weedr` through a narrow sudoers rule. `roots`, `twig`, `stakes`, and the traefik bed run unprivileged, and root executes only root-owned helper copies. ferm and fail2ban cover the host; no daemon runs as root and users are per bed and per pond, so SELinux/AppArmor hardening stays possible.
 - **fence**: traefik runs as its own bed — `bed-fence-traefik` in the `fence` track — with its own user and quadlet dir, and its `bed.yaml` declares ports 80/443 for ferm plus safe defaults. `roots` is a separate unprivileged service that writes `/var/lib/roots/dynamic/`; the traefik bed reads that directory through the `fence` group. The two never share a user.
+- **auth**: sign-in runs at the fence: a protected bed declares `auth: true` in `bed.yaml` and `roots` renders the forward-auth rule aimed at the auth bed's hyphae name. The auth bed — Authelia or Authentik — is a normal bed, named once in a root-owned file beside the dynamic config; its own routers never carry the rule, and a bed without `auth:` gets today's routes. See ADR-0009.
 - **hyphae** is an optional contract, not a network: shared services publish on loopback, `weedr` writes stable names (`<pond>.internal`, `bed-<env>-<name>.internal`) into `/etc/hosts`, and beds use `pasta` to reach the host loopback. Each pond group gets its own loopback block (`127.1.<g>.<n>`), and ferm `OUTPUT` rules with `uid-owner` matching admit only that group's members — the pond's own user and its member bed users. A shared podman network across bed users is not part of the design. See ADR-0003.
 - **pond** is a primitive: a named shared-state instance, Postgres first, named `pond-<env>-<name>` (`pond-production-postgres`, `pond-staging-postgres`) — the bed schema with the class prefix swapped. Ponds are optional and host prep never creates one by default. Each pond runs as its own user `pond-<env>-<name>` — created by `weedr pond dig` with linger and subuid/subgid, its own quadlet dir and data directory — so ponds are separated by a real user boundary; there is no shared `pond` user. Verbs: `weedr pond dig <name>` creates a pond, `weedr pond fill <bed>` provisions a database and role for a bed, `weedr pond drain <bed>` removes them — with explicit confirmation when production. `weedr bed plow -p <pond>` / `--pond <pond>` connects a bed's hyphae to a pond; an unknown name offers the known ponds plus the option to create one. Shared ponds are the recommendation for state; a self-contained bed may own its own service or database container, subvolume, ladder, and state. See ADR-0002.
-- The project repo declares exactly one unit source: `compose.yaml` at the root (pure Compose) **or** quadlet units in `.guarden/quadlet/`; declaring neither is a pre-commit error. `.guarden/` also holds `bed.yaml` (routes, `pond:` databases with roles/grants, hyphae aliases, `ports:`, environment), `widgets/<service>.yml` (exactly one widget per service), and `.env.schema`. Both `weedr` and `hose` read the same files. See ADR-0005.
+- The project repo declares exactly one unit source: `compose.yaml` at the root (pure Compose) **or** quadlet units in `.guarden/quadlet/`; declaring neither is a pre-commit error. `.guarden/` also holds `bed.yaml` (routes, `pond:` databases with roles/grants, hyphae aliases, `ports:`, environment, `auth:`), `widgets/<service>.yml` (exactly one widget per service), and `.env.schema`. Both `weedr` and `hose` read the same files. See ADR-0005.
 - `weedr` converts Compose to quadlet using **podlet** as a pinned binary, plus a small pass that emits `.volume` units for bare named volumes. Units given in `.guarden/quadlet/` are used as they are. Bed-specific overrides are written as unit drop-ins so regeneration cannot clobber them.
 - Admin overrides are bed-scoped and root-owned: `/home/bed-<env>-<name>/overrides.yaml` is root:root 0444 — readable by the bed user and the CLIs, writable only by root — plus root-owned admin drop-ins in the bed's quadlet dir (`<unit>.container.d/` for unit-level overrides). Regeneration and `hose` never touch root-owned paths.
 - Watchers are systemd `.path` units with globs over the `bed-*`/`pond-*` folder schema, recursive so nested preview refs are caught. A trigger runs `daemon-reload` only; nothing auto-restarts. No regex.

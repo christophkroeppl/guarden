@@ -60,6 +60,10 @@ _Avoid_: compartment, stack, slot
 The boundary layer: the traefik bed `bed-fence-traefik` running in the `fence` environment, the `fence` system group, and the shared dynamic-config directory that `roots` writes and the traefik bed reads. Traefik is a bed like any other — its own user, its own quadlet dir — and `roots` stays a separate unprivileged service.
 _Avoid_: perimeter, gateway, front door
 
+**auth**:
+The optional sign-in layer: an auth bed (Authelia or Authentik) that Traefik consults at the fence before a protected request reaches its service. A bed opts in with `auth: true` in `bed.yaml` and `roots` renders the forward-auth rule into its routes; the auth bed itself is plowed like any bed.
+_Avoid_: sso, login service, authelia, authentik
+
 **hyphae**:
 The optional connectivity contract: loopback-published ports plus stable host names (`<pond>.internal`, `bed-<env>-<name>.internal`). Each pond group gets its own loopback block that only its members (the pond user and its member bed users) can reach — never a shared podman network.
 _Avoid_: mycelium, mycellia, shared network

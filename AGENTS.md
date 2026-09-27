@@ -27,7 +27,7 @@ thing that mutates state that matters; everything else reads and renders.
 
 ## Binding decisions
 
-`docs/adr/0001` through `0008` are binding. Do not re-litigate them in a change. The
+`docs/adr/0001` through `0009` are binding. Do not re-litigate them in a change. The
 short version:
 
 - No web UI, ever. `weedr` is the only thing that creates or rewrites bed units.
@@ -38,6 +38,8 @@ short version:
   allowed, but it must be an explicit choice, never the default.
 - hyphae is loopback ports and host names, not a shared podman network. Rootless podman
   networks are per-user and cannot cross users.
+- Auth runs at the fence: a bed opts in with `auth: true` in `bed.yaml` and `roots`
+  renders the forward-auth rule at the auth bed named in one root-owned file.
 - No secrets in git and none in GH Actions. Production secrets are hand-set via
   `weedr secret set`. staging secrets are generated at bed create and stable until drop.
 - The manifest is pure `compose.yaml` or quadlet units in `.guarden/quadlet/` — exactly

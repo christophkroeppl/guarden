@@ -55,6 +55,7 @@ Constraints: one human, one VPS, KISS, UNIX-flavoured, loosely coupled parts, no
 - Tailscale (or similar) for staging/dashboards exposure.
 - Monitoring export (podman/vps stats) as a soil plugin.
 - Shared non-pg state services in the pond (redis, minio).
+- Auth bed (Authelia or Authentik) behind forward-auth at the fence: `roots` renders the rule from `auth: true` in `bed.yaml`, the auth bed is named in one root-owned file (ADR-0009, ticket 190).
 - Per-pond network segregation stronger than loopback blocks plus ferm uid-owner rules (§5).
 - Rust ports of hot paths once Python/bash has proven the shape.
 
@@ -92,7 +93,7 @@ A **preview** is one bed per project (`bed-preview-<project>`) with one nested i
 | part | layer | kind | job |
 |---|---|---|---|
 | **soil** | base | converger scripts + timers | host prep: cloud-init, btrfs convert, ferm/fail2ban, snapper ladders, podman/quadlet, sysctl |
-| **roots** | base | watcher/timer | read `bed.yaml` route sections from all beds, write Traefik dynamic config |
+| **roots** | base | watcher/timer | read `bed.yaml` route and auth sections from all beds, write Traefik dynamic config |
 | **weedr** | base | CLI | `bed plow` / `bed remove`, `pond dig` / `pond fill` / `pond drain`, mint pond roles, plant secrets, convert Compose → quadlet, apply ferm ports, production gate |
 | **stakes** | base | tiny service + state file | pin/unpin snapshot ids with holder identity; `stakes query` shows the holders of one id, `stakes lists` shows ladders and pins |
 | **twig** | addon | watcher/timer | merge `widgets/<service>.yml` into Homepage config |
@@ -178,7 +179,7 @@ Exactly one of `compose.yaml` and `.guarden/quadlet/` must exist; neither is a p
 
 ### 6.1 `bed.yaml`
 
-Infra contract only. Routes for **roots**, databases and roles for **pond**, hyphae aliases, ferm ports, and the environment.
+Infra contract only. Routes for **roots**, databases and roles for **pond**, hyphae aliases, ferm ports, the environment, and the forward-auth opt-in for **roots**.
 
 ```yaml
 # .guarden/bed.yaml
@@ -186,6 +187,7 @@ environment: production          # required: production | staging | preview | fe
 routes:
   api: "api.${env}.${domain}"
   web: "${env}.${domain}"
+auth: true                       # forward-auth at the fence; roots renders it (ADR-0009)
 pond:
   databases:
     app:
