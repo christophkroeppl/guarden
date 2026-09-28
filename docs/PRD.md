@@ -29,12 +29,12 @@ Constraints: one human, one VPS, KISS, UNIX-flavoured, loosely coupled parts, no
 - **weedr** creates and removes **beds** (project × environment) with their user, units, volumes, hyphae names, optional pond database, and secrets. No web UI.
 - **Explicit environments.** The track is always named: `production | staging | preview | fence`. `weedr bed plow` requires `--env`, and a git manifest declares its environment. There is no implicit default.
 - **pond** is a primitive, not a fixture: optional named instances (Postgres first) on the bed schema with the class prefix swapped — `pond-production-postgres`, `pond-staging-postgres`. Verbs: `weedr pond dig <name>` create, `weedr pond fill <bed>` provision, `weedr pond drain <bed>` remove. Default host prep never creates a pond.
-- **fence**: Traefik runs as its own bed (`bed-fence-traefik`) in the `fence` environment track with its own user and quadlet dir; its `bed.yaml` declares ports 80/443 plus safe defaults. The shared dynamic-config dir `/var/lib/roots/dynamic/` is written by unprivileged **roots** and read by the traefik bed through the `fence` group, so a roots bug cannot run containers.
+- **fence**: Traefik runs as its own bed (`bed-fence-traefik`) in the `fence` environment track with its own user and quadlet dir; its `bed.yaml` declares ports 80/443 plus safe defaults. The auth bed (`bed-fence-authelia`, ADR-0009) shares the track and starts with it. The shared dynamic-config dir `/var/lib/roots/dynamic/` is written by unprivileged **roots** and read by the traefik bed through the `fence` group, so a roots bug cannot run containers.
 - **roots** accumulates route config from beds and writes Traefik dynamic config. Traefik is a separate process in a separate user.
 - **stakes** holds snapshot pins as sets of holders so ladders cannot prune data a bed still needs.
-- **hose** (addon) reconciles beds from git using the same manifest `weedr` reads, over an explicit list of project repos, through the deploy queue.
+- **hose** (addon) reconciles beds from CI pokes (`project ref sha` + source over ssh) and, when the remote is readable, a `hose check` drift pass; the same manifest `weedr` reads, over an explicit project list, through the deploy queue (ADR-0010).
 - **twig** (addon) renders Homepage config from per-service widgets.
-- Production gate: refuse to start a production service whose required env value is empty or still an example value — evaluated before the old container is stopped.
+- Production/fence gate: refuse to start a production or fence service whose required env value is empty or still an example value — evaluated before the old container is stopped.
 
 ### Non-goals (v1)
 
@@ -55,7 +55,7 @@ Constraints: one human, one VPS, KISS, UNIX-flavoured, loosely coupled parts, no
 - Tailscale (or similar) for staging/dashboards exposure.
 - Monitoring export (podman/vps stats) as a soil plugin.
 - Shared non-pg state services in the pond (redis, minio).
-- Auth bed (Authelia or Authentik) behind forward-auth at the fence: `roots` renders the rule from `auth: true` in `bed.yaml`, the auth bed is named in one root-owned file (ADR-0009, ticket 190).
+- Auth bed (Authelia or Authentik) behind forward-auth at the fence: `roots` renders the rule from `auth: true` in `bed.yaml`, the auth bed is `bed-fence-authelia` in the `fence` track, named in one root-owned file (ADR-0009, ticket 190).
 - Per-pond network segregation stronger than loopback blocks plus ferm uid-owner rules (§5).
 - Rust ports of hot paths once Python/bash has proven the shape.
 
@@ -82,7 +82,7 @@ A **bed** owns one Linux user (`bed-<env>-<name>`), one quadlet unit directory, 
 
 A **pond** is a named shared-state instance (Postgres first, others later); a member bed gets a database and a role inside one. A pond owns one Linux user `pond-<env>-<name>` of the same name, created by `weedr pond dig`. Ponds are optional — a manifest with no `pond:` section needs none.
 
-A **preview** is one bed per project (`bed-preview-<project>`) with one nested instance directory per ref under its home; the **fence** bed (`bed-fence-traefik`) runs Traefik for the whole host. **hyphae** is an optional connectivity contract a bed may declare (§5) — a bed without it has no stable names and no group membership.
+A **preview** is one bed per project (`bed-preview-<project>`) with one nested instance directory per ref under its home; the **fence** track holds `bed-fence-traefik` (Traefik for the whole host) and `bed-fence-authelia` (sign-in, ADR-0009). **hyphae** is an optional connectivity contract a bed may declare (§5) — a bed without it has no stable names and no group membership.
 
 ---
 
@@ -95,10 +95,10 @@ A **preview** is one bed per project (`bed-preview-<project>`) with one nested i
 | **soil** | base | converger scripts + timers | host prep: cloud-init, btrfs convert, ferm/fail2ban, snapper ladders, podman/quadlet, sysctl |
 | **roots** | base | watcher/timer | read `bed.yaml` route and auth sections from all beds, write Traefik dynamic config |
 | **weedr** | base | CLI | `bed plow` / `bed remove`, `pond dig` / `pond fill` / `pond drain`, mint pond roles, plant secrets, convert Compose → quadlet, apply ferm ports, production gate |
-| **stakes** | base | tiny service + state file | pin/unpin snapshot ids with holder identity; `stakes query` shows the holders of one id, `stakes lists` shows ladders and pins |
+| **stakes** | base | tiny service + state file | pin/unpin snapshot ids with holder identity; `stakes query` shows the holders of one id, `stakes list` shows ladders and pins |
 | **twig** | addon | watcher/timer | merge `widgets/<service>.yml` into Homepage config |
 | **pond** | addon | optional named instances | Postgres first: named `pond-<env>-<name>` (`pond-production-postgres`, `pond-staging-postgres`, …); one database + one role per member bed |
-| **hose** | addon | timer or path unit | `git pull` an explicitly listed project repo, call `weedr` to apply, restart changed units — queued like every other build |
+| **hose** | addon | CLI + timer | accept a CI poke (`project ref sha` + source tarball), or run `hose check` against a readable remote; call `weedr` to apply; restart changed units — queued like every other build |
 
 Parts talk over files and paths. There is no internal HTTP API.
 
@@ -112,7 +112,7 @@ Watchers are systemd `.path` units with globs over the `bed-*` / `pond-*` folder
 | pond instances | `pond-<env>-<name>` | one user per pond, created by `weedr pond dig`; ports published on `127.0.0.1` |
 | traefik | `bed-fence-traefik` | fence bed; binds :80/:443, reads `/var/lib/roots/dynamic/` |
 | roots | `roots` | writes `/var/lib/roots/dynamic/` |
-| stakes | `stakes` | state in `/var/lib/stakes/pins.json`; root snapper hook reads the file |
+| stakes | `stakes` | state in `/var/lib/guarden/stakes/pins` (root-readable, one line per snapshot: the id then its holder beds); root snapper hook reads the file |
 | twig | `twig` | writes Homepage config |
 | hose | `hose` | calls `weedr` through a narrow sudoers rule |
 | weedr | admin (sudo) | creates beds, plants secrets, mints pond roles |
@@ -225,7 +225,7 @@ No secrets in git. No secrets in GH Actions.
 
 | environment | who sets secrets | gate |
 |---|---|---|
-| production | admin by hand: `weedr secret set <bed> KEY` | **refuse to start** if a `@required` key is empty or still `EXAMPLE-`/`changeme` |
+| production, fence | admin by hand: `weedr secret set <bed> KEY` | **refuse to start** if a `@required` key is empty or still `EXAMPLE-`/`changeme` |
 | staging / preview | `weedr` generates `@sensitive` values at bed create (stable until drop); local override always wins | warn only |
 
 **Ordering rule: the gate is evaluated before the old container is shut down.** A deploy that fails the gate leaves the running container running — no gap, no restart into a broken config.
@@ -234,6 +234,7 @@ No secrets in git. No secrets in GH Actions.
 - staging values are minted once per bed (`openssl rand`), not per deploy. Dropping a preview instance drops its credentials.
 - Pond role passwords are always minted by `weedr`, never human-chosen, never reused across environments. Restoring a DB from a pinned snapshot brings data, not secrets — `weedr` makes a new role and reassigns ownership.
 - Admin owns the offline copy of production values for snapshot restore. Acceptable for one operator.
+- A production bed created by a push to `main` is planted the same way: the gate names the missing keys, and the bed does not start until the operator sets them (ADR-0010).
 
 ---
 
@@ -242,8 +243,8 @@ No secrets in git. No secrets in GH Actions.
 - A **ladder** is a snapper configuration owned by the subvolume it protects: a pond's ladder sits with the pond, a bed's own ladder sits with the bed's subvolume. Config lives with the subvolume owner; **soil** applies generic defaults for ladders it does not find configured.
 - **soil** configures ladders for root, home, and the production pond's data. A rebuildable pond's data carries no ladder, at its owner's discretion.
 - A ladder prunes oldest first unless a snapshot is pinned.
-- **stakes** holds pins as `snapshot_id → holders [bed ids]` — an identity set, never a bare count. A pin is released only when every holder is gone. `stakes query` prints the holders of an id; `stakes lists` prints ladders and their pins.
-- `weedr`/`hose` call `stakes` to pin before an extract and unpin when the last holder is dropped. Snapper's cleanup hook reads `/var/lib/stakes/pins.json` and skips pinned ids. `stakes` never blocks snapper; it only answers queries.
+- **stakes** holds pins as `snapshot_id → holders [bed ids]` — an identity set, never a bare count. A pin is released only when every holder is gone. `stakes query` prints the holders of an id; `stakes list` prints ladders and their pins.
+- `weedr`/`hose` call `stakes` to pin before an extract and unpin when the last holder is dropped. Snapper's cleanup hook reads `/var/lib/guarden/stakes/pins` and skips pinned ids. `stakes` never blocks snapper; it only answers queries.
 - Space-aware pruning keeps the next-branch priority ladder (home/agents first, root, production pond last).
 
 ---
@@ -251,6 +252,8 @@ No secrets in git. No secrets in GH Actions.
 ## 9. Staging and preview lifecycle
 
 A staging or preview instance extracts from a **source pond** (normally production) into a **target pond**:
+
+Seeding sources are fixed (ADR-0002): a production bed starts with an **empty** database — its first deploy never forks from staging. A staging bed forks from the production pond's latest snapshot. A preview forks from production by default, and from the staging pond when the project has no production data yet; a project with nothing to fork from starts empty. Every restore mints a new role and password.
 
 ```
 create staging/preview instance
@@ -282,11 +285,12 @@ Default routes: `staging.<domain>` and `preview.<domain>/<ref>`, overridable per
 ## 10. Deploy model
 
 - **Gate before stop.** The production gate is evaluated before the old container is shut down; a failed gate leaves the old container running (§7).
-- `hose` pulls the source of truth, diffs the generated units, writes them, and restarts changed services. **Stop then start.** No rolling (§2 non-goals).
+- `hose` receives the source with a poke (`project ref sha` + tarball), or fetches it in `hose check` when the remote is readable; it diffs the generated units, writes them, and restarts changed services. **Stop then start.** No rolling (§2 non-goals).
 - Migrations run **in-app on start**, before the service accepts traffic. A failing migration leaves the unit failed and `roots` keeps the old route target until the unit is healthy again (v1: route stays, service is down — simpler).
-- **Build queue.** Never more than one container build at a time on the VPS — by default. FIFO, production always prioritized, debounced and deduped. The queue is respected by gitops (a GH Action pokes `hose`) and by manual redeploys of multi-service beds. `weedr redeploy --now` bypasses queue position for one request; the lane count itself is a root-owned host override (`weedr queue lanes <n>`, default 1) that applies between builds and never kills an in-flight one — more lanes when the box has headroom, back to one when it has not.
+- **Build queue.** Never more than one container build at a time on the VPS — by default. FIFO, production always prioritized, debounced and deduped. The queue is respected by gitops (a GH Action pokes `hose`) and by manual redeploys of multi-service beds. `weedr redeploy --now` bypasses queue position for one request; the lane count itself is a root-owned host override (`weedr queue lanes <n>`, default 1) that applies between builds and never kills an in-flight one — more lanes when the box has headroom, back to one when it has not. The build itself is a rootless `podman build` as the bed user from `/var/lib/guarden/staging/<bed>/<sha>/`, tagged with compose's `image:` ref, deduped on (bed, ref, sha), and it runs **before** the old container stops — a failed build leaves the running service running (ADR-0010).
+- **Production via poke.** A push to `main` may create and deploy the production bed — the first deploy starts an empty database (§9), and the gate still applies before start (§7). A poke never drops a production bed: `hose drop` and `hose check` refuse, and a root-owned override beside the ops list is the only switch (ADR-0010).
 - `weedr redeploy <bed>` is the manual trigger. Production requires confirmation.
-- **Boot ordering.** The fence bed starts first, then production ponds, then production beds. Staging and preview start only after ALL production services have started, plus a fixed delay. Container dependencies (`After=`, quadlet dependencies) order units inside each wave — a pond before the beds that consume it. `weedr` writes the systemd ordering drop-ins; the delay is fixed, not configurable in v1.
+- **Boot ordering.** The fence track starts first (traefik, auth), then production ponds, then production beds. Staging and preview start only after ALL production services have started, plus a fixed delay. Container dependencies (`After=`, quadlet dependencies) order units inside each wave — a pond before the beds that consume it. `weedr` writes the systemd ordering drop-ins; the delay is fixed, not configurable in v1.
 
 ---
 
@@ -302,8 +306,10 @@ Default routes: `staging.<domain>` and `preview.<domain>/<ref>`, overridable per
   .config/containers/systemd/     pond quadlet units
 /var/lib/guarden/beds/<bed>/      bed-owned state (subvolumes when the bed has them)
 /var/lib/guarden/ponds/<pond>/    pond data subvolumes
+/var/lib/guarden/staging/<bed>/<sha>/   poked source staged for the build (0755)
+/var/lib/guarden/hose/            ops list (project → git URL), read credential, production-drop override
 /var/lib/roots/dynamic/           traefik dynamic config (group fence)
-/var/lib/stakes/pins.json         pin registry state (root-readable)
+/var/lib/guarden/stakes/pins   pin registry state: snapshot id → holder beds (root-readable)
 /etc/hosts                        hyphae names (written by weedr)
 /etc/containers/systemd/users/<uid>/   admin-injected quadlet units
 ```
@@ -341,6 +347,7 @@ The golden VM's behaviour phases exercise **production- and staging-named ponds*
 - Fail2ban + ferm (ufw disabled by soil).
 - Future SELinux/AppArmor: no daemon runs as root; users are per bed and per pond; drop-in files are the extension point — nothing here requires `unconfined`.
 - UNIX security rule: manual and gitops beds share the layout; there is no "privileged mode" in a bed.
+- CI holds one ssh key per project, forced-command-bound to that project's pokes; no registry token and no GitHub credential exists in Actions or on the box (ADR-0010).
 
 ---
 
@@ -375,5 +382,9 @@ Tickets `10`–`90` are the frontier build; the `100`+ series follows:
 16. **160** — deploy queue.
 17. **170** — jinja2 templates (the one allowed new runtime dependency) and moving embedded Python into separate files/libs.
 18. **180** — demo projects: seedling, coldframe, stonecrop.
+19. **190** — forward-auth at the fence (ADR-0009).
+20. **200** — CI pokes: `hose poke` / `hose drop` / `hose grant`, staging intake, production-drop guard, workflow template (ADR-0010).
+21. **210** — `hose check` + timer + optional read credential (ADR-0010).
+22. **220** — the on-VPS build step: rootless `podman build` as the bed user, before stop (ADR-0010).
 
 Each step ships with its tier tests. Do not start the next step with a failing `--check`.

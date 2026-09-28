@@ -6,11 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [ ] `weedr bed plow <project>` without `--env` exits non-zero and names the required flag; `--env production`, `--env staging`, `--env preview`, and `--env fence` are accepted and any other value is rejected by name
-- [ ] A manifest without a declared `environment` fails validation (non-zero exit, file named)
-- [ ] Bed users and homes are `bed-<env>-<name>` (the fast harness sees `bed-staging-myapp`, not `bed-myapp-staging`)
-- [ ] A project has exactly one preview bed; refs are nested instances under `/home/bed-preview-<project>/<ref>/`
-- [ ] Creating a fourth concurrent preview ref for a project evicts the oldest ref (FIFO), and a config override changes the cap of 3
+- [x] `weedr bed plow <project>` without `--env` exits non-zero and names the required flag; `--env production`, `--env staging`, `--env preview`, and `--env fence` are accepted and any other value is rejected by name
+- [x] A manifest without a declared `environment` fails validation (non-zero exit, file named)
+- [x] Bed users and homes are `bed-<env>-<name>` (the fast harness sees `bed-staging-myapp`, not `bed-myapp-staging`)
+- [x] A project has exactly one preview bed; refs are nested instances under `/home/bed-preview-<project>/<ref>/`
+- [x] Creating a fourth concurrent preview ref for a project evicts the oldest ref (FIFO), and a config override changes the cap of 3
 - [ ] `bed-fence-traefik` runs in the `fence` track as member of the `fence` group; `roots` writes `/var/lib/roots/dynamic/` and the traefik bed user reads it through that group, and no other user is a member
 - [ ] Boot order: the fake `systemctl` call log shows the fence bed started before any production unit, production ponds before production beds, and all production units started before any staging or preview unit, with the fixed delay present as a drop-in written by `weedr`
 - [ ] Re-running the ordering converge on an already-ordered host exits 0 with no drift

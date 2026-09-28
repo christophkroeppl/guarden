@@ -23,7 +23,7 @@ next one over files.
 | **stakes** | Remembers which snapshots you care about — and shows who is holding each one. |
 | **pond** | Named Postgres instances you dig when you want one. Named like a bed (`pond-production-postgres`), entirely optional. |
 | **twig** | Renders your Homepage dashboard from one small file per service. |
-| **hose** | Optional. Watches git and keeps beds in sync with what is on a branch. |
+| **hose** | Optional. Takes each project's CI pokes and keeps beds in sync with what is on a branch — plus a drift check when it can read the repo. |
 
 You can run `soil` + `weedr` + `roots` + `stakes` and stop there. `pond`, `twig`, and
 `hose` are extras.
@@ -203,14 +203,14 @@ lets two builds run at once; the count applies between builds and never kills on
 
 There is no secrets service. There is no encrypted blob in git.
 
-- **Production:** you type the real value once with `weedr secret set`. It lives on the
-  VPS in the bed and nowhere else. If you lose the VPS and your own backup of those
+- **Production and fence:** you type the real value once with `weedr secret set`. It lives on
+  the VPS in the bed and nowhere else. If you lose the VPS and your own backup of those
   values, the secret is gone. That is the deal for one human and one box.
 - **Staging and previews:** `weedr` invents a random value the first time the bed is
   created and reuses it until you drop the bed. Good enough for a staging login, not for
   a payment key.
-- **The gate:** a production service will not start if a required variable is empty or
-  still says `changeme`. The gate is checked **before the old container is shut down**, so
+- **The gate:** a production or fence service will not start if a required variable is empty
+  or still says `changeme`. The gate is checked **before the old container is shut down**, so
   a deploy that fails it leaves the running service untouched. The error tells you which
   key is missing.
 
@@ -233,8 +233,11 @@ Every bed declares its environment out loud: `production`, `staging`, `preview`,
   drops it when the branch is gone. Up to three concurrent refs per project by default,
   the oldest goes when a fourth shows up, and the cap is overridable.
 
-Both get a fresh database restored from a pinned production snapshot, with a fresh
-password. They never see a production credential.
+Data flows one way. A production bed starts with an **empty** database — its first
+deploy never forks from anything. Staging forks from the latest production snapshot.
+A preview forks from production too, or from staging when the project has no production
+data yet. Every restore gets a fresh role and password; staging and previews never see
+a production credential.
 
 ---
 
@@ -259,16 +262,24 @@ every ladder with its pins.
 
 ## What `hose` is for
 
-`hose` is the optional gitops piece. Point it at a list of project repos and it will:
+`hose` is the optional gitops piece. Each project's GitHub Action pokes it over ssh —
+project, ref, sha, plus the source tree — and `hose` will:
 
 - create a staging bed for `develop` if it is not there,
 - open a preview instance for every feature branch,
-- drop a preview when its branch is merged away,
-- redeploy a bed when its manifests changed.
+- redeploy a bed when its manifests changed,
+- drop a preview when its branch is merged away, or when `hose check` sees the branch gone.
 
-It does this by calling `weedr` and nothing else. It has no root of its own — just a
-narrow `sudoers` rule for the `weedr` subcommands it needs. Deploys queue up like
-everything else (a GitHub Action just pokes `hose`). If you do not want gitops, do not
+`hose` keeps no git checkout on the box. When it can read the repo — public, or a
+fine-grained read token you store on the VPS — a 15-minute timer runs `hose check`,
+which compares the remote with what is deployed and fixes drift by itself. A private
+repo without that token is events-only: a lost poke stays wrong until you push an empty
+commit.
+
+It calls `weedr` and nothing else. It has no root of its own — just a narrow
+`sudoers` rule for the `weedr` subcommands it needs. Deploys queue up like everything
+else. A push to `main` can create and deploy the production bed, but a poke never drops
+a production bed unless you set a root-owned override. If you do not want gitops, do not
 install it.
 
 ---
@@ -284,6 +295,7 @@ journalctl -u traefik -u roots -u stakes
 snapper list                # how many snapshots, how much room
 stakes list                 # every ladder and its pins
 stakes query <id>           # is something holding a snapshot?
+hose check                  # drift between git and the beds (readable repos)
 ```
 
 The full recovery runbook is in [`docs/sysadmin.md`](docs/sysadmin.md). If you lock

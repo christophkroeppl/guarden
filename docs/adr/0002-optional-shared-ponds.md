@@ -9,6 +9,13 @@ ponds are separated from each other by a real user boundary — and `weedr pond 
 <bed>` provisions a database and role for a bed, `weedr pond drain <bed>` takes them
 away.
 
+Seeding is asymmetric. A production bed starts with an **empty** database — a first
+deploy of `main` never forks from staging or from any pond. A staging bed forks from the
+production pond's latest snapshot. A preview forks from production by default, and from
+the staging pond when the project has no production data yet; a project with nothing to
+fork from starts empty. Every restore mints a new role and password — data, never
+secrets.
+
 Why: N state containers mean N backups, N credential sets to restore, and N ladders where
 a snapshot can go wrong. The `pond-production-*` and `pond-staging-*` ponds are the
 reference use-case our tests exercise, not something host prep assumes.

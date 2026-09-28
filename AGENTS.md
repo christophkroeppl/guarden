@@ -12,7 +12,7 @@ stakes/   pin registry + snapper-cleanup hook
 roots/    .guarden/bed.yaml -> traefik dynamic config (shared dir, fence group)
 twig/     .guarden/widgets/<service>.yml -> homepage config
 pond/     optional named pond instances
-hose/     optional gitops reconciler (calls weedr via sudoers)
+hose/     optional gitops reconciler (CI poke intake + drift check; calls weedr via sudoers)
 tests/    the one test seam
 fixtures/ fake binaries (PATH-first) and example project manifests
 docs/     PRD, ADRs, spec, tickets, sysadmin runbook
@@ -27,7 +27,7 @@ thing that mutates state that matters; everything else reads and renders.
 
 ## Binding decisions
 
-`docs/adr/0001` through `0009` are binding. Do not re-litigate them in a change. The
+`docs/adr/0001` through `0010` are binding. Do not re-litigate them in a change. The
 short version:
 
 - No web UI, ever. `weedr` is the only thing that creates or rewrites bed units.
@@ -45,6 +45,12 @@ short version:
 - The manifest is pure `compose.yaml` or quadlet units in `.guarden/quadlet/` — exactly
   one — plus `.guarden/bed.yaml` and `.guarden/widgets/<service>.yml`. `compose.yaml`
   stays valid Compose.
+- CI only pokes: `hose poke <project> <ref> <sha>` plus the source tarball over ssh, one
+  key per project, forced-command-bound. The VPS keeps no git state; `hose check` on a
+  15m timer fixes drift only where the remote is readable (ADR-0010).
+- Builds run on the VPS inside the deploy queue, as the bed user, in throwaway
+  containers — no registry, no image copying. A poke may create and deploy production
+  (empty database) but never drop a production bed without a root-owned override.
 
 ## Test seam
 

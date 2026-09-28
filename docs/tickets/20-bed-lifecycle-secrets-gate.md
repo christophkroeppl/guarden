@@ -6,16 +6,16 @@
 
 **Status:** ready-for-agent
 
-- [ ] `weedr bed plow <project> --env <env>` reads `compose.yaml` and creates the bed user `bed-<env>-<name>` with linger, a user-scope quadlet unit directory, and allocated subuid/subgid
-- [ ] `compose.yaml` converts to quadlet units; bare named volumes also get `.volume` units; per-bed overrides land in unit drop-ins so regeneration cannot clobber them
-- [ ] `weedr` writes and removes hyphae names (`bed-<env>-<name>.internal` and peers) with the bed
-- [ ] `weedr bed start` / `stop` / `restart` drive the bed's units as the bed user (visible in the fake `systemctl` call log)
-- [ ] `weedr secret set <bed> KEY` plants one value into the bed and keeps no long-term copy inside `weedr`
-- [ ] staging beds get generated `@sensitive` values at create, stable until the bed is removed; a local override file always wins
-- [ ] A tracked `.env.schema` is the source of truth for names and types; `.env.example` is generated from it
-- [ ] `weedr bed start` on production exits non-zero and names the missing key when a `@required` key is empty
-- [ ] `weedr bed start` on production exits non-zero when a value still looks like `EXAMPLE-` or `changeme`
-- [ ] The same two conditions only warn on staging and previews
-- [ ] On production the gate runs before the old container is stopped: a failed gate exits non-zero and leaves the currently running container up (no `stop` for it in the fake `systemctl` call log)
-- [ ] `weedr bed remove` stops units, removes the user, removes hyphae names, and is refused on production without confirmation
-- [ ] All of the above is verified at the CLI seam with the fast harness
+- [x] `weedr bed plow <project> --env <env>` reads `compose.yaml` and creates the bed user `bed-<env>-<name>` with linger, a user-scope quadlet unit directory, and allocated subuid/subgid
+- [x] `compose.yaml` converts to quadlet units; bare named volumes also get `.volume` units; per-bed overrides land in unit drop-ins so regeneration cannot clobber them
+- [x] `weedr` writes and removes hyphae names (`bed-<env>-<name>.internal` and peers) with the bed
+- [x] `weedr bed start` / `stop` / `restart` drive the bed's units as the bed user (visible in the fake `systemctl` call log)
+- [x] `weedr secret set <bed> KEY` plants one value into the bed and keeps no long-term copy inside `weedr`
+- [x] staging beds get generated `@sensitive` values at create, stable until the bed is removed; a local override file always wins
+- [x] A tracked `.env.schema` is the source of truth for names and types; `.env.example` is generated from it
+- [x] `weedr bed start` on production exits non-zero and names the missing key when a `@required` key is empty
+- [x] `weedr bed start` on production exits non-zero when a value still looks like `EXAMPLE-` or `changeme`
+- [x] The same two conditions only warn on staging and previews
+- [x] On production the gate runs before the old container is stopped: a failed gate exits non-zero and leaves the currently running container up (no `stop` for it in the fake `systemctl` call log)
+- [x] `weedr bed remove` stops units, removes the user, removes hyphae names, and is refused on production without confirmation
+- [x] All of the above is verified at the CLI seam with the fast harness

@@ -7,11 +7,11 @@
 **Status:** ready-for-agent
 
 - [ ] A repo with root `compose.yaml`, `.guarden/bed.yaml`, `.guarden/widgets/<service>.yml`, and `.guarden/.env.schema` passes the pre-commit check (exit 0)
-- [ ] `.guarden/bed.yaml` accepts `routes`, `pond:` with `databases` and roles/grants, `hyphae` aliases, and `ports:`; an unknown top-level key fails validation with the file named (non-zero exit)
+- [x] `.guarden/bed.yaml` accepts `routes`, `pond:` with `databases` and roles/grants, `hyphae` aliases, and `ports:`; an unknown top-level key fails validation with the file named (non-zero exit)
 - [ ] A repo that ships `.guarden/quadlet/` instead of root `compose.yaml` passes the check
 - [ ] A repo with neither `compose.yaml` nor `.guarden/quadlet/` fails the pre-commit check with a message naming both accepted locations (non-zero exit)
 - [ ] A repo with both `compose.yaml` and `.guarden/quadlet/` fails the check as ambiguous (non-zero exit)
-- [ ] `weedr` copies and reads `compose.yaml`, `.guarden/bed.yaml`, and `.guarden/widgets/<service>.yml`; the fast harness call log shows only the new paths
-- [ ] `.env.schema` is read from `.guarden/.env.schema`; a schema at the old repo-root location is not picked up
+- [x] `weedr` copies and reads `compose.yaml`, `.guarden/bed.yaml`, and `.guarden/widgets/<service>.yml`; the fast harness call log shows only the new paths
+- [x] `.env.schema` is read from `.guarden/.env.schema`; a schema at the old repo-root location is not picked up
 - [ ] The pre-commit hook runs offline in seconds and is wired into the repo's existing pre-commit entry point
 - [ ] All of the above is verified at the CLI seam with the fast harness

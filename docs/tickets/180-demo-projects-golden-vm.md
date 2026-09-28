@@ -12,5 +12,5 @@
 - [ ] `stonecrop` runs self-contained: it owns its service/DB container, subvolume, ladder, and state; the call log shows no `pond fill` and no pond hyphae names for it
 - [ ] The demo set creates at most one preview bed per project with nested refs within the cap of 3
 - [ ] Fixtures and tests contain no retired prototype project names, and the fast harness includes a check that fails if one reappears
-- [ ] The golden-VM run ends in an evidence tarball containing unit states, `curl` traces, `snapper list`, `stakes query`, and `stakes ladders` output for all three projects
+- [ ] The golden-VM run ends in an evidence tarball containing unit states, `curl` traces, `snapper list`, `stakes query`, and `stakes list` output for all three projects
 - [ ] `make test` stays green and stays fast (the demos run only on the golden VM)

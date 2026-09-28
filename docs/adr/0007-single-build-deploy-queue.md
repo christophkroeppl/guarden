@@ -2,10 +2,11 @@
 
 The VPS is small: two builds at once thrash CPU and disk, and a deploy racing another
 deploy leaves half-written units. So container builds and deployments are serialized —
-never more than one in flight.
+never more than one in flight. A build is a rootless `podman build` run as the bed user
+from the poked source (ADR-0010).
 
-The queue is FIFO, with production jumping the queue. Repeated pokes for the same bed and
-revision debounce and dedupe, so a burst of pushes becomes one build. Both paths respect
+The queue is FIFO, with production jumping the queue. Repeated pokes for the same bed,
+ref, and sha debounce and dedupe, so a burst of pushes becomes one build. Both paths respect
 it: `hose` (poked by the GitHub Action) and manual redeploys of a multi-service bed. The
 operator can bypass it with `weedr redeploy --now`.
 

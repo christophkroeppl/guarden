@@ -41,8 +41,12 @@ The four explicit tracks a bed declares: `production`, `staging`, `preview`, `fe
 _Avoid_: stage, env
 
 **hose**:
-The gitops reconciler that waters beds from a git source of truth, calling `weedr` and nothing else.
+The gitops reconciler that waters beds from CI pokes — `project ref sha` plus the source tree over ssh — and, when it can read the remote, from a drift check (`hose check`); calls `weedr` and nothing else, and keeps no git state on the VPS.
 _Avoid_: canal, gitops service, fetchit
+
+**poke**:
+The one message a project's GitHub Action sends to the VPS over ssh: `hose poke <project> <ref> <sha>` with the source tree as a tarball on stdin, or `hose drop <project> <ref>` without source. One ed25519 key per project, bound to that project by a forced command.
+_Avoid_: webhook, callback, push event
 
 **base**:
 soil together with roots, weedr, and stakes. Enough for manually assisted deployments.
@@ -57,11 +61,11 @@ A runtime slot for one workload in one environment: the user `bed-<env>-<name>`,
 _Avoid_: compartment, stack, slot
 
 **fence**:
-The boundary layer: the traefik bed `bed-fence-traefik` running in the `fence` environment, the `fence` system group, and the shared dynamic-config directory that `roots` writes and the traefik bed reads. Traefik is a bed like any other — its own user, its own quadlet dir — and `roots` stays a separate unprivileged service.
+The boundary layer: the traefik bed `bed-fence-traefik` and the auth bed `bed-fence-authelia`, both running in the `fence` environment, plus the `fence` system group and the shared dynamic-config directory that `roots` writes and the traefik bed reads. Both are beds like any other — their own users, their own quadlet dirs — and `roots` stays a separate unprivileged service.
 _Avoid_: perimeter, gateway, front door
 
 **auth**:
-The optional sign-in layer: an auth bed (Authelia or Authentik) that Traefik consults at the fence before a protected request reaches its service. A bed opts in with `auth: true` in `bed.yaml` and `roots` renders the forward-auth rule into its routes; the auth bed itself is plowed like any bed.
+The optional sign-in layer: an auth bed (Authelia or Authentik) that Traefik consults at the fence before a protected request reaches its service. It runs in the `fence` track (`bed-fence-authelia`) and carries its own state. A bed opts in with `auth: true` in `bed.yaml` and `roots` renders the forward-auth rule into its routes; the auth bed itself is plowed like any bed.
 _Avoid_: sso, login service, authelia, authentik
 
 **hyphae**:
@@ -77,8 +81,8 @@ _Avoid_: retention, prune schedule, snapshot policy
 Naming facts only:
 
 - Bed user and home: `bed-<env>-<name>` — `bed-production-bitcoin`, `bed-staging-myapp`,
-  `bed-preview-myapp`, `bed-fence-traefik`. `<name>` is the project, or `traefik` for the
-  fence bed.
+  `bed-preview-myapp`, `bed-fence-traefik`, `bed-fence-authelia`. `<name>` is the project,
+  or the workload name otherwise (`traefik`, `authelia` on the fence).
 - Environments are always explicit: `production`, `staging`, `preview`, `fence`.
 - Pond names: `pond-<env>-<name>` — `pond-production-postgres`, `pond-staging-postgres`.
 - Pond user and home: the same `pond-<env>-<name>`, created by `weedr pond dig` — no

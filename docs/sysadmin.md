@@ -122,9 +122,29 @@ weedr redeploy <bed> --now  # jump the queue for one request
 The new count applies between builds — it never kills an in-flight one. Production still
 jumps to the front of whichever lane frees up first.
 
+## pokes and drift
+
+```
+hose poke <project> <ref> <sha>   # what a project's GH Action sends; source tar.gz on stdin
+hose drop  <project> <ref>        # remove a preview bed; refuses a production bed by default
+hose check [<project>]            # ls-remote vs deployed shas; fetch/drop to converge
+hose grant <project> <pubkey>     # bind one poke key to one project (forced command)
+```
+
+- Staged source lives at `/var/lib/guarden/staging/<bed>/<sha>/` (0755) — the bed user
+  must be able to read it for the build.
+- The ops list (project → git URL), the optional read credential (fine-grained
+  Contents:Read PAT, root-owned 0600), and the production-drop override live under
+  `/var/lib/guarden/hose/`.
+- `hose-check.timer` runs `hose check` every 15 minutes. Public repos need no
+  credential. A private repo without one is events-only: `check` logs `unreadable` and
+  exits 0, and a stuck deploy is nudged with an empty commit.
+- `hose drop` and `hose check` never remove a production bed unless
+  `/var/lib/guarden/hose/allow-production-drop` exists (root-owned).
+
 ## boot ordering
 
-The fence bed starts first, then production ponds, then production beds. Staging and
+The fence track starts first (traefik, auth), then production ponds, then production beds. Staging and
 preview start only after **all** production services have started, plus a fixed delay.
 Container dependencies order the units inside each wave — a pond before the beds that
 consume it. `weedr` writes the systemd ordering drop-ins; the delay is fixed in v1.

@@ -14,7 +14,7 @@ home, capped at three concurrent refs by default (FIFO eviction, overridable). T
 `fence` track is the boundary: `bed-fence-traefik` runs Traefik with ports 80/443 and
 safe defaults.
 
-Boot ordering follows the track and the dependency chain: the fence bed starts first,
+Boot ordering follows the track and the dependency chain: the fence track starts first,
 then production ponds, then production beds; staging and preview — ponds and beds — start
 only after all production services have started, plus a fixed delay. Inside each wave
 container dependencies (`After=`, quadlet dependencies) decide the exact order, so a pond

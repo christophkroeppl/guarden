@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] `stakes pin` and `stakes unpin` serialise their read-modify-write of the pin state file (a lock file or `flock` around the update is enough for one operator)
-- [ ] Two concurrent `stakes unpin --holder <a>` and `stakes unpin --holder <b>` on one snapshot leave `stakes query` printing `holders=0` and the pin freed exactly once
-- [ ] Two concurrent `stakes pin` on one snapshot with different holders leave `holders=2`
-- [ ] A concurrent `unpin` while `stakes query` is reading never sees a torn or half-written state file
-- [ ] The `stakes/snapper-cleanup` hook still exits 0 and still skips pinned ids during a concurrent update — `stakes` never blocks `snapper`
-- [ ] A stress test at the CLI seam runs 20 interleaved `pin`/`unpin` pairs and ends with `holders=0` and the pin freed
-- [ ] Verified at the CLI seam with the fast harness
+- [x] `stakes pin` and `stakes unpin` serialise their read-modify-write of the pin state file (a lock file or `flock` around the update is enough for one operator)
+- [x] Two concurrent `stakes unpin --holder <a>` and `stakes unpin --holder <b>` on one snapshot leave `stakes query` printing `holders=0` and the pin freed exactly once
+- [x] Two concurrent `stakes pin` on one snapshot with different holders leave `holders=2`
+- [x] A concurrent `unpin` while `stakes query` is reading never sees a torn or half-written state file
+- [x] The `stakes/snapper-cleanup` hook still exits 0 and still skips pinned ids during a concurrent update — `stakes` never blocks `snapper`
+- [x] A stress test at the CLI seam runs 20 interleaved `pin`/`unpin` pairs and ends with `holders=0` and the pin freed
+- [x] Verified at the CLI seam with the fast harness
