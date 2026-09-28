@@ -1,0 +1,3 @@
+description: Nutristack Web
+href: "https://${env}.${domain}"
+icon: mdi-web

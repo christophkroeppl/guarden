@@ -13,6 +13,10 @@ assert_call_log_empty
 
 for phase in $PHASES; do
   assert_exit 0 soil "$phase" --apply
+  if [ "$phase" = btrfs ]; then
+    rm -f "$GUARDEN_STATE/soil/reboot-needed"
+    assert_exit 0 soil "$phase" --apply
+  fi
   assert_file "$GUARDEN_STATE/soil/$phase.done"
   assert_exit 0 soil "$phase" --check
 done
@@ -22,6 +26,14 @@ assert_call_log_has "systemctl"
 assert_call_log_has "btrfs"
 assert_call_log_has "snapper"
 assert_call_log_has "podman"
+assert_call_log_lacks "useradd .*pond"
+assert_call_log_lacks "btrfs subvolume create .*pond"
+assert_call_log_lacks "snapper -c pond"
+assert_file "$GUARDEN_SYSROOT/usr/local/bin/soil"
+assert_file "$GUARDEN_SYSROOT/usr/local/bin/weedr"
+assert_file "$GUARDEN_SYSROOT/usr/local/bin/stakes"
+assert_file "$GUARDEN_SYSROOT/var/lib/guarden/beds"
+assert_no_file "$GUARDEN_SYSROOT/var/lib/pond"
 
 : > "$GUARDEN_CALL_LOG"
 assert_exit 0 soil users --check

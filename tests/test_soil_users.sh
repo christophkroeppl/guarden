@@ -8,15 +8,16 @@ assert_no_file "$GUARDEN_STATE/soil/users.done"
 
 assert_exit 0 soil users --apply
 assert_file "$GUARDEN_STATE/soil/users.done"
-assert_call_log_has "groupadd --system edge"
-assert_call_log_has "useradd --system --user-group --home-dir /home/pond --shell /usr/sbin/nologin pond"
+assert_call_log_has "groupadd --system fence"
 assert_call_log_has "useradd --system --user-group --home-dir /home/roots --shell /usr/sbin/nologin roots"
-assert_call_log_has "useradd --system --user-group --home-dir /home/traefik --shell /usr/sbin/nologin traefik"
 assert_call_log_has "useradd --system --user-group --home-dir /home/stakes --shell /usr/sbin/nologin stakes"
 assert_call_log_has "useradd --system --user-group --home-dir /home/twig --shell /usr/sbin/nologin twig"
 assert_call_log_has "useradd --system --user-group --home-dir /home/hose --shell /usr/sbin/nologin hose"
-assert_call_log_has "usermod -aG edge roots"
-assert_call_log_has "usermod -aG edge traefik"
+assert_call_log_has "usermod -aG fence roots"
+assert_call_log_lacks "useradd .*traefik"
+assert_call_log_lacks "usermod -aG fence traefik"
+assert_call_log_lacks "useradd .*pond"
+assert_call_log_lacks "groupadd --system edge"
 
 assert_exit 0 soil users --check
 assert_output_has "ok" soil users --check

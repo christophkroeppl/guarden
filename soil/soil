@@ -9,11 +9,11 @@ soil — host prep: btrfs convert, snapper ladders, ferm/fail2ban, podman/quadle
 rootless prerequisites. Runs install-time convergers as root.
 
 phases:
-  users         shared-tier users and groups, bed user skeleton
+  users         shared-tier users and groups, fence group
   firewall      disable ufw, converge ferm and fail2ban
   sysctl        net.ipv4.ip_unprivileged_port_start=0
   btrfs         ext4 to btrfs convert, @ and @home subvolumes
-  storage       data subvolumes, snapper ladders, pond-production last
+  storage       volumes root, root and home ladders, apt hook
   root-scripts  root-owned copies of anything root executes
   units         podman, quadlet, base units
 
@@ -90,12 +90,11 @@ mkdir -p "$(dirname "$marker")"
 
 case "$phase" in
   users)
-    getent group edge >/dev/null 2>&1 || groupadd --system edge
-    for u in pond roots traefik stakes twig hose; do
+    getent group fence >/dev/null 2>&1 || groupadd --system fence
+    for u in roots stakes twig hose; do
       getent passwd "$u" >/dev/null 2>&1 || useradd --system --user-group --home-dir "/home/$u" --shell /usr/sbin/nologin "$u"
     done
-    usermod -aG edge roots
-    usermod -aG edge traefik
+    usermod -aG fence roots
     ;;
   firewall)
     apt-get install -y ferm fail2ban
@@ -124,15 +123,33 @@ EOF
     systemctl enable --now fail2ban
     fail2ban-client reload
     if [ "$deadman" -eq 1 ]; then
-      mkdir -p "$sysroot/usr/local/lib/guarden"
+      mkdir -p "$sysroot/usr/local/lib/guarden" "$sysroot/etc/systemd/system"
       cat > "$sysroot/usr/local/lib/guarden/deadman-restore" <<'EOF'
 #!/bin/sh
 set -e
+systemctl stop guarden-deadman.timer
 systemctl stop ferm || true
 ufw --force disable
 EOF
-      chmod +x "$sysroot/usr/local/lib/guarden/deadman-restore"
-      systemctl-timer arm guarden-deadman 15m /usr/local/lib/guarden/deadman-restore
+      chmod 0755 "$sysroot/usr/local/lib/guarden/deadman-restore"
+      cat > "$sysroot/etc/systemd/system/guarden-deadman.service" <<'EOF'
+[Unit]
+Description=guarden dead-man firewall restore
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/guarden/deadman-restore
+EOF
+      cat > "$sysroot/etc/systemd/system/guarden-deadman.timer" <<'EOF'
+[Unit]
+Description=guarden dead-man firewall restore timer
+
+[Timer]
+OnActiveSec=15m
+AccuracySec=1s
+EOF
+      systemctl daemon-reload
+      systemctl start guarden-deadman.timer
     fi
     ;;
   sysctl)
@@ -149,24 +166,25 @@ EOF
     fi
     if [ "$bstate" = "converted" ]; then
       echo "no drift: btrfs"
-    elif [ "$bstate" = "hook-staged" ] && [ -e "$reboot_marker" ]; then
-      echo "reboot required: btrfs"
     elif [ "$bstate" = "hook-staged" ]; then
-      btrfs subvolume create "$sysroot/@" 2>/dev/null || btrfs subvolume show "$sysroot/@"
-      btrfs subvolume create "$sysroot/@home" 2>/dev/null || btrfs subvolume show "$sysroot/@home"
-      fstab="$sysroot/etc/fstab"
-      fstab_src="UUID=root"
-      if [ -e "$fstab" ]; then
-        fstab_src="$(awk '$2=="/" {print $1; exit}' "$fstab")"
-        awk '$2!="/" && $2!="/home"' "$fstab" > "$fstab.guarden"
-        mv "$fstab.guarden" "$fstab"
-      else
-        mkdir -p "$sysroot/etc"
+      if [ ! -e "$reboot_marker" ]; then
+        btrfs subvolume create "$sysroot/@" 2>/dev/null || btrfs subvolume show "$sysroot/@"
+        btrfs subvolume create "$sysroot/@home" 2>/dev/null || btrfs subvolume show "$sysroot/@home"
+        fstab="$sysroot/etc/fstab"
+        fstab_src="UUID=root"
+        if [ -e "$fstab" ]; then
+          fstab_src="$(awk '$2=="/" {print $1; exit}' "$fstab")"
+          awk '$2!="/" && $2!="/home"' "$fstab" > "$fstab.guarden"
+          mv "$fstab.guarden" "$fstab"
+        else
+          mkdir -p "$sysroot/etc"
+        fi
+        [ -n "$fstab_src" ] || fstab_src="UUID=root"
+        printf '%s / btrfs subvol=@,noatime,compress=zstd 0 0\n' "$fstab_src" >> "$fstab"
+        printf '%s /home btrfs subvol=@home,noatime,compress=zstd 0 0\n' "$fstab_src" >> "$fstab"
+        echo "converted" > "$bstate_file"
+        bstate="converted"
       fi
-      [ -n "$fstab_src" ] || fstab_src="UUID=root"
-      printf '%s / btrfs subvol=@,noatime,compress=zstd 0 0\n' "$fstab_src" >> "$fstab"
-      printf '%s /home btrfs subvol=@home,noatime,compress=zstd 0 0\n' "$fstab_src" >> "$fstab"
-      echo "converted" > "$bstate_file"
     else
       mkdir -p "$sysroot/usr/lib/dracut/modules.d/99guarden-convert"
       cat > "$sysroot/usr/lib/dracut/modules.d/99guarden-convert/module-setup.sh" <<'EOF'
@@ -222,39 +240,47 @@ return 0
 EOF
       echo "reboot required to run the ext4 to btrfs pre-mount hook" > "$reboot_marker"
       echo "hook-staged" > "$bstate_file"
+      bstate="hook-staged"
       dracut -f
-      btrfs filesystem show /
     fi
     ;;
   storage)
     apt-get install -y snapper
-    mkdir -p "$sysroot/var/lib/pond" "$sysroot/var/lib/guarden" "$sysroot/etc/apt/apt.conf.d"
-    btrfs subvolume create "$sysroot/var/lib/pond/prod" 2>/dev/null || btrfs subvolume show "$sysroot/var/lib/pond/prod"
-    btrfs subvolume create "$sysroot/var/lib/pond/nonprod" 2>/dev/null || btrfs subvolume show "$sysroot/var/lib/pond/nonprod"
-    btrfs subvolume create "$sysroot/var/lib/guarden/volumes" 2>/dev/null || btrfs subvolume show "$sysroot/var/lib/guarden/volumes"
+    mkdir -p "$sysroot/var/lib/guarden" "$sysroot/etc/apt/apt.conf.d"
+    btrfs subvolume create "$sysroot/var/lib/guarden/beds" 2>/dev/null || btrfs subvolume show "$sysroot/var/lib/guarden/beds"
+    mkdir -p "$sysroot/var/lib/guarden/beds"
+    mkdir -p "$sysroot/var/lib/roots/dynamic"
+    chgrp fence "$sysroot/var/lib/roots/dynamic"
+    chmod 2775 "$sysroot/var/lib/roots/dynamic"
     snapper -c root create-config / 2>/dev/null || true
     snapper -c home create-config /home 2>/dev/null || true
-    snapper -c pond-production create-config /var/lib/pond/prod 2>/dev/null || true
     for kv in NUMBER_CLEANUP=yes NUMBER_LIMIT=0-50 NUMBER_LIMIT_IMPORTANT=0-10 TIMELINE_CLEANUP=yes TIMELINE_LIMIT_HOURLY=0 TIMELINE_LIMIT_DAILY=1-7 TIMELINE_LIMIT_WEEKLY=1-4 TIMELINE_LIMIT_MONTHLY=1-3 TIMELINE_LIMIT_QUARTERLY=1-4 TIMELINE_LIMIT_YEARLY=0-1 EMPTY_PRE_POST_CLEANUP=yes FREE_LIMIT=0.12; do
       snapper -c root set-config "$kv"
     done
     for kv in NUMBER_CLEANUP=yes TIMELINE_CLEANUP=yes TIMELINE_LIMIT_HOURLY=0 TIMELINE_LIMIT_DAILY=0-7 TIMELINE_LIMIT_WEEKLY=0-4 TIMELINE_LIMIT_MONTHLY=0-3 TIMELINE_LIMIT_QUARTERLY=0-4 TIMELINE_LIMIT_YEARLY=0-1 EMPTY_PRE_POST_CLEANUP=yes FREE_LIMIT=0.20; do
       snapper -c home set-config "$kv"
     done
-    for kv in NUMBER_CLEANUP=yes NUMBER_LIMIT=0-60 NUMBER_LIMIT_IMPORTANT=0-50 TIMELINE_CLEANUP=yes TIMELINE_LIMIT_HOURLY=0 TIMELINE_LIMIT_DAILY=3-7 TIMELINE_LIMIT_WEEKLY=2-4 TIMELINE_LIMIT_MONTHLY=1-3 TIMELINE_LIMIT_QUARTERLY=1-4 TIMELINE_LIMIT_YEARLY=1-4 EMPTY_PRE_POST_CLEANUP=yes FREE_LIMIT=0.06; do
-      snapper -c pond-production set-config "$kv"
-    done
     cat > "$sysroot/etc/apt/apt.conf.d/80snapper" <<'EOF'
 DPkg::Pre-Invoke {"if command -v snapper >/dev/null 2>&1 && snapper -c root list >/dev/null 2>&1; then snapper -c root create --description 'apt pre' --cleanup-algorithm number >/dev/null 2>&1 || true; fi";};
 EOF
     ;;
   root-scripts)
-    :
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    mkdir -p "$sysroot/usr/local/bin"
+    if [ -e "$here/../weedr/weedr" ]; then
+      install -m 0755 "$here/soil" "$sysroot/usr/local/bin/soil"
+      install -m 0755 "$here/../weedr/weedr" "$sysroot/usr/local/bin/weedr"
+      install -m 0755 "$here/../stakes/stakes" "$sysroot/usr/local/bin/stakes"
+    fi
     ;;
   units)
     podman --version
     ;;
 esac
 
-: > "$marker"
-echo "applied: $phase"
+if [ "$phase" = btrfs ] && [ "${bstate:-}" = "hook-staged" ]; then
+  echo "reboot required: btrfs"
+else
+  : > "$marker"
+  echo "applied: $phase"
+fi

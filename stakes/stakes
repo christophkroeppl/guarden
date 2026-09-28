@@ -10,12 +10,14 @@ usage() {
 usage: stakes <command>
 
 stakes — standalone pin registry. Holds snapshot pins so ladders cannot prune
-pinned data. Holder refcount lives in one state file; no long-lived daemon.
+pinned data. A pin is a snapshot id with the holder bed identities that keep
+it; state lives in one root-readable file, no long-lived daemon.
 
 commands:
   pin <snapshot> --holder <bed>    hold a snapshot for a bed
-  unpin <snapshot> --holder <bed>  release a hold; frees the pin at zero holders
-  query [snapshot]                 print holders=N
+  unpin <snapshot> --holder <bed>  release a hold; frees the pin at the last holder
+  query [snapshot]                 print holders=N and the holder ids
+  list                             every ladder and its pins
 EOF
 }
 
@@ -34,7 +36,20 @@ parse_pin_args() {
 holders_of() {
   local id="$1"
   [ -f "$PINS_FILE" ] || { echo 0; return; }
-  awk -v id="$id" '$1 == id { print NF - 1; found = 1 } END { if (!found) print 0 }' "$PINS_FILE"
+  awk -v id="$id" '$1 == id { for (i = 2; i <= NF; i++) if (!seen[$i]++) n++ } END { print n + 0 }' "$PINS_FILE"
+}
+
+holders_line() {
+  local id="$1"
+  [ -f "$PINS_FILE" ] || { echo "holders=0"; return; }
+  local sorted h n=0 rest=""
+  sorted="$(awk -v id="$id" '$1 == id { for (i = 2; i <= NF; i++) print $i }' "$PINS_FILE" | sort -u)"
+  [ -n "$sorted" ] || { echo "holders=0"; return; }
+  while IFS= read -r h; do
+    n=$((n + 1))
+    rest="$rest $h"
+  done <<< "$sorted"
+  echo "holders=$n$rest"
 }
 
 ensure_pins() {
@@ -54,7 +69,7 @@ cmd_pin() {
   exec 9>"$PINS_DIR/pins.lock"
   flock 9
   local tmp line lid found=0
-  tmp="$(mktemp)"
+  tmp="$(mktemp "$PINS_DIR/.pins.XXXXXX")"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     lid="${line%% *}"
@@ -87,7 +102,7 @@ cmd_unpin() {
   exec 9>"$PINS_DIR/pins.lock"
   flock 9
   local tmp line lid rest h out
-  tmp="$(mktemp)"
+  tmp="$(mktemp "$PINS_DIR/.pins.XXXXXX")"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     lid="${line%% *}"
@@ -115,7 +130,7 @@ cmd_query() {
   shift
   local snapshot="${1:-}"
   if [ -n "$snapshot" ]; then
-    echo "holders=$(holders_of "$snapshot")"
+    holders_line "$snapshot"
     return 0
   fi
   [ -f "$PINS_FILE" ] || return 0
@@ -123,7 +138,27 @@ cmd_query() {
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     lid="${line%% *}"
-    echo "$lid holders=$(holders_of "$lid")"
+    echo "$lid $(holders_line "$lid")"
+  done < "$PINS_FILE"
+}
+
+cmd_list() {
+  local sysroot="${GUARDEN_SYSROOT:-}"
+  local cfgdir="$sysroot/etc/snapper/configs"
+  local f name
+  if [ -d "$cfgdir" ]; then
+    for f in "$cfgdir"/*; do
+      [ -e "$f" ] || continue
+      name="${f##*/}"
+      echo "ladder $name"
+    done
+  fi
+  [ -f "$PINS_FILE" ] || return 0
+  local line lid
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    lid="${line%% *}"
+    echo "pin $lid $(holders_line "$lid")"
   done < "$PINS_FILE"
 }
 
@@ -140,6 +175,9 @@ case "${1:-}" in
     ;;
   query)
     cmd_query "$@"
+    ;;
+  list)
+    cmd_list "$@"
     ;;
   *)
     usage >&2

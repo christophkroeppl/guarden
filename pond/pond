@@ -2,56 +2,45 @@
 set -euo pipefail
 
 STATE="${GUARDEN_STATE:-/var/lib/guarden}"
-HOSTS_FILE="$STATE/hosts"
+PONDS_DIR="$STATE/ponds"
 
 usage() {
   cat <<'EOF'
 usage: pond <command>
 
-pond — shared state services offered to beds (postgres first). Exactly two
-instances: pond-production (snapshotted, 127.0.0.1:5432) and pond-staging
-(rebuildable, 127.0.0.1:5433). Beds get databases inside a pond, never their
-own pond. Podman runs as user pond.
+pond — reports the named shared-state instances (Postgres first) dug on this
+host. Ponds are created, filled and drained through weedr; each one runs as its
+own user pond-<env>-<name> and no shared pond user exists.
 
 commands:
-  up      run pond-production and pond-staging
-  down    remove pond-production and pond-staging
+  list    list the ponds dug on this host
+
+weedr pond dig <name>              create a pond (name is pond-<env>-<name>)
+weedr pond fill <bed> [-p <pond>]  provision a database and role for a bed
+weedr pond drain <bed> [-p <pond>] remove them (production asks first)
 EOF
 }
 
-as_pond() {
-  runuser -u pond -- "$@"
-}
-
-write_hyphae_pond() {
-  mkdir -p "$(dirname "$HOSTS_FILE")"
-  if ! grep -qF " pond.internal" "$HOSTS_FILE" 2>/dev/null; then
-    echo "127.0.0.1 pond.internal" >> "$HOSTS_FILE"
-  fi
-}
-
-cmd_up() {
-  as_pond podman run -d --name pond-production --publish 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" postgres
-  as_pond podman run -d --name pond-staging --publish 127.0.0.1:5433:5432 -e POSTGRES_PASSWORD="$(openssl rand -hex 16)" postgres
-  write_hyphae_pond
-  echo "pond up: pond-production 127.0.0.1:5432, pond-staging 127.0.0.1:5433"
-}
-
-cmd_down() {
-  as_pond podman rm -f pond-production pond-staging
-  echo "pond down"
+cmd_list() {
+  local d id envval
+  for d in "$PONDS_DIR"/*; do
+    [ -d "$d" ] || continue
+    id="$(basename "$d")"
+    envval=""
+    if [ -f "$d/meta" ]; then
+      envval="$(sed -n 's/^env=//p' "$d/meta" | head -1)"
+    fi
+    echo "$id $envval"
+  done
 }
 
 case "${1:-}" in
+  list)
+    cmd_list
+    ;;
   ""|-h|--help)
     usage
     exit 0
-    ;;
-  up)
-    cmd_up
-    ;;
-  down)
-    cmd_down
     ;;
   *)
     usage >&2

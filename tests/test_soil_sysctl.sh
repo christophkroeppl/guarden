@@ -10,6 +10,7 @@ assert_exit 0 soil sysctl --apply
 assert_file "$GUARDEN_STATE/soil/sysctl.done"
 assert_call_log_has "sysctl -w net.ipv4.ip_unprivileged_port_start=0"
 assert_file "$GUARDEN_SYSROOT/etc/sysctl.d/99-guarden.conf"
+assert_output_has "net.ipv4.ip_unprivileged_port_start=0" cat "$GUARDEN_SYSROOT/etc/sysctl.d/99-guarden.conf"
 
 assert_exit 0 soil sysctl --check
 assert_output_has "ok" soil sysctl --check

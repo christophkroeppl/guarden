@@ -2,8 +2,9 @@
 set -euo pipefail
 
 STATE="${GUARDEN_STATE:-/var/lib/guarden}"
+SYSROOT="${GUARDEN_SYSROOT:-}"
 BEDS_DIR="$STATE/beds"
-EDGE_DIR="$STATE/edge"
+DYNAMIC_DIR="$SYSROOT/var/lib/roots/dynamic"
 DOMAIN="${GUARDEN_DOMAIN:-example.com}"
 
 usage() {
@@ -20,25 +21,17 @@ EOF
 }
 
 cmd_sync() {
-  mkdir -p "$EDGE_DIR"
-  python3 - "$BEDS_DIR" "$EDGE_DIR" "$DOMAIN" <<'PYEOF'
+  mkdir -p "$DYNAMIC_DIR"
+  python3 - "$BEDS_DIR" "$DYNAMIC_DIR" "$DOMAIN" <<'PYEOF'
 import os, re, sys
 
-beds_dir, edge_dir, domain = sys.argv[1], sys.argv[2], sys.argv[3]
+beds_dir, dynamic_dir, domain = sys.argv[1], sys.argv[2], sys.argv[3]
 
-def parse_meta(path):
-    meta = {}
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if "=" in line:
-                k, _, v = line.partition("=")
-                meta[k] = v
-    return meta
+ENVS = ("production", "staging", "preview", "fence")
 
 def parse_bed_yaml(path):
+    env = None
     routes = {}
-    repo = None
     in_routes = False
     with open(path) as f:
         for line in f:
@@ -49,18 +42,38 @@ def parse_bed_yaml(path):
             indent = len(raw) - len(raw.lstrip())
             if indent == 0:
                 in_routes = stripped == "routes:"
-                if stripped.startswith("repo:"):
-                    repo = stripped.split(":", 1)[1].strip().strip("\"'")
+                if stripped.startswith("environment:"):
+                    env = stripped.split(":", 1)[1].strip().strip("\"'")
                 continue
-            if in_routes and indent == 2:
+            if in_routes and indent == 2 and not stripped.startswith("-"):
                 m = re.match(r'(\S+):\s*"([^"]*)"', stripped)
                 if m:
                     routes[m.group(1)] = m.group(2)
-                else:
-                    m = re.match(r"(\S+):\s*(\S+)", stripped)
-                    if m:
-                        routes[m.group(1)] = m.group(2).strip("\"'")
-    return routes, repo
+                    continue
+                m = re.match(r"(\S+):\s*(\S+)", stripped)
+                if m:
+                    routes[m.group(1)] = m.group(2).strip("\"'")
+    if env is not None and env not in ENVS:
+        env = None
+    return env, routes
+
+def bed_id_env(bed_name):
+    parts = bed_name.split("-")
+    if len(parts) >= 3 and parts[0] == "bed" and parts[1] in ENVS:
+        return parts[1]
+    return None
+
+def safe_name(name):
+    return re.sub(r"[^A-Za-z0-9_.-]", "-", name)
+
+def host_port(entry):
+    entry = entry.split("/")[0].strip().strip("\"'")
+    parts = entry.split(":")
+    cand = parts[1] if len(parts) == 3 else parts[0]
+    cand = cand.strip().strip("\"'")
+    if cand.isdigit():
+        return cand
+    return None
 
 def parse_compose_ports(path):
     ports = {}
@@ -81,49 +94,98 @@ def parse_compose_ports(path):
                 continue
             if not in_services:
                 continue
-            if indent == 2 and stripped.endswith(":"):
-                current = stripped[:-1]
+            if indent == 2:
                 in_ports = False
+                if stripped.startswith("-"):
+                    current = None
+                elif stripped.endswith(":"):
+                    current = stripped[:-1].strip()
+                elif ":" in stripped:
+                    current = stripped.split(":", 1)[0].strip()
+                else:
+                    current = None
                 continue
             if current and indent == 4:
+                if stripped.startswith("-"):
+                    if in_ports:
+                        p = host_port(stripped.lstrip("- ").strip())
+                        if p:
+                            ports.setdefault(current, p)
+                    continue
                 if stripped == "ports:":
                     in_ports = True
                     continue
+                m = re.match(r"ports:\s*\[(.*)\]", stripped)
+                if m:
+                    for item in m.group(1).split(","):
+                        item = item.strip().strip("\"'")
+                        if not item:
+                            continue
+                        p = host_port(item)
+                        if p:
+                            ports.setdefault(current, p)
+                    continue
                 in_ports = False
-            if current and in_ports and indent >= 6:
-                entry = stripped.lstrip("- ").strip().strip("\"'")
-                host_port = entry.split(":")[0]
-                if host_port.isdigit():
-                    ports.setdefault(current, host_port)
+                continue
+            if current and in_ports and indent > 4 and stripped.startswith("-"):
+                p = host_port(stripped.lstrip("- ").strip())
+                if p:
+                    ports.setdefault(current, p)
     return ports
 
-def safe_env(env):
-    return re.sub(r"[:/]", "-", env)
+def host_rule(pattern, env, ref):
+    if pattern:
+        rule = "Host(`%s`)" % pattern.replace("${env}", env).replace("${domain}", domain)
+    elif env == "staging":
+        rule = "Host(`staging.%s`)" % domain
+    elif env == "production":
+        rule = "Host(`%s`)" % domain
+    elif env == "preview":
+        rule = "Host(`preview.%s`)" % domain
+    else:
+        rule = "Host(`%s.%s`)" % (env, domain)
+    if ref:
+        rule += " && PathPrefix(`/%s`)" % ref
+    return rule
 
-def env_kind(env):
-    if env == "production":
-        return "production"
-    if env == "staging":
-        return "staging"
-    if env.startswith("preview:"):
-        return "preview"
-    return "other"
+def instance_refs(bed_dir):
+    refs = []
+    for name in sorted(os.listdir(bed_dir)):
+        sub = os.path.join(bed_dir, name)
+        if name == ".guarden" or not os.path.isdir(sub):
+            continue
+        if os.path.isfile(os.path.join(sub, "compose.yaml")) or os.path.isfile(os.path.join(sub, ".guarden", "bed.yaml")):
+            refs.append(name)
+    return refs
 
-def default_rule(env, domain):
-    kind = env_kind(env)
-    if kind == "staging":
-        return "Host(`staging.%s`)" % domain
-    if kind == "preview":
-        ref = env.split(":", 1)[1]
-        return "Host(`preview.%s`) && PathPrefix(`/%s`)" % (domain, ref)
-    if kind == "production":
-        return "Host(`%s`)" % domain
-    return "Host(`%s.%s`)" % (safe_env(env), domain)
+def add_unit(unit_dir, default_env, ref, prefix, routers, services):
+    env = default_env
+    routes = {}
+    bed_yaml = os.path.join(unit_dir, ".guarden", "bed.yaml")
+    if os.path.isfile(bed_yaml):
+        yaml_env, yaml_routes = parse_bed_yaml(bed_yaml)
+        if yaml_env:
+            env = yaml_env
+        routes = yaml_routes
+    ports = {}
+    compose = os.path.join(unit_dir, "compose.yaml")
+    if os.path.isfile(compose):
+        ports = parse_compose_ports(compose)
+    if not ports:
+        return
+    if routes:
+        for svc in sorted(routes):
+            port = ports.get(svc)
+            if not port:
+                continue
+            name = "%s-%s" % (prefix, svc)
+            routers[name] = host_rule(routes[svc], env, ref)
+            services[name] = port
+    else:
+        routers[prefix] = host_rule(None, env, ref)
+        services[prefix] = ports[sorted(ports)[0]]
 
-def substitute(pattern, env, domain):
-    return pattern.replace("${env}", safe_env(env)).replace("${domain}", domain)
-
-def write_config(path, routers, services):
+def config_text(routers, services):
     lines = ["http:", "  routers:"]
     for name in sorted(routers):
         lines.append("    %s:" % name)
@@ -135,8 +197,15 @@ def write_config(path, routers, services):
         lines.append("      loadBalancer:")
         lines.append("        servers:")
         lines.append('          - url: "http://127.0.0.1:%s"' % services[name])
+    return "\n".join(lines) + "\n"
+
+def write_if_changed(path, text):
+    if os.path.isfile(path):
+        with open(path) as f:
+            if f.read() == text:
+                return
     with open(path, "w") as f:
-        f.write("\n".join(lines) + "\n")
+        f.write(text)
 
 expected = set()
 if os.path.isdir(beds_dir):
@@ -144,45 +213,31 @@ if os.path.isdir(beds_dir):
         bed_dir = os.path.join(beds_dir, bed_name)
         if not os.path.isdir(bed_dir):
             continue
-        meta_path = os.path.join(bed_dir, "meta")
-        if not os.path.isfile(meta_path):
-            continue
-        meta = parse_meta(meta_path)
-        env = meta.get("env", "staging")
-        routes, repo = ({}, None)
-        bed_yaml = os.path.join(bed_dir, "bed.yaml")
+        yaml_env = None
+        bed_yaml = os.path.join(bed_dir, ".guarden", "bed.yaml")
         if os.path.isfile(bed_yaml):
-            routes, repo = parse_bed_yaml(bed_yaml)
-        ports = {}
-        compose = os.path.join(bed_dir, "compose.yaml")
-        if os.path.isfile(compose):
-            ports = parse_compose_ports(compose)
+            yaml_env, _ = parse_bed_yaml(bed_yaml)
+        env = yaml_env or bed_id_env(bed_name)
+        if not env:
+            continue
         routers = {}
         services = {}
-        if routes:
-            for svc, pattern in sorted(routes.items()):
-                port = ports.get(svc)
-                if not port:
-                    continue
-                router_name = "%s-%s" % (bed_name, svc)
-                routers[router_name] = "Host(`%s`)" % substitute(pattern, env, domain)
-                services[router_name] = port
-        else:
-            if not ports:
-                continue
-            router_name = bed_name
-            routers[router_name] = default_rule(env, domain)
-            first_svc = sorted(ports)[0]
-            services[router_name] = ports[first_svc]
-        out_path = os.path.join(edge_dir, "%s.yml" % bed_name)
-        write_config(out_path, routers, services)
+        add_unit(bed_dir, env, None, bed_name, routers, services)
+        if env == "preview":
+            for ref in instance_refs(bed_dir):
+                add_unit(os.path.join(bed_dir, ref), env, ref,
+                         "%s-%s" % (bed_name, safe_name(ref)), routers, services)
+        if not routers:
+            continue
+        out_path = os.path.join(dynamic_dir, "%s.yml" % bed_name)
+        write_if_changed(out_path, config_text(routers, services))
         expected.add("%s.yml" % bed_name)
 
-for fname in os.listdir(edge_dir):
+for fname in os.listdir(dynamic_dir):
     if fname.endswith(".yml") and fname not in expected:
-        os.remove(os.path.join(edge_dir, fname))
+        os.remove(os.path.join(dynamic_dir, fname))
 PYEOF
-  echo "roots: dynamic config written to $EDGE_DIR"
+  echo "roots: dynamic config written to $DYNAMIC_DIR"
 }
 
 case "${1:-}" in

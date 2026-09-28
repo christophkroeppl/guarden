@@ -1,2 +1,9 @@
 .kilo
 CLAUDE.md
+.env
+.env.example
+.env.*.local
+.env.production
+.env.staging
+.env.preview
+.env.fence
