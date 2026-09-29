@@ -17,10 +17,13 @@ converges and is idempotent. `soil` creates no service identity.
       and persists it, and nowhere else. Without it the kernel drops packets DNATed to
       `127.0.0.1` that arrived on a non-loopback interface as martians. It is scoped to that one
       interface, never to `conf.all`
-- [ ] **`soil sysctl` does not set `net.ipv4.ip_unprivileged_port_start`.** No unprivileged
-      process on the host may bind a port below 1024, and no process gains a capability to do
-      so. The public ports belong to the kernel and are forwarded to the edge, so there is no
-      privileged-port exception in the system
+- [ ] **`soil sysctl` sets `net.ipv4.ip_unprivileged_port_start=1024` and owns that key.** No
+      unprivileged process on the host may bind a port below 1024, and no process gains a
+      capability to do so. Raising the threshold to the kernel default is a tightening and is
+      what makes the invariant a fact; *lowering* it grants every unprivileged uid a privileged
+      port and is refused. An earlier revision said guarden must not set it, which conflated the
+      two acts. The public ports belong to the kernel and are forwarded to the edge, so there is
+      no privileged-port exception in the system
 - [ ] `soil sysctl` **disables IPv6 by default** and persists that, so every firewall rule
       guarden writes is IPv4 only. There is no ip6tables set to keep in step, and an operator
       who re-enables IPv6 is outside what the golden VM proved

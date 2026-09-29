@@ -234,10 +234,11 @@ phrase usually attached to it, that is the phrase's fault.
   `REDIRECT` cannot do this job: it
   rewrites the destination to the incoming interface's own address and the edge listens on
   loopback only. The edge is an ordinary service that binds loopback publications and nothing
-  else. `net.ipv4.ip_unprivileged_port_start` is not set, so there is no exception anywhere in
-  the system and nothing to reason about at three in the morning; that guarden does not set it is
-  a convention, and `soil sysctl --check` and `weedr service list` both report if it is no longer
-  at the distribution's default, which is what turns the convention into a checked fact.
+  else. `soil sysctl` sets and owns `net.ipv4.ip_unprivileged_port_start=1024`, so there is no
+  exception anywhere in the system and nothing to reason about at three in the morning.
+  The check is against the value `1024`, not against the distribution's default, because a
+  base image that ships `0` satisfies the default and breaks the invariant; `soil sysctl
+  --check` and `weedr service list` both report drift against the value guarden converges.
   `443/udp` is HTTP/3 served by
   the edge from the same TLS entrypoint, and it is an additive optimisation: a client that
   cannot use it loses nothing, and nothing else in the design depends on it.

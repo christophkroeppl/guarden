@@ -19,8 +19,10 @@ Configuration is read from the root-owned files, and never written by us.
       refuses a name that carries none, an unknown environment, a name over 31 characters, or a
       name containing `..`. **The 31-character limit is on the service name, not on `project`**:
       `project` has no limit of its own, and what is checked is the resulting service name
-- [ ] A name with no environment defaults to **staging** and the resolved name is printed; it
-      must not default to a track with `gated = true`
+- [ ] A name with no environment resolves to **the first track in table order with
+      `gated = false` and `kind = "slot"`** — `staging` in the shipped table, resolved by rule and
+      not by the hardcoded word — and the resolved name is printed. It must not default to a track
+      with `gated = true`, and if no such track exists the name is exit `1` naming that fact
 - [ ] `--from` is **required**. A service is created from a manifest on disk and guarden never
       infers where one is; the command is refused without it
 - [ ] `workload` and `project` are separate registry fields and may differ. `workload` is the
@@ -47,8 +49,10 @@ Configuration is read from the root-owned files, and never written by us.
 - [ ] **The registry file and each `overrides.toml` are `0640 root:guarden`**, not world
       readable. The registry describes the whole topology — every uid, every edge, every port,
       every snapshot seed — and a service that can read it can read the map of the box
-- [ ] `/var/lib/guarden/stakes/` is `0750 root:guarden`, because `stakes` runs as `guarden` and
-      owns the pin files, and `/var/lib/guarden/queue/` is the same for `furrow`
+- [ ] `/var/lib/guarden/stakes/` and `/var/lib/guarden/queue/` are **`0770 root:guarden`**, because
+      `stakes` and `furrow` run as `guarden` and *create and remove* the files in them. `0750` is
+      a defect, not a tightening: group bits of `r-x` let `furrow` read the queue and not write
+      to it, so the deploy queue could not accept a request and `stakes pin` could not write a pin
 - [ ] **A service's home is not snapshotted and gets no snapper configuration of its own.** It
       holds generated units, the rootless image store, the per-user podman secret database and
       build staging: none of it precious, and the secret database holds credentials in the clear.
@@ -125,7 +129,9 @@ Configuration is read from the root-owned files, and never written by us.
       host invariants guarden depends on and cannot enforce: IPv6 re-enabled, and
       `net.ipv4.ip_unprivileged_port_start` is not `1024`, which `soil sysctl` sets and owns. Both are
       reported and neither is corrected. `--json` emits the same as machine-readable output
-- [ ] `/etc/guarden/guarden.toml` is read but never rewritten by any verb on this ticket. The
-      one writer in the whole system is `weedr module add`, which appends to `[modules] enabled`
-      and rewrites nothing else, under the `modules` lock
+- [ ] `/etc/guarden/guarden.toml` is read but never rewritten by any verb on this ticket. There
+      are **two** writers of the file in the system, both under the `modules` lock and both
+      through the write protocol and touching disjoint keys: `weedr module add` appends to
+      `[modules] enabled` and rewrites nothing else, and `soil install` writes the measured
+      `ingress.alias` from its probe
 - [ ] Verified at the CLI seam with the fast harness

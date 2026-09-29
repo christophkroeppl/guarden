@@ -14,8 +14,9 @@ it.
       `systemd-escape` internally so `feature/x` and `feature-x` are distinct
 - [ ] A service is created for the workload only if it does not exist; the second ref creates no
       second user, home, or image store
-- [ ] The instance is forked from the same workload's `staging` service, the `seed` is recorded,
-      and the call log shows the clone. Its `bulk` volumes are created as **empty subvolumes**,
+- [ ] The instance is forked from the same workload's service in the track its `fork_from` field
+      names (`staging` in the shipped table, read as a field and not as the word), the `seed` is
+      recorded, and the call log shows the clone. Its `bulk` volumes are created as **empty subvolumes**,
       never empty directories
 - [ ] Instances get generated credentials, and a missing credential warns rather than blocking
 - [ ] A preview appears at `preview.$DOMAIN/<ref>` — a **path** on one host, from the track's

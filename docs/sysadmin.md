@@ -283,7 +283,7 @@ The rest of the host, and where to look when a path is not what you expected:
 | path | what it is |
 |---|---|
 | `/usr/lib/guarden/` | guarden's own files, root-owned, never written by a deploy |
-| `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Two writers, both under the `modules` lock and both through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else, and `soil install` writes the measured `ingress.alias` from its probe. Disjoint keys, so they do not race |
+| `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Three writers, all under the `modules` lock and all through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else; `soil install` writes the measured `ingress.alias` and seeds `[modules] enabled` from cloud-init. Two share `[modules] enabled`, so a write re-reads the file under the lock rather than trusting what it saw before it |
 | `/etc/guarden/services/<name>/overrides.toml` | admin grants: ports, retention, groups, mounts |
 | `/etc/guarden/firewall/10-framework.conf` | ferm skeleton, dead-man timer, the interface's `route_localnet` — written by `soil firewall` |
 | `/etc/guarden/firewall/20-ingress-nat.conf` | the edge's three forwarding rules, from the enabled modules' declared ingress — written by `soil firewall`. Each is a `PREROUTING` DNAT and nothing else |
@@ -455,8 +455,10 @@ granted ports, and what is pending.
 
 **A grant is never a bind.** No service ever binds a non-loopback address, and there is no such
 thing as a private grant versus a public one. A granted public port becomes a `DNAT` from that
-port on the ingress interface to the service's own loopback publication. A port no manifest
-requested may still be granted; the grant is the admin's.
+port on the ingress interface to the service's own loopback publication. **A port the manifest
+did not request cannot be granted** — the command refuses with exit `2` and names the `ports:`
+entry it would have to be, because a grant is a translation to a publication and an entry
+naming only a public port names no container. The manifest asks, the admin decides.
 
 **A granted port is not proof that anything can reach it.** The grant is a rule; reachability is
 a property of the whole path, and only a request from a second machine demonstrates it (see

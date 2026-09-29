@@ -41,8 +41,10 @@ grant, and the repository still cannot make one.
       surface of the host is readable in one command. A pending request is sticky
 - [ ] A requested port with no grant is simply not forwarded — the container comes up without the
       port rather than with it silently half-working — and the request stays pending
-- [ ] A port no manifest requested may still be granted; the grant is the admin's, not the
-      manifest's
+- [ ] **A port no manifest requested may not be granted at all**, and the refusal is exit `2`
+      naming the `ports:` entry it would have to be. A grant is a translation to a publication, a
+      publication is allocated per container, and a request naming only a public port names no
+      container, so the grant had no destination. The manifest asks and the admin decides
 - [ ] The `firewall` render is a union of every grant and every allocation, rewritten atomically
       with the diff printed before installation, so two mutations in a row cannot install out of
       order and duplicate rules cannot exist

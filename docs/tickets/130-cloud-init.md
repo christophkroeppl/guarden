@@ -18,7 +18,12 @@ serves both, and the layout is a portability decision rather than a portability 
 - [ ] There is one package list, with per-family entries, not two copies that can drift; the
       command-line seam, exit codes and the `drift` word are unchanged by the path taken
 - [ ] Non-default modules are selectable from cloud-init and from the script, and the selection
-      is written into `/etc/guarden/guarden.toml` so it survives a later `weedr module add`
+      is written into `/etc/guarden/guarden.toml` by `soil install` under the `modules` lock, so
+      it survives a later `weedr module add`. That makes **three** writers of the file — `soil
+      install` for `[modules] enabled` and the measured `ingress.alias`, `weedr module add` for
+      `[modules] enabled` — and `[modules] enabled` is the one two of them share, so
+      `soil install` must take the `modules` lock and refuse if a `weedr module add` is in
+      progress rather than writing blind
 - [ ] The path constants exist in exactly one place and follow FHS: programs and modules under
       `/usr/lib/guarden` with symlinks in `/usr/bin`, configuration under `/etc/guarden`,
       state under `/var/lib/guarden`, runtime under `/run/guarden`

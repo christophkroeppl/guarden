@@ -170,9 +170,10 @@ a new ADR that supersedes it. The short version:
   container stops, and so does the build.
 - Every mutation that renders a shared file holds one lock across render, diff and install, or
   a stale render can install last and drop what the previous mutation granted. `guarden.toml` has
-  two writers, not one — `weedr module add` appends to `[modules] enabled` and `soil install`
-  writes the measured `ingress.alias` — so both take the `modules` lock and the write protocol
-  applies to the file like every other. Queue state is durable under `/var/lib/guarden/queue`;
+  three writers, not one — `weedr module add` appends to `[modules] enabled`, and `soil install`
+  writes the measured `ingress.alias` and seeds `[modules] enabled` from cloud-init — and two of
+  them share a key, so every one takes the `modules` lock, goes through the write protocol, and
+  re-reads the file under the lock rather than trusting what it saw before it. Queue state is durable under `/var/lib/guarden/queue`;
   only the locks are tmpfs, in `/run/guarden/locks`, and the lock directory is recreated at boot
   by a `tmpfiles.d` entry `soil install` writes.
 - **Lanes bound builds; `deploy-<service>` bounds deploys.** `build.lanes` is how many container

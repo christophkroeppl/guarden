@@ -44,9 +44,13 @@ build or a failed gate leaves the running container running.
 - [ ] `furrow deploy --now` skips queue position for that request and changes nobody else's
 - [ ] `build.lanes` raises or lowers **build** concurrency; lowering never kills a build in
       flight and takes effect between builds
-- [ ] **Lanes bound builds; `deploy-<service>` bounds deploys.** One deploy of one service holds
-      `deploy-<service>` from its first step to its last, so two deploys of the same service
-      cannot interleave their unit writes while different services proceed in parallel. The
+- [ ] **Lanes bound builds; a lock per service bounds deploys.** One deploy of one **slot**
+      service holds `deploy-<service>` from its first step to its last, and one **instance** holds
+      `deploy-<service>-<escaped-ref>` — on a `kind = "instance"` track every instance is deployed
+      separately, and one shared lock would serialise the whole track's previews behind each other.
+      The ref is the same escaped form as the registry key, never a raw ref. Two deploys of the
+      same service cannot interleave their unit writes while different services proceed in
+      parallel. The
       `queue` lock covers enqueue, dequeue and an in-flight request, and nothing else. Raising
       `build.lanes` retires build serialisation and never had deploy serialisation to retire, so
       it is not the knob for a deploy that races another deploy

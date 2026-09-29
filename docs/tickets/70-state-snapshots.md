@@ -81,8 +81,12 @@ snapshots that must survive and runs no delete loop.
 - [ ] `weedr service rollback <name> --to <number>` stops, swaps, starts; it is refused on a track
       with `gated = true` outright, with no override flag, and refused entirely — changing nothing — if the
       snapshot is missing from any state volume
-- [ ] Lineage is derived from the track: production starts empty, staging forks from production,
-      a preview from staging; `--from` overrides; a manifest key for it is refused by name
+- [ ] Lineage is derived from the track's `fork_from` field and never from its name: the shipped
+      rows are `production` (empty), `staging` (`fork_from = "production"`) and `preview`
+      (`fork_from = "staging"`), and a fourth track forks because a row says so rather than
+      because guarden recognises the word. `--from` overrides; a `fork_from` naming a track that
+      does not exist, or the track's own name, is exit `2`; a manifest key for lineage is refused
+      by name
 - [ ] `stakes pin/unpin/list/query` operate on one file per snapshot id, idempotently, with no
       lock and no shared aggregate file
 - [ ] **Retention is snapper's. guarden runs no delete loop of its own.** snapper's own cleanup

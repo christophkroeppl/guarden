@@ -58,8 +58,9 @@ The box takes the source, maps the ref to an environment from a root-owned allow
 - [ ] **`hose drop <ref>` never removes a service in a track with `gated = true`,**
       refused with exit 1 and the reason unless `/etc/guarden/allow-gated-drop` exists. **The
       refusal is enforced root-side in `weedr service remove`, and `hose` never reads that file**
-      — it is `0444 root:root` precisely so the network-facing program is not the thing
-      consulting it
+      — and the mode is not what stops it. `0444` is world-readable, so `hose` could read the
+      file if it wanted to; what stops it is that the refusal lives in the verb `hose` is not
+      permitted
 - [ ] The box keeps no clone and no checkout: the repository directory is absent afterwards
 - [ ] **The sudoers surface is exactly, with its runas target:** `furrow deploy`,
       `furrow preview drop`, `furrow queue list`, `furrow status`, `weedr service list` and
@@ -69,9 +70,12 @@ The box takes the source, maps the ref to an environment from a root-owned allow
       naming X" is that X runs as root, and the program that handles repository-supplied paths
       must not be that. The removal verb is `furrow preview drop`, not a direct `weedr service
       remove` — a workflow cannot even name the removal path, it can ask for one instance to be
-      dropped and `furrow` decides whether that is allowed. `weedr` is never reachable from a
-      poke at all: no `weedr` verb appears in the surface, so a poke cannot create a service,
-      grant a port, or remove one. A poke cannot reach a shell
+      dropped and `furrow` decides whether that is allowed. `weedr` is reachable from a poke
+      only as `weedr service list` and `weedr project list`, so a poke cannot create a service,
+      grant a port, or remove one. Note that `weedr service list` reports a service's granted
+      ports as part of its status, so a poke can *read* which ports are open; what it cannot do
+      is reach `weedr port list`, `weedr port open` or `weedr port close`. Say it here rather than
+      claiming `weedr` is unreachable, because it is not. A poke cannot reach a shell
 - [ ] `hose check` prints `not implemented: events only` and exits 0
 - [ ] The staged tree is removed after the deploy
 - [ ] The shipped workflow template contains the poke key and nothing else, with

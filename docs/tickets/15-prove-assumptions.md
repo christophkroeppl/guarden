@@ -27,10 +27,10 @@ it may conclude that an ADR is wrong, and that is a successful outcome.
       nothing
 - [ ] **`--no-map-gw` and `--map-host-loopback none` are refused by the renderer**, and a unit
       source naming a non-pasta backend or `network_mode: host` is refused with the key named
-- [ ] **A container can reach a host loopback port that is not a publication** — use `sshd` on
-      22, or a throwaway listener. This is the known gap, and the ticket must demonstrate it
-      rather than assume it, so that the default-deny question in `SECURITY.md` §2.6 is answered
-      with a measurement
+- [ ] **A container cannot reach a host loopback port that is not a publication** — try `sshd` on
+      22, or a throwaway listener, and the connection is dropped. The default deny is the
+      designed behaviour, so this proves it rather than discovering it. The same connection from a
+      uid in the publication's accept set succeeds, so the accept rules are proved in the same run
 - [ ] **`--host-lo-to-ns-lo` is not set**, and an application inside a container that binds only
       `127.0.0.1` is confirmed unreachable — the gotcha that reads as a firewall fault and is not
       one

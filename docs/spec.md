@@ -41,7 +41,8 @@ filesystem, the installed services and the remote are the host. So:
 | situation | code |
 |---|---|
 | an unknown or malformed key, a name that breaks a rule, a port out of range, an ambiguous unit source, a `service:` where a `container:` belongs | `2` |
-| a container named in `routes:`, `widgets:`, `state:` or `bulk:` that the unit source does not define | `2` — both are input |
+| a container named in `routes:`, `ports:` or `widgets:` that the unit source does not define | `2` — both are input |
+| a volume named in `state:` or `bulk:` that the unit source does not mount, or a name in both | `2` — both are input |
 | a `needs:`/`provides:` disagreement that is visible from the manifests alone | `2` |
 | an edge naming a service that does not exist | `1` |
 | a `needs:`/`provides:` disagreement where the provider exists but does not offer the kind | `1` — the answer came from the host |
@@ -191,8 +192,9 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/var/lib/guarden/stakes/` | `0770` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/queue/` | `0770` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/soil/` | `0750` | `root:guarden` | `soil storage` |
-| `/var/lib/guarden/staging/` | `0755` | `root:root` | `soil storage` |
-| `/var/lib/guarden/staging/<project>/<sha>/` | `0755` | `root:root`, files `0644`, removed after the deploy | `hose` |
+| `/var/lib/guarden/staging/` | `0755` | `root:root` | `soil storage`. **Nobody creates a subdirectory here at run time** |
+| `/var/lib/guarden/staging/<project>/` | `0755` | the `hose` user | `weedr project grant`, and `weedr project revoke` removes it. Pre-created because `hose` is unprivileged and cannot `mkdir` under a `0755 root:root` parent |
+| `/var/lib/guarden/staging/<project>/<sha>/` | `0755`, files `0644`, removed after the deploy | the `hose` user | `hose` |
 | `/run/guarden/` | `0755` | `root:root` | `soil install`, via `tmpfiles.d` — it is tmpfs and must be recreated every boot |
 | `/run/guarden/locks/` | `0770` | `root:guarden` | `soil install`, via `tmpfiles.d`, mode and owner from the row above |
 | `/etc/guarden/**` | `0640` | `root:guarden`, directories `0750` | |
@@ -479,12 +481,18 @@ The lock names, and the composite operation each one covers:
 ref becomes part of a path, a key or a filename. A raw ref is never used in any of the three,
 because a ref taken raw may contain `/` and turn one lock file into a path that does not exist.
 
-`guarden.toml` has **two** writers, not one: `weedr module add` appends to `[modules] enabled`,
-and `soil install` writes the measured `ingress.alias` from its probe (§6.1). The two write
-disjoint keys of a shared file, so the `modules` lock does not cover the second one and the
-statement that this file has a single writer was wrong. Both writes go through this protocol,
-`soil install` takes the `modules` lock for its write, and the rule for a future key is simply
-that adding a key means deciding which lock covers it. There is no `hosts` lock, because nothing
+`guarden.toml` has **three** writers, not one, and two of them share a key: `weedr module add`
+appends to `[modules] enabled`; `soil install` writes the measured `ingress.alias` **and** seeds
+`[modules] enabled` from cloud-init or from the install script; and `soil install` is also the
+phase that owns the rest of the file. The statement that this file has a single writer was wrong
+twice over.
+
+The rule for every one of them is the same, and it is the rule for adding a fourth: **a write
+takes the `modules` lock, goes through this protocol, and rewrites only the keys it owns.** A
+read-modify-write of `[modules] enabled` re-reads the file under the lock rather than trusting
+what it saw before it, so `soil install` seeding the list and `weedr module add` appending to it
+cannot lose one another. Two writers of one key is legal here because both take the lock; two
+writers of one key with neither taking it would not be. There is no `hosts` lock, because nothing
 writes a name map: names go into the consumer's own unit (§7.3). The pin
 store is deliberately exempt from the protocol's locking: one file per snapshot, created and
 removed by name, never aggregated, so there is no read-modify-write to lose.
@@ -583,7 +591,11 @@ Validation rules:
   **resulting service name** must not exceed 31 characters, and that is what is checked.
 - `state` and `bulk` entries must match `^[a-z0-9][a-z0-9._-]*$`, must name a volume the unit
   source mounts, and a name may not appear in both.
-- `needs` entries must name a service that exists or will exist, and a port in range.
+- `needs` entries must name a service that exists **or will exist**, and a port in range. A
+  service that does not exist *yet* is not an error: a poke creates services in dependency order
+  and a manifest may name a service a later deploy brings into being. The code is `1` and the
+  diagnostic names the service, because the answer came from the host rather than from the two
+  manifests alone (§1.2).
 - `ports` entries carry `container:` and `port:`, exactly as `routes` entries do, and `port:`
   is the **container's** port. A bare `"8080/tcp"` string is not a valid entry. This is a
   correction rather than a new requirement: a grant is a translation to a publication (§7.5),
@@ -597,6 +609,10 @@ Validation rules:
   therefore not used anywhere in a manifest entry; the old string form carried the protocol, and
   carrying it in two places is two places for it to be wrong.
 - `routes` must name a container the unit source defines, and carry a container port.
+- A `ports:` entry names a container the unit source defines, exactly as `routes:` does. The
+  container's port is also how its publication is found, so a container named only in `ports:`
+  gets a publication like any other (§7.4). This is the case the whole grant model rests on: a
+  peer-to-peer service with no route and no dependency exposes a public port and nothing else.
 - `widgets` must name a container the unit source defines, and the file must exist.
 - `as` must be unique within the manifest, because it is the prefix of generated variables.
 - A self-edge is refused.
@@ -617,12 +633,32 @@ rendered.
 `compose.yaml` must stay valid Compose and is converted by the renderer, never by the mutator.
 A repository that ships quadlet units has them used as they are, after the checks in §6.3.
 
-The secret schema uses varlock's annotation syntax because it is a readable standard for "this
-key is required and this is what an example looks like". guarden does **not** run varlock and
-does not depend on it; the annotations are read as text. `@required`, `@sensitive`, `@type`
-and `@example` are the only annotations that carry meaning. Nothing is generated from it into
-the repository: a service's credentials exist only in its own store, and there is no
-`.env.example` to keep in step with anything.
+The secret schema is a **varlock schema**, `.guarden/.env.schema`, and there is no
+`.env.example` — the schema is the single source of truth and the two are never kept in step
+because there is only one. guarden does **not** run varlock, does not depend on it, and is not
+installed by `soil`; the annotations are read as text, which is why the four below are the only
+ones that carry meaning and an unknown annotation is ignored rather than refused:
+
+- `@required` — the key must be set, and a gated track refuses to start without it
+- `@sensitive` — the key's value is a credential and is never printed, never listed by name
+  with its value, and never rendered
+- `@type` — informational for guarden, which stores every value as text
+- `@example` — the example the gate rejects while it is still present
+
+**The varlock defaults are part of the contract, because a project will not spell them out.**
+`@defaultSensitive` is `true` unless the file says otherwise, so a bare `DB_PASSWORD=` is
+already a credential and needs no decorator; `@defaultRequired` is `true` unless the file says
+`infer`. guarden therefore treats **every key in the schema as a credential and every key as
+required** unless the file's own root decorators say otherwise, and reads those two decorators
+to find out. A project that writes `@defaultRequired=infer` gets "a key with a value in the
+schema is required, a key without one is not", and a project that writes
+`@defaultSensitive=false` gets "only keys marked `@sensitive` are credentials". Getting this
+wrong fails closed: a key guarden believes is optional is not required, and a key guarden
+believes is a credential when it is not is stored encrypted and injected as a file, which is
+harmless.
+
+Nothing is generated from the schema into the repository: a service's credentials exist only in
+its own store.
 
 ---
 
@@ -715,8 +751,11 @@ In order:
 5. For each `state` and `bulk` entry, a btrfs subvolume owned by the service user, and for each
    `state` entry a snapper configuration named `<service>-<volume>` with soil's canonical value
    set (§8.1). A `bulk` volume gets a subvolume and no configuration.
-6. An allocated publication for every container named in a `routes:` entry and every `needs:`
-   entry, and for the edge's API when the module declares one (§7.4).
+6. An allocated publication for every container named in a `routes:` entry, a `ports:` entry or a
+   `needs:` entry, and for the edge's API when the module declares one (§7.4). A `ports:` entry is
+   here because a grant is a translation to a publication: without this a peer-to-peer service
+   with no route and no dependency would be grantable in the manifest and unrenderable in the
+   firewall.
 7. A firewall accept rule per edge, and the drop rules for every publication (§7.6).
 8. A forwarded public port for every granted entry in `overrides.toml` (§7.5).
 9. For a track with `gated = false`, a generated value for every `@sensitive` key the schema
@@ -954,9 +993,19 @@ forced command is the only source of the project name at runtime.
 `weedr module add <name>` appends the module's name to `[modules] enabled` in `guarden.toml`
 and rewrites nothing else in the file, under the `modules` lock and through the §3.5 protocol.
 It then, for the module's declared services, does everything a service needs: creates the
-service from the module's own unit source, grants the ports and mounts the module declares,
-installs the units, creates any group the module owns (`gate` owns `edge` and adds the edge's
-service user to it), and converges the edge's forwarding from the modules' declared ingress.
+service from the module's own unit source, installs the units, creates any group the module owns
+(`gate` owns `edge` and adds the edge's service user to it), and converges the edge's forwarding
+from the modules' declared ingress.
+
+**A module grants no port and no mount.** `module.toml` (§3.6) declares `name`, `requires`,
+`[[services]]` with `service`/`ingress`/`api`, and `[[switches]]` with `program` — there is no
+port key and no mount key, and an earlier revision of this paragraph said a module "grants the
+ports and mounts the module declares", which named two things the schema does not have. A module
+ships services, and a service's ports come from its manifest and an admin's `overrides.toml`
+like any other service's. The `ingress` a module declares is the module's **own** contribution
+to the forwarded set, which is configuration rather than a grant, and it is the one ingress list
+the design has: `[ingress] forwarded` in `guarden.toml` is not read by anything and is not in the
+shipped table.
 
 `weedr module remove <name>` is the inverse, and its steps are stated because a half-removed
 module is the failure this verb exists to prevent. In order, under the `modules` lock and the
@@ -1207,8 +1256,14 @@ which let a key for one project drop any preview instance on the box.
 
 The only network-facing program, holding no privilege beyond a sudoers rule naming exactly:
 `furrow deploy`, `furrow preview drop`, `furrow queue list`, `furrow status`, `weedr service
-list`, `weedr project list`. It is never permitted `weedr` directly and never `weedr service
-remove`, so it can neither drop a service nor read a grant. Its rule is
+list`, `weedr project list`.
+
+**It is never permitted `weedr port list`, `weedr port open`, `weedr port close` or `weedr
+service remove`** — the verbs that could grant, revoke or destroy. It cannot drop a service. It
+**can** read which public ports are granted, because `weedr service list` reports a service's
+granted ports as part of its status; that is a status command, and the grant inventory is
+`weedr port list`, which is not on the rule. The honest statement is that a poke can observe the
+grant surface and cannot change it. Its rule is
 
 ```
 hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy, \
@@ -1228,7 +1283,18 @@ unpacks the archive into `/var/lib/guarden/staging/<project>/<sha>/` and calls `
 are reported as a `warning:` line naming them and the exact command to run, which reaches the
 workflow log.
 
-Unpacking is hardened: extracted as a non-root user under `umask 022`, with no absolute member
+**The per-project directory is created when the key is installed, not when the poke arrives.**
+`hose` is unprivileged and `staging/` is `0755 root:root`, so it cannot create a subdirectory
+there at all; `weedr project grant` creates `/var/lib/guarden/staging/<project>/` owned by the
+`hose` user, and `weedr project revoke` removes it. The staged tree is then `0755` with `0644`
+files so that `guarden` can render it and root can read it, because `hose` is deliberately not a
+member of the `guarden` group — it may read `projects.toml` and nothing else under
+`/etc/guarden`, and the world bits on a transient source tree are the price of that. **A service
+can read another project's staged source while a deploy is in flight**, which is stated rather
+than hidden: the tree is removed after the deploy and it contains no secret, because a repository
+contains none.
+
+Unpacking is hardened: extracted as the `hose` user under `umask 022`, with no absolute member
 names, no `..` component, no preserved ownership, and no symlink followed. A member that
 escapes the target directory is refused and the poke fails without touching a service. The
 staged tree contains no secret, because a repository contains none, and it is removed after
@@ -1351,7 +1417,10 @@ edge the credential arrives as `/run/secrets/DB_PASSWORD`.
 
 A **publication** is a loopback port allocated from `ingress.publication_range`. Publications
 are the only ports anything in guarden binds. One is created for every container named in a
-`routes:` entry, for every `needs:` entry, and for the edge's API when its module declares one.
+`routes:`, `ports:` or `needs:` entry, and for the edge's API when its module declares one. A
+`ports:` entry is included because a grant is a translation to a publication: without it a
+peer-to-peer service that exposes a public port and declares no route and no dependency would
+have a requestable port and no destination to translate to.
 The allocation is persisted in the registry, so it is stable across regenerations and unique
 per service and instance — which is what lets several instances of one preview service be
 routed at the same time.

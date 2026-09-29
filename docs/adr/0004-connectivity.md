@@ -76,11 +76,12 @@ branches do not contend for a port, they are each handed one, and the edge is po
 instance it meant. ADR-0006 covers the two kinds separately, because they are governed by
 different rules.
 
-The drop set is the union of everything guarden publishes — the route publications, the edge
-publications, the edge's API and any service's own forwarded port — not only the route ones.
-Publications guarden does not create are left alone, because a blanket drop of loopback traffic
-for service uids would break name resolution and package updates inside their containers. The
-edge's uid is deliberately permitted, by uid, to reach every allocated route publication,
+The drop set is **all of loopback for every service uid**, not only the published ports — a
+default deny on `-o lo -d 127.0.0.0/8` with the per-publication accepts above it. The earlier
+version policed each publication and left the rest alone, on the stated grounds that a blanket
+drop "would break name resolution and package updates inside their containers"; both are wrong,
+pasta excludes DNS from the loopback mapping and package updates are outbound. The edge's uid is
+deliberately permitted, by uid, to reach every allocated route publication,
 because reaching the container is the edge's entire job. A compromised edge can therefore reach
 anything routed to it, and the blast radius of that compromise is the routed surface.
 

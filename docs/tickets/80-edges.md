@@ -25,11 +25,12 @@ paths is ticket 40, and both are needed before the edge is complete.
 - [ ] For each edge, `loom` writes `AddHost=<provider>:<alias>` into every unit of the consumer.
       There is no name map and no `/etc/hosts`; the name is the provider's service name, with no
       suffix and no alias
-- [ ] **The firewall rules' destination address is that host-loopback alias as the machine
-      actually has it**, not an assumed `127.0.0.1`. The address is measured once by ticket 15,
-      `soil install` writes the measured value into `guarden.toml` as `ingress.alias` from its own
-      probe, and the render uses that value, because a container's `127.0.0.1` is its own. It is
-      not left for an operator to fill in, and the edge does not start without it
+- [ ] **The firewall rules' destination address is `127.0.0.1`, never the alias.** Pasta maps the
+      container's gateway onto the host's loopback in userspace, before the kernel's packet path,
+      so by the time `OUTPUT` sees the connection it is already `127.0.0.1` and a rule matching the
+      alias matches nothing. The measured alias is written into `guarden.toml` as `ingress.alias`
+      by `soil install` from its own probe and appears in `AddHost=` only; the edge does not start
+      without it
 - [ ] For each edge, `weedr` renders an `OUTPUT` accept rule matching the consumer's uid and the
       dependency's publication, followed by a drop rule for every other uid
 - [ ] **The edge is permitted, by uid, to reach every route publication.** That is
@@ -41,10 +42,13 @@ paths is ticket 40, and both are needed before the edge is complete.
       published, and that is what lets several instances of one preview service coexist: the
       branches do not contend for a port, they are each handed one, and the edge is pointed at the
       instance it meant
-- [ ] **The drop set is the union of every publication** — route publications, edge
-      publications, the edge's API, and any service's own forwarded port. Publications guarden
-      does not create are left alone, because a blanket drop of loopback traffic for service uids
-      would break name resolution and package updates inside their containers
+- [ ] **The loopback is closed to service uids by default.** The `OUTPUT` set is a default deny on
+      `-o lo -d 127.0.0.0/8` for every service uid, with the per-publication accepts above it.
+      The deny does not touch outbound traffic, and pasta's DNS forward is explicitly excluded
+      from the loopback mapping, so the earlier justification about name resolution and package
+      updates was false. A container cannot reach `sshd` on 22, and there is no fifth grant table:
+      a service needing a host loopback port which is not a publication needs that daemon to be a
+      service
 - [ ] **Render, diff and install happen under one `firewall` lock.** Two mutations that each
       render would otherwise let the stale render install last, silently dropping the rule the
       other one had just granted
@@ -52,9 +56,11 @@ paths is ticket 40, and both are needed before the edge is complete.
       forget and no second address family in the rule set
 - [ ] The rules are rendered in full from the union of all declared edges and grants, written
       atomically, with the diff against the installed set printed before installation
-- [ ] For each publication the accept set is exactly **owner, edge, declared consumers**, and
-      every accept precedes every drop. A rule set that omits the owner refuses the owner's
-      own listener; one that omits the edge makes every route 502
+- [ ] For each publication the accept set is the edge's uid, each declared consumer's uid, the
+      service itself for its own granted port, and `host.admin_user` for the edge's API, and
+      every accept precedes the single deny. A rule set that omits the owner refuses the owner's
+      own listener; one that omits the edge makes every route 502; one that omits the admin
+      refuses the dashboard from the operator's own shell
 - [ ] Two services declaring the same edge produce one rule, because the set is deduplicated by
       construction rather than by a mechanism
 - [ ] Two services publishing the same port is refused at install with exit 1 and the holder

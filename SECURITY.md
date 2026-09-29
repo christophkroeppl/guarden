@@ -221,12 +221,14 @@ advisory.
 
 Two layers, with their exact limits.
 
-**Connections to declared ports are policed.** The rendered rule set gives each publication
-an accept rule per allowed uid — the edge for every route publication, a consumer for each edge
-it declared, `host.admin_user` for the edge's API — and then a drop for every other uid, in
-`OUTPUT`, where an owner match matches the socket's owner and is reliable. A service that did
-not declare an edge cannot connect to a declared one. The drop set is the union of *every*
-publication, so a port nobody declared does not become reachable merely by being published.
+**The loopback is closed to the service uids, and the publications are the only way in.** The
+rendered rule set is a **default deny on all of loopback for every service uid** in `OUTPUT`,
+where an owner match matches the socket's owner and is reliable, with an accept rule per
+(publication, allowed uid) above it — the edge for every route publication, a consumer for each
+edge it declared, `host.admin_user` for the edge's API, the service itself for its own granted
+port. A service that did not declare an edge cannot connect to a declared one, and a service
+cannot reach a port nobody published at all, including `sshd`. The rule renders the accept set
+first and the single deny last, and the order is the whole of it.
 
 **Binds are not policed.** Nothing prevents a service from binding a loopback port it was never
 granted a publication for, and two compromised services can talk over any port they both choose.
@@ -376,10 +378,12 @@ rule. The `snapshots` lock covers both the mark reconciler and the cleanup unit,
 snapper takes no lock that `snapper modify` participates in and a mark written during a
 running cleanup is lost with no error anywhere.
 
-`guarden.toml` is not exempt because little writes it, but it has **two** writers rather than
+`guarden.toml` is not exempt because little writes it, but it has **three** writers rather than
 the one previously claimed: `weedr module add` appends to `[modules] enabled`, and `soil install`
-writes the measured `ingress.alias`. They touch disjoint keys, and both go through the protocol
-under the `modules` lock, so the file has no unprotocolled writer. A `kind = "instance"` track
+writes both the measured `ingress.alias` and the `[modules] enabled` list it seeds from
+cloud-init. Two of the three share a key, so the rule is that every write takes the `modules`
+lock, goes through the protocol, and re-reads the file under the lock rather than trusting what it
+saw before it. The file has no unprotocolled writer. A `kind = "instance"` track
 deploys each of its instances separately, and one `deploy-<service>` lock per service would
 serialise every preview behind every other preview, so an instance's deploy takes
 `deploy-<service>-<escaped-ref>`; the ref uses the same escaped form as the registry key and

@@ -38,10 +38,12 @@ running.
       rendered unit, and no registry field, contains one
 - [ ] `weedr secret list <name>` prints names and whether each is set, never a value
 - [ ] **The trust boundary, stated exactly:** a value is in no plaintext file, in no snapshot of a
-      service's state, in no backup of the host filesystem, and is unreadable by any other service
-      user. It is deliberately available to its own service, because a rootless container shares
-      that service's uid and the podman secret database lives in that service's own home. The test
-      asserts the first half; the second half is not a defect and no test should imply it is
+      service's state, in no backup of `/etc`, and is unreadable by any other service user — and it
+      **is readable in a backup of `/var/lib`**, because the materialised podman secret store in
+      the service's `0700` home is cleartext and the home's mode is the only protection. It is
+      deliberately available to its own service, because a rootless container shares that
+      service's uid. The test asserts the first half and asserts the second half too, so the
+      limitation is recorded rather than assumed away
 - [ ] **Lose the encryption key and every credential is unrecoverable.** There is one key, no
       second copy on the box and no mechanism for one, so the runbook says so plainly: each
       credential must be re-planted with `weedr secret set` from the operator's own offline copy,
