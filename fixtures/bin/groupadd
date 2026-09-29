@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-echo "groupadd $*" >> "${GUARDEN_CALL_LOG:-/dev/null}"
-exit 0

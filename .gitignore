@@ -1,9 +1,16 @@
 .kilo
 CLAUDE.md
+
+# A project's credential schema is tracked; a project's values are not.
+# The schema declares names, types and example values, and never a value, so it is
+# safe in git and required to be there. Everything else under `.env` is not.
 .env
-.env.example
-.env.*.local
-.env.production
-.env.staging
-.env.preview
-.env.fence
+.env.*
+!.guarden/.env.schema
+
+__pycache__/
+*.pyc
+.venv/
+*.tar.gz
+*.dump
+evidence/

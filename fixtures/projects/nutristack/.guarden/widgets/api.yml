@@ -1,3 +1,0 @@
-description: Nutristack API
-href: "https://api.${env}.${domain}"
-icon: mdi-api
