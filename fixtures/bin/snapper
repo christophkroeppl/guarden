@@ -13,7 +13,12 @@
 # /etc/snapper/configs/, and `modify` records the userdata it was handed, because
 # a pin test that does not inspect the mark tests nothing.
 #
-# Seed a configuration by writing records to
+# `create-config` and `set-config` are here because the mutator creates a
+# service's configuration and writes its value set, and a fake that modelled
+# neither would make "the mutator wrote the canonical set" and "soil storage
+# converged it" the same untested claim.
+#
+# Seed a configuration's snapshots by writing records to
 # $GUARDEN_FIXTURES/snapper/<config>.list, one per line:
 #
 #   number|cleanup|date|description|k=v,k=v
@@ -32,6 +37,7 @@ algorithm=
 userdata=
 records=()
 extra=()
+settings=()
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -64,6 +70,18 @@ while [ "$#" -gt 0 ]; do
             extra+=("description=$2")
             shift 2
             ;;
+        set-config)
+            [ "$#" -ge 2 ] || fake_die "set-config needs a KEY=VALUE"
+            verb=set-config
+            settings+=("$2")
+            shift 2
+            ;;
+        create-config)
+            [ "$#" -ge 2 ] || fake_die "create-config needs a subvolume"
+            verb=create-config
+            records+=("$2")
+            shift 2
+            ;;
         --)
             shift
             ;;
@@ -81,9 +99,14 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+conf_dir=${GUARDEN_SNAPPER_CONFIGS:-}
+if [ -z "$conf_dir" ] && [ -n "${GUARDEN_PREFIX:-}" ]; then
+    conf_dir="$GUARDEN_PREFIX/etc/snapper/configs"
+fi
+conf_dir=${conf_dir:-$GUARDEN_FAKE_SNAPPER}
 list_file="$GUARDEN_FAKE_SNAPPER/$config.list"
-conf_file="$GUARDEN_FAKE_SNAPPER/$config.conf"
-mkdir -p "$GUARDEN_FAKE_SNAPPER"
+conf_file="$conf_dir/$config"
+mkdir -p "$GUARDEN_FAKE_SNAPPER" "$conf_dir"
 
 json_escape() {
     local text=$1
@@ -192,8 +215,7 @@ canonical_config() {
 }
 
 case "$verb" in
-    list)
-        case "$format" in
+    list)        case "$format" in
             json) list_json ;;
             csv) list_csv ;;
             table) list_table ;;
@@ -218,6 +240,31 @@ case "$verb" in
             exit 0
         fi
         canonical_config
+        ;;
+    create-config)
+        # The mutator creates a service's configuration and sets its value set
+        # here; soil storage converges the same values later. Modelling both is
+        # what lets a test tell "the mutator wrote the canonical set" from "soil
+        # storage did", which is the difference between a correct create and a
+        # correct apply.
+        [ -d "${records[0]:-}" ] || fake_die "create-config: ${records[0]:-<none>} is not a subvolume"
+        [ -e "$conf_file" ] && fake_die "config $config already exists"
+        printf 'SUBVOLUME=%s\nFSTYPE=btrfs\n' "${records[0]}" >"$conf_file"
+        ;;
+    set-config)
+        [ -f "$conf_file" ] || fake_die "no configuration $config"
+        [ "${#settings[@]}" -ge 1 ] || fake_die "set-config needs a KEY=VALUE"
+        for setting in "${settings[@]}"; do
+            case "$setting" in
+                *=*) ;;
+                *) fake_die "set-config: $setting is not KEY=VALUE" ;;
+            esac
+            key=${setting%%=*}
+            value=${setting#*=}
+            grep -v "^$key=" "$conf_file" >"$conf_file.tmp" || true
+            printf '%s=%s\n' "$key" "$value" >>"$conf_file.tmp"
+            mv "$conf_file.tmp" "$conf_file"
+        done
         ;;
     modify)
         [ "${#records[@]}" -eq 1 ] || fake_die "modify takes exactly one snapshot number"

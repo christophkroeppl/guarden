@@ -10,11 +10,15 @@ would grant the capability with it. There is no `weedr redeploy` — deploying i
 from __future__ import annotations
 
 import argparse
+import sys
+import time
 
-from guarden import cli
+from guarden import cli, errors, names, paths, registry, report, service
+from guarden import config as config_mod
 
 SERVICE = (
-    ("add", "create or reconcile a service from a manifest on disk"),
+    ("ingest", "create or reconcile a service from a poke's staged tree"),
+    ("add", "create or reconcile a service from another service's tree"),
     ("remove", "remove a service, or one instance of one; alias: rm"),
     ("purge", "delete a service's volumes; the only path in guarden that destroys data"),
     ("start", "start a service or one instance"),
@@ -89,11 +93,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     top = cli.add_groups(parser, "group", GROUPS)
 
-    add = top["service"]["verbs"]["add"]
-    cli.add_name(add, "the service to create, with a ref on an instance track")
-    add.add_argument(
-        "--from", dest="from_dir", metavar="DIR", required=True, help="the manifest's directory"
-    )
+    for verb, help_text in (
+        ("ingest", "the service to create, with a ref on an instance track"),
+        ("add", "the service to create; a name with no environment resolves a default"),
+    ):
+        creator = top["service"]["verbs"][verb]
+        cli.add_name(creator, help_text)
+        creator.add_argument(
+            "--from",
+            dest="source",
+            metavar="SOURCE",
+            nargs="+",
+            required=True,
+            help="`<service>`, or `poke <project>@<sha>`; never a path",
+        )
 
     for verb, help_text in (
         ("remove", "a whole service, or one instance with /<ref>"),
@@ -133,10 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     build = top["service"]["verbs"]["build"]
-    cli.add_name(build, "the service whose user the build runs as")
-    build.add_argument(
-        "--from", dest="from_dir", metavar="DIR", required=True, help="the source to build"
-    )
+    cli.add_name(build, "the service whose own tree the build runs on")
 
     secret_set = top["secret"]["verbs"]["set"]
     secret_set.add_argument("name", metavar="NAME", help="the service that owns the value")
@@ -182,10 +192,116 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _emit(outcome: service.Outcome, verb: str) -> int:
+    """What a create verb says, on stdout, and what it does not.
+
+    A default environment is **printed**, because the caller asked for a service
+    and got one under a name it did not type, and an operator who cannot see that
+    has been given a name by something other than themselves.
+    """
+    if outcome.converged:
+        sys.stdout.write("converged\n")
+        return 0
+    if outcome.resolved.defaulted:
+        sys.stdout.write(f"{outcome.resolved.name}\n")
+    for message in outcome.warnings:
+        sys.stderr.write(f"{errors.warn(message)}\n")
+    sys.stdout.write(f"{verb} {outcome.resolved.name} uid {outcome.uid}\n")
+    return 0
+
+
+def _create(args, allow_default: bool) -> int:
+    config = config_mod.load()
+    source = service.parse_from(args.source)
+    resolved = names.resolve(args.name, list(config.tracks), allow_default)
+    outcome = service.create(resolved, source, config, _now())
+    return _emit(outcome, "created" if not outcome.converged else "converged")
+
+
+def _ingest(args) -> int:
+    # spec 5.1: the default-environment exception belongs to `add` alone, so a
+    # poke can never choose the track its service lands in.
+    return _create(args, allow_default=False)
+
+
+def _add(args) -> int:
+    return _create(args, allow_default=True)
+
+
+def _remove(args) -> int:
+    config = config_mod.load()
+    resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
+    for line in service.remove(resolved, config, _now()):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+def _purge(args) -> int:
+    config = config_mod.load()
+    resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
+    if resolved.ref:
+        raise errors.GuardenError(
+            f"{resolved.name}/{resolved.ref} is an instance, and an instance's volumes are "
+            f"the service's data, so purging one would destroy it"
+        )
+    record = registry.load(resolved.name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{resolved.name} has no registry entry, so there is nothing to destroy",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if resolved.track.gated:
+        service._gated_refusal(resolved.name, resolved.track.name)
+
+    # Every volume is named before any of it is destroyed, and the confirmation
+    # is at a terminal: this is the only path in guarden that deletes data, and
+    # it is not reachable from a sudoers rule at all.
+    sys.stdout.write(f"about to destroy every volume of {resolved.name}:\n")
+    for volume in record.volume_list():
+        where = paths.volume(resolved.name, volume.kind, volume.name)
+        sys.stdout.write(f"  {volume.kind} {volume.name} {where}\n")
+    if not sys.stdin.isatty():
+        raise errors.GuardenError(
+            "weedr service purge needs a terminal to confirm at, and stdin is not one",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    for volume in record.volume_list():
+        service._drop(paths.volume(resolved.name, volume.kind, volume.name))
+    sys.stdout.write(f"destroyed every volume of {resolved.name}\n")
+    return 0
+
+
+def _list(args) -> int:
+    listing = report.build()
+    sys.stdout.write(report.as_json(listing) + "\n" if args.json else report.as_text(listing))
+    return 0
+
+
+HANDLERS = {
+    "weedr service ingest": _ingest,
+    "weedr service add": _add,
+    "weedr service remove": _remove,
+    "weedr service purge": _purge,
+    "weedr service list": _list,
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return cli.pending(cli.invocation("weedr", args.group, args.verb))
+    call = " ".join(part for part in ("weedr", args.group, args.verb) if part)
+    handler = HANDLERS.get(call)
+    if handler is None:
+        return cli.pending(call)
+    try:
+        return handler(args)
+    except errors.GuardenError as exc:
+        sys.stderr.write(f"{exc.report(call)}\n")
+        return exc.code
 
 
 if __name__ == "__main__":

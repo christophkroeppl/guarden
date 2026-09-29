@@ -31,8 +31,10 @@ SEARCHED = ("src/guarden", "tools/check-deps", "tests")
 
 
 def allowed_roots() -> frozenset[str]:
-    return frozenset(sys.stdlib_module_names) | frozenset(DISTRIBUTION_PACKAGES) | frozenset(
-        FIRST_PARTY
+    return (
+        frozenset(sys.stdlib_module_names)
+        | frozenset(DISTRIBUTION_PACKAGES)
+        | frozenset(FIRST_PARTY)
     )
 
 

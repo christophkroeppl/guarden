@@ -26,12 +26,6 @@ assert_stdout_has "weedr service remove"
 
 # A diagnostic names the long form whichever the caller typed, so what lands in
 # the journal is the form an operator greps for.
-run weedr service remove myapp-production
-assert_exit 1
-assert_stderr_has "weedr service remove is not implemented"
-run weedr service rm myapp-production
-assert_exit 1
-assert_stderr_has "weedr service remove is not implemented"
 run weedr project remove myapp
 assert_exit 1
 assert_stderr_has "weedr project remove is not implemented"

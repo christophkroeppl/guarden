@@ -13,15 +13,15 @@
 run soil list
 assert_exit 0
 assert_stderr_empty
-run weedr service purge myapp-production
+run weedr service start myapp-production
 assert_exit 1
 
 # 2. the diagnostic lines: one line, prefixed, naming the thing it is about,
 # and on stderr, with the result on stdout and nothing beside it (spec 1.1).
-run weedr service purge myapp-production
+run weedr service start myapp-production
 assert_exit 1
 assert_one_diagnostic "error:"
-assert_stderr_has "weedr service purge is not implemented"
+assert_stderr_has "weedr service start is not implemented"
 assert_stdout_empty
 
 # 3. the files that appeared. A fake that models a call models its effect.
@@ -44,7 +44,7 @@ assert_called "iptables -t nat -A POSTROUTING -o eth0 -d 127.0.0.1 --dport 20000
 # that shelled out would put a line in the call log that a later test would
 # read as evidence of something this one never did.
 assert_makes_no_calls weedr service list
-assert_makes_no_calls weedr service start myapp-production
+assert_makes_no_calls weedr service restart myapp-production
 assert_makes_no_calls soil --check
 assert_makes_no_calls loom render . --service myapp-production --out /tmp/units
 assert_makes_no_calls roots sync

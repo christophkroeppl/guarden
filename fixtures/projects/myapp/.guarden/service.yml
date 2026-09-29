@@ -1,0 +1,8 @@
+project: myapp
+units: compose.yaml
+state:
+  - data
+bulk:
+  - chainstate
+provides:
+  - db

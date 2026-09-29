@@ -66,7 +66,7 @@ assert_stdout_has "NUMBER_LIMIT_IMPORTANT=8-12"
 # A seeded configuration reads back what was written, which is the whole point
 # of reading rather than believing: weedr service list reports what snapper
 # holds, not what guarden thinks it wrote.
-printf '%s\n' 'NUMBER_LIMIT_IMPORTANT=4-6' 'TIMELINE_CLEANUP=no' >"$GUARDEN_FIXTURES/snapper/myapp-production-custom.conf"
+printf '%s\n' 'NUMBER_LIMIT_IMPORTANT=4-6' 'TIMELINE_CLEANUP=no' >"$GUARDEN_FIXTURES/snapper/myapp-production-custom"
 fake snapper -c myapp-production-custom get-config
 assert_exit 0
 assert_stdout_has "NUMBER_LIMIT_IMPORTANT=4-6"

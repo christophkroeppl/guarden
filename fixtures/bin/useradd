@@ -1,4 +1,82 @@
 #!/usr/bin/env bash
+# useradd — a system user, and a subid range the system picks.
+#
+# ADR-0003: the range comes from `useradd --system --add-subuids-for-system`,
+# which needs shadow-utils 4.11 or later. A fixture marker stands in for an older
+# one, so the fallback path — plain useradd, then `usermod --add-subuids` — is a
+# thing a test can exercise rather than a branch nobody ever runs.
+
 . "$(dirname "$0")/../lib/fake.sh"
+. "$(dirname "$0")/../lib/users.sh"
+
 fake_init "$@"
+fake_early_exit "$@"
+
+subuids=0
+add_subuids=0
+shell=/bin/sh
+home_dir=""
+name=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --add-subuids-for-system)
+            add_subuids=1
+            shift
+            ;;
+        --system|--no-create-home|-r|-M)
+            shift
+            ;;
+        --shell|-s)
+            shell=$2
+            shift 2
+            ;;
+        --home-dir|-d)
+            home_dir=$2
+            shift 2
+            ;;
+        --comment|-c|--expiredate|-e)
+            shift 2
+            ;;
+        --)
+            shift
+            ;;
+        -*)
+            fake_die "unknown option $1"
+            ;;
+        *)
+            name=$1
+            shift
+            ;;
+    esac
+done
+
+[ -n "$name" ] || fake_die "no user name"
+
+if fake_user_known "$name"; then
+    fake_out "useradd: user $name already exists"
+    exit 9
+fi
+
+if [ "$add_subuids" = 1 ] && [ -e "$GUARDEN_FIXTURES/shadow-utils-old" ]; then
+    fake_die "--add-subuids-for-system: unrecognized option"
+fi
+
+uid=$(_next_uid)
+fake_user_write "$name" "$uid" "$shell"
+
+if [ "$add_subuids" = 1 ]; then
+    # A marker makes the allocator hand out the same base to everyone, which is
+    # the "one hardcoded range for every service" failure weedr's read-back has
+    # to catch rather than accept.
+    if [ -e "$GUARDEN_FIXTURES/subid-collision" ]; then
+        subuids=100000
+    else
+        subuids=$(fake_subid_base 65536)
+    fi
+    fake_subid_write "$subuid_file" "$name" "$subuids" 65536
+    fake_subid_write "$subgid_file" "$name" "$subuids" 65536
+fi
+
+fake_out "$name:x:$uid:$uid::$home_dir:$shell"
 exit 0

@@ -1,4 +1,24 @@
 #!/usr/bin/env bash
+# btrfs — a subvolume per volume, and never a plain directory.
+#
+# The distinction matters: a nested subvolume is excluded from its parent's
+# snapshot entirely, so a bulk volume created as a directory would be a mount of
+# something else after a fork (spec 8.1, and the instance layout in spec 2).
+
 . "$(dirname "$0")/../lib/fake.sh"
+. "$(dirname "$0")/../lib/users.sh"
+
 fake_init "$@"
+fake_early_exit "$@"
+
+[ "${1:-}" = "subvolume" ] || fake_die "unknown command ${1:-<none>}"
+[ "${2:-}" = "create" ] || fake_die "unknown subcommand ${2:-<none>}"
+target=${3:-}
+[ -n "$target" ] || fake_die "subvolume create needs a path"
+[ -d "$(dirname "$target")" ] || fake_die "the parent of $target does not exist"
+mkdir -p "$target"
+: >"$GUARDEN_FIXTURES/subvolumes/$(printf '%s' "$target" | tr '/' '_')" 2>/dev/null || {
+    mkdir -p "$GUARDEN_FIXTURES/subvolumes"
+    : >"$GUARDEN_FIXTURES/subvolumes/$(printf '%s' "$target" | tr '/' '_')"
+}
 exit 0

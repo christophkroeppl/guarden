@@ -1,4 +1,75 @@
 #!/usr/bin/env bash
+# usermod — supplementary groups, and the subid ranges of the fallback path.
+#
+# The `--add-subuids`/`--add-subgids` forms take an explicit range, which is why
+# the call log can show a distinct range per service user where the
+# `useradd --add-subuids-for-system` path shows nothing at all. That asymmetry is
+# the reason weedr reads /etc/subuid back rather than trusting either call.
+
 . "$(dirname "$0")/../lib/fake.sh"
+. "$(dirname "$0")/../lib/users.sh"
+
 fake_init "$@"
+fake_early_exit "$@"
+
+action=""
+span=""
+groups=""
+name=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --add-subuids|--add-subgids)
+            action=${1#--}
+            span=$2
+            shift 2
+            ;;
+        --append|-a)
+            shift
+            ;;
+        --groups|-G)
+            groups=$2
+            shift 2
+            ;;
+        --shell|-s)
+            shift 2
+            ;;
+        --)
+            shift
+            ;;
+        -*)
+            fake_die "unknown option $1"
+            ;;
+        *)
+            name=$1
+            shift
+            ;;
+    esac
+done
+
+[ -n "$name" ] || fake_die "no user name"
+fake_user_known "$name" || fake_die "user $name does not exist"
+
+case "$action" in
+    add-subuids|add-subgids)
+        first=${span%%-*}
+        last=${span#*-}
+        case "$first$last" in
+            ''|*[!0-9-]*) fake_die "not a range: $span" ;;
+        esac
+        file=$subuid_file
+        [ "$action" = add-subgids ] && file=$subgid_file
+        fake_subid_write "$file" "$name" "$first" "$((last - first + 1))"
+        ;;
+    '')
+        [ -n "$groups" ] || fake_die "nothing to do"
+        group_file="${GUARDEN_PREFIX:-}/etc/group"
+        for group in ${groups//,/ }; do
+            printf '%s:%s:\n' "$group" "$name" >>"$group_file"
+        done
+        ;;
+    *)
+        fake_die "unknown action $action"
+        ;;
+esac
 exit 0
