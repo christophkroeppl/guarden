@@ -106,7 +106,9 @@ converges and is idempotent. `soil` creates no service identity.
       configuration for anything guarden does not own
 - [ ] The lockout drill exists: arming the timer, then breaking the firewall, gets an operator
       back in without the provider's console
-- [ ] On the golden VM: `net.ipv4.ip_unprivileged_port_start` is left at the distribution's
-      value, and an unprivileged process fails to bind a port below 1024
+- [ ] On the golden VM: `net.ipv4.ip_unprivileged_port_start` reads `1024` after
+      `soil sysctl --apply`, and an unprivileged process fails to bind a port below 1024. Set it
+      to `0` first and confirm `--check` reports the drift, because a host that ships `0` is the
+      case the check exists for
 - [ ] The fast harness verifies the phases against fakes; the golden VM runs them with real
       tools and captures an evidence tarball

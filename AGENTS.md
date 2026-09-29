@@ -182,6 +182,10 @@ a new ADR that supersedes it. The short version:
   while different services proceed in parallel. That is what delivers "a deploy racing another
   deploy leaves half-written units": the queue serialises builds, not deploys, so raising
   `build.lanes` retires build serialisation and never had deploy serialisation to retire.
+- **One canonical statement per rule.** The masquerade, the loopback deny and the sudoers
+  argument rule each appear in several documents because each was needed in several places, and
+  duplication is why a refuted claim survives in a stale copy. A rule is stated once — in the
+  spec — and every other document points at it. When you change a rule, grep for it.
 - **No verb on the privileged surface carries a flag that widens authority.** A sudoers rule
   naming a command without an argument specification matches any arguments, and sudoers has no
   negation, so `--grant-ports` on `weedr service add` could never have been withheld — the grant
@@ -235,7 +239,12 @@ a new ADR that supersedes it. The short version:
   with no per-item error handling, so the first candidate it cannot delete aborts that
   configuration's entire cleanup for that run, and the configuration stops auto-pruning while that
   snapshot is a candidate. Recorded, opt-in, reversible with `chattr -i`.
-- No boot waves and no fixed delay. A consumer's unit depends on the services it declared.
+- **No boot waves and no fixed delay, and the ordering lives in the system manager.** A unit in
+  one service's user manager cannot require a unit in another's, so a consumer's container units
+  carry only an `After=guarden-order.target` drop-in and the real edges live in a root-owned
+  `<name>.target` per service, with `loom` emitting the edges and the mutator installing them.
+  The edges are `Wants=`, not `Requires=`: a down provider must not stop its consumers (spec
+  §6.10, ADR-0011).
 - Modules are configuration, not plugins. They never write each other's files. `weedr module add
   gate` creates the `edge` group and adds the edge's user to it; `soil install` creates the
   `guarden` group and no other, and never an `edge`. The `guarden` group is load-bearing rather

@@ -37,8 +37,37 @@ There are no boot waves, and no fixed delay. Boot ordering is not a property of 
 is a property of a service's dependencies, and it belongs where the dependencies are declared.
 The only ordering in this system is between a service and the services it declared it needs.
 
-Real dependencies are expressed where they belong: loom writes `Requires=` and `After=` into
-a consumer's units for each edge in the manifest, so a database starts before the service that
-dials it and the user manager resolves it without knowing what environment anything is in.
-Everything else starts when systemd starts it, in parallel, which is what a service manager
-is for.
+Real dependencies are expressed in the **system** manager, because they cannot be expressed in
+the user managers. Each service runs its own `systemd --user` instance under its own uid, so a
+unit in the consumer's manager cannot `Requires=` a unit in the provider's manager: the
+dependency does not resolve, because the two units are in different dependency graphs and
+systemd does not cross user managers. An earlier revision of this document had `loom` write
+`Requires=` and `After=` straight into a consumer's container units, and that cannot work.
+
+The mechanism is one target per service, in the system manager, plus one host-wide target to
+pull them in:
+
+- **`guarden-order.target`**, in the root path, `Wants=` every enabled service's target. It is
+  what the root path pulls in, and it is what makes the whole set startable at boot.
+- **`<name>.target`**, one per service, `Wants=` the targets of the services its manifest declared
+  under `needs:`, and `After=` them. The mutator writes it root-owned, converges the symlinks
+  under `/etc/systemd/system/<name>.target.wants/`, and adds `After=guarden-order.target` and
+  `Wants=guarden-order.target` to the service's **quadlet directory drop-in** — which is the only
+  place a user-manager unit can acquire a dependency on something in the system manager.
+- `loom` emits the *edges* — the `Wants=`/`After=` lines inside `<name>.target` — and the mutator
+  installs it. That keeps the unprivileged renderer's output separated by one install step from
+  the privileged target, and it is the same renderer/mutator split as everywhere else.
+
+So the ordering is still declared where the dependencies are declared, and the root path still
+does not sequence services: systemd resolves the target graph, and a database's target being
+pulled in before a consumer's is what "a database starts before the service that dials it"
+means. **There is no fixed delay and no boot wave** — a service with no edges starts in
+parallel with everything else, and the graph is a dependency graph, not a sequence (spec §6.10). What this
+buys is the ordering that was previously promised and previously impossible, and the cost is one
+system target per service and a symlink directory to converge.
+
+A consumer whose provider is down is *not* held up by this, and that is deliberate: the
+dependency is a `Wants=`, not a `Requires=`, so a failed provider does not prevent the consumer
+from starting. The consumer's own dial fails and it retries, which every one of these
+applications already does. A hard `Requires=` would make one dead database take down everything
+that declares it, and a service manager whose failure mode is "everything stops" is not one.

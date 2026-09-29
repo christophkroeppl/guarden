@@ -201,9 +201,10 @@ phrase usually attached to it, that is the phrase's fault.
   compromised services can talk over any port they both choose. Install-time refusal of a
   duplicate publication is all that is there.
 - Credentials are systemd-encrypted blobs, materialised into per-user podman secrets. The trust
-  boundary is exact: **protected from other services, from host storage and from backups;
-  deliberately available to its own service**, because a rootless container shares its
-  service's uid and the secret database lives in that service's home. Scoping and rotation are
+  boundary is exact: **protected from other services and from a backup of `/etc`; NOT protected
+  from a backup of `/var/lib`**, because the materialised podman secret store in the service's
+  home is cleartext and the home's `0700` is the protection. It is deliberately available to its
+  own service, because a rootless container shares that service's uid. Scoping and rotation are
   the real controls — one least-privilege credential per declared edge, and rotation is
   `weedr secret set` plus a restart. On a gated track the gate refuses a start with a missing,
   empty or example value, and it is checked before the old container stops; on a track with

@@ -158,7 +158,7 @@ kind = "slot"
 
 ```sh
 weedr service add myapp-production --from .
-weedr service remove myapp-production                       # also asks; alias: rm
+weedr service remove myapp-production                       # refused: gated track; alias: rm
 ```
 
 Staging and preview do not ask. `weedr service add myapp` with no environment defaults to
@@ -239,7 +239,8 @@ weedr service list --json                # per state volume: totals, marked, old
 furrow deploy myapp-production --from . --sha "$(git rev-parse --short HEAD)"
 furrow queue list
 
-hose poke myapp main 9f2c1ab < site.tar.gz   # what a project's CI sends
+hose poke main 9f2c1ab < site.tar.gz   # what a project's CI sends; the project comes
+                                  # from the key's forced command, not from here
 ```
 
 `stakes` and `weedr service list --json` answer different questions on purpose. `stakes` runs
@@ -505,7 +506,8 @@ editing a manifest — `weedr service add <name> --from <dir>`, which is idempot
 reconcile command — and how to get back in if the firewall locks you out. The dead-man timer is
 not always running. It is armed only by `soil firewall --apply --deadman`, it lasts fifteen
 minutes, and when it fires it stops `ferm` and re-enables the distribution firewall, which
-leaves you able to ssh back in. It disarms itself when it fires, and a plain
+leaves you able to ssh back in. (That is the one statement of what it does; the spec §6.1 and the
+runbook both point here rather than describing it again.) It disarms itself when it fires, and a plain
 `soil firewall --apply` without the flag disarms it too, so an armed timer cannot outlive the
 drill.
 

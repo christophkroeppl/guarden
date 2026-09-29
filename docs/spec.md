@@ -199,7 +199,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/var/lib/guarden/render/<service>[/<ref>]/` | `0700` | `guarden` | `loom` |
 | `/var/lib/guarden/shared/` | `0750` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/shared/<name>/` | `0750` | `root:guarden` | the mutator, installing the render |
-| `/var/lib/guarden/shared/dashboard/` | `0750` | `guarden:guarden` | `weedr module add homepage` |
+| `/var/lib/guarden/shared/dashboard/` | `0755` | `guarden:guarden` | `weedr module add homepage`. **World-readable, and that is the point** — the dashboard is an ordinary service in neither group, and the design keeps two groups, so `2750 guarden:<reader-group>` is not available. The content is merged widget output: UI configuration, no secret, and it is the public face of the box anyway |
 | `/var/lib/guarden/edge/dynamic/` | `2750` | `guarden:edge` | `weedr module add gate` — **not** `roots`, which cannot set a group it is not in |
 | `/var/lib/guarden/stakes/` | `0770` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/queue/` | `0770` | `root:guarden` | `soil storage` |
@@ -301,7 +301,9 @@ name = "production"
 host_prefix = ""                 # route host is myapp.$DOMAIN
 gated = true                     # refuses to start on a missing or placeholder credential
 weight = 1000                    # CPUWeight and IOWeight in generated units
-free_limit = "0.10"              # snapper FREE_LIMIT, a percentage of free space (§8.1)
+free_limit = 0.10                # snapper FREE_LIMIT: a PERCENTAGE of free space (§8.1). A
+                             # TOML float, not a string, so 0.10 means ten-hundredths of a
+                             # percent -- 0.1% -- and never the 10% a string would invite
 keep_last = 7                    # the daily bucket's maximum, NOT a total (§8.1)
 kind = "slot"                    # one service per workload
 fork_from = ""                   # the track this one forks from; empty starts empty (§8.3)
@@ -389,8 +391,11 @@ open = [ "8080/tcp" ]            # public ports the admin grants this service. A
                                 # half-rendered
 
 [retention]
-keep_last = 7                    # overrides the track's default
-free_limit = "0.08"              # overrides the track's default
+keep_last = 7                    # the DAILY bucket's maximum; overrides the track's default
+free_limit = 0.08                # a percentage of free space; overrides the track's default
+weekly = 4                       # the ladder's other buckets, per-volume. `keep_last = 0` turns
+monthly = 6                      # off the daily bucket only, and these still keep twelve
+quarterly = 2                    # snapshots, so an operator who wants none sets them here
 
 [groups]
 add = ["video", "render"]        # supplementary groups for the service user
@@ -441,6 +446,8 @@ snapshots = 42                       # newest snapshot number; absent for a bulk
 
 [instances."feature\\x2dx"]      # instance tracks only: the escaped ref is the key
 created = "2026-09-28T18:03:11Z"
+publication = { web = 20120 }   # that instance's own publications, allocated per instance so two
+                                # instances of one service can both be routed at once
 seed    = { data = 38 }          # per state volume, by configuration name
 
 [generated]
@@ -478,7 +485,7 @@ The lock names, and the composite operation each one covers:
 | lock | held across |
 |---|---|
 | `registry` | a read of the registries, the change, and the write — for one service |
-| `projects` | a project's allowlist edit and the dispatch decision taken from it |
+| `projects` | a project's allowlist edit. **Not** the dispatch decision: `projects.toml` is root-owned `0444` and only root writes it, so a reader of it has nothing to serialise — `hose` takes this lock never, and §3.5's rule that a reader takes no lock is what makes that true rather than accidental |
 | `overrides` | a read of every service's overrides, the change, and the write |
 | `firewall` | **the whole render, the diff, and the install of `30-services.conf`** — without it two concurrent grants each render and the stale one installs last, silently dropping the other's rule |
 | `snapshots` | the mark reconciler **and** the cleanup unit (§8.5) |
@@ -487,6 +494,26 @@ The lock names, and the composite operation each one covers:
 | `deploy-<service>-<escaped-ref>` | the same, for one **instance**'s deploy. On a `kind = "instance"` track every instance of a service is deployed separately and is forked and rolled back separately, so one shared `deploy-<service>` lock would serialise an entire track's previews behind each other. The two names cannot collide: a `-` in a service name is a legal character, but the slot lock carries no ref and this one always does, and `<escaped-ref>` never contains a raw `/` |
 | `preview-cap` | counting instances and evicting, so two creates cannot both pass the cap |
 | `modules` | installing or removing a module's services, groups and grants |
+
+**Locks are taken in a fixed order, and the order is part of the contract.** Four of these
+compose, and without an order two mutations can deadlock instead of serialising. The order is:
+
+```
+modules  >  projects  >  overrides  >  registry  >  preview-cap  >  queue  >  firewall  >  deploy-*
+```
+
+Each program takes what it needs and releases before taking the next, and **never two at once**
+unless they are adjacent in that list and taken left to right. The compositions the order exists
+for: `weedr module add` takes `modules`, releases it, then calls `soil firewall --apply` which
+takes `firewall` — two locks, in sequence, never nested (§6.2). A preview create takes
+`preview-cap`, releases, then `registry`, releases, then its `deploy-<service>-<escaped-ref>`.
+`registry` is "for one service" and an add touches one service's registry plus possibly a
+provider's, so it takes them **one at a time in lexical order of service name**, never two — that
+is what "for one service" is for.
+
+`hose` takes none of these. It is not a member of the `guarden` group, so it could not open them
+even if it wanted to, and it needs none: it reads a root-owned `0444` allowlist to make a
+dispatch decision and writes nothing that a lock protects.
 
 `<escaped-ref>` in a lock name is the **same escaped form** as the registry's instance key
 (`feature\x2dx`, §3.4) and the instance directory's, so one escaping rule governs every place a
@@ -592,7 +619,9 @@ Validation rules:
 - Unknown top-level keys are refused, and so are unknown keys **inside** a known one. Each
   block has a closed key set: a `needs` entry takes `service`, `as`, `port` and `auth` and
   nothing else; a `routes` or `ports` entry takes `container` and `port`; a `widgets` entry
-  takes `container` and `file`; a `state`/`bulk` entry is a string. An unknown key inside one
+  takes `container` and `file`; a `provides` entry is a **single string naming a kind** —
+  `engine: postgres`, `auth: secret` — and nothing else, because a `provides` entry carries no
+  value and no structure; a `state`/`bulk` entry is a string. An unknown key inside one
   of them is refused **by name**, the same as an unknown top-level key. This was a gap: the
   rule covered only the top level, so a typo in a nested key was silently dropped and a
   manifest asking for `authentification: true` got a route with no auth on it and no diagnostic
@@ -856,7 +885,9 @@ no `soil users` phase: the two program users are created by `install`.
   written by exactly one program.
 
   **The dead-man timer is armed only by `--deadman`, and a plain `--apply` never arms it.** It
-  is fifteen minutes after which the firewall is opened wide, and it exists so that an operator
+  is fifteen minutes after which **`ferm` is stopped and the distribution's own firewall is
+  re-enabled** — the state the box was in before guarden touched it, which is the only posture
+  that is reliably "you can ssh back in" — and it exists so that an operator
   who has just locked themselves out can get back in. The flag is named here because the runbook
   told operators to use it while the interface did not define it, and a `soil` written to this
   spec would have rejected the one command that gets someone back in. Arming it is also the
@@ -905,7 +936,7 @@ weedr service list [--json]
 weedr service status <name[/ref]> [--json]
 weedr service snapshot <name> [--all]
 weedr service fork <target[/ref]> [--from <service>[@<number>]]
-weedr service rollback <name> --to <number>   # not on any sudoers rule
+weedr service rollback <name[/ref]> --to <number>   # not on any sudoers rule
 weedr service build <name> --from <dir>          # podman build, as the service user
 
 weedr secret set <name> <KEY>
@@ -914,6 +945,16 @@ weedr secret list <name> [--json]
 weedr port list [--json]
 weedr port open <name> <public-port>     # must match a ports: entry in the manifest
 weedr port close <name> <public-port>
+
+A `ports:` entry carries `container:` and `port:`, and **that `port:` is both the container's own
+port and the public port requested for it** — one number, two meanings, because a grant is a
+translation from the public port to the container's port and a peer-to-peer service exposes them
+the same. So `ports: [{ container: web, port: 8080 }]` asks for public port 8080 to reach
+container `web`, and `weedr port open <name> 8080` matches that entry by the number. The rule was
+undefined and could not be: the manifest stopped naming a public port when `ports:` gained a
+container key, and the verb's argument was left matching nothing. The registry's
+`[ports] requested` carries the same numbers, not `"8080/tcp"` strings, so the grant resolves
+against one shape.
 
 weedr pin sync                 # the privileged bridge into snapper (ADR-0007)
 
@@ -1036,6 +1077,15 @@ module is the failure this verb exists to prevent. In order, under the `modules`
 
 1. Refuse if any service the module installed is not the module's own — refused with exit `1`
    naming it. A module never removes a service it did not create.
+
+   **This is the one caller exempt from the gated-drop refusal.** `weedr module add gate` installs
+   `traefik-production` on a `gated = true` track, and `weedr service remove` is refused outright
+   there, so removing the module that installed it would otherwise be impossible. The exemption is
+   narrow and is not a flag: the module removes exactly the services in its own `[[services]]`
+   list, it is a root action, and removal moves volumes aside rather than deleting them
+   (§5.3). `weedr service purge` — the destructive verb — is not reachable from it, and the
+   operator is told on stdout which gated services were removed, because a module removal is not
+   something they did.
 2. For each of the module's services, `weedr service remove` them. Volumes are **moved aside**,
    never deleted, so a module removal is reversible with `weedr service add`; nothing here
    destroys data, and `weedr service purge` is not reachable from a module removal.
@@ -1194,7 +1244,16 @@ The steps, in this order, and the order is the point (ADR-0011):
 1. Render with `loom`.
 2. Build, if the unit source has a build instruction: `weedr service build <name> --from <the
    staged source>`, which runs `podman build` **as the service user**, tagged with the image
-   reference the manifest names. The build is a mutator verb because an unprivileged `furrow`
+   reference the manifest names.
+
+   **`--from` on `weedr service build` carries the same staging confinement as on
+   `weedr service add`, and the same `realpath` check.** This was a hole and it is the worst one
+   left: `podman build` executes arbitrary `RUN` steps, so an unconfined `build --from <dir>` lets
+   a `guarden` program — or a poke key, through the `(guarden)` hop — run code as any service uid
+   from a tree it chose, which is precisely the per-service-uid boundary the rest of the design
+   exists to hold. Confinement on `add` alone did not close it, because `build` is a separate verb
+   on the same sudoers rule and was simply not mentioned. The build is a mutator verb because an
+   unprivileged `furrow`
    cannot become the service user, and because the subuid range belongs to the service user and
    only it may map container-root into it. A failure exits `1` and the running container is
    still running.
@@ -1336,11 +1395,18 @@ the deploy.
 track is enforced root-side in `weedr service remove` against
 `/etc/guarden/allow-gated-drop` — `hose` never reads that file.
 
-**`hose` must not accept a `--project` argument at all**, and an invocation carrying one is exit
-`2` naming the key. A flag that is documented as the source of truth and also supplied by the
-client is a flag that will be supplied by the client, and this is the second time a
-client-controlled argument has been load-bearing in this program. The project comes from the
-forced command or from nowhere.
+**`--project` must appear exactly once in `argv`, and that occurrence is the forced command's.**
+This is the whole rule and it is the second time a client-controlled argument has been
+load-bearing in this program. sshd builds the command line by concatenating the forced command
+with whatever the client sent, so a legitimate invocation is exactly
+`hose --project <name> poke <ref> <sha>` and a client that sends nothing adds nothing. A client
+that sends `--project other` produces two occurrences, and **two is exit `2` naming the key** —
+which is the answer, and it is not "refuse any `--project`", because the forced command supplies
+one and refusing those would refuse every poke. Counting occurrences is what makes the forced
+command's value unforgeable: whichever of the two a parser reads, both are the same string in the
+legitimate case and the invocation is rejected in the illegitimate one. A parser that took the
+last occurrence would be wrong here, which is why the count is checked before the value is used
+and not instead of it.
 
 ### 6.8 `stakes` — pins
 
@@ -1380,6 +1446,28 @@ is not a surprise in a monitoring script.
 
 There is no long-running daemon. Every recurring job is a `.path` or a `.timer` unit running a
 oneshot.
+
+### 6.10 Start order
+
+A service's start order is expressed in the **system** manager, not in the user managers, and the
+mechanism is one target per service. A unit in one service's user manager cannot require a unit
+in another's — the two are different dependency graphs and systemd does not cross them — so a
+consumer's container units carry only an `After=guarden-order.target` drop-in, and the real edges
+live in a root-owned `<name>.target` per service:
+
+- **`guarden-order.target`**, `Wants=` every enabled service's target, installed in the root path.
+- **`<name>.target`**, `Wants=` and `After=` the targets of the services the manifest declared
+  under `needs:`. `loom` emits the edges; the mutator installs the file and converges
+  `/etc/systemd/system/<name>.target.wants/`.
+- The service's quadlet drop-in gains `After=guarden-order.target`, which is the only way a
+  user-manager unit can depend on something in the system manager.
+
+The edges are `Wants=`, not `Requires=`. A provider that is down does not prevent its consumers
+from starting; the consumer's first dial fails and it retries. A hard requirement would let one
+dead database take down everything that declares it. **No boot wave and no fixed delay**: a
+service with no edges starts in parallel with everything else, and the graph is a dependency
+graph, not a sequence. ADR-0011 is the binding decision.
+
 
 ---
 
@@ -1539,7 +1627,15 @@ with the accept rules above it. Order is the whole of it: accepts first, then on
 filter OUTPUT
   -A guarden-svc -o lo -d 127.0.0.1 --dport <pub> -m owner --uid-owner <allowed-uid> -j ACCEPT
   ... one per (publication, allowed uid) ...
-  -A guarden-svc -o lo -d 127.0.0.0/8 -m owner --uid-owner <every-service-uid> -j DROP
+  -A guarden-svc -o lo -d 127.0.0.0/8 -j DROP
+
+**The final rule matches no uid at all.** An earlier version put
+`-m owner --uid-owner <every-service-uid>` on it, which meant a uid that is not a service user —
+`guarden` itself, `hose`, an operator's own shell, a package's system user, anything on the box —
+matched nothing and, under a default `ACCEPT` policy, reached every publication and `sshd`. A
+default deny that enumerates who it applies to is not a default deny. The accepts carry the owner
+match because they are the only place a uid is named; the deny carries none because it is the
+rule that needs no exceptions.
 ```
 
 The accept set is the same one each publication already had, unchanged: the edge's uid for every
