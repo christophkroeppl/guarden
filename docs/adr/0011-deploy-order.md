@@ -2,7 +2,7 @@
 
 A deploy is a fixed sequence, and the order is the point:
 
-0. **Ensure the service exists.** If the registry has no entry, `weedr service add` runs first,
+0. **Ensure the service exists.** If the registry has no entry, `weedr service ingest` runs first,
    from the staged tree; it has no flag that could grant a port, because the grant is the
    separate verb `weedr port open`. This is where a poke creates a service.
 1. **Render.** `loom` turns the manifest plus the registry into units, and the mutator installs
@@ -65,6 +65,17 @@ means. **There is no fixed delay and no boot wave** — a service with no edges 
 parallel with everything else, and the graph is a dependency graph, not a sequence (spec §6.10). What this
 buys is the ordering that was previously promised and previously impossible, and the cost is one
 system target per service and a symlink directory to converge.
+
+**The credential gate is a state, not a moment, and it runs before the stop.** `weedr service
+gate <name>` evaluates it and changes nothing else; `weedr service start` re-evaluates it every
+time. So a push to a gated track with no credentials planted creates the service, builds the
+image, installs the units and **does not start the container** — and the deploy **exits 0**, so
+CI is green. The operator plants the credentials and runs `weedr service start`, and the service
+comes up without a second push. The gate's verdict is a registry field rather than a line in the
+journal, so `weedr service list` can say *why* a service is not running. Disabling the unit with
+systemd was considered and rejected: it is not the same condition (a non-gated track with a
+missing optional key must not be disabled), a service has N units, and `disable` does not stop an
+explicit start anyway.
 
 A consumer whose provider is down is *not* held up by this, and that is deliberate: the
 dependency is a `Wants=`, not a `Requires=`, so a failed provider does not prevent the consumer

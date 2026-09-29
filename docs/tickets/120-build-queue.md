@@ -23,8 +23,8 @@ build or a failed gate leaves the running container running.
 - [ ] A manifest cannot state a priority: there is no key for it, and one is refused by name
 - [ ] N identical requests for one service and sha collapse into one build
 - [ ] The **order is ensure, render, build, gate, stop, install, start**, and the call log shows
-      it in that order. Step zero is `weedr service add` from the staged tree without
-      `weedr service add` when the registry has no entry — a verb with no grant flag on it, and
+      it in that order. Step zero is `weedr service ingest` from the staged tree without
+      `weedr service ingest` when the registry has no entry — a verb with no grant flag on it, and
       that is how a poke creates a service without being able to open a port
 - [ ] **The build step is the mutator verb `weedr service build <name> --from <the staged
       source>`, and `furrow` never invokes podman.** The build runs as the service user, tagged

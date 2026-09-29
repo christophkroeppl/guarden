@@ -78,10 +78,10 @@ paths is ticket 40, and both are needed before the edge is complete.
       and conntrack unwinds the translation on the reply. A masquerade would match no packet in
       either direction. The service sees the client's real address as its peer, which is
       recorded so nobody "fixes" it with an INPUT SNAT
-- [ ] `weedr service add` never grants a port, because it has no flag that can. The grant is
+- [ ] `weedr service ingest` never grants a port, because it has no flag that can. The grant is
       `weedr port open`, which is not on `furrow`'s sudoers rule, so a poke leaves the requested
       ports pending and a `warning:` line names them and the exact command to run
-- [ ] `weedr service add` never grants a port the manifest did not request
+- [ ] `weedr port open` never grants a port the manifest did not request
 - [ ] For a database edge, `weedr` creates one role and one database in the provider, mints the
       password, plants it as a podman secret in the consumer's store, and generates the
       `DB_HOST`, `DB_PORT` and `DB_PASSWORD` variables for the consumer

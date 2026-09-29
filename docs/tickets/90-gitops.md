@@ -36,14 +36,15 @@ The box takes the source, maps the ref to an environment from a root-owned allow
       argument parser and deploy another repository's project with their own key
 - [ ] `hose drop <ref>` **derives** the service name from the project and the ref and never
       accepts one, so a key for one project cannot drop another project's instance
-- [ ] **`furrow deploy --from` and `weedr service add --from` both refuse any path that does not
-      resolve under `/var/lib/guarden/staging/`.** The mutator's copy is the control: `guarden`
-      can write the queue directory, so a compromised `guarden` program must not be able to hand
-      the root mutator a tree it controls
+- [ ] **No verb takes a path.** `weedr service ingest <name> --from poke <project>@<sha>` builds
+      `/var/lib/guarden/staging/<project>/<sha>` itself from a project validated against
+      `projects.toml` and a hex sha, and `weedr service add --from <service>` copies a service
+      tree. `weedr service build` takes no `--from`. There is nothing to confine, because a
+      caller can no longer choose a location — a poke can only ship its own tree
 - [ ] `hose poke <ref> <sha>` unpacks the tar archive on stdin into
       `/var/lib/guarden/staging/<project>/<sha>/` — keyed by project, so the path exists before
       any service does — creates the service and instance the allowlist permits, and calls
-      `furrow deploy`, whose `weedr service add` carries no flag that could grant a port
+      `furrow deploy`, whose `weedr service ingest` carries no flag that could grant a port
 - [ ] **The archive is unpacked safely and the test says so:** as a non-root user under
       `umask 022`, with absolute member names refused, `..` components refused, no preserved
       ownership or timestamps from the archive, and no symlink followed. A member that would

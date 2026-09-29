@@ -45,19 +45,15 @@ sudoers rule naming X" is that X runs as root, which would have made `furrow`, t
 handles repository-supplied paths, a root program:
 
 ```
-guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service add, \
-    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service start, \
+guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service ingest, \
+    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service gate, \
+    /usr/lib/guarden/bin/weedr service start, \
     /usr/lib/guarden/bin/weedr service stop, /usr/lib/guarden/bin/weedr service restart, \
-    /usr/lib/guarden/bin/weedr service snapshot, /usr/lib/guarden/bin/weedr service fork, \
+    /usr/lib/guarden/bin/weedr service snapshot, \
     /usr/lib/guarden/bin/weedr service build, \
     /usr/lib/guarden/bin/weedr secret list, /usr/lib/guarden/bin/weedr port list, \
     /usr/lib/guarden/bin/weedr service list, /usr/lib/guarden/bin/weedr service status, \
     /usr/lib/guarden/bin/weedr module list
-
-hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy, \
-    /usr/lib/guarden/bin/furrow preview drop, /usr/lib/guarden/bin/furrow queue list, \
-    /usr/lib/guarden/bin/furrow status, /usr/lib/guarden/bin/weedr service list, \
-    /usr/lib/guarden/bin/weedr project list
 ```
 
 The `(root)` is the mutator, and the verbs named are exactly the lifecycle and read verbs plus
@@ -364,8 +360,11 @@ from the project and the ref, so a key for one project cannot drop another proje
 
 **A `--from` outside staging is refused by the mutator, not only by the deployer.** `guarden`
 runs unprivileged and can write into the queue directory, so a compromised or buggy `guarden`
-program could hand `weedr service add` a tree it controls — which the mutator would then render
-into root-owned units. `weedr service add` resolves `--from` with `realpath` and refuses
+program could hand the mutator a tree it controls — which would then be rendered
+into root-owned units. No verb takes a path at all: `weedr service ingest` builds the staging
+path itself from a validated project and a hex sha, `weedr service add --from <service>` copies
+a service tree, and `weedr service build` takes no `--from`. `weedr service add` resolves
+`--from` with `realpath` and refuses
 anything outside `/var/lib/guarden/staging/`, so the confinement holds whoever asked.
 
 ### 2.11 Write discipline
@@ -404,7 +403,7 @@ Stated plainly, because a reader who knows the edges can use the system correctl
 | **An instance of a preview service reading its siblings** | They share a uid. Narrow the allowlist for a repository with outside contributors, or give the fork its own service. |
 | **Root on the box** | Out of scope. A host-key credential is decryptable by root. |
 | **A dependency compromise inside a container** | The per-service uid contains it to that service. It does not contain what the service itself can reach. |
-| **A leaked CI key reaching a production deploy** | A poke *may* create and deploy a service in a gated track, and the gate then refuses to start it until the operator plants credentials. It may never drop one in a gated track, and it may never open a port or destroy data. Each of those is a verb the sudoers rule does not name, and no verb the rule does name carries a flag that reaches one. The refusal to drop is enforced root-side in `weedr service remove` against `/etc/guarden/allow-gated-drop` and has no override flag; `hose` never reads that file, and never reaches that verb directly. |
+| **A leaked CI key reaching a production deploy** | A poke *may* create and deploy a service in a gated track, and the gate then holds the start — the deploy exits `0` and the service waits, with the reason in the registry, until the operator plants credentials and runs `weedr service start`. A CI key cannot open a production service's gate: the gate is a mutator verdict and only `weedr service start` lifts it, and a start needs root. It may never drop one in a gated track, and it may never open a port or destroy data. Each of those is a verb the sudoers rule does not name, and no verb the rule does name carries a flag that reaches one. The refusal to drop is enforced root-side in `weedr service remove` against `/etc/guarden/allow-gated-drop` and has no override flag; `hose` never reads that file, and never reaches that verb directly. |
 | **A full disk** | Under real disk pressure, marked snapshots are reaped oldest first, and the ladder's ranges are ranges, so the free-space pass keeps only their minimum too. That is intended: it means the disk is nearly full, which is the signal worth having. `weedr service list --json` reports the per-volume counts and the effective limits; `stakes list --json` reports the pin files and the services naming each as a seed, because `stakes` cannot read a state volume. Disk monitoring is backlog. |
 | **Malformed configuration being acted on** | The reconciler stops rather than clearing anything when its state cannot be read, and a renderer refuses rather than guesses. Both fail towards doing less. |
 

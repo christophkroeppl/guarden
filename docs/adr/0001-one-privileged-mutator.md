@@ -37,19 +37,15 @@ root — which would have made `furrow`, the program that handles repository-sup
 program:
 
 ```
-guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service add, \
-    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service start, \
+guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service ingest, \
+    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service gate, \
+    /usr/lib/guarden/bin/weedr service start, \
     /usr/lib/guarden/bin/weedr service stop, /usr/lib/guarden/bin/weedr service restart, \
-    /usr/lib/guarden/bin/weedr service snapshot, /usr/lib/guarden/bin/weedr service fork, \
+    /usr/lib/guarden/bin/weedr service snapshot, \
     /usr/lib/guarden/bin/weedr service build, \
     /usr/lib/guarden/bin/weedr secret list, /usr/lib/guarden/bin/weedr port list, \
     /usr/lib/guarden/bin/weedr service list, /usr/lib/guarden/bin/weedr service status, \
     /usr/lib/guarden/bin/weedr module list
-
-hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy, \
-    /usr/lib/guarden/bin/furrow preview drop, /usr/lib/guarden/bin/furrow queue list, \
-    /usr/lib/guarden/bin/furrow status, /usr/lib/guarden/bin/weedr service list, \
-    /usr/lib/guarden/bin/weedr project list
 ```
 
 `furrow` is unprivileged and calls root `weedr` to install units and start services, and it is

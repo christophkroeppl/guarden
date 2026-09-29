@@ -1,6 +1,6 @@
 # 30: weedr — identities, service roots, configuration
 
-**What to build:** `weedr service add` and `weedr service remove` create and destroy everything
+**What to build:** `weedr service ingest` and `weedr service remove` create and destroy everything
 that makes a service a service: the registry record, the system user, the home, the quadlet
 directory, and the subvolumes and snapper configurations for its declared state volumes.
 Configuration is read from the root-owned files, and never written by us.
@@ -15,7 +15,8 @@ Configuration is read from the root-owned files, and never written by us.
       **track**. A service name whose last `-`-separated segment is not one of the table's `name`
       values is refused naming both the name and the known tracks. The three shipped rows are
       defaults, not a list in the code, so appending a `preprod` block needs no change here
-- [ ] `weedr service add <name>` parses the environment from the last `-`-separated segment and
+- [ ] `weedr service ingest <name> --from poke <project>@<sha>` and `weedr service add <name>
+      --from <service>` both parse the environment from the last `-`-separated segment and
       refuses a name that carries none, an unknown environment, a name over 31 characters, or a
       name containing `..`. **The 31-character limit is on the service name, not on `project`**:
       `project` has no limit of its own, and what is checked is the resulting service name
@@ -111,7 +112,7 @@ Configuration is read from the root-owned files, and never written by us.
       instead of moving them, requires a terminal, names every volume it is
       about to destroy before it does, and **is refused for an instance**, because an instance's
       volumes are the service's data and purging one would destroy it
-- [ ] A second `weedr service add` of a converged service exits 0, prints `converged`, and
+- [ ] A second `ingest` or `add` of a converged service exits 0, prints `converged`, and
       produces no calls in the log
 - [ ] Every state file is written with the spec §3.5 protocol and the call log shows the
       temporary file created in the target directory and renamed

@@ -33,6 +33,16 @@ The box keeps no git state — no clone, no checkout, no working tree. The sourc
 the poke, is unpacked into a per-sha staging directory, and is handed to the build. The
 authoritative state is the services plus the deployed sha in each service's registry.
 
+**This is also why a service's tree comes from exactly two places, and neither is a path an
+argument can name**: a poke's staged tree (`weedr service ingest <name> --from poke
+<project>@<sha>`, where the mutator builds the path from a validated project and a hex sha) or a
+copy of another service's (`weedr service add <name> --from <service>`, root only). There is
+**no `--from git <url>` and no `--from <path>`**. A private repository is therefore a non-event
+rather than a special case — CI holds the credential, and the box holds no forge token, no
+deploy key and no `.netrc` to steal. And because `--from <service>` is root-only, a branch can
+never create a service out of another service's tree, so a compromised `guarden` program cannot
+promote a staging manifest into production.
+
 There is no drift check. Reconciling on a timer needs a read credential stored on the box,
 which would put a GitHub credential on a server whose entire credential story is that it holds
 none, and it would recover a lost poke for an operator who is also the person pushing the

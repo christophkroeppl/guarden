@@ -108,7 +108,7 @@ schema: .guarden/.env.schema
 Then, on the box:
 
 ```sh
-weedr service add myapp-production --from /path/to/myapp
+weedr service add myapp-production --from myapp-staging   # copy that service's setup
 ```
 
 One command creates the Linux user, the home, a subvolume for `pgdata` with its own snapshots,
@@ -157,9 +157,14 @@ kind = "slot"
 ### A gated track says yes first
 
 ```sh
-weedr service add myapp-production --from .
+weedr service add myapp-production --from myapp-staging     # copy staging's setup
 weedr service remove myapp-production                       # refused: gated track; alias: rm
 ```
+
+`--from` names a **service**, never a folder. There is no path in this interface, and no
+`--from git <url>` either — CI holds the credential and pushes a tarball, so the box never
+authenticates to a forge. A brand-new project is created by a push to `main`; `weedr service
+add` is how you copy one service's setup onto another track.
 
 Staging and preview do not ask. `weedr service add myapp` with no environment defaults to
 **staging**, never to a gated track, so a forgotten argument cannot create one.
@@ -216,7 +221,7 @@ and the module owns the choice either way.
 
 ```sh
 weedr service list                       # what is running, and what is waiting
-weedr service add myapp-staging --from .
+weedr service add myapp-staging --from myapp-production
 weedr service start|stop|restart myapp-staging
 weedr service remove myapp-staging       # alias: weedr service rm
 weedr service purge myapp-staging                     # the only way data dies
@@ -224,7 +229,7 @@ weedr service purge myapp-staging                     # the only way data dies
 weedr service snapshot myapp-production  # take a snapshot, without stopping anything
 weedr service rollback myapp-production --to 41
 weedr service fork myapp-staging --from myapp-production
-weedr service build myapp-staging --from .   # podman build, as the service user
+weedr service build myapp-staging            # podman build, as the service user, from its own home
 
 weedr secret set myapp-production STRIPE_KEY
 weedr secret list myapp-production
@@ -236,7 +241,7 @@ stakes pin myapp-production:pgdata@41 "before the risky change"
 stakes list                              # pin files it owns, and which services name each as a seed
 weedr service list --json                # per state volume: totals, marked, oldest, newest, limits
 
-furrow deploy myapp-production --from . --sha "$(git rev-parse --short HEAD)"
+furrow deploy myapp-production --from poke myapp@"$(git rev-parse --short HEAD)"
 furrow queue list
 
 hose poke main 9f2c1ab < site.tar.gz   # what a project's CI sends; the project comes
@@ -314,7 +319,7 @@ production, a preview forks from staging.** A repository cannot change that, and
 A preview is a directory inside one preview service, not a service of its own:
 
 ```sh
-weedr service add myapp-preview/feature-login --from /path/to/myapp
+weedr service add myapp-preview/feature-login --from myapp-staging
 weedr service remove myapp-preview/feature-login      # one instance; alias: rm
 ```
 

@@ -48,7 +48,8 @@ filesystem, the installed services and the remote are the host. So:
 | a `needs:`/`provides:` disagreement where the provider exists but does not offer the kind | `1` — the answer came from the host |
 | a requested port already held by another service | `1` |
 | a snapshot that is gone, or absent from one of the volumes a fork needs | `1` |
-| a gate failure on a gated track | `1` |
+| `weedr service start` on a gated track whose gate is blocked | `1` — you asked to start it and it cannot |
+| a deploy whose gate is blocked, the deploy itself | `0` — the service exists and is waiting (§6.6) |
 
 Nothing else writes `2`. A diagnostic names the thing it is about: the service, the key, the
 port, the file, the line. A deploy that succeeds with warnings exits `0`.
@@ -450,6 +451,14 @@ publication = { web = 20120 }   # that instance's own publications, allocated pe
                                 # instances of one service can both be routed at once
 seed    = { data = 38 }          # per state volume, by configuration name
 
+[gate]
+state   = "ready"                # ready | blocked | not-required
+reason  = "missing required key: DB_PASSWORD"   # present only when blocked
+checked = "2026-09-29T10:12:03Z"  # when the verdict was last taken, by `weedr service gate`
+                                     # or by `weedr service start` re-checking. A service whose
+                                     # gate has never been evaluated has no [gate] table at all,
+                                     # which is not the same as `ready`
+
 [generated]
 "API_KEY" = "2026-09-29T10:12:00Z"   # a value guarden minted, not one a human planted. Once
                                       # minted it is indistinguishable from a planted value, so
@@ -748,7 +757,7 @@ receives is `<name>:<publication>`.
 ### 5.2 Instances
 
 An instance is a preview of one service, named by the ref it tracks. **Every verb takes the
-ref raw**, and escaping is internal: `weedr service add myapp-preview/feature-login --from <dir>`
+ref raw**, and escaping is internal: `weedr service ingest myapp-preview/feature-login --from poke <project>@<sha>`
 and `furrow preview drop myapp-preview feature-login` both take `feature-login`, and the directory,
 the unit name and the registry key are all `systemd-escape` of it, so `feature/x` and
 `feature-x` can never collide.
@@ -774,9 +783,38 @@ who can push to the repository, which is the case that actually matters.
 
 ### 5.3 What a service owns
 
-`weedr service add <name>[/ref] --from <dir>` — `--from` is **required**. A service is created
-from a manifest on disk, and guarden never infers where a manifest is. `weedr service add` is
-also the reconcile command: run it again with `--from` to apply an edited manifest.
+**A service's tree comes from exactly one of two places, and never from a path an argument names.**
+
+```
+  weedr service ingest <name[/ref]> --from poke <project>@<sha>    on the guarden rule
+      └ CI's tree, already on the box. The system builds the path.
+
+  weedr service add <name[/ref]> --from <service>                   root only
+      └ copy that service's manifest and unit source
+```
+
+There is **no `--from <path>`**, and that is the whole security argument rather than a
+convention. An earlier revision took a directory, and the entire problem it created was that a
+caller could then *choose a location*: a path is the one argument in this interface that can
+mean something other than what it says, and every mitigation for it was a check — staging
+confinement, a `realpath` resolution, a symlink refusal, a uid-conditional allowance. A service
+name and a `<project>@<sha>` pair are not paths. The system resolves them to locations it already
+owns, and there is nothing left to confine.
+
+Two consequences, and they are the reason this is the shape rather than a preference:
+
+- **The box never authenticates to a forge.** There is no git clone form, so a private repository
+  is not a special case — CI holds the credential, pushes a tarball, and `hose` receives it. That
+  removed the need for a deploy key, a token or an `.netrc` on the host, which was the reason
+  `--from git` was awkward in the first place.
+- **A poke cannot promote anything but itself.** `--from <service>` is root-only and `ingest` has
+  no such form, so a branch can never create a service out of another service's tree. It ships
+  its own tree, into a track the allowlist approves. A compromised `guarden` program cannot
+  promote a staging manifest into production either, which was possible while `weedr service
+  fork --from` was on the same rule as the verbs a deploy needs.
+
+`ingest` requires its two arguments. `add` requires `--from`, and is also the reconcile command:
+run either again to apply an edited manifest.
 
 In order:
 
@@ -807,11 +845,19 @@ In order:
    a podman secret in the **consumer's** store, and nothing in the provider's. For a `secret`
    edge, a minted secret planted in both, because the provider has to be able to verify it.
 11. Units, rendered by `loom` and installed by the mutator.
-12. A fork, when the track forks (§8.3).
+12. **A fork, when the track forks — as an internal step of this command, from the track's
+    `fork_from` field and nothing else.** §8.3 has the rules; the two that matter here are that
+    **`production` has `fork_from = ""` and therefore starts empty, and a production service
+    never forks from staging**, and that the source is read from the field rather than from any
+    argument. The fork is a step of creation rather than a verb a deployer invokes, precisely so
+    that the override and the automatic path cannot be the same call: `weedr service fork` with
+    its `--from` override is root-only and is *not* on the `guarden` rule (§5.1), so a poke
+    cannot ask for a fork at all, let alone one out of staging into production. An operator
+    wanting that does it deliberately, by hand, and it is the `weedr service fork` verb.
 13. A re-render of the edge's routes and the dashboard, at the end of the command (§6.9).
 
-Every step is idempotent. A second `weedr service add` of a converged service exits `0`, says
-it converged, and changes nothing.
+Every step is idempotent. A second `ingest` or `add` of a converged service exits `0`, says it
+converged, and changes nothing.
 
 `weedr service remove <name>` removes a whole service: it reverses all of it, moves each state
 and bulk subvolume to `/var/lib/guarden/removed/<service>/<time>/<vol>/` rather than deleting
@@ -928,16 +974,21 @@ no `soil users` phase: the two program users are created by `install`.
 ### 6.2 `weedr` — the privileged mutator
 
 ```
-weedr service add <name[/ref]> --from <dir>
+weedr service ingest <name[/ref]> --from poke <project>@<sha>
+weedr service add <name[/ref]> --from <service>
 weedr service remove <name[/ref]>
 weedr service purge <name>                 # the only destructive verb; not on any sudoers rule
-weedr service start|stop|restart <name[/ref]>
+weedr service gate <name[/ref]>            # evaluate the credential gate; change nothing else
+weedr service start|stop|restart <name[/ref]>   # start re-evaluates the gate
 weedr service list [--json]
 weedr service status <name[/ref]> [--json]
 weedr service snapshot <name> [--all]
-weedr service fork <target[/ref]> [--from <service>[@<number>]]
+weedr service fork <target[/ref]> [--from <service>[@<number>]]   # the override; root only
 weedr service rollback <name[/ref]> --to <number>   # not on any sudoers rule
-weedr service build <name> --from <dir>          # podman build, as the service user
+weedr service build <name>                    # podman build, as the service user, from its own
+                                              # home. It takes no --from: a build has exactly one
+                                              # tree it is ever allowed to build, and it is the
+                                              # service's
 
 weedr secret set <name> <KEY>
 weedr secret list <name> [--json]
@@ -1205,7 +1256,7 @@ purpose.
 ### 6.6 `furrow` — the deploy queue
 
 ```
-furrow deploy <name[/ref]> [--from <dir>] [--sha <sha>] [--now]
+furrow deploy <name[/ref]> [--from poke <project>@<sha>] [--sha <sha>] [--now]
 furrow preview drop <name> <ref>
 furrow queue list [--json]
 furrow queue show <service>
@@ -1218,53 +1269,70 @@ one. `--now` skips queue position for this request only. Queue state is a direct
 under `/var/lib/guarden/queue`, so `ls` answers what is waiting and a reboot does not lose an
 accepted request.
 
-**`--from` is required when the service does not exist, and forbidden outside staging.** It
-takes a directory that must resolve, after `realpath`, to somewhere under
-`/var/lib/guarden/staging/`, and anything else is exit `2` naming the path. This check lives in
-`furrow` **and** in `weedr service add`, and the reason it is duplicated is that the second
-copy is the one that matters: `furrow` runs as `guarden`, and `guarden` can write into the
-queue directory, so a compromised or buggy `guarden` program can hand `weedr` a directory it
-controls. `weedr service add` then renders that manifest and installs units from it **as
-root**. The confinement is therefore stated at the mutator, where it holds regardless of who
-asked, and `furrow`'s copy is a convenience rather than the control. Without the check, a
-compromised `guarden` program — or a poke key, via the `(guarden)` hop — chooses the tree that
-becomes root-owned units.
+****`--from` is required when the service does not exist, and it never takes a path.** The only
+form is `poke <project>@<sha>`, and the mutator builds
+`/var/lib/guarden/staging/<project>/<sha>` itself. `<project>` is checked against the project's
+`projects.toml` entry and `<sha>` must be hex, so **the path is assembled by the system from two
+validated components and there is nothing for a caller to traverse out of.** This replaces a
+staging-confinement design that was correct and needless: `--from <dir>` made the caller choose a
+location, and the only question was how much checking to wrap around it.
+
+Two rules follow from the type rather than from a check. **A `furrow deploy` with no `--from` and
+no registry entry is exit `1` naming the service** — not a silent redeploy of whatever exists,
+and not a path taken from the current directory. And **a hand-run `furrow deploy` names a
+project and a sha, never a folder**, so an operator at a terminal uses the same two-argument form
+CI does and there is no second, looser path for a human to take.
 
 `--from` **may** be omitted when the registry already has an entry, in which case the render
 uses the manifest and unit source already in the service's home and `--sha` records what is
-being deployed. That is the re-deploy case. A `<name>` typo with no `--from` and no entry is
-exit `1` naming the service, not a silent redeploy of whatever exists.
+being deployed. That is the re-deploy case.
 
 The steps, in this order, and the order is the point (ADR-0011):
 
 0. **Ensure the service exists.** If the registry has no entry, call
-   `weedr service add <name> --from <staged tree>`. It takes no flag that can grant a port,
-   because that is a different verb (§5.1). This is where a
-   poke creates a service, which is why `hose` needs no `weedr` verb at all.
+   `weedr service ingest <name> --from poke <project>@<sha>` with the sha the poke carried.
+   The mutator resolves that pair to `/var/lib/guarden/staging/<project>/<sha>` itself; `furrow`
+   never names a path, and neither does any other caller. This is where a poke creates a service,
+   which is why `hose` needs no `weedr` verb at all.
 1. Render with `loom`.
-2. Build, if the unit source has a build instruction: `weedr service build <name> --from <the
-   staged source>`, which runs `podman build` **as the service user**, tagged with the image
+2. Build, if the unit source has a build instruction: `weedr service build <name>`, which runs
+   `podman build` **as the service user** on the service's own tree, tagged with the image
    reference the manifest names.
 
-   **`--from` on `weedr service build` carries the same staging confinement as on
-   `weedr service add`, and the same `realpath` check.** This was a hole and it is the worst one
-   left: `podman build` executes arbitrary `RUN` steps, so an unconfined `build --from <dir>` lets
-   a `guarden` program — or a poke key, through the `(guarden)` hop — run code as any service uid
-   from a tree it chose, which is precisely the per-service-uid boundary the rest of the design
-   exists to hold. Confinement on `add` alone did not close it, because `build` is a separate verb
-   on the same sudoers rule and was simply not mentioned. The build is a mutator verb because an
-   unprivileged `furrow`
-   cannot become the service user, and because the subuid range belongs to the service user and
-   only it may map container-root into it. A failure exits `1` and the running container is
-   still running.
-3. Gate. For a gated track, every `@required` key in the schema exists as a podman secret with a
-   value that is neither empty, nor prefixed `EXAMPLE-`, nor equal to `changeme`: a failure
-   exits `1` and names the key, and the running container is still running. For a track with
-   `gated = false`, a missing or example value produces a `warning:` line naming the key and
-   the start proceeds — that is the whole difference between the two, and it is the only
-   difference.
+   **`weedr service build` takes no `--from`, and that is the fix rather than a restriction.** It
+   used to take one, and the staging confinement written for `weedr service add --from` was never
+   copied to it — a separate verb on the same sudoers rule, simply not mentioned, and
+   `podman build` executes arbitrary `RUN` steps, so an unconfined `build --from <dir>` let a
+   `guarden` program, or a poke key through the `(guarden)` hop, run code as any service uid from
+   a tree it chose. A build has exactly one tree it is ever allowed to build and it is the
+   service's own, so the argument is gone rather than confined. The build is a mutator verb
+   because an unprivileged `furrow` cannot become the service user, and because the subuid range
+   belongs to the service user and only it may map container-root into it. A failure exits `1`
+   and the running container is still running.
+3. **Gate, before the stop.** `weedr service gate <name>` evaluates the credential gate and
+   changes nothing else: for a gated track, every key the schema requires exists in the service's
+   own podman secret store with a value that is neither empty, nor prefixed `EXAMPLE-`, nor
+   equal to `changeme`. It records the verdict in the registry and returns. It is a mutator verb
+   because the store is inside the service's `0700` home and only root can read it — an earlier
+   revision had `furrow` evaluate the gate, which no permitted verb could support, since the only
+   secret-reading verb on its rule returns booleans and never a value.
+
+   **A blocked gate does not fail the deploy.** The deploy has done what it was asked: the
+   service exists, the image is built, the units are installed, and the container is not started.
+   So `furrow` reports `warning: deployed, waiting for the credential gate — reason: …` and
+   **exits `0`**. A red X on every push until the operator plants credentials is noise, and noise
+   teaches people to want the gate gone. The operator then plants the credentials and runs
+   `weedr service start <name>`, which re-evaluates the gate and starts if it now passes. **No
+   second push is needed**, and the gate's verdict — which until now existed only in the journal
+   — is a field in the registry.
+
+   For a track with `gated = false`, a missing or example value produces a `warning:` line naming
+   the key, the gate records `not-required`, and the start proceeds. That is the whole difference
+   between the two tracks, and it is the only difference.
 4. Stop the units.
-5. Install the rendered units, record the sha, reload the user manager, start.
+5. Install the rendered units, record the sha, reload the user manager, start — and `start`
+   re-evaluates the gate, so a service that was blocked and is now unblocked starts here without
+   anything else having to notice.
 
 Only builds are queued. A deploy that pulls a prebuilt image competes for no resource with
 anything and does not go behind a build lane.
@@ -1273,10 +1341,11 @@ anything and does not go behind a build lane.
 in full, because "unprivileged" is a property of the file and not of the reader's assumption:
 
 ```
-guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service add, \
-    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service start, \
+guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service ingest, \
+    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service gate, \
+    /usr/lib/guarden/bin/weedr service start, \
     /usr/lib/guarden/bin/weedr service stop, /usr/lib/guarden/bin/weedr service restart, \
-    /usr/lib/guarden/bin/weedr service snapshot, /usr/lib/guarden/bin/weedr service fork, \
+    /usr/lib/guarden/bin/weedr service snapshot, \
     /usr/lib/guarden/bin/weedr service build, \
     /usr/lib/guarden/bin/weedr secret list, /usr/lib/guarden/bin/weedr port list, \
     /usr/lib/guarden/bin/weedr service list, /usr/lib/guarden/bin/weedr service status, \
@@ -1302,6 +1371,20 @@ each capability its own verb:
   that deletes them is `weedr service purge`, and it is not on the rule. No program that answers
   a poke can destroy data, and the sudoers file is where that is true rather than a sentence
   beside it.
+- **`weedr service fork` and `weedr service add` are both off the rule, and that is what makes
+  production's empty lineage structural.** Both carry a source, and the source is the only thing
+  that can change where a service's tree or data comes from. The automatic fork on a
+  `fork_from` track is a *step inside `weedr service ingest`*, not a verb the deployer calls, so
+  there is no `fork --from` for a poke to reach — and `production` has `fork_from = ""`, so an
+  ingest of a production service starts it empty and a poke cannot ask for anything else. An
+  operator who wants to fork a staging database into production does it by hand with the root
+  `weedr service fork <target> --from myapp-staging`, which is deliberate, recorded in the
+  call log, and not something a workflow key can do.
+- **`weedr service gate` is on the rule and that is safe**, because it *evaluates and changes
+  nothing*: it reads the schema and the service's own secret store, records a verdict, and
+  returns. The gate it records is re-evaluated by `weedr service start` every time, so a wrong
+  verdict — the only thing a compromised `guarden` program could produce here — cannot start
+  anything, and the worst case is a stale line in the registry.
 - **`weedr service rollback` was removed from the rule.** It replaces a service's current volumes
   with a clone of an old snapshot, so it is destructive in the way `purge` is, and it used to be
   gated only by a `--yes` the rule could not distinguish from any other argument. `furrow` never

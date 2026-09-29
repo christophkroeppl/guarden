@@ -167,7 +167,10 @@ a new ADR that supersedes it. The short version:
   carries no `LoadCredentialEncrypted=`,** because it runs in the *service user's* user manager,
   which cannot read a `0600 root` system host key and has no business holding it. The renderer
   never emits a value, because it has none. The gate on a gated track runs before the old
-  container stops, and so does the build.
+  container stops, and so does the build. **A blocked gate is a state, not a failure**: the
+  deploy exits `0`, the service is installed and waiting, `[gate] reason` in the registry says
+  why, and `weedr service start` re-checks and starts once the operator has planted the
+  credentials. Do not disable the unit instead — see the runbook.
 - Every mutation that renders a shared file holds one lock across render, diff and install, or
   a stale render can install last and drop what the previous mutation granted. `guarden.toml` has
   three writers, not one — `weedr module add` appends to `[modules] enabled`, and `soil install`
@@ -188,7 +191,7 @@ a new ADR that supersedes it. The short version:
   spec — and every other document points at it. When you change a rule, grep for it.
 - **No verb on the privileged surface carries a flag that widens authority.** A sudoers rule
   naming a command without an argument specification matches any arguments, and sudoers has no
-  negation, so `--grant-ports` on `weedr service add` could never have been withheld — the grant
+  negation, so `--grant-ports` on a service-creating verb could never have been withheld — the grant
   already permitted it. The capabilities are therefore verbs: a grant is `weedr port open`,
   destruction is `weedr service purge`, and `weedr service rollback` is not on the rule at all.
   Every verb that is granted is granted whole. Write the long form in every call site, every

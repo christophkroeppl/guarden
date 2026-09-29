@@ -72,3 +72,19 @@ ingress, with nothing else in the way.
       from the box itself never reaches the forwarding rules. Over http, since a throwaway
       machine cannot complete ACME
 - [ ] `just test` exits 0 and stays in seconds
+
+- [ ] **`weedr service gate <name>` evaluates and changes nothing else**: it reads the schema and
+      the service's own secret store, writes `[gate] state`/`reason`/`checked` to the registry,
+      and returns. It is a mutator verb because the store is inside a `0700` home
+- [ ] **A blocked gate is a state, not a failed deploy.** A push to a gated track with a missing
+      required key creates the service, builds, installs, does **not** start the container, and
+      `furrow` **exits `0`** with a `warning:` naming the missing key
+- [ ] **`weedr service start` re-evaluates the gate every time**, so an operator who plants the
+      credential and runs it starts the service with no second push. A raw `systemctl --user
+      start` bypasses it, and that is stated as a deliberate act by someone with those powers
+- [ ] `weedr service list` distinguishes **blocked** from **crashed** from **never started**, in
+      words, and prints the `[gate] reason` for a blocked one
+- [ ] A service with **no** `[gate]` table has never been evaluated, which is reported as
+      "not evaluated" and is not the same as `ready`
+- [ ] On a `gated = false` track the same missing key is one `warning:` line, the gate records
+      `not-required`, and the start proceeds

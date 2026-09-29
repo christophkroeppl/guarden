@@ -3,7 +3,7 @@
 A service owns a Linux user of the same name, with a home under
 `/var/lib/guarden/services/<name>/home`, linger enabled, and a subuid/subgid range allocated
 by the system rather than by us. The user is a system user, has no login shell, and is
-created and destroyed only by `weedr service add` and `weedr service remove`.
+created and destroyed only by `weedr service ingest` and `weedr service remove`.
 
 **Every directory a program writes into is `0770`; the `0750` this document previously gave
 `queue/` and `stakes/` was a defect, not a tight default.** Group bits of `r-x` on a directory
@@ -54,7 +54,7 @@ twenty users, twenty homes, twenty subuid ranges and twenty image stores. The co
 worth stating: instances of one service are one trust domain, and a malicious instance can read
 the others' directories and credentials. That is acceptable for one operator's own forks and
 would not be for untrusted outside pull requests; a fork from a stranger should be its own
-service, and `weedr service add <fork>-preview` is the way to get that.
+service, and `weedr service ingest <workload>-preview/<ref>` is the way to get that.
 
 Homes live under `/var/lib/guarden` rather than `/home` for three reasons: the service's
 whole world is one deletable directory; it sits on one btrfs subvolume rather than several; and

@@ -71,6 +71,17 @@ connection tracking unwinds the translation on the reply. Publications and grant
 deduplicated into one firewall render.
 _Avoid_: ingress, opening, endpoint
 
+**gate**:
+The credential check on a track with `gated = true`: every key the schema requires must exist in
+the service's own podman secret store with a real value, and one that is still an example does not
+count. It is a **state, not a moment** — recorded in the registry as `ready`, `blocked` or
+`not-required` — because a service may be deployed, installed and waiting for its operator to
+plant credentials, and that is a successful deploy rather than a failed one. `weedr service gate`
+evaluates it; `weedr service start` re-evaluates it every time. A poke therefore never leaves a
+red build waiting on a human. On a track with `gated = false` the same condition is one
+`warning:` line and the start proceeds, which is the only difference between the two tracks.
+_Avoid_: disabled service, hold, release
+
 **secret**:
 A value that must not be readable at rest. Encrypted as a systemd credential, materialised
 into the owning service's podman secret store, and injected into a container as a file by

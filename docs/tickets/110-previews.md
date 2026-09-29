@@ -9,7 +9,7 @@ it.
 
 **Status:** ready-for-agent
 
-- [ ] `weedr service add <workload>-preview/<ref> --from <dir>` creates one service and one
+- [ ] `weedr service ingest <workload>-preview/<ref> --from poke <project>@<sha>` creates one service and one
       instance directory, with the ref taken **raw** by every verb and escaped by
       `systemd-escape` internally so `feature/x` and `feature-x` are distinct
 - [ ] A service is created for the workload only if it does not exist; the second ref creates no

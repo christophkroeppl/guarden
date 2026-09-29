@@ -316,7 +316,7 @@ credential scoped to that edge.
 ### previews
 
 ```sh
-weedr service add myapp-preview/feature-login --from /path/to/myapp
+weedr service add myapp-preview/feature-login --from myapp-staging
 furrow preview drop myapp-preview feature-login
 weedr service remove myapp-preview/feature-login               # alias: rm
 ```
@@ -362,7 +362,7 @@ make the fork its own service.
 ## Deploying
 
 ```sh
-furrow deploy <name[/ref]> --from <dir> --sha <sha>
+furrow deploy <name[/ref]> --from poke <project>@<sha>
 furrow deploy <name> --now               # skip queue position for this request
 furrow queue list                        # what is waiting, in what order, and any failure
 furrow status
@@ -721,7 +721,7 @@ existing blob is a `systemd-creds` operation on the `.cred` file; re-planting wi
 A service in a gated track that is missing a required key will not start. The message names it:
 
 ```sh
-furrow deploy myapp-production --from .    # error: gate: myapp-production: STRIPE_KEY is not set
+furrow deploy myapp-production --from poke myapp@9f2c1ab   # warning: waiting for the gate
 ```
 
 The same condition on a track with `gated = false` is a single `warning:` line and the start
@@ -1038,19 +1038,15 @@ sudoers rule naming X" is that X runs as root, which would make `furrow`, the pr
 handles repository-supplied paths, a root program:
 
 ```
-guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service add, \
-    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service start, \
+guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service ingest, \
+    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service gate, \
+    /usr/lib/guarden/bin/weedr service start, \
     /usr/lib/guarden/bin/weedr service stop, /usr/lib/guarden/bin/weedr service restart, \
-    /usr/lib/guarden/bin/weedr service snapshot, /usr/lib/guarden/bin/weedr service fork, \
+    /usr/lib/guarden/bin/weedr service snapshot, \
     /usr/lib/guarden/bin/weedr service build, \
     /usr/lib/guarden/bin/weedr secret list, /usr/lib/guarden/bin/weedr port list, \
     /usr/lib/guarden/bin/weedr service list, /usr/lib/guarden/bin/weedr service status, \
     /usr/lib/guarden/bin/weedr module list
-
-hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy, \
-    /usr/lib/guarden/bin/furrow preview drop, /usr/lib/guarden/bin/furrow queue list, \
-    /usr/lib/guarden/bin/furrow status, /usr/lib/guarden/bin/weedr service list, \
-    /usr/lib/guarden/bin/weedr project list
 ```
 
 `guarden`'s rule is the mutator, and `weedr service build` is on it: the build has to happen as
@@ -1107,3 +1103,40 @@ is only ever created here. A host with no edge module has no `edge` group, and
 4. `soil --check` — if the host drifted, nothing above it means much.
 5. The call log. Every program logs each external tool it invokes, so the exact commands that
    produced the current state are in the journal, not reconstructed.
+
+### a service that deployed but did not start
+
+A push to a gated track with an unplanted credential **succeeds**: the service exists, the image
+is built, the units are installed, and the container is not started. The workflow is green. This
+is deliberate — a red build on every push until you plant credentials is noise, and noise makes
+people want the gate gone.
+
+So a service can sit waiting, and that is a state you can see:
+
+```sh
+weedr service list                 # blocked services say so, and give the reason
+weedr service status myapp-production
+```
+
+Three different things look alike from a distance, and the listing tells them apart:
+
+- **blocked** — `[gate] reason` names the missing or still-example key
+- **never started** — no `[gate]` table at all, because the gate has never been evaluated
+- **crashed** — the gate passed and the unit went down on its own
+
+The way out of blocked is not a re-push. Plant the credential, then start the service:
+
+```sh
+weedr secret set myapp-production DB_PASSWORD   # prompts, echo off
+weedr service start myapp-production           # re-evaluates the gate, then starts
+```
+
+**Do not reach for `systemctl --user disable` or `mask` instead.** Those are not the control, and
+they hide the reason: the gate is credential-shaped, a service has N units rather than one, and
+`disable` does not stop an explicit start anyway. A masked unit looks disabled whether it is
+waiting for a password or broken, which is exactly the confusion the registry field exists to
+remove.
+
+A raw `systemctl --user start` bypasses the gate entirely. That is true of every guarden rule on
+the box and it is a deliberate act by someone who already has those powers — but nothing CI can
+reach can do it.
