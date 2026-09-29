@@ -337,6 +337,17 @@ Rules that hold for every test:
   developer-facing manifest should not have to be TOML, and every YAML file we read is one a human
   wrote in a repository. Guarden's own configuration is TOML, read with the standard library,
   because nothing depends on a parser to read it.
+- **`loom` drives the pinned `podlet` for Compose translation, and treats its output as untrusted
+  input.** podlet owns the fields guarden has no opinion about; `loom` overwrites or removes every
+  field it does — the refusal list, the whole `PublishPort` set, `Network=pasta:`, `AddHost=`, the
+  credential requests, the `.volume` units, the start-order edges. Running a converter is not
+  trusting its output. It runs unprivileged, which is what satisfies ADR-0012: that rule is about
+  who runs the converter, not about whether the renderer writes it itself.
+- **The programs are Python console scripts, with no shell entry point.** Each is
+  `soil = "guarden.soil:main"` and so on, so `just lint` runs `ruff` and not `shellcheck` —
+  `shellcheck` on eight one-line wrappers would be checking the wrong language, and eight wrappers
+  that must agree with the spec is exactly the drift this repository keeps fighting. Bash remains
+  for scripts that only invoke and sequence.
 - Every shared file is written with the protocol in spec §3.5: lock, temporary file in the same
   directory, fsync, rename. Readers take no lock. The pin store is deliberately lock-free by
   construction; do not give it a shared aggregate file.

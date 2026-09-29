@@ -786,6 +786,27 @@ rendered.
 `compose.yaml` must stay valid Compose and is converted by the renderer, never by the mutator.
 A repository that ships quadlet units has them used as they are, after the checks in §6.3.
 
+**The division of labour in that conversion is stated here because it was not.** The pinned
+`podlet` does the mechanical Compose-to-quadlet translation, and `loom` drives it,
+post-processes its output, and owns every field the design has an opinion about:
+
+- **podlet owns**: container, image, command, entrypoint, environment, user, working
+  directory, ports before stripping, volumes before rewriting, and the labels quadlet needs.
+  Compose is a large and still-moving specification and reimplementing the translation is a
+  project of its own with a long tail of edge cases; the renderer exists to make the
+  *security* decisions unprivileged, not to re-derive a converter.
+- **`loom` owns, on the output**: the refusal list (§6.3), the whole `PublishPort` set, the
+  `Network=pasta:` line from `[network] pasta_options`, `AddHost=` per edge, the credential
+  requests, the `.volume` units, the `After=guarden-order.target` drop-in, and the
+  `<name>.target` start-order edges. **Every one of those overwrites or removes something
+  podlet emitted**, which is why running podlet is not the same as trusting it: it is a
+  translator for the fields guarden has no opinion about, and not a security boundary for
+  the fields it does.
+
+So `loom` invoking `podlet` does not weaken ADR-0012. That rule is about **who runs the
+converter** — the mutator runs no program at all over repository input — and podlet runs as
+the unprivileged renderer, which is exactly where ADR-0012 puts the conversion.
+
 The secret schema is a **varlock schema**, `.guarden/.env.schema`, and there is no
 `.env.example` — the schema is the single source of truth and the two are never kept in step
 because there is only one. guarden does **not** run varlock, does not depend on it, and is not
@@ -2237,6 +2258,15 @@ the unit source are the repository's and no root-owned file overrides them.
 ---
 
 ## 11. Test seam
+
+**Each program is a Python module with a `main`, exposed as a console script** — `soil =
+"guarden.soil:main"`, `weedr = "guarden.weedr:main"`, and so on. There is no shell entry point
+and no wrapper to keep in step: eight one-line shims are eight more files that must agree with
+the spec, which is the drift this repository keeps fighting, and `shellcheck` on a shim that
+contains no logic is checking the wrong language. `just lint` therefore runs `ruff` and nothing
+else. Bash remains for scripts that only invoke and sequence.
+
+
 
 Every test drives a command line and asserts on the exit code, the diagnostic lines, the files
 that appeared or vanished, and the calls made to external tools. No test imports a program's

@@ -17,9 +17,16 @@ It refuses to render anything it cannot fully resolve.
 - [ ] `units:` accepts `compose.yaml` at the repository root or `.guarden/quadlet/`; **both
       present is exit 2 naming both**, and **neither present is exit 2 naming both accepted
       locations**
-- [ ] `compose.yaml` is converted in the renderer, unprivileged, with pinned `podlet`; a
-      repository shipping quadlet units has them used unchanged. The privileged mutator never
-      runs a converter, or any other program, over repository input
+- [ ] `compose.yaml` is converted in the renderer, unprivileged, by driving the pinned
+      `podlet`; a repository shipping quadlet units has them used unchanged. The privileged
+      mutator never runs a converter, or any other program, over repository input
+- [ ] **podlet's output is treated as untrusted input, not as a finished unit.** `loom`
+      overwrites or removes every field guarden has an opinion about — the refusal list, the whole
+      `PublishPort` set, `Network=pasta:`, `AddHost=`, the credential requests, the `.volume`
+      units, the start-order edges. A test converts a `compose.yaml` declaring `network_mode:
+      host`, `cap_add` and a `PublishPort`, and asserts none of the three survives into the
+      installed unit: a converter that passes them through is not a security boundary, and this
+      is the assertion that proves loom is
 - [ ] **The renderer owns the published-port set completely.** Every `PublishPort` found in the
       unit source is stripped before the units are regenerated, and the whole set comes from the
       grants and the allocations. Without this step a `ports:` entry in a Compose file becomes a

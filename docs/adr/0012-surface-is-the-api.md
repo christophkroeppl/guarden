@@ -24,6 +24,14 @@ and never runs any program at all, over repository input; it only ever reads fil
 `loom` wrote. That is not an extra rule, it is what root executing only root-owned copies
 already implies.
 
+**This says who runs the converter, not that the renderer writes it itself.** `loom` drives the
+pinned `podlet` for the mechanical translation, and the rule is satisfied because podlet runs as
+the unprivileged renderer. The division is in spec §4: podlet owns the fields guarden has no
+opinion about, and `loom` overwrites or removes every field it does — the refusal list, the whole
+`PublishPort` set, `Network=pasta:`, `AddHost=`, the credential requests, the `.volume` units and
+the start-order edges. Running a converter is not the same as trusting its output, and the
+distinction is the whole of why the renderer exists.
+
 The formats are normative and specified in `docs/spec.md` precisely so a future
 implementation can be checked against them rather than against the current source. When
 something cannot be expressed as a file format or a command, it does not go in.
