@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# getent — whether a user or a group exists, which is how a phase's create step
+# stays idempotent without creating it twice and reading as a change.
+. "$(dirname "$0")/../lib/fake.sh"
+fake_init "$@"
+
+case "${1:-}" in
+    --version|-V)
+        printf '%s\n' "getent (guarden fake) 1.0"
+        exit 0
+        ;;
+esac
+
+database=$1
+name=$2
+case "$database" in
+    passwd) file="$GUARDEN_FAKE_DIR/users" ;;
+    group) file="$GUARDEN_FAKE_DIR/groups" ;;
+    *) fake_die "getent: only passwd and group are modelled" ;;
+esac
+[ -n "$name" ] || fake_die "getent: no name given"
+if [ -f "$file" ] && grep -q "^$name:" "$file"; then
+    grep "^$name:" "$file"
+    exit 0
+fi
+printf 'getent: no such %s: %s\n' "$database" "$name" >&2
+exit 2

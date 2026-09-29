@@ -1,0 +1,11 @@
+[Unit]
+Description=nightly routine snapshots
+Requires=guarden-snapshot.service
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+AccuracySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

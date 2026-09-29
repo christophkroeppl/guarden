@@ -46,32 +46,41 @@ fake snapper -c myapp-production-notseeded list --machine-readable json
 assert_exit 0
 assert_stdout_has "[]"
 
-# get-config answers, and answers with the value set soil storage converges into
-# every configuration it can see (spec 8.1).
-fake snapper -c myapp-production-pgdata get-config
-assert_exit 0
-assert_stdout_has "EMPTY_PRE_POST_CLEANUP=no"
-assert_stdout_has "NUMBER_CLEANUP=yes"
-assert_stdout_has "TIMELINE_CLEANUP=yes"
-assert_stdout_has "TIMELINE_LIMIT_DAILY=0-7"
-assert_stdout_has "NUMBER_LIMIT=2-10"
-assert_stdout_has "NUMBER_LIMIT_IMPORTANT=8-12"
-assert_stdout_has "FREE_LIMIT=0.10"
-assert_stdout_has "NUMBER_MIN_AGE=3600"
+# A configuration that does not exist is an error, and that is the whole reason
+# soil asks rather than statting /etc/snapper/configs/<name>.
+fake snapper -c not-a-configuration get-config
+assert_exit 1
+assert_stderr_has "no configuration for not-a-configuration"
 
+# create-config writes the distribution's own default template, which is the
+# state before soil converges anything, and creates no snapshot.
+fake snapper -c myapp-production-fresh create-config -f btrfs -p /
+assert_exit 0
+fake snapper -c myapp-production-fresh get-config
+assert_exit 0
+assert_stdout_has "EMPTY_PRE_POST_CLEANUP=yes"
+assert_stdout_has "NUMBER_MIN_AGE=0"
+assert_stdout_has "TIMELINE_LIMIT_DAILY=0-7"
+assert_stdout_has "NUMBER_LIMIT_IMPORTANT=8-12"
+fake snapper -c myapp-production-fresh list --machine-readable json
+assert_stdout_has "[]"
+
+# get-config answers for a key as well as for the whole configuration.
 fake snapper -c myapp-production-pgdata get-config NUMBER_LIMIT_IMPORTANT
 assert_exit 0
 assert_stdout_has "NUMBER_LIMIT_IMPORTANT=8-12"
+fake snapper -c myapp-production-pgdata get-config NOT_A_KEY
+assert_exit 1
 
-# A seeded configuration reads back what was written, which is the whole point
-# of reading rather than believing: weedr service list reports what snapper
-# holds, not what guarden thinks it wrote.
-printf '%s\n' 'NUMBER_LIMIT_IMPORTANT=4-6' 'TIMELINE_CLEANUP=no' >"$GUARDEN_FIXTURES/snapper/myapp-production-custom.conf"
-fake snapper -c myapp-production-custom get-config
+# modify -f merges into what is there rather than replacing it, which is how a
+# converged set leaves every other value alone.
+printf '%s\n' 'NUMBER_LIMIT_IMPORTANT=4-6' 'A_KEY_SOIL_DOES_NOT_OWN=kept' >"$GUARDEN_FIXTURES/merge.conf"
+fake snapper -c myapp-production-pgdata modify -f "$GUARDEN_FIXTURES/merge.conf"
 assert_exit 0
+fake snapper -c myapp-production-pgdata get-config
 assert_stdout_has "NUMBER_LIMIT_IMPORTANT=4-6"
-assert_stdout_has "TIMELINE_CLEANUP=no"
-assert_stdout_lacks "FREE_LIMIT"
+assert_stdout_has "A_KEY_SOIL_DOES_NOT_OWN=kept"
+assert_stdout_has "TIMELINE_LIMIT_DAILY=0-7"
 
 # modify records the userdata it was given, because a pin test that does not
 # inspect the mark tests nothing: it is the mark, not the pin file, that makes a

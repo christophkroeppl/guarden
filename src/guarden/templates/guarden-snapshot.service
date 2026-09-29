@@ -1,0 +1,13 @@
+[Unit]
+Description=a routine snapshot of every service's state volumes
+Documentation=file:///usr/share/doc/guarden/
+# A routine snapshot is what the nightly timer makes: `timeline`-tagged, and it
+# lives by the volume's ladder rather than by a pin. It is taken while the
+# service keeps running, and it is never marked — a mark is only ever about an
+# on-demand snapshot.
+Requires=snapperd.service
+After=snapperd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/guarden/bin/weedr service snapshot --all

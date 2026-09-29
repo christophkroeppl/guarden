@@ -1,0 +1,16 @@
+[Unit]
+Description=fifteen minutes to get back in
+Documentation=file:///usr/share/doc/guarden/
+# Installed by soil firewall and *never started by a converge*: only
+# `soil firewall --apply --deadman` arms it, and a plain apply stops it, so an
+# armed timer cannot outlive the drill.
+Requires=guarden-firewall-deadman.service
+After=guarden-firewall.service
+
+[Timer]
+OnActiveSec=15min
+AccuracySec=30s
+Unit=guarden-firewall-deadman.service
+
+[Install]
+WantedBy=timers.target

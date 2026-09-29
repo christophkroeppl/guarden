@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# dpkg-query — the distribution's package database, and the only way soil asks
+# whether a package is installed.
+. "$(dirname "$0")/../lib/fake.sh"
+fake_init "$@"
+
+case "${1:-}" in
+    --version|-V)
+        printf '%s\n' "dpkg-query (guarden fake) 1.0"
+        exit 0
+        ;;
+esac
+
+installed="$GUARDEN_FAKE_DIR/packages"
+mkdir -p "$GUARDEN_FAKE_DIR"
+[ -f "$installed" ] || : >"$installed"
+
+status=0
+package=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -W) shift ;;
+        -f=*) status=1; format=${1#-f=}; shift ;;
+        -f) status=1; format=$2; shift 2 ;;
+        *) package=$1; shift ;;
+    esac
+done
+
+[ -n "$package" ] || fake_die "no package named"
+if grep -qx "$package" "$installed"; then
+    [ "$status" = 1 ] || exit 0
+    case "$format" in
+        *Status-Status*) printf 'installed\n' ;;
+        *) printf '%s\n' "$format" ;;
+    esac
+    exit 0
+fi
+printf 'dpkg-query: no packages found matching %s\n' "$package" >&2
+exit 1

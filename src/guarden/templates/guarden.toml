@@ -1,0 +1,60 @@
+# The host configuration. Three writers, all under the `modules` lock and all
+# through the spec §3.5 protocol: `soil install` seeds it, `soil install` writes
+# the measured `ingress.alias`, and `weedr module add` appends to
+# `[modules] enabled`. Each rewrites only the keys it owns.
+#
+# A track is this table's row and not a name in the code: adding `preprod` is
+# appending a block, and nothing branches on the word.
+
+[host]
+domain = ""
+interface = ""                   # empty: resolve the ingress interface from the default route
+admin_user = ""                  # empty: the invoking user at install time
+
+[ingress]
+alias = ""                       # the address a rootless container reaches the host on; the
+                                 # measured probe writes it, and it is a NAME the consumer
+                                 # resolves and never a firewall destination
+publication_range = [20000, 32767]
+forwarded = [ "80/tcp", "443/tcp", "443/udp" ]
+
+[network]
+backend = "pasta"                # the only value v1 supports
+pasta_options = [ "--map-gw" ]   # the complete set; --no-map-gw is refused
+
+[build]
+lanes = 1
+
+[modules]
+enabled = ["gate", "homepage"]
+
+[[environments]]
+name = "production"
+host_prefix = ""
+gated = true
+weight = 1000
+free_limit = 0.10
+keep_last = 7
+kind = "slot"
+fork_from = ""
+
+[[environments]]
+name = "staging"
+host_prefix = "staging."
+gated = false
+weight = 100
+free_limit = 0.20
+keep_last = 0
+kind = "slot"
+fork_from = "production"
+
+[[environments]]
+name = "preview"
+host_prefix = "preview."
+gated = false
+weight = 10
+free_limit = 0.20
+keep_last = 0
+kind = "instance"
+fork_from = "staging"
+cap = 3

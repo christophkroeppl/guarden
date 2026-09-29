@@ -42,10 +42,11 @@ assert_called "iptables -t nat -A POSTROUTING -o eth0 -d 127.0.0.1 --dport 20000
 
 # A program whose body a later ticket writes calls nothing at all. A skeleton
 # that shelled out would put a line in the call log that a later test would
-# read as evidence of something this one never did.
+# read as evidence of something this one never did. soil is not in this list
+# because it has a body: it reads the host, and reading the host is calling
+# tools.
 assert_makes_no_calls weedr service list
 assert_makes_no_calls weedr service start myapp-production
-assert_makes_no_calls soil --check
 assert_makes_no_calls loom render . --service myapp-production --out /tmp/units
 assert_makes_no_calls roots sync
 assert_makes_no_calls twig sync

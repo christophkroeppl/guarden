@@ -1,4 +1,42 @@
 #!/usr/bin/env bash
+# apt-get — records what it installed, because a converger that cannot ask
+# whether a package is present re-installs on every run, and a second apply has
+# to look like no change.
 . "$(dirname "$0")/../lib/fake.sh"
 fake_init "$@"
-exit 0
+
+case "${1:-}" in
+    --version|-V)
+        printf '%s\n' "apt-get (guarden fake) 1.0"
+        exit 0
+        ;;
+esac
+
+installed="$GUARDEN_FAKE_DIR/packages"
+mkdir -p "$GUARDEN_FAKE_DIR"
+[ -f "$installed" ] || : >"$installed"
+
+mode=""
+packages=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -y|--yes|-q|--quiet) shift ;;
+        install|remove|purge|update|upgrade) mode=$1; shift ;;
+        *) packages+=("$1"); shift ;;
+    esac
+done
+
+case "$mode" in
+    install)
+        for package in "${packages[@]}"; do
+            printf 'Setting up %s ...\n' "$package"
+            grep -qx "$package" "$installed" || printf '%s\n' "$package" >>"$installed"
+        done
+        ;;
+    "")
+        fake_die "apt-get: no subcommand"
+        ;;
+    *)
+        printf '%s: done\n' "$mode"
+        ;;
+esac

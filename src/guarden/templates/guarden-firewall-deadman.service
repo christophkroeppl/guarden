@@ -1,0 +1,12 @@
+[Unit]
+Description=the dead-man timer firing: let the operator back in
+Documentation=file:///usr/share/doc/guarden/
+# What it does is open the firewall. It is the posture the box was in before
+# guarden touched it, and the only one that is reliably "you can ssh back in".
+# Nothing is rolled back: the point is a shell, not the previous rules.
+After=guarden-firewall.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl stop guarden-firewall.service
+ExecStart=/usr/bin/systemctl enable --now ufw.service
