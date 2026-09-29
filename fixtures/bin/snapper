@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# snapper — the one fake that answers.
+#
+# spec 8.2 and AGENTS.md: snapshot state is read with
+# `snapper list --machine-readable json`, because JSON renders a snapshot's
+# `userdata` as an object and `important` is therefore a key, while CSV renders
+# the whole map as one comma-joined quoted field. A fake that answered only the
+# human table would let a CSV parser pass its tests, so this one models all
+# three renderings from the same seed, and the difference between them is the
+# difference a test has to be able to see.
+#
+# The effective configuration is read with `get-config`, never by parsing
+# /etc/snapper/configs/, and `modify` records the userdata it was handed, because
+# a pin test that does not inspect the mark tests nothing.
+#
+# Seed a configuration by writing records to
+# $GUARDEN_FIXTURES/snapper/<config>.list, one per line:
+#
+#   number|cleanup|date|description|k=v,k=v
+#
+# and its configuration to $GUARDEN_FIXTURES/snapper/<config>.conf as KEY=value
+# lines. Unseeded, `list` is empty and `get-config` is the canonical value set.
+
+. "$(dirname "$0")/../lib/fake.sh"
+
+fake_init "$@"
+
+config=root
+verb=
+format=table
+algorithm=
+userdata=
+records=()
+extra=()
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --version|-v)
+            fake_out "snapper 0.11.2"
+            exit 0
+            ;;
+        -c|--config)
+            [ "$#" -ge 2 ] || fake_die "-c needs a configuration"
+            config=$2
+            shift 2
+            ;;
+        --machine-readable)
+            [ "$#" -ge 2 ] || fake_die "--machine-readable needs a format"
+            format=$2
+            shift 2
+            ;;
+        --cleanup-algorithm)
+            [ "$#" -ge 2 ] || fake_die "--cleanup-algorithm needs an algorithm"
+            algorithm=$2
+            shift 2
+            ;;
+        --userdata)
+            [ "$#" -ge 2 ] || fake_die "--userdata needs a value"
+            userdata=$2
+            shift 2
+            ;;
+        --description)
+            [ "$#" -ge 2 ] || fake_die "--description needs a value"
+            extra+=("description=$2")
+            shift 2
+            ;;
+        --)
+            shift
+            ;;
+        -*)
+            fake_die "unknown option $1"
+            ;;
+        *)
+            if [ -z "$verb" ]; then
+                verb=$1
+            else
+                records+=("$1")
+            fi
+            shift
+            ;;
+    esac
+done
+
+list_file="$GUARDEN_FAKE_SNAPPER/$config.list"
+conf_file="$GUARDEN_FAKE_SNAPPER/$config.conf"
+mkdir -p "$GUARDEN_FAKE_SNAPPER"
+
+json_escape() {
+    local text=$1
+    text=${text//\\/\\\\}
+    text=${text//\"/\\\"}
+    printf '%s' "$text"
+}
+
+# userdata_json <k=v,k=v>: the map as a real JSON object, so `important` is a key.
+userdata_json() {
+    local pairs=$1 pair key value
+    printf '{'
+    local first=1
+    local rest=$pairs
+    while [ -n "$rest" ]; do
+        pair=${rest%%,*}
+        if [ "$pair" = "$rest" ]; then
+            rest=
+        else
+            rest=${rest#*,}
+        fi
+        [ -n "$pair" ] || continue
+        key=${pair%%=*}
+        value=${pair#*=}
+        # snapper parses `important=yes, guarden=x` into a map, so the space
+        # after the comma is a separator and not part of the key.
+        key=${key## }
+        key=${key# }
+        value=${value# }
+        value=${value% }
+        [ "$first" = 1 ] || printf ','
+        first=0
+        printf '"%s":"%s"' "$(json_escape "$key")" "$(json_escape "$value")"
+    done
+    printf '}'
+}
+
+list_json() {
+    local line number cleanup date description userdata
+    printf '['
+    local first=1
+    if [ -f "$list_file" ]; then
+        while IFS='|' read -r number cleanup date description userdata; do
+            [ -n "${number:-}" ] || continue
+            [ "$first" = 1 ] || printf ','
+            first=0
+            printf '{"number":%s,"date":"%s","description":"%s","cleanup":"%s","tags":["%s"],"userdata":%s}' \
+                "$number" "$(json_escape "$date")" "$(json_escape "$description")" \
+                "$cleanup" "$cleanup" "$(userdata_json "$userdata")"
+        done <"$list_file"
+    fi
+    printf ']'
+}
+
+# The rendering CSV produces, and the reason guarden does not read it: the whole
+# userdata map is one comma-joined quoted field, so a consumer string-matches.
+list_csv() {
+    local line number cleanup date description userdata
+    printf '#|number|date|user_used|cleanup|description|userdata\n'
+    if [ -f "$list_file" ]; then
+        while IFS='|' read -r number cleanup date description userdata; do
+            [ -n "${number:-}" ] || continue
+            printf '%s|%s|%s|0|%s|%s|"%s"\n' \
+                "$number" "$number" "$date" "$cleanup" "$description" "$userdata"
+        done <"$list_file"
+    fi
+}
+
+list_table() {
+    local number cleanup date description userdata
+    printf '%-7s %-12s %-20s %s\n' "number" "cleanup" "date" "description"
+    if [ -f "$list_file" ]; then
+        while IFS='|' read -r number cleanup date description userdata; do
+            [ -n "${number:-}" ] || continue
+            printf '%-7s %-12s %-20s %s\n' "$number" "$cleanup" "$date" "$description"
+        done <"$list_file"
+    fi
+}
+
+# soil storage converges this fixed set into every configuration it can see
+# (spec 8.1) and rewrites nothing else, so it is what an unseeded get-config
+# answers with.
+canonical_config() {
+    local key value
+    for pair in \
+        'SUBVOLUME=/var/lib/guarden' \
+        'FSTYPE=btrfs' \
+        'EMPTY_PRE_POST_CLEANUP=no' \
+        'NUMBER_MIN_AGE=3600' \
+        'NUMBER_CLEANUP=yes' \
+        'TIMELINE_CLEANUP=yes' \
+        'TIMELINE_LIMIT_HOURLY=0' \
+        'TIMELINE_LIMIT_DAILY=0-7' \
+        'TIMELINE_LIMIT_WEEKLY=0-4' \
+        'TIMELINE_LIMIT_MONTHLY=0-6' \
+        'TIMELINE_LIMIT_QUARTERLY=0-2' \
+        'TIMELINE_LIMIT_YEARLY=0' \
+        'NUMBER_LIMIT=2-10' \
+        'NUMBER_LIMIT_IMPORTANT=8-12' \
+        'FREE_LIMIT=0.10'
+    do
+        key=${pair%%=*}
+        value=${pair#*=}
+        printf '%s=%s\n' "$key" "$value"
+    done
+}
+
+case "$verb" in
+    list)
+        case "$format" in
+            json) list_json ;;
+            csv) list_csv ;;
+            table) list_table ;;
+            *) fake_die "unknown --machine-readable format: $format" ;;
+        esac
+        ;;
+    get-config)
+        if [ "${#records[@]}" -gt 1 ]; then
+            fake_die "get-config takes at most one key"
+        fi
+        key=${records[0]:-}
+        if [ -f "$conf_file" ]; then
+            if [ -n "$key" ]; then
+                grep "^$key=" "$conf_file"
+                exit 0
+            fi
+            cat "$conf_file"
+            exit 0
+        fi
+        if [ -n "$key" ]; then
+            canonical_config | grep "^$key="
+            exit 0
+        fi
+        canonical_config
+        ;;
+    modify)
+        [ "${#records[@]}" -eq 1 ] || fake_die "modify takes exactly one snapshot number"
+        [ -n "$algorithm" ] || fake_die "modify needs --cleanup-algorithm"
+        printf '%s|%s|%s\n' "${records[0]}" "$algorithm" "$userdata" \
+            >>"$GUARDEN_FAKE_SNAPPER/$config.modifications"
+        ;;
+    *)
+        fake_die "unknown command: ${verb:-<none>}"
+        ;;
+esac

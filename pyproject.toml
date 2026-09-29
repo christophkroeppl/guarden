@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guarden"
+version = "1.0.0"
+description = "One VPS, a handful of projects, one edge."
+requires-python = ">=3.11"
+
+# No install_requires, and that is deliberate. spec 6.1 and AGENTS.md: the
+# runtime dependencies are the distribution's `python3-yaml` and
+# `python3-jinja2`, installed by `soil packages`. Nothing is fetched from PyPI
+# at deploy time and no wheel is checked in, so a program that reached for a
+# third import would be a program the host cannot install. `just check` fails
+# the build on an import that is neither in the standard library nor one of
+# those two.
+dependencies = []
+
+[project.scripts]
+soil = "guarden.soil:main"
+weedr = "guarden.weedr:main"
+loom = "guarden.loom:main"
+roots = "guarden.roots:main"
+twig = "guarden.twig:main"
+furrow = "guarden.furrow:main"
+hose = "guarden.hose:main"
+stakes = "guarden.stakes:main"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
