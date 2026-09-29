@@ -70,7 +70,7 @@ document sets is a suggestion.
 
 **There is one path a deploy can add a service by, and it cannot grant a port.**
 `weedr service ingest` takes `--from poke <project>@<sha>` and nothing else. The grant is `weedr port open`, a separate verb, and it is not on
-`furrow`'s sudoers rule — so a deploy creates the service and the ports its manifest asked for
+the `guarden` rule — so a deploy creates the service and the ports its manifest asked for
 stay pending. `hose` prints a `warning:` line naming the ports and the exact command to run,
 which reaches the pull request's log, and the pending state is sticky: `weedr service list`
 shows it until an admin grants or the manifest drops the request.

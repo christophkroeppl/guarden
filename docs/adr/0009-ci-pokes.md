@@ -67,7 +67,7 @@ poke creates the service and waits for the admin.
 
 Builds happen on the box, as the service user, in throwaway containers, tagged with the
 image reference the manifest already names, so no registry and no image copying exist. They run
-through a mutator verb, `weedr service build <name> --from <dir>`, for two reasons: an
+through a mutator verb, `weedr service build <name>`, for two reasons: an
 unprivileged `furrow` cannot become the service user, and the subuid range belongs to the service
 user and only it may map container-root into it. `furrow` never touches podman. Builds are
 serialised by lanes; see ADR-0010 and ADR-0011.

@@ -49,7 +49,7 @@ a new ADR that supersedes it. The short version:
   and `stakes` run as `guarden`; `hose` has its own user because it is network-facing. No
   guarden program runs a long-lived daemon as root, and guarden has no daemon of its own —
   `snapperd` is a root daemon the design depends on and does not claim otherwise. The image
-  build is a mutator verb, `weedr service build <name> --from <dir>`: an unprivileged `furrow`
+  build is a mutator verb, `weedr service build <name>`, which takes no `--from`: an unprivileged `furrow`
   cannot become the service user, and the subuid range belongs to the service user and only it
   may map container-root into it. `furrow` never touches podman.
 - Everything deployed is a **service**: one user, one home, one unit directory, declared state.

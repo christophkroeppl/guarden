@@ -18,7 +18,7 @@ _Avoid_: service (when you mean one process), unit, pod
 
 **project**:
 A repository. The thing you promote through tracks. Its name is the manifest's `project` field,
-defaulting to the basename of the directory `--from` was given. It is not the same thing as the
+defaulting to the project the `--from` source belongs to. It is not the same thing as the
 workload and the two may differ.
 _Avoid_: app, repo, service (when you mean the repository)
 

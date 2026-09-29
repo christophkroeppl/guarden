@@ -297,11 +297,15 @@ There is no secrets service and no encrypted blob in a repository.
   of a host key anywhere. That is the deal for one person and one box.
 - **Staging and previews:** generated once, stable until the service is removed.
 - **The gate:** a service in a gated track will not start if a required key is missing, empty, or
-  still an example. It is checked **before** the old container stops, so a deploy that fails
-  it leaves the running service alone. So is the image build. The error names the key. On a track
+  still an example. It is checked **before** the old container stops, so a blocked gate never takes
+  the running service down. The deploy itself still succeeds — the service is created, built,
+  installed and **waiting**, with the reason in the registry — so a push with no credentials planted
+  yet is a green build rather than a red one. Plant them, then `weedr service start`; no second
+  push is needed. So is the image build. The error names the key. On a track
   that is not gated the same condition is one warning line and the start proceeds.
 
-The shape of every key lives in a tracked `.guarden/.env.schema`. Values never do. A snapshot
+The shape of every key lives in a tracked varlock schema, `.guarden/.env.schema`, and there is
+no `.env.example` — the schema is the single source of truth. Values never do. A snapshot
 of a service's state does not contain its credentials, which is what makes it safe to clone and
 roll back automatically. Scoping is the real control, not secrecy: one credential and one
 least-privilege role per declared edge, and rotation is `weedr secret set` followed by a
@@ -507,12 +511,12 @@ furrow queue list
 ```
 
 The runbook is [`docs/sysadmin.md`](docs/sysadmin.md). It also says how to re-converge after
-editing a manifest — `weedr service add <name> --from <dir>`, which is idempotent and is the
+editing a manifest — `weedr service ingest <name> --from poke <project>@<sha>`, which is idempotent and is the
 reconcile command — and how to get back in if the firewall locks you out. The dead-man timer is
 not always running. It is armed only by `soil firewall --apply --deadman`, it lasts fifteen
 minutes, and when it fires it stops `ferm` and re-enables the distribution firewall, which
-leaves you able to ssh back in. (That is the one statement of what it does; the spec §6.1 and the
-runbook both point here rather than describing it again.) It disarms itself when it fires, and a plain
+leaves you able to ssh back in. (That is the canonical statement of what it does; the spec §6.1 says the same thing in the words
+a program needs and the runbook links here.) It disarms itself when it fires, and a plain
 `soil firewall --apply` without the flag disarms it too, so an armed timer cannot outlive the
 drill.
 

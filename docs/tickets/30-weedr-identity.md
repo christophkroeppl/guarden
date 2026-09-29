@@ -28,7 +28,7 @@ Configuration is read from the root-owned files, and never written by us.
       infers where one is; the command is refused without it
 - [ ] `workload` and `project` are separate registry fields and may differ. `workload` is the
       service name without its environment segment; `project` is the manifest's `project` field,
-      defaulting to the basename of the `--from` directory
+      defaulting to the project the `--from` source belongs to, never to a path basename
 - [ ] The user is created with the system allocator for subuid and subgid — `useradd --system
       --add-subuids-for-system`, which needs shadow-utils 4.11 or later. Where that option is
       missing the user is created plain and the ranges are written afterwards with `usermod
@@ -131,7 +131,7 @@ Configuration is read from the root-owned files, and never written by us.
       `net.ipv4.ip_unprivileged_port_start` is not `1024`, which `soil sysctl` sets and owns. Both are
       reported and neither is corrected. `--json` emits the same as machine-readable output
 - [ ] `/etc/guarden/guarden.toml` is read but never rewritten by any verb on this ticket. There
-      are **two** writers of the file in the system, both under the `modules` lock and both
+      are **three** writers of the file in the system, all under the `modules` lock and all
       through the write protocol and touching disjoint keys: `weedr module add` appends to
       `[modules] enabled` and rewrites nothing else, and `soil install` writes the measured
       `ingress.alias` from its probe

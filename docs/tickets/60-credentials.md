@@ -2,7 +2,7 @@
 
 **What to build:** A value the operator types once is encrypted on the box and reaches the
 container as a podman secret file, and a service in a gated track cannot start without it. No
-value is readable by anything but its own service, and a failed gate leaves the running container
+value is readable by anything but its own service, and a blocked gate leaves the running container
 running.
 
 **Blocked by:** 30 (weedr), 40 (loom)
@@ -57,7 +57,8 @@ running.
 - [ ] A service on a track with `gated = false` gets generated values for its own keys at
       creation, stable until the service is removed: nothing on it is worth stealing, and a poke
       must not be blocked on a human planting them
-- [ ] The gate is evaluated before the old container is stopped: a failed gate exits 1 and the
+- [ ] The gate is evaluated before the old container is stopped: a blocked gate exits 1 from
+      `weedr service gate` while the **deploy itself exits 0**, and the
       call log contains no `stop` for the running unit
 - [ ] The varlock schema in `.guarden/.env.schema` is the source of truth for names and types, and
       the only annotations that carry meaning are `@required`, `@sensitive`, `@type` and

@@ -358,16 +358,25 @@ the **last** occurrence of a repeated option, so the client would have won. `hos
 `--project` argument outright. `hose drop` likewise never accepts a service name: it derives one
 from the project and the ref, so a key for one project cannot drop another project's instance.
 
-**A `--from` outside staging is refused by the mutator, not only by the deployer.** `guarden`
-runs unprivileged and can write into the queue directory, so a compromised or buggy `guarden`
-program could hand the mutator a tree it controls — which would then be rendered
-into root-owned units. No verb takes a path at all: `weedr service ingest` builds the staging
-path itself from a validated project and a hex sha, `weedr service add --from <service>` copies
-a service tree, and `weedr service build` takes no `--from`. `weedr service add` resolves
-`--from` with `realpath` and refuses
-anything outside `/var/lib/guarden/staging/`, so the confinement holds whoever asked.
+**No verb takes a path, so there is nothing for a caller to point somewhere else.** This
+replaced a staging-confinement design that was correct and needless. `--from <dir>` made the
+caller choose a location, and the only question was how much checking to wrap around it — a
+`realpath` resolution, a symlink refusal, a uid-conditional allowance, a confinement clause in
+the mutator as well as the deployer because `guarden` could write the queue and hand the root
+mutator a tree it controlled. A service's tree now comes from exactly two places and neither is a
+location: a poke's staged tree, via `weedr service ingest <name> --from poke <project>@<sha>`,
+where the mutator builds the path itself from a project validated against `projects.toml` and a
+hex sha; or a copy of another service's, via `weedr service add <name> --from <service>`, which
+is root-only. `weedr service build` takes no `--from` at all, which also closes the
+`podman-build` escalation it previously was — a build may only ever build the service's own tree.
 
-### 2.11 Write discipline
+Because `--from <service>` is root-only and is not on the `guarden` rule, a branch cannot create
+a service out of another service's tree, and a compromised `guarden` program cannot promote a
+staging manifest into production. And because there is no `--from git <url>`, the box never
+authenticates to a forge: CI holds the credential, pushes a tarball, and `hose` receives it, so
+a private repository needs no deploy key, no token and no `.netrc` on the host.
+
+## 2.11 Write discipline
 
 Every file more than one process may read while another writes is written lock → temporary file
 in the same directory → `fsync` → `rename`. A reader takes no lock and never sees a torn file.

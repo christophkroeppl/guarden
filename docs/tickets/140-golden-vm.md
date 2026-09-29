@@ -36,7 +36,8 @@ creating a service), 110 (two previews from one snapshot), 120 (the queue), 130 
       operation and forks as a complete set; a fork naming a number one of the two volumes does
       not have is refused with exit `1` and changes nothing. The two volumes are not required to
       agree to the byte, and the run does not claim they do
-- [ ] A deploy of a service in a gated track with a missing credential is refused, and the
+- [ ] A deploy of a service in a gated track with a missing credential installs and waits without
+      starting the container, and the deploy **exits 0** while the gate names the key. The
       running container is still running afterwards
 - [ ] A poke through `hose` creates a service, builds it, and deploys it, and the box is
       left with no clone and no checkout

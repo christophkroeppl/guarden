@@ -39,7 +39,9 @@ rather than a mechanism, and a distinction enforced by nothing has to be enforce
 - Production data is snapshotted while it runs, and any snapshot can be cloned into a staging
   or preview service in constant time and constant space.
 - Production cannot start with a missing or placeholder credential, and a failed build or a
-  failed gate leaves the running container running.
+  blocked gate leaves the running container running. A blocked gate leaves the *deploy* succeeding
+  too — the service is installed and waiting, and CI is green while the operator plants the
+  credential.
 - Nothing in a repository can open a host port, choose its own environment, or read a
   credential.
 - Optional gitops: a push pokes the box, the box builds and deploys, the box keeps no git

@@ -2,13 +2,15 @@
 
 **What to build:** Builds are serialised — one at a time, highest track weight first, previews
 always last — and a deploy is always ensure, render, build, gate, stop, install, start. A failed
-build or a failed gate leaves the running container running.
+build or a blocked gate leaves the running container running, and a blocked gate leaves the deploy
+itself **succeeding** — the service is installed and waiting, and `furrow` exits `0`.
 
 **Blocked by:** 40 (loom), 60 (credentials)
 
 **Status:** ready-for-agent
 
-- [ ] A request is a service, a ref, a sha and a source directory; queue state is a directory of
+- [ ] A request is a service, a ref and a sha — **no path**, because the mutator builds the staging
+      location from the project and the sha itself. Queue state is a directory of
       files under `/var/lib/guarden/queue`, readable with `ls`
 - [ ] **Queue state is on disk, not in tmpfs, and survives a reboot.** A request that was
       acknowledged before the reboot is still built after it, which is the whole difference
@@ -23,16 +25,12 @@ build or a failed gate leaves the running container running.
 - [ ] A manifest cannot state a priority: there is no key for it, and one is refused by name
 - [ ] N identical requests for one service and sha collapse into one build
 - [ ] The **order is ensure, render, build, gate, stop, install, start**, and the call log shows
-      it in that order. Step zero is `weedr service ingest` from the staged tree without
-      `weedr service ingest` when the registry has no entry — a verb with no grant flag on it, and
+      it in that order. Step zero is `weedr service ingest <name> --from poke <project>@<sha>` when
+      the registry has no entry — a verb with no grant flag on it, and
       that is how a poke creates a service without being able to open a port
-- [ ] **The build step is the mutator verb `weedr service build <name> --from <the staged
-      source>`, and `furrow` never invokes podman.** The build runs as the service user, tagged
-      with the image reference the manifest names, so no registry and no image copying exist. It
-      is a `weedr` verb for two reasons: an unprivileged `furrow` cannot become the service user,
-      and the subuid range belongs to the service user and only it may map container-root into it.
-      A test asserts the call log shows `weedr service build` and no direct `podman build` from
-      `furrow`
+- [ ] **The build step is the mutator verb `weedr service build <name>`**, which takes no
+      `--from`: a build has exactly one tree it may build and it is the service's own, which
+      closes the `podman build` escalation a `build --from <dir>` would have been
 - [ ] A failing build exits non-zero, leaves the previous units in place, and the container
       running before the deploy is still running
 - [ ] A failing gate on a track with `gated = true` exits non-zero, names the key, and the

@@ -48,6 +48,8 @@ filesystem, the installed services and the remote are the host. So:
 | a `needs:`/`provides:` disagreement where the provider exists but does not offer the kind | `1` — the answer came from the host |
 | a requested port already held by another service | `1` |
 | a snapshot that is gone, or absent from one of the volumes a fork needs | `1` |
+| `weedr service gate` on a gated track whose gate is blocked | `1`, naming the key. It changed nothing, so the code is the answer rather than a failure |
+| `weedr service gate` on a track with `gated = false` | `0`, and it records `not-required` |
 | `weedr service start` on a gated track whose gate is blocked | `1` — you asked to start it and it cannot |
 | a deploy whose gate is blocked, the deploy itself | `0` — the service exists and is waiting (§6.6) |
 
@@ -65,8 +67,8 @@ change to this table and not a compatible addition.
 
 | verb | top-level fields |
 |---|---|
-| `weedr service list` | `services` — one object per service, each with `name`, `workload`, `project`, `environment`, `uid`, `source`, `deployed_sha`, `publication`, `edges`, `ports`, `volumes`, `instances`, `warnings`. The nested objects are specified too, because a top-level name whose contents are open is not a field set: `publication` is `{ container, port }` pairs plus `api`; `edges` is `{ service, port, as, auth, publications }` per declared edge; `ports` is `{ requested, granted, pending }`; `volumes` is `{ name, kind, config, snapshots: { total, marked, oldest, newest, limits }, removed }` per declared volume; `instances` is `{ ref, created, seed }` per instance; and `warnings` is a list of one-line strings, **including the two host invariants and the two host-lock state reports**, because those are what §6.2 says this verb reports |
-| `weedr service status` | one object: `name`, `ref` (null on a slot track), `unit_state`, `active_state`, `sub_state`, `publications`, `edges`, `snapshots`, `instances`, `warnings` |
+| `weedr service list` | `services` — one object per service, each with `name`, `workload`, `project`, `environment`, `uid`, `source`, `deployed_sha`, `publication`, `edges`, `ports`, `volumes`, `instances`, `gate`, `warnings`. The nested objects are specified too, because a top-level name whose contents are open is not a field set: `publication` is `{ container, port }` pairs plus `api`; `edges` is `{ service, port, as, auth, publications }` per declared edge; `ports` is `{ requested, granted, pending }`; `volumes` is `{ name, kind, config, snapshots: { total, marked, oldest, newest, limits }, removed }` per declared volume; `instances` is `{ ref, created, seed }` per instance; `gate` is the `[gate]` table verbatim — `{ state, reason?, checked? }` — or `null` when the gate has never been evaluated, and `null` is **not** the same as `state: "ready"`. This is the field the runbook's "blocked, never started, crashed" triage reads, so it is in the table rather than folded into a status string. And `warnings` is a list of one-line strings, **including the two host invariants and the two host-lock state reports**, because those are what §6.2 says this verb reports |
+| `weedr service status` | one object: `name`, `ref` (null on a slot track), `unit_state`, `active_state`, `sub_state`, `publications`, `edges`, `snapshots`, `instances`, `gate`, `warnings` |
 | `weedr secret list` | `secrets` — one object per key, each with `name`, `set` (bool), `source` (`planted` \| `generated`), `example` (bool). **Never a value** |
 | `weedr port list` | `services` — one object per service, each with `name`, `requested`, `granted`, `pending` |
 | `weedr module list` | `enabled`, `available` — each a list of module names |
@@ -421,7 +423,9 @@ Written only by the mutator.
 ```toml
 service      = "myapp-production"
 workload     = "myapp"           # the part of the service name before the environment
-project      = "myapp"           # the manifest's project, or the source directory's basename
+project      = "myapp"           # the manifest's project, or the project its --from source
+                                 # belongs to. Never a path basename: under the new layout the
+                                 # staging directory's basename is a sha
 environment  = "production"
 uid          = 1004
 created      = "2026-09-29T10:12:00Z"
@@ -451,13 +455,15 @@ publication = { web = 20120 }   # that instance's own publications, allocated pe
                                 # instances of one service can both be routed at once
 seed    = { data = 38 }          # per state volume, by configuration name
 
-[gate]
-state   = "ready"                # ready | blocked | not-required
-reason  = "missing required key: DB_PASSWORD"   # present only when blocked
+[gate]                            # one per SERVICE, not per instance: every instance shares the
+                                  # service's uid and therefore one secret store, so the
+                                  # credential state is a property of the service. Omitted
+                                  # entirely when the gate has never been evaluated, which is
+                                  # NOT the same as state = "ready"
+state   = "blocked"              # ready | blocked | not-required
+reason  = "missing required key: DB_PASSWORD"   # present only when state = "blocked"
 checked = "2026-09-29T10:12:03Z"  # when the verdict was last taken, by `weedr service gate`
-                                     # or by `weedr service start` re-checking. A service whose
-                                     # gate has never been evaluated has no [gate] table at all,
-                                     # which is not the same as `ready`
+                                     # or by `weedr service start` re-checking
 
 [generated]
 "API_KEY" = "2026-09-29T10:12:00Z"   # a value guarden minted, not one a human planted. Once
@@ -470,7 +476,8 @@ checked = "2026-09-29T10:12:03Z"  # when the verdict was last taken, by `weedr s
 
 `workload` and `project` are different things and may differ. `workload` is the service name
 without its environment segment. `project` is the manifest's `project` field, defaulting to
-the basename of the source directory `weedr service add --from` was given. The instance cap
+the project its `--from` source belongs to — the `<project>` of `--from poke <project>@<sha>`,
+or the source service's project for `--from <service>`. The instance cap
 counts per **preview service**, which is per workload and environment — never per project,
 because two repositories may declare the same project name.
 
@@ -575,7 +582,8 @@ programs are shared and ship with guarden.
 `.guarden/service.yml` at the repository root.
 
 ```yaml
-project: myapp                    # optional; defaults to the basename of the source directory
+project: myapp                    # optional; defaults to the project the --from source
+                                 # belongs to, never to a path basename
 
 units: compose.yaml               # or: units: .guarden/quadlet/ — exactly one
 
@@ -742,13 +750,17 @@ flag therefore do not have one, and each capability is a separate verb instead:
 
 | capability | verb | on the `guarden` sudoers rule? |
 |---|---|---|
+| create a service from a poke | `weedr service ingest` | **yes** |
+| create a service from another service's tree | `weedr service add` | **no** |
+| fork, with a chosen source | `weedr service fork` | **no** |
 | grant a public port | `weedr port open` | **no** |
 | destroy a service's volumes | `weedr service purge` | **no** |
 | roll a service back to a snapshot | `weedr service rollback` | **no** |
 
-Every verb that *is* granted is granted whole. A caller that can run `weedr service add` cannot
-grant a port, cannot destroy data, and cannot roll anything back, because none of those is a flag
-on something it can run.
+Every verb that *is* granted is granted whole. A caller that can run `weedr service ingest`
+creates a service and nothing else: it cannot grant a port, cannot destroy data, cannot roll
+anything back, and cannot choose where a service's tree or data comes from, because none of those
+is a flag on something it can run.
 
 Names are service names everywhere. There is no separate host-name convention, no suffix, and
 no alias: the name a consumer resolves is the service's own name, and the route target Traefik
@@ -800,6 +812,14 @@ mean something other than what it says, and every mitigation for it was a check 
 confinement, a `realpath` resolution, a symlink refusal, a uid-conditional allowance. A service
 name and a `<project>@<sha>` pair are not paths. The system resolves them to locations it already
 owns, and there is nothing left to confine.
+
+**The rule is about the verb surface, not about every read.** A root-owned program reading a
+root-owned path it shipped is not a caller naming a location, and one case depends on the
+distinction: `weedr module add` creates the module's declared services from the unit source in
+`/usr/lib/guarden/modules/<name>/`, which guarden shipped and root owns. It reads that path
+itself, takes no `--from` form for it, and offers no way for anyone to name a different one. So
+the two-place rule holds for every caller — operator, `furrow` and `hose` alike — without
+implying that `weedr` may not read its own installation.
 
 Two consequences, and they are the reason this is the shape rather than a preference:
 
@@ -978,7 +998,9 @@ weedr service ingest <name[/ref]> --from poke <project>@<sha>
 weedr service add <name[/ref]> --from <service>
 weedr service remove <name[/ref]>
 weedr service purge <name>                 # the only destructive verb; not on any sudoers rule
-weedr service gate <name[/ref]>            # evaluate the credential gate; change nothing else
+weedr service gate <name>                  # evaluate the credential gate; change nothing else.
+                                           # No [/ref]: the verdict is per SERVICE, because
+                                           # every instance shares the service's secret store
 weedr service start|stop|restart <name[/ref]>   # start re-evaluates the gate
 weedr service list [--json]
 weedr service status <name[/ref]> [--json]
@@ -1269,7 +1291,7 @@ one. `--now` skips queue position for this request only. Queue state is a direct
 under `/var/lib/guarden/queue`, so `ls` answers what is waiting and a reboot does not lose an
 accepted request.
 
-****`--from` is required when the service does not exist, and it never takes a path.** The only
+**`--from` is required when the service does not exist, and it never takes a path.** The only
 form is `poke <project>@<sha>`, and the mutator builds
 `/var/lib/guarden/staging/<project>/<sha>` itself. `<project>` is checked against the project's
 `projects.toml` entry and `<sha>` must be hex, so **the path is assembled by the system from two
@@ -1330,9 +1352,18 @@ The steps, in this order, and the order is the point (ADR-0011):
    the key, the gate records `not-required`, and the start proceeds. That is the whole difference
    between the two tracks, and it is the only difference.
 4. Stop the units.
-5. Install the rendered units, record the sha, reload the user manager, start — and `start`
-   re-evaluates the gate, so a service that was blocked and is now unblocked starts here without
-   anything else having to notice.
+5. Install the rendered units, record the sha, reload the user manager, and then **start only if
+   step 3 recorded `ready` or `not-required`.** A blocked gate stops the sequence here: the units
+   are installed, the user manager is reloaded, the container is not started, and `furrow`
+   reports the `[gate] reason` and exits `0`. `furrow` does **not** call `weedr service start` on a
+   blocked service and then convert its exit `1` into a `0` — it reads the verdict step 3 recorded
+   and branches, so the verb that says `1` and the deploy that says `0` are never both spoken
+   about the same attempt.
+
+   The consequence for an existing service is the property ADR-0011 orders for: a blocked gate
+   never reaches step 4, so the running container is untouched. For a service that is being
+   created for the first time there is nothing to stop, and the same sequence leaves it installed
+   and waiting.
 
 Only builds are queued. A deploy that pulls a prebuilt image competes for no resource with
 anything and does not go behind a build lane.
@@ -1363,10 +1394,10 @@ permitting `weedr service add` would have permitted `weedr service add --grant-p
 resolution was to remove the flags rather than to try to constrain the arguments, and to make
 each capability its own verb:
 
-- **No flag on a granted verb widens authority.** `weedr service add` has `--from` and nothing
-  else; the grant is `weedr port open`, a different verb that is not on the rule. So a poke can
-  create a service and leave its ports pending, which is ADR-0006's rule arriving through the
-  mechanism that enforces it.
+- **No flag on a granted verb widens authority.** `weedr service ingest` takes `--from poke
+  <project>@<sha>` and nothing else; the grant is `weedr port open`, a different verb that is not
+  on the rule. So a poke can create a service and leave its ports pending, which is ADR-0006's
+  rule arriving through the mechanism that enforces it.
 - **Nothing on the rule destroys data.** `weedr service remove` moves volumes aside; the verb
   that deletes them is `weedr service purge`, and it is not on the rule. No program that answers
   a poke can destroy data, and the sudoers file is where that is true rather than a sentence
@@ -1518,7 +1549,7 @@ is not a surprise in a monitoring script.
 
 | trigger | runs |
 |---|---|
-| end of `weedr service add` / `remove` / `fork` / `rollback` | `roots sync` and `twig sync`, as the `guarden` user |
+| end of `weedr service ingest` / `add` / `remove` / `fork` / `rollback` | `roots sync` and `twig sync`, as the `guarden` user |
 | `guarden-sync.path` on `/var/lib/guarden/shared/` | the same, so an edit made outside the mutator still converges |
 | `guarden-queue.path` on `/var/lib/guarden/queue/` | `furrow`, which drains the queue; no daemon. A `.path` on a directory the triggered program also writes to can re-trigger itself as it dequeues, so the unit carries `TriggerLimitIntervalSec` and the drainer removes a request file only after it has finished with it |
 | `guarden-pins.path` on `/var/lib/guarden/stakes/` and `/var/lib/guarden/registry/` | `weedr pin sync`, under the `snapshots` lock |

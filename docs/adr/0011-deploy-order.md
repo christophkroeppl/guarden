@@ -8,7 +8,8 @@ A deploy is a fixed sequence, and the order is the point:
 1. **Render.** `loom` turns the manifest plus the registry into units, and the mutator installs
    what the render will need, without starting anything.
 2. **Build.** If the unit source has a build instruction, the build runs as the service user,
-   through the mutator verb `weedr service build <name> --from <the staged source>`. It is a
+   through the mutator verb `weedr service build <name>`, which takes no `--from` because a build
+   has exactly one tree it may build and it is the service's own. It is a
    mutator verb because an unprivileged `furrow` cannot become the service user, and because the
    subuid range belongs to the service user and only it may map container-root into it; `furrow`
    never touches podman. A failed build exits `1` and the running container is still running.

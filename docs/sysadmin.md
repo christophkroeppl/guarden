@@ -144,7 +144,8 @@ own programs call it, so `rm` is not something a script, a unit, or anything run
 ## Services
 
 ```sh
-weedr service add <name[/ref]> --from <dir>
+weedr service ingest <name[/ref]> --from poke <project>@<sha>
+weedr service add <name[/ref]> --from <service>
 weedr service remove <name[/ref]>      # alias: rm
 weedr service purge <name>             # the only destructive verb
 weedr service start|stop|restart <name[/ref]>
@@ -152,7 +153,8 @@ weedr service list [--json]
 weedr service status <name[/ref]> [--json]
 ```
 
-`--from` is **required**: a service is created from a manifest on disk and guarden never infers
+`--from` is **required** and names a service or a poke, never a folder. A service is created from
+a manifest and guarden never infers where one is
 where one is.
 
 Names carry the environment: `myapp-production`, `other-app-staging`, `postgres-production`,
@@ -377,7 +379,7 @@ one `warning:` line and the start proceeds.
 The build step is a mutator verb:
 
 ```sh
-weedr service build <name> --from <the staged source>
+weedr service build <name>
 ```
 
 It runs `podman build` **as the service user**, tagged with the image reference the manifest
@@ -386,7 +388,9 @@ unprivileged `furrow` cannot become the service user, and the subuid range belon
 user and only it may map container-root into it. `furrow` never touches podman.
 
 The first step is how a poke creates a service: if there is no registry entry, `furrow` calls
-`weedr service add` itself — which has no flag that could grant a port, because the grant is
+`weedr service ingest <name> --from poke <project>@<sha>`, naming the project and sha it received
+and never a path, since the mutator builds the staging location itself. `ingest` has no flag that
+could grant a port, because the grant is
 the separate verb `weedr port open`, which `furrow` may not run.
 
 Only builds are queued, and lanes bound builds only. `build.lanes` in `guarden.toml` is how many

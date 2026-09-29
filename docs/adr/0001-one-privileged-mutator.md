@@ -68,6 +68,14 @@ first of those is ADR-0006's rule arriving through the mechanism that enforces i
 through a convention nobody reads. The second means no program that answers a poke can destroy
 data, and the file is where that is true.
 
+`weedr service fork` and `weedr service add` were removed from the rule for the same reason, and
+for a stronger one: both carry a *source*, and the source is the only thing that can change where
+a service's tree or data comes from. The automatic fork on a `fork_from` track is a step inside
+`weedr service ingest` rather than a verb a deployer calls, so there is no `fork --from` for a
+poke to reach and `production`, whose `fork_from` is empty, always starts empty. An operator
+forking a staging database into production does it by hand with the root verb, deliberately and in
+the call log.
+
 `weedr service rollback` was removed from the rule for the same reason. It replaces a service's
 current volumes with a clone of an old snapshot and was gated only by a `--yes` the rule could
 not distinguish from any other argument, so a rule that granted it granted the ability to
@@ -81,7 +89,7 @@ range belongs to the service user and only it may map container-root into it.
 `hose` gets its own, smaller surface, and it is `(guarden)` — the deploy queue, not the mutator.
 Dropping a preview instance reaches the mutator only through `furrow preview drop`, and a poke
 can only ask for `furrow deploy` or that one drop, so a repository's workflow can never arrive at
-the removal of a service in a gated track. `hose` cannot run `weedr` at all. Because the rule
+the removal of a service in a gated track. `hose` cannot run a `weedr` verb that changes anything. Because the rule
 names `(guarden)` explicitly, "a poke cannot reach a shell" is a property of the file rather than
 of a reader's assumption about how sudoers works.
 
