@@ -68,9 +68,16 @@ a new ADR that supersedes it. The short version:
   `weedr service remove <name>` is refused while any instance exists, naming them.
   `weedr service purge <name>` — a separate verb, not a flag — is refused for an instance,
   because an instance's volumes are the service's.
-- Lineage is derived from the track and cannot be set by a repository or by `overrides.toml`:
-  production starts empty, staging forks from production, a preview forks from staging. Only
-  `weedr service fork --from` overrides it.
+- Lineage is derived from the track's `fork_from` field and cannot be set by a repository or by
+  `overrides.toml`: production starts empty, staging forks from production, a preview forks from
+  staging. The automatic fork is a step inside `weedr service ingest` with no argument, and
+  `weedr service fork --from` — the override — is **root only and off the guarden rule**, so a
+  poke can never fork a production service from staging. An operator who wants that does it by
+  hand, deliberately and in the call log.
+- **A poke may create a service in a gated track, including production, and that is forced rather
+  than chosen.** With no git clone and no `add --from <service>` reachable from CI, the staged
+  tree a poke carries is the only way code reaches a workload that does not exist yet. What stands
+  between a push and a running production container is the gate, not the creation.
 - Connectivity is one loopback namespace. A declared edge produces an `AddHost=` entry in the
   consumer's own units, a uid-matched firewall rule and a per-consumer credential. There is no
   shared podman network, no name map, and no per-group address space.
@@ -193,7 +200,9 @@ a new ADR that supersedes it. The short version:
   naming a command without an argument specification matches any arguments, and sudoers has no
   negation, so `--grant-ports` on a service-creating verb could never have been withheld — the grant
   already permitted it. The capabilities are therefore verbs: a grant is `weedr port open`,
-  destruction is `weedr service purge`, and `weedr service rollback` is not on the rule at all.
+  destruction is `weedr service purge`, and `weedr service rollback` is not on the rule at all —
+  rolling a production database back is an operator's deliberate act, made as root, with no
+  program between the decision and the subvolume operations.
   Every verb that is granted is granted whole. Write the long form in every call site, every
   unit and every sudoers rule: a rule naming `weedr service rm` would not match it.
 - Snapshots are atomic per volume, taken while the service runs. A fork is a copy-on-write

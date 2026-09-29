@@ -78,7 +78,7 @@ snapshots that must survive and runs no delete loop.
 - [ ] A failed fork restores the previous subvolumes, starts the target, and exits 1, leaving
       nothing half-swapped
 - [ ] The btrfs-progs version is checked and reported, not worked around
-- [ ] `weedr service rollback <name> --to <number>` stops, swaps, starts; it is refused on a track
+- [ ] `weedr service rollback <name[/ref]> --to <number>` stops, swaps, starts; it is refused on a track
       with `gated = true` outright, with no override flag, and refused entirely — changing nothing — if the
       snapshot is missing from any state volume
 - [ ] Lineage is derived from the track's `fork_from` field and never from its name: the shipped

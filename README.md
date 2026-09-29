@@ -489,7 +489,9 @@ asks `furrow` to deploy. The box keeps no git state. CI holds one ssh key per pr
 nothing else — no registry token, no GitHub credential. `weedr project grant` installs one key
 bound to its project by a forced command, and `weedr project revoke` takes it away again.
 
-A push to `main` can create and deploy a service in a gated track; the first deploy starts with
+A push to `main` can create and deploy a service in a gated track, production included. That is
+forced, not chosen: with no clone on the box, a poke carrying a tree is the only way code reaches
+a workload that does not exist yet. What holds the start is the gate. The first deploy starts with
 an empty database and waits for you to plant its credentials. A poke can never remove a service
 in a gated track — the refusal is enforced root-side, and the only way to allow it is for you to
 create `/etc/guarden/allow-gated-drop` yourself. If you would rather not have gitops, do not

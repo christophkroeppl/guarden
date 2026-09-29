@@ -738,7 +738,7 @@ proceeds.
 ```sh
 weedr service snapshot <name>                       # does not stop anything
 weedr service fork <target[/ref]> --from <service>[@<number>]
-weedr service rollback <name> --to <number>   # refused outright on a gated track
+weedr service rollback <name[/ref]> --to <number>   # refused outright on a gated track
 ```
 
 There are two kinds of snapshot and they are governed differently, so read which one you have

@@ -836,6 +836,16 @@ Two consequences, and they are the reason this is the shape rather than a prefer
 `ingest` requires its two arguments. `add` requires `--from`, and is also the reconcile command:
 run either again to apply an edited manifest.
 
+**A poke may create a service in a gated track, including `production`, and that is forced rather
+than chosen.** With no `--from git` and no `add --from <service>` for CI, the staged tree a poke
+carries is the only path in the system that brings code to a workload that does not exist yet. A
+rule that only root could create a production service would make the first production deploy of
+every new project impossible, not safer. So CI creates, and what stands between a push and a
+running production container is not the creation but the gate: the service exists, builds and
+installs, and **does not start** until an operator has planted its credentials and run
+`weedr service start`, which needs root (§6.6). The gate is a mutator verdict precisely so that
+the thing that starts a production service is never reachable from a workflow key.
+
 In order:
 
 1. The registry entry, if absent.
@@ -1416,11 +1426,13 @@ each capability its own verb:
   returns. The gate it records is re-evaluated by `weedr service start` every time, so a wrong
   verdict — the only thing a compromised `guarden` program could produce here — cannot start
   anything, and the worst case is a stale line in the registry.
-- **`weedr service rollback` was removed from the rule.** It replaces a service's current volumes
-  with a clone of an old snapshot, so it is destructive in the way `purge` is, and it used to be
-  gated only by a `--yes` the rule could not distinguish from any other argument. `furrow` never
-  rolls anything back — the deploy sequence in ADR-0011 has no such step — so nothing needed it
-  and the operator, who runs as root anyway, is not inconvenienced.
+- **`weedr service rollback` was removed from the rule**, and the operator keeps it as a root
+  verb. It replaces a service's current volumes with a clone of an old snapshot, so it is
+  destructive in the way `purge` is, and it used to be gated only by a `--yes` the rule could not
+  distinguish from any other argument. `furrow` never rolls anything back — the deploy sequence in
+  ADR-0011 has no such step — so nothing needed it, and **rolling a production database back is
+  an operator's deliberate act, made as root, with no program between the decision and the
+  subvolume operations.** An indirection there would be a liability, not a convenience.
 
 The verbs it may name are exactly the ones in the block. Never `weedr port open`, `weedr port
 close`, `weedr service purge`, `weedr service rollback`, `weedr module add`, `weedr project
@@ -2020,7 +2032,7 @@ read-only by default. It is used after a fork to confirm the clone's flag was cl
 
 ### 8.6 Rollback
 
-`weedr service rollback <name> --to <number>` validates the complete set as in §8.4,
+`weedr service rollback <name[/ref]> --to <number>` validates the complete set as in §8.4,
 stops the service, replaces each state volume with a clone of that snapshot, and starts it.
 Refused outright on a track with `gated = true`, with no flag that overrides it — the verb is not
 on the `guarden` sudoers rule at all, so this is a refusal an operator can only lift by
