@@ -42,7 +42,10 @@ services, grants what the module declares, installs the units, and creates
 `/var/lib/guarden/shared/dashboard/` `guarden:guarden 0750` — the one directory `twig` may
 write, which is the writer/reader split the edge's directory already draws and the reason a
 dashboard module did not need a third group. `weedr module remove <name>` is the inverse in a
-stated order (spec §6.2), and its step four is the one that matters: it re-renders the ingress
-from the **remaining** modules and installs it, because `soil firewall` is not run by a module
-removal and the removed module's forwarding rules would otherwise outlive it. This is why modules are
+stated order (spec §6.2), and its step four is the one that matters: it calls
+`soil firewall --apply` rather than re-rendering the ingress itself, because `soil` is the only
+writer of `20-ingress-nat.conf`. An earlier revision had the mutator write that file itself,
+which made a second writer on a file the layout gives one writer, and did it with no `firewall`
+lock. Nothing runs `soil firewall` automatically when a module changes, so without the explicit
+call the removed module's forwarding rules would outlive it. This is why modules are
 configuration rather than a compile-time feature list.

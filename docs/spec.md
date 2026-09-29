@@ -64,7 +64,7 @@ change to this table and not a compatible addition.
 
 | verb | top-level fields |
 |---|---|
-| `weedr service list` | `services` — one object per service, each with `name`, `workload`, `project`, `environment`, `uid`, `source`, `deployed_sha`, `publication`, `edges`, `ports`, `volumes`, `instances`, `warnings` |
+| `weedr service list` | `services` — one object per service, each with `name`, `workload`, `project`, `environment`, `uid`, `source`, `deployed_sha`, `publication`, `edges`, `ports`, `volumes`, `instances`, `warnings`. The nested objects are specified too, because a top-level name whose contents are open is not a field set: `publication` is `{ container, port }` pairs plus `api`; `edges` is `{ service, port, as, auth, publications }` per declared edge; `ports` is `{ requested, granted, pending }`; `volumes` is `{ name, kind, config, snapshots: { total, marked, oldest, newest, limits }, removed }` per declared volume; `instances` is `{ ref, created, seed }` per instance; and `warnings` is a list of one-line strings, **including the two host invariants and the two host-lock state reports**, because those are what §6.2 says this verb reports |
 | `weedr service status` | one object: `name`, `ref` (null on a slot track), `unit_state`, `active_state`, `sub_state`, `publications`, `edges`, `snapshots`, `instances`, `warnings` |
 | `weedr secret list` | `secrets` — one object per key, each with `name`, `set` (bool), `source` (`planted` \| `generated`), `example` (bool). **Never a value** |
 | `weedr port list` | `services` — one object per service, each with `name`, `requested`, `granted`, `pending` |
@@ -72,14 +72,24 @@ change to this table and not a compatible addition.
 | `weedr project list` | `projects` — one object per project, each with `name`, `repository`, `environments` |
 | `weedr project keys` | `project`, `keys` — one object per key with `type`, `fingerprint`, `added` |
 | `stakes list` | `pins` — one object per pin with `id`, `service`, `volume`, `number`, `note`, `marked` |
-| `stakes query` | one object: `id`, `service`, `volume`, `number`, `tag`, `description`, `important`, `userdata`, `note` |
+| `stakes query` | one object: `id`, `service`, `volume`, `number`, `note`, `marked` — **and nothing snapper holds.** See below |
 | `furrow queue list` | `requests` — one object per request with `service`, `ref`, `sha`, `state`, `lane`, `weight`, `queued_at` |
 | `furrow status` | `lanes`, `in_flight`, `deployed`, `queued` |
 
-`stakes query` reads `important` and `userdata` from `snapper list --machine-readable json`,
-where `userdata` renders as an object (§8.2). `marked` in `stakes list` is a statement about
-what the reconciler will write, not about the filesystem: a pin is a priority with a budget and
-not a promise (§8.5).
+**`stakes query` reads the pin file and the registry, and nothing else.** An earlier version of
+this table listed `tag`, `description`, `important` and `userdata` for it, which is the same
+contradiction §6.8 states a third time: those fields come from snapper, a service's
+configurations are `0700` to that service, and `stakes` runs as `guarden` and cannot read them.
+`stakes` cannot report the age of a snapshot, whether it exists, or whether the reconciler's mark
+survived the number cleaner, and the field set says so rather than implying otherwise.
+
+`marked` is a statement about **what `weedr pin sync` will write**, not about the filesystem: a
+pin is a priority with a budget and not a promise (§8.5), and under real disk pressure a marked
+snapshot can be reaped. A caller wanting the truth about the filesystem asks root, and the
+read that gets it — `snapper list --machine-readable json`, where `userdata` renders as an
+object and `important` is therefore a key rather than part of a comma-joined CSV string — is
+`weedr service status --json`'s `snapshots` field (§6.2), which runs as root. §8.2 is about
+that read, not about `stakes`.
 
 ### 1.3 Verb aliases
 
@@ -117,7 +127,9 @@ to it.
   edge/auth-provider                   the auth module's marker, read by roots
   firewall/10-framework.conf           ferm skeleton, dead-man timer, the interface's
                                        route_localnet. Written by soil.
-  firewall/20-ingress-nat.conf         the edge's three forwarding rules. Written by soil.
+  firewall/20-ingress-nat.conf         the edge's three forwarding rules. Written by soil,
+                                       and by nothing else -- a module change converges it by
+                                       calling `soil firewall --apply`, not by writing it
   firewall/30-services.conf            the whole uid-matched filter set, and any service's own
                                        forwarding rules. Written by the mutator.
   creds/<name>/<KEY>.cred              systemd-credential blobs, mode 0600
@@ -194,7 +206,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/var/lib/guarden/soil/` | `0750` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/staging/` | `0755` | `root:root` | `soil storage`. **Nobody creates a subdirectory here at run time** |
 | `/var/lib/guarden/staging/<project>/` | `0755` | the `hose` user | `weedr project grant`, and `weedr project revoke` removes it. Pre-created because `hose` is unprivileged and cannot `mkdir` under a `0755 root:root` parent |
-| `/var/lib/guarden/staging/<project>/<sha>/` | `0755`, files `0644`, removed after the deploy | the `hose` user | `hose` |
+| `/var/lib/guarden/staging/<project>/<sha>/` | `0755`, files `0644` | the `hose` user | `hose`, and **`hose` removes it** once the deploy returns |
 | `/run/guarden/` | `0755` | `root:root` | `soil install`, via `tmpfiles.d` — it is tmpfs and must be recreated every boot |
 | `/run/guarden/locks/` | `0770` | `root:guarden` | `soil install`, via `tmpfiles.d`, mode and owner from the row above |
 | `/etc/guarden/**` | `0640` | `root:guarden`, directories `0750` | |
@@ -742,7 +754,7 @@ In order:
 1. The registry entry, if absent.
 2. A system user of the same name, home `/var/lib/guarden/services/<name>/home`, no login
    shell, linger enabled, and a subuid/subgid range allocated by the system with
-   `useradd --system --add-subids-for-system`, falling back to `usermod --add-subuids`. The
+   `useradd --system --add-subuids-for-system`, falling back to `usermod --add-subuids`. The
    mutator reads `/etc/subuid` and `/etc/subgid` back and **fails loudly** if the range it
    asked for is absent. Every service user gets a distinct range; a shared range would map
    every container's root to the same host uid. The home is `0700`; the service tree is `0700`.
@@ -824,7 +836,8 @@ no `soil users` phase: the two program users are created by `install`.
 - `storage` verifies btrfs with `@` and `@var` subvolumes, installs
   `/etc/apt/apt.conf.d/80guarden-snapper` with a `DPkg::Pre-Invoke` that snapshots `root`
   before every package transaction, converges the canonical value set into every snapper
-  configuration it can see (§8.1), creates `root` and `home`, and installs
+  configuration it can see — a service's configurations, and the host's own `root` and `home`,
+  and nothing else (§8.1) — creates `root` and `home` where they are absent, and installs
   `/var/lib/guarden/soil/`. It creates **no** service volume. It also **disables the
   distribution's packaged snapper cleanup timer** and installs the replacement that takes the
   `snapshots` lock (§8.5). A snapper configuration belonging to a service is created by the mutator and is
@@ -995,7 +1008,17 @@ and rewrites nothing else in the file, under the `modules` lock and through the 
 It then, for the module's declared services, does everything a service needs: creates the
 service from the module's own unit source, installs the units, creates any group the module owns
 (`gate` owns `edge` and adds the edge's service user to it), and converges the edge's forwarding
-from the modules' declared ingress.
+by invoking `soil firewall --apply`.
+
+**The mutator does not write `20-ingress-nat.conf`; it calls the program that does.** An earlier
+revision of this step had the mutator re-render the file itself, which put a second writer on a
+file the layout table says has exactly one, and did it with no `firewall` lock — the precise
+stale-render failure the lock exists to prevent. Calling `soil` is not a violation of the
+renderer's separation either: ADR-0012's rule is that the mutator never runs a program **over
+repository input**, and `soil firewall` reads `guarden.toml` and the module directory, both
+root-owned. The two steps that touch the module list and the ingress therefore do not nest: the
+`modules` lock is released before the `firewall` lock is taken, and `soil firewall` re-reads
+`guarden.toml` under that lock rather than trusting what `weedr module add` saw.
 
 **A module grants no port and no mount.** `module.toml` (§3.6) declares `name`, `requires`,
 `[[services]]` with `service`/`ingress`/`api`, and `[[switches]]` with `program` — there is no
@@ -1017,10 +1040,11 @@ module is the failure this verb exists to prevent. In order, under the `modules`
    never deleted, so a module removal is reversible with `weedr service add`; nothing here
    destroys data, and `weedr service purge` is not reachable from a module removal.
 3. Remove the module's name from `[modules] enabled` in `guarden.toml`, through the protocol.
-4. Re-render `20-ingress-nat.conf` from the **remaining** enabled modules' declared ingress
-   and install it, so the ports this module declared stop being forwarded. Without this step a
-   removed module's ingress rules would outlive it, and `soil firewall` is not run by a module
-   removal.
+4. Call `soil firewall --apply`, which re-renders `20-ingress-nat.conf` from the **remaining**
+   enabled modules' declared ingress and installs it, so the ports this module declared stop
+   being forwarded. The mutator does not write that file, because `soil` is its only writer.
+   Without this step a removed module's ingress rules would outlive it, since the module removal
+   is what changed the input and nothing else would notice.
 5. Re-render the edge's routes and the dashboard from the remaining services (§6.9).
 6. Remove the group the module owns **only** if no remaining service is in it, and report the
    group removal on stdout. A group in use is a `warning:` line and exit `0`, not a failure.
@@ -1291,8 +1315,16 @@ files so that `guarden` can render it and root can read it, because `hose` is de
 member of the `guarden` group — it may read `projects.toml` and nothing else under
 `/etc/guarden`, and the world bits on a transient source tree are the price of that. **A service
 can read another project's staged source while a deploy is in flight**, which is stated rather
-than hidden: the tree is removed after the deploy and it contains no secret, because a repository
-contains none.
+than hidden: the tree contains no secret, because a repository contains none.
+
+**Whoever created the tree removes it, which for a poke means `hose` and not `furrow`.** The tree
+is owned by the `hose` user, `furrow` runs as `guarden` and has no write on it, and a design in
+which `furrow` deleted a tree it cannot write to was wrong in the same way the creation was.
+`hose` removes `/var/lib/guarden/staging/<project>/<sha>/` after `furrow deploy` returns,
+whatever that deploy exited with, so a failed deploy does not leave a tree behind either. The
+per-project parent directory survives for the next poke and is removed by `weedr project revoke`.
+A `furrow deploy --from` invoked by hand at a terminal leaves the tree, because the caller is a
+human who chose the path, and `furrow` prints a `warning:` naming the path it did not remove.
 
 Unpacking is hardened: extracted as the `hose` user under `umask 022`, with no absolute member
 names, no `..` component, no preserved ownership, and no symlink followed. A member that
@@ -1561,10 +1593,31 @@ both contain `-`, so `<service>-<volume>` cannot be decomposed back into its par
 that tried would be wrong for any service named `my-app`. `soil storage` therefore never reads
 the track out of the name: it reads `registry/<name>.toml`, which records the service's
 `environment` as a field, and takes `free_limit` and `keep_last` from the environment table row
-for that field. A configuration whose name matches no registry entry is **skipped with a
-`warning:` line naming it**, because a configuration guarden does not understand is not one it
-may rewrite — the whole point of converging a fixed set into "every configuration it can see"
-is that it is a fixed set and not a policy.
+for that field.
+
+**The skip rule is narrower than "a name I do not recognise".** It has exactly three cases and no
+others, because a rule that skips whatever it does not recognise silently drops configurations the
+operator owns:
+
+- **A service's configuration** — the name matches a registry entry, so the track is read from the
+  registry and the retention values come from that track.
+- **`root` and `home`**, the host's own. These are converged with the **fixed set only** —
+  `EMPTY_PRE_POST_CLEANUP`, `NUMBER_MIN_AGE`, `NUMBER_CLEANUP`, `TIMELINE_CLEANUP` — and **no
+  ladder value and no `FREE_LIMIT` is written for them**, because no track owns them and there is
+  no track to read a default from. Their ladder is left as the distribution shipped it. Nothing
+  snapshots them on a schedule, so their limits govern only what a human gets who runs `snapper`
+  by hand there, and that is a human's own housekeeping rather than a policy guarden owns. An
+  earlier revision applied the skip rule to these two as well, which meant every
+  `soil storage --apply` emitted two warnings and never converged the host at all.
+- **Anything else** is a configuration guarden did not create, so it is **skipped with a
+  `warning:` line naming it** and left byte-for-byte alone. This is the "every configuration it
+  can see" in the phase description, and "can see" is doing the work: seeing means a name that
+  either matches a registry entry or is one of the host's two.
+
+A configuration for a **removed** service is the case that matters most, and it is the second
+branch: `weedr service remove` deletes the service's `state` subvolumes, and `soil storage` is
+what removes their snapper configurations. They are gone before the next `soil storage --apply`
+runs, so there is no stale configuration to skip.
 
 `soil storage` converges this fixed set of values into **every** configuration it can see and
 rewrites nothing else in them:

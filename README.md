@@ -279,9 +279,14 @@ There is no secrets service and no encrypted blob in a repository.
   cannot: it runs in the service user's user manager, which cannot read a `0600 root` system host
   key and has no business holding it. It names the secret and podman resolves it.
 
-  The value is protected from every other service, from the host's storage and from backups; it is
-  deliberately available to the service that owns it, because a rootless container shares that
-  service's uid. If you lose the VPS **and** the encryption key, every credential is
+  The value is protected from every other service, and from a backup of `/etc`. It is **not**
+  protected from a backup of `/var/lib`: the credential materialiser writes the cleartext value
+  into the owning service's podman secret store, and podman keeps secrets in the clear, so the
+  `0700` on that home is the protection. A stolen disk, a provider volume snapshot or a `tar` of
+  `/var/lib` yields every credential in the clear. It is deliberately available to the service
+  that owns it, because a rootless container shares that service's uid — but the distinction to
+  carry away is *encrypted blob* versus *materialised copy*, and only the first survives an
+  encrypted-key theft. If you lose the VPS **and** the encryption key, every credential is
   unrecoverable and each has to be re-planted from your own offline copy — there is no second copy
   of a host key anywhere. That is the deal for one person and one box.
 - **Staging and previews:** generated once, stable until the service is removed.

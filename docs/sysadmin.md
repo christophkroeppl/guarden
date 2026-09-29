@@ -246,7 +246,9 @@ always one of these numbers.
 | `/var/lib/guarden/stakes/` | `0770` | `root:guarden` |
 | `/var/lib/guarden/queue/` | `0770` | `root:guarden` |
 | `/var/lib/guarden/soil/` | `0750` | `root:guarden` |
-| `/var/lib/guarden/staging/<project>/<sha>/` | `0755`, files `0644`, removed after the deploy | `root:root` |
+| `/var/lib/guarden/staging/` | `0755` | `root:root`. Nobody creates a subdirectory here at run time |
+| `/var/lib/guarden/staging/<project>/` | `0755` | the `hose` user. Created by `weedr project grant`, removed by `weedr project revoke` — `hose` is unprivileged and cannot `mkdir` here itself |
+| `/var/lib/guarden/staging/<project>/<sha>/` | `0755`, files `0644` | the `hose` user, which also removes the tree after the deploy |
 | `/etc/guarden/**` | `0640`, directories `0750` | `root:guarden` |
 | `/etc/guarden/projects.toml`, `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` |
 | `/etc/guarden/creds/` | `0700` | `root` |
