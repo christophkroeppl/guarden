@@ -39,22 +39,17 @@ an operator who has decided to shoot themselves in the foot.
 has its own user because it is the only program a stranger can reach. `snapperd` is a root daemon
 the distribution ships and the design depends on; the claim is about guarden's own programs.
 
-The two sudoers rules are written out in full, with their runas target, because "unprivileged" is
-a property of the file and not of a reader's assumption — and because the default reading of "a
-sudoers rule naming X" is that X runs as root, which would have made `furrow`, the program that
-handles repository-supplied paths, a root program:
-
-```
-guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service ingest, \
-    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service gate, \
-    /usr/lib/guarden/bin/weedr service start, \
-    /usr/lib/guarden/bin/weedr service stop, /usr/lib/guarden/bin/weedr service restart, \
-    /usr/lib/guarden/bin/weedr service snapshot, \
-    /usr/lib/guarden/bin/weedr service build, \
-    /usr/lib/guarden/bin/weedr secret list, /usr/lib/guarden/bin/weedr port list, \
-    /usr/lib/guarden/bin/weedr service list, /usr/lib/guarden/bin/weedr service status, \
-    /usr/lib/guarden/bin/weedr module list
-```
+Both sudoers rules are written out in full, once, in `docs/spec.md` §6.6 and §6.7 with their
+runas targets. They are not repeated here: a rule duplicated across documents is a rule that
+drifts, and this one has changed four times in the spec's own history. What matters *for this
+document* is the consequence, which does not need the block: the `guarden` rule runs the
+mutator verbs as **root** — so `guarden`, the user that runs `loom`, reaches root through
+exactly the verb list, and the program that handles repository-supplied paths is not itself
+a root program — while `hose`'s rule runs as **`(guarden)`**, so the default reading of "a
+sudoers rule naming X is that X runs as root" is false here and would have made a
+network-facing program a root one. `hose`'s only `weedr` verb is `weedr project list`;
+`weedr service list` is deliberately absent because this rule's runas target is `guarden`
+and that verb is a root read.
 
 The `(root)` is the mutator, and the verbs named are exactly the lifecycle and read verbs plus
 `weedr service build`. Never `weedr port open`, `weedr port close`, `weedr service purge`,

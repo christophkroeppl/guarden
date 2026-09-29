@@ -78,7 +78,7 @@ snapshots that must survive and runs no delete loop.
 - [ ] A failed fork restores the previous subvolumes, starts the target, and exits 1, leaving
       nothing half-swapped
 - [ ] The btrfs-progs version is checked and reported, not worked around
-- [ ] `weedr service rollback <name[/ref]> --to <number>` stops, swaps, starts; it is refused on a track
+- [ ] `weedr service rollback <name[/ref]> --to <timestamp>` stops, swaps, starts; it is refused on a track. `--to` is a **time** and not a number, because a service with several state volumes has a different number in each configuration and no single number names a set. It resolves each volume to the newest snapshot at or before the time, and refuses with exit 1 naming any volume that has none
       with `gated = true` outright, with no override flag, and refused entirely — changing nothing — if the
       snapshot is missing from any state volume
 - [ ] Lineage is derived from the track's `fork_from` field and never from its name: the shipped
@@ -119,14 +119,12 @@ snapshots that must survive and runs no delete loop.
       configuration owned by `soil` and set by no manifest; the shipped default keeps eight marked
       snapshots under pressure
 - [ ] **`chattr +i` on a snapshot's subvolume is available as an opt-in escalation, and it is a
-      deny rather than a keep-N.** The btrfs delete ioctl returns `EPERM` for an immutable victim
-      and no `NUMBER_LIMIT`, `FREE_LIMIT` or `SPACE_LIMIT` overrides it; btrfs does not inherit
-      immutability, so a fork from an immutable snapshot still works. The cost is exact:
-      snapper's cleaner deletes candidates in a loop with no per-item error handling, so the first
-      candidate it cannot delete **aborts that configuration's entire cleanup for that run**, so
-      while that snapshot is a candidate the configuration stops auto-pruning. It is opt-in, it is
-      recorded with its reason, and unsetting it with `chattr -i` restores normal pruning. A test
-      asserts that unsetting it lets cleanup prune again
+      root verb: `weedr service immutable <id> <reason>` sets the flag AND writes the
+      provider's `[immutable]` record with the reason, and `weedr service mutable <id>` clears
+      both.** One verb for both halves, so a flag without a record and a record without a flag
+      are both impossible. It is **not** `stakes pin`: pinning is a retention act that raises the
+      snapshot to important=yes under the number cleaner, while `chattr +i` is a deny no limit
+      overrides and which aborts the whole cleanup for its configuration. The two compose
 - [ ] The reconciler takes `/run/guarden/locks/snapshots.lock` for the whole run, and so does
       the cleanup oneshot, so the two never overlap. snapper takes no lock that `snapper modify`
       participates in — the per-config lock lives in the daemon, is advisory, and is released

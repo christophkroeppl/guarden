@@ -738,7 +738,7 @@ proceeds.
 ```sh
 weedr service snapshot <name>                       # does not stop anything
 weedr service fork <target[/ref]> --from <service>[@<number>]
-weedr service rollback <name[/ref]> --to <number>   # refused outright on a gated track
+weedr service rollback <name[/ref]> --to <timestamp>   # refused outright on a gated track
 ```
 
 There are two kinds of snapshot and they are governed differently, so read which one you have
@@ -797,7 +797,7 @@ configuration come from the manifest, so after rolling back a database, redeploy
 too if the application schema also moved.
 
 ```sh
-weedr service rollback myapp-production --to 41
+weedr service rollback myapp-production --to 2026-09-27T03:00:00Z
 weedr service start myapp-production
 ```
 
@@ -929,21 +929,31 @@ deletes candidates one at a time with no per-item error handling, so the first c
 cannot delete aborts the whole cleanup for that configuration for that run. It is a deny, not a
 keep-N, and there is no dial that makes it one.
 
-So it is a per-snapshot decision an operator makes, records and can undo. Record it as a pin, so
-the intent is written down rather than remembered:
+So it is a per-snapshot decision an operator makes, records and can undo, and **one verb does
+both halves** — the flag and the record — so they cannot disagree:
 
 ```sh
-stakes pin myapp-production:pgdata@41 "immutable: production rollback base"
+weedr service immutable myapp-production:data@41 "production rollback base"
+lsattr /var/lib/guarden/services/<name>/state/<vol>/.snapshots/<n>/snapshot
+weedr service mutable myapp-production:data@41          # back to normal, record and all
 ```
 
-Production rollback bases are what it is worth spending on. Snapper's own layout puts the snapshot
-subvolume at `.snapshots/<number>/snapshot` under the state volume:
+**This is not a pin, and the runbook used to say it was.** `stakes pin` is a *retention* act: it
+raises the snapshot to `important=yes` under the number cleaner, which respects it up to a
+budget. `chattr +i` is a *deny*: no limit overrides it and the whole cleanup for that
+configuration aborts. Pinning when you meant immutability gives you the weaker of the two plus a
+side effect you did not ask for. They compose — pin it *and* make it immutable — but each has its
+own verb.
+
+Production rollback bases are what it is worth spending on. If you need the flag without the verb,
+snapper's own layout puts the snapshot subvolume at `.snapshots/<number>/snapshot`:
 
 ```sh
 chattr +i /var/lib/guarden/services/<name>/state/<vol>/.snapshots/<n>/snapshot
-lsattr /var/lib/guarden/services/<name>/state/<vol>/.snapshots/<n>/snapshot
 chattr -i /var/lib/guarden/services/<name>/state/<vol>/.snapshots/<n>/snapshot   # back to normal
 ```
+
+Doing it by hand is possible and leaves no record, which is why the verb exists.
 
 While it is set, and while that snapshot is among the candidates, every cleanup for that configuration
 aborts — so the configuration accumulates snapshots rather than pruning them. That is usually the intent, and it is not
@@ -989,7 +999,7 @@ so the free-space pass keeps only their minimum and no retention promise here is
 ```sh
 hose poke <ref> <sha>               # what a project's CI sends; tar archive on stdin
 hose drop <ref>                      # remove a preview instance
-hose check                          # prints "not implemented: events only"
+hose check                          # could a poke deploy? verifies and exits 0 or 1
 ```
 
 There is no drift correction. If a deploy was missed, push an empty commit.
@@ -1036,23 +1046,21 @@ verb.
 
 ### the sudoers surface
 
-The two rules are written out in full, with their runas target, because "unprivileged" is a
-property of the file and not of a reader's assumption — and because the default reading of "a
-sudoers rule naming X" is that X runs as root, which would make `furrow`, the program that
-handles repository-supplied paths, a root program:
+Both rules are written out in full, once, in `docs/spec.md` §6.6 and §6.7 with their runas
+targets. They are not repeated here, because a rule duplicated across documents is a rule that
+drifts and this one has changed four times. What an operator needs from them:
 
-```
-guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service ingest, \
-    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service gate, \
-    /usr/lib/guarden/bin/weedr service start, \
-    /usr/lib/guarden/bin/weedr service stop, /usr/lib/guarden/bin/weedr service restart, \
-    /usr/lib/guarden/bin/weedr service snapshot, \
-    /usr/lib/guarden/bin/weedr service build, \
-    /usr/lib/guarden/bin/weedr secret list, /usr/lib/guarden/bin/weedr port list, \
-    /usr/lib/guarden/bin/weedr service list, /usr/lib/guarden/bin/weedr service status, \
-    /usr/lib/guarden/bin/weedr module list
-```
+- **`guarden ALL=(root)`** — the mutator verbs, run as root. `furrow` runs as `guarden` and
+  reaches root through exactly that list. It does **not** name `weedr port open`,
+  `weedr port close`, `weedr service purge`, `weedr service rollback`, `weedr service fork`,
+  `weedr service add`, `weedr module add`, or any `weedr project` verb, so a workflow can create
+  a service and nothing else.
+- **`hose ALL=(guarden)`** — the deploy queue, run as `guarden`. A poke reaches the mutator only
+  through `furrow deploy` and `furrow preview drop`, and its only `weedr` verb is
+  `weedr project list`.
 
+Read them before you change either program. A verb added to a program that is on a rule is a
+grant, and a grant added to reach one new capability is a grant to everything that verb can do.
 `guarden`'s rule is the mutator, and `weedr service build` is on it: the build has to happen as
 the service user, and an unprivileged `furrow` cannot become the service user. It is never
 `weedr port open`, `weedr port close`, `weedr service purge`, `weedr service rollback`,

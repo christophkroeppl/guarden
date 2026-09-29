@@ -227,7 +227,7 @@ weedr service remove myapp-staging       # alias: weedr service rm
 weedr service purge myapp-staging                     # the only way data dies
 
 weedr service snapshot myapp-production  # take a snapshot, without stopping anything
-weedr service rollback myapp-production --to 41
+weedr service rollback myapp-production --to 2026-09-27T03:00:00Z
 weedr service fork myapp-staging --from myapp-production
 weedr service build myapp-staging            # podman build, as the service user, from its own home
 

@@ -77,7 +77,11 @@ The box takes the source, maps the ref to an environment from a root-owned allow
       ports as part of its status, so a poke can *read* which ports are open; what it cannot do
       is reach `weedr port list`, `weedr port open` or `weedr port close`. Say it here rather than
       claiming `weedr` is unreachable, because it is not. A poke cannot reach a shell
-- [ ] `hose check` prints `not implemented: events only` and exits 0
+- [ ] **`hose check` actually verifies**, and is not a stub: the project is in `projects.toml`, the
+      forced command names this project, the per-project staging directory exists and is writable
+      by the `hose` user, the ref maps to a track, and `guarden` can read what `furrow` needs. Each
+      failure is a `warning:` naming what failed, and the exit is 1 if any failed. It changes
+      nothing, so CI may call it on every push
 - [ ] The staged tree is removed after the deploy
 - [ ] The shipped workflow template contains the poke key and nothing else, with
       `concurrency: { group: <project>/<ref>, cancel-in-progress: true }`

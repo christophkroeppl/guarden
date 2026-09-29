@@ -43,9 +43,7 @@ filesystem, the installed services and the remote are the host. So:
 | an unknown or malformed key, a name that breaks a rule, a port out of range, an ambiguous unit source, a `service:` where a `container:` belongs | `2` |
 | a container named in `routes:`, `ports:` or `widgets:` that the unit source does not define | `2` — both are input |
 | a volume named in `state:` or `bulk:` that the unit source does not mount, or a name in both | `2` — both are input |
-| a `needs:`/`provides:` disagreement that is visible from the manifests alone | `2` |
-| an edge naming a service that does not exist | `1` |
-| a `needs:`/`provides:` disagreement where the provider exists but does not offer the kind | `1` — the answer came from the host |
+| a `needs:` entry whose provider does not exist, or exists and does not offer the `as:` kind | `1` — the answer came from the host, read from the provider's registry |
 | a requested port already held by another service | `1` |
 | a snapshot that is gone, or absent from one of the volumes a fork needs | `1` |
 | `weedr service gate` on a gated track whose gate is blocked | `1`, naming the key. It changed nothing, so the code is the answer rather than a failure |
@@ -154,10 +152,12 @@ to it.
   services/<name>/state/<vol>/         a volume: a btrfs subvolume. A `state` volume has a
                                        snapper configuration named <service>-<vol>; a `bulk`
                                        volume has none
-  services/<name>/state/<vol>/<escaped-ref>/   an instance's own volumes, on an instance track.
-                                       A `state` instance volume has a snapper configuration
-                                       named <service>-<escaped-ref>-<vol>; a `bulk` one has
-                                       none
+  services/<name>/bulk/<vol>/          the same for a `bulk` volume, split out so the `state/`
+                                       tree contains nothing but snapshotted subvolumes
+  services/<name>/instances/<escaped-ref>/       an instance's OWN tree, on an instance track.
+                                       A sibling of `state/`, never a child of it — see below.
+                                       Its `state/<vol>` has a snapper configuration named
+                                       <service>-<escaped-ref>-<vol>; its `bulk/<vol>` none
   shared/<name>/                       root-owned installed renderings: routes.toml, widgets/,
                                        schema.toml. Read by roots and twig
   shared/dashboard/                    the merged widget output, written by twig. This is the
@@ -170,6 +170,20 @@ to it.
 /run/guarden/locks/                    one flock file per resource. tmpfs, gone on reboot.
 /etc/snapper/configs/<service>-<vol>   written by soil, converged to a fixed value set
 ```
+
+**An instance's volumes are a sibling of the service's, never a child of them.** An earlier
+version of this layout put them at `services/<name>/state/<vol>/<escaped-ref>/`, and that is
+wrong in a way that fails silently: **btrfs does not recurse into nested subvolumes when it
+snapshots.** A subvolume nested inside another is excluded from its parent's snapshot entirely,
+so `state/data/` would have snapshotted cleanly, nightly, forever, while containing **no
+instance data at all** — and the only symptom would be an empty restore. Every instance volume
+therefore lives under `instances/<escaped-ref>/`, with its own snapper configuration, and
+`state/` and `bulk/` contain nothing but the service's own subvolumes and no subvolume has
+children.
+
+The same reason splits `state/` from `bulk/`: they differ in whether a snapper configuration
+exists, and keeping a snapshotted tree and an unsnapshotted one in one directory is how the
+above happened in the first place.
 
 Nothing root-owned lives inside a service's home, and **admin units are not copied into
 one**: they live in `/etc/guarden/services/<name>/units.d/` until the mutator installs them
@@ -377,7 +391,24 @@ environments = { "main" = ["production"], "develop" = ["staging"], "*" = ["previ
 
 `environments` is an **allowlist**: it says which environments a ref may deploy to, not which
 one it gets. The first matching pattern wins and `*` matches any ref; a ref matching nothing
-is refused with exit `1` and the reason named. An entry in `projects.d/` overrides the same
+is refused with exit `1` and the reason named.
+
+**A pattern with more than one track in its list is legal, so the poke names the one it wants.**
+`environments = { "release/*" = ["staging", "production"] }` grants two environments to a
+release branch, and `hose poke <ref> <sha> [<environment>]` carries the choice. The environment
+is validated against that ref's allowed set and refused with exit `2` naming the set if it is not
+in it; a ref whose matching pattern grants several and which names none is refused with the set
+printed. "First match wins" decides *which set applies*, and nothing inside the set is decided by
+order — a rule that silently deployed the first track in a list would make a permission set
+behave like an assignment, which is the confusion the allowlist exists to avoid.
+
+This is a client-supplied argument and it is worth being explicit about why it is not the hole
+`--project` was. The environment is a value from a closed set of track names the **operator**
+wrote in a root-owned file, checked against the specific set that ref's pattern grants, before
+it is used. It cannot name a project, a path, or anything outside that set, and the mutator
+re-checks it — `furrow` proposing an environment the allowlist does not grant changes nothing.
+A `--project` argument was a different animal entirely: it named a whole repository, and
+`sshd` appends the client's own command, so it was never the operator's value to begin with. An entry in `projects.d/` overrides the same
 project in the file above; `weedr project add` writes the `projects.d/` copy so a project can
 be edited without touching the shared file.
 
@@ -430,6 +461,11 @@ environment  = "production"
 uid          = 1004
 created      = "2026-09-29T10:12:00Z"
 source       = "manual"          # or "gitops"; recorded, and it changes nothing
+installed_by = "gate"            # the module that created this service, or absent for a service
+                                 # created by a poke or by hand. This is what makes step 1 of
+                                 # `weedr module remove` answerable, and it is the reason modules
+                                 # record provenance at all: without it "a service the module
+                                 # installed is not the module's own" has nothing to consult
 deployed_sha = "9f2c1ab"
 
 [publication]
@@ -440,6 +476,17 @@ api = 20007                      # the edge's API publication, when it has one
 port = 5432
 as   = "db"
 auth = "database"                # database | secret | none
+
+[provides]
+kinds = [ "db" ]                # what the manifest's provides: listed, and only that. Written by
+                                # the mutator at creation from the manifest, and this is the ONLY
+                                # copy a consumer can read: the provider's own tree is 0700 to
+                                # the provider and loom runs as guarden. Absent for a service
+                                # whose manifest declares none, which is not the same as empty
+
+[route_hosts]
+web = "web.myapp.com"            # manifest label -> the full name, prefix applied. A claim, like a
+                                 # publication: allocated, refused when taken, released on remove
 
 [ports]
 requested = ["8080/tcp"]         # what the manifest asked for, in manifest order
@@ -471,7 +518,15 @@ checked = "2026-09-29T10:12:03Z"  # when the verdict was last taken, by `weedr s
                                       # this is the only record that it was not one
 
 [immutable]
-"data" = "production rollback base, 2026-09-29"   # the chattr +i escalation, with its reason
+"data" = "production rollback base, 2026-09-29"   # the chattr +i escalation, with its reason.
+                                       # Written by `weedr service immutable`, which sets the
+                                       # flag and this record together, and cleared by
+                                       # `weedr service mutable`, which clears both. An earlier
+                                       # revision had no writer for this table at all and the
+                                       # runbook said to record the escalation with `stakes pin`,
+                                       # which is a different thing: pinning also raises the
+                                       # snapshot to important=yes under the number cleaner, so
+                                       # it was a retention side effect presented as note-taking
 ```
 
 `workload` and `project` are different things and may differ. `workload` is the service name
@@ -598,9 +653,9 @@ needs:                            # declared edges to other services
     port: 5432
     auth: database                # database | secret | none
 
-provides:                         # what this service can offer a consumer
-  - auth: secret
-  - engine: postgres
+provides:                         # what this service can offer a consumer, as KINDS
+  - db                             # consumed as `as: db`, which also gives DB_HOST/DB_PORT
+  - secret                         # consumed as `as: secret`, verified with a shared credential
 
 ports:                            # public ports requested from outside the host
   - container: web                # a container in THIS service, exactly as under routes:
@@ -609,7 +664,9 @@ ports:                            # public ports requested from outside the host
 routes:                           # published to the edge
   - container: web                # a container in THIS service
     port: 3000                    # the container's own port; the loopback publication is guarden's
-    host: "web.${domain}"
+    host: "web"                   # a LABEL, not a domain. The full name is the track's
+                                 # root-owned host_prefix + this, so a manifest cannot claim a
+                                 # name outside host.domain
     auth: true
 
 widgets:
@@ -625,20 +682,23 @@ manifest's whole point is that a developer can tell which is which. `port:` unde
 the **container's** port and is required: guarden allocates the loopback publication that
 Traefik dials, and the manifest never names it.
 
-`needs` and `provides` must agree. An edge with `auth: database` requires a provider that
-declares `engine: postgres`; an edge with `auth: secret` requires one that declares
-`auth: secret`. A disagreement visible from the manifests alone is exit `2`; one where the
-provider exists but does not offer the kind is exit `1`, and the diagnostic names both services
-and both kinds.
+`needs` and `provides` must agree, and they are compared **kind to kind**: a consumer's
+`as: db` requires a provider whose `provides:` lists `db`, and its `as: secret` requires one
+that lists `secret`. An edge's `auth:` is a second, separate matter — it says how the consumer
+authenticates, not what the provider is — and it does not have to match anything in
+`provides:`. The comparison is against the provider's **registry**, not its manifest, so there is
+one input and one exit code: a disagreement is exit `1` with both kinds and both service names
+named. The earlier `2`-and-`1` pair described a check that no program could have performed,
+because it required reading two manifests the renderer cannot reach.
 
 Validation rules:
 
 - Unknown top-level keys are refused, and so are unknown keys **inside** a known one. Each
   block has a closed key set: a `needs` entry takes `service`, `as`, `port` and `auth` and
   nothing else; a `routes` or `ports` entry takes `container` and `port`; a `widgets` entry
-  takes `container` and `file`; a `provides` entry is a **single string naming a kind** —
-  `engine: postgres`, `auth: secret` — and nothing else, because a `provides` entry carries no
-  value and no structure; a `state`/`bulk` entry is a string. An unknown key inside one
+  takes `container` and `file`; a `provides` entry is a **single string naming a kind** — `db`,
+  `secret` — and nothing else, because a `provides` entry carries no value and no structure; a
+  `state`/`bulk` entry is a string. An unknown key inside one
   of them is refused **by name**, the same as an unknown top-level key. This was a gap: the
   rule covered only the top level, so a typo in a nested key was silently dropped and a
   manifest asking for `authentification: true` got a route with no auth on it and no diagnostic
@@ -649,11 +709,25 @@ Validation rules:
   **resulting service name** must not exceed 31 characters, and that is what is checked.
 - `state` and `bulk` entries must match `^[a-z0-9][a-z0-9._-]*$`, must name a volume the unit
   source mounts, and a name may not appear in both.
-- `needs` entries must name a service that exists **or will exist**, and a port in range. A
-  service that does not exist *yet* is not an error: a poke creates services in dependency order
-  and a manifest may name a service a later deploy brings into being. The code is `1` and the
-  diagnostic names the service, because the answer came from the host rather than from the two
-  manifests alone (§1.2).
+- `needs` entries must name a service that exists **or will exist**, carry an `as:` kind, and a
+  port in range. A service that does not exist *yet* is not an error: a poke creates services in
+  dependency order and a manifest may name a service a later deploy brings into being.
+- **The provider's `provides:` is read from the provider's registry, never from its manifest.** A
+  manifest that declared both sides of every edge would be one document the renderer cannot
+  reach: the consumer's tree is `0700` to the consumer and `loom` runs as `guarden`, so the
+  provider's `provides:` lives in a file the mutator wrote and the renderer can read. The
+  consequence is that **every** disagreement has a single input, which is why there is one exit
+  code for it rather than two: a provider with no registry entry, or one whose `[provides]
+  kinds` does not include the consumer's `as:`, is **exit `1`** with the kind and both service
+  names in the diagnostic. There is no case where the disagreement is visible from two manifests
+  alone, so §1.2 has no `2` row for it — that row was in an earlier revision and described a
+  check no program could have performed.
+- **`as:` is the variable name, uppercased.** `as: db` gives the consumer `DB_HOST` and
+  `DB_PORT`; `as: cache` gives `CACHE_HOST` and `CACHE_PORT`. There is no mapping table to keep in
+  step, and no per-edge exception: the manifest names the prefix, so a service that wants
+  `SEARCH_URL` writes `as: search`. For a `database` auth edge the credential additionally arrives
+  as `/run/secrets/DB_PASSWORD` — the same uppercased prefix plus `_PASSWORD` — and for a `secret`
+  edge as `/run/secrets/<KEY>` named in the manifest's schema.
 - `ports` entries carry `container:` and `port:`, exactly as `routes` entries do, and `port:`
   is the **container's** port. A bare `"8080/tcp"` string is not a valid entry. This is a
   correction rather than a new requirement: a grant is a translation to a publication (§7.5),
@@ -667,6 +741,27 @@ Validation rules:
   therefore not used anywhere in a manifest entry; the old string form carried the protocol, and
   carrying it in two places is two places for it to be wrong.
 - `routes` must name a container the unit source defines, and carry a container port.
+- **A route's `host:` is a label, not a domain, and the host owns the domain.** The full name is
+  `<track host_prefix><host:>`, and `host_prefix` is root-owned. So with `host_prefix = "myapp."`
+  a manifest writing `web` claims `web.myapp.com` and a manifest writing
+  `www.elsewhere.com` claims `www.elsewhere.com.myapp.com` — inside the domain, unreachable,
+  and visibly wrong to the developer rather than silently successful. **A repository therefore
+  cannot claim a name outside `host.domain`, and the only way to serve another domain is for the
+  operator to set `host.domain` or the track's `host_prefix`.** The earlier revision combined
+  these two with a `${domain}` substitution and validated nothing, which meant any repository
+  could claim any name in the operator's domain and two services claiming one was undefined.
+- `host:` must match `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$` after
+  prefixing, and must be at least one label. An uppercase character, an underscore, a leading or
+  trailing dot, a wildcard or a port is exit `2` naming the value. A wildcard was the shape that
+  would have been dangerous and the reason the pattern is closed rather than a list of
+  prohibitions.
+- **A host is allocated, like a publication, and the allocator refuses the second claimant.** A
+  second `weedr service ingest` whose route host is already taken is exit `1` with the holder
+  named, exactly as for a duplicate port (§1.2). The allocation lives in the host's
+  `[route_hosts]` table, so it survives regeneration and two instances of one preview service
+  cannot collide. Nothing about this is cooperative: a repository cannot take a name that is
+  already serving, and a service that loses its host on removal has it released, so the name
+  becomes available again.
 - A `ports:` entry names a container the unit source defines, exactly as `routes:` does. The
   container's port is also how its publication is found, so a container named only in `ports:`
   gets a publication like any other (§7.4). This is the case the whole grant model rests on: a
@@ -1015,8 +1110,11 @@ weedr service start|stop|restart <name[/ref]>   # start re-evaluates the gate
 weedr service list [--json]
 weedr service status <name[/ref]> [--json]
 weedr service snapshot <name> [--all]
-weedr service fork <target[/ref]> [--from <service>[@<number>]]   # the override; root only
-weedr service rollback <name[/ref]> --to <number>   # not on any sudoers rule
+weedr service immutable <snapshot-id> <reason>   # the chattr +i escalation; sets the
+                                        # flag AND records it, so the two cannot disagree
+weedr service mutable <snapshot-id>                # clears the flag; the record goes with it
+weedr service fork <target[/ref]> [--from <service[@<timestamp>]]   # the override; root only
+weedr service rollback <name[/ref]> --to <timestamp>   # not on any sudoers rule
 weedr service build <name>                    # podman build, as the service user, from its own
                                               # home. It takes no --from: a build has exactly one
                                               # tree it is ever allowed to build, and it is the
@@ -1181,6 +1279,13 @@ module is the failure this verb exists to prevent. In order, under the `modules`
 5. Re-render the edge's routes and the dashboard from the remaining services (§6.9).
 6. Remove the group the module owns **only** if no remaining service is in it, and report the
    group removal on stdout. A group in use is a `warning:` line and exit `0`, not a failure.
+7. **`[[switches]]` is reference-counted by module name, and that is why `installed_by` exists.**
+   Two modules switch the same program on — `gate` and `auth` both switch on `roots` — so
+   removing `gate` must not switch `roots` off out from under `auth`. The rule: after step 6, for
+   each program this module switched on, remove it only if **no other enabled module's
+   `[[switches]]` names it**, and report what stayed with a `warning:` naming the module that
+   still wants it. Without the count the two cases are indistinguishable, and switching `roots`
+   off would silently stop the edge's route renderer for a service that still needs it.
 
 A module that declares no services still converges the ingress and the route set, so removing
 it is never a no-op.
@@ -1442,9 +1547,10 @@ because a rule naming `weedr service rm` would not match it.
 ### 6.7 `hose` — the gitops receiver
 
 ```
-hose poke <ref> <sha>     # source tar archive on stdin
+hose poke <ref> <sha> [<environment>]   # source tar archive on stdin. <environment>
+                                       # only when the ref's allowlist grants more than one track
 hose drop  <ref>
-hose check                 # prints "not implemented: events only", exits 0
+hose check                 # verify this project's ability to deploy. Exits 0 or 1.
 ```
 
 **There is no `<project>` argument, and its absence is the whole of the per-project binding.**
@@ -1464,21 +1570,27 @@ drop <name> <ref>` with a name it computed. The previous signature took a free-f
 which let a key for one project drop any preview instance on the box.
 
 The only network-facing program, holding no privilege beyond a sudoers rule naming exactly:
-`furrow deploy`, `furrow preview drop`, `furrow queue list`, `furrow status`, `weedr service
-list`, `weedr project list`.
+`furrow deploy`, `furrow preview drop`, `furrow queue list`, `furrow status`, `weedr project
+list`.
 
-**It is never permitted `weedr port list`, `weedr port open`, `weedr port close` or `weedr
-service remove`** — the verbs that could grant, revoke or destroy. It cannot drop a service. It
-**can** read which public ports are granted, because `weedr service list` reports a service's
-granted ports as part of its status; that is a status command, and the grant inventory is
-`weedr port list`, which is not on the rule. The honest statement is that a poke can observe the
-grant surface and cannot change it. Its rule is
+**It cannot drop a service, cannot grant or revoke a port, and cannot read a service's status at
+all.** `weedr port open`, `weedr port close` and `weedr service remove` are the verbs that could
+change something and none is named.
+
+`weedr service list` **was** on this rule, and it had to come off: this rule's runas target is
+`(guarden)`, not root, so `weedr service list` invoked here ran with no read on a service's
+`0700` tree and could not return the per-volume snapshot figures its contract promises. The same
+verb is on the `guarden` rule with runas `(root)`, so it had two behaviours depending on which
+rule reached it — a class of bug worth naming generally, because **a verb's output depends on
+its runas target, and a verb that appears on two rules with different runas targets has two
+contracts.** `weedr service list` is a root read, so it is root-only. `weedr project list` needs
+nothing private and stays. A poke can therefore see which projects are registered and nothing
+else about the box, which is less than it could and more than it needs. Its rule is
 
 ```
 hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy, \
     /usr/lib/guarden/bin/furrow preview drop, /usr/lib/guarden/bin/furrow queue list, \
-    /usr/lib/guarden/bin/furrow status, /usr/lib/guarden/bin/weedr service list, \
-    /usr/lib/guarden/bin/weedr project list
+    /usr/lib/guarden/bin/furrow status, /usr/lib/guarden/bin/weedr project list
 ```
 
 so a poke reaches a root program only by way of one that is itself unprivileged, and the
@@ -1520,6 +1632,17 @@ the deploy.
 `hose drop` removes an instance through `furrow preview drop`, and the refusal for a gated
 track is enforced root-side in `weedr service remove` against
 `/etc/guarden/allow-gated-drop` — `hose` never reads that file.
+
+**`hose check` verifies rather than announces.** It was a verb that printed "not implemented"
+and exited `0`, which is a stub, and a stub in a document set whose standard is that there are
+none is worse than no verb. It now answers one question a workflow can use before it pushes:
+**could a poke for this project deploy right now?** In order — the project is in
+`projects.toml`; the key's forced command names this project and only this project; the
+per-project staging directory exists and is writable by the `hose` user; the ref asked for maps
+to a track through the allowlist; and the `guarden` group can read the files `furrow` needs. Each
+check is a `warning:` line naming what failed, and the exit is `1` if any failed, `0` if all
+passed. It reads nothing it is not already allowed to read and changes nothing, so it is safe for
+CI to call on every push.
 
 **`--project` must appear exactly once in `argv`, and that occurrence is the forced command's.**
 This is the whole rule and it is the second time a client-controlled argument has been
@@ -1907,6 +2030,22 @@ It does **not** stop the service, does not lock, and does not wait. A btrfs subv
 is atomic, so a clone is consistent as of that instant and the service's engine recovers from
 it; nothing in guarden depends on which engine it is.
 
+**`weedr service immutable <snapshot-id> <reason>` is the only way to escalate one snapshot, and
+it does both halves in one call.** It sets `chattr +i` on the snapshot subvolume and writes
+`[immutable]` in the provider's registry with the operator's reason. They have to be the same
+verb: a flag set without a record is an escalation nobody can find later, and a record without a
+flag is a lie. `weedr service mutable` clears the flag and the record together. The verb is
+**root** and is not on any sudoers rule, because `chattr +i` needs `CAP_LINUX_IMMUTABLE` and
+because this is an operator's decision about a production artifact.
+
+**A pin is not the same thing, and conflating them was a defect.** `stakes pin` raises the
+snapshot to `important=yes` under the number cleaner (§8.5), which is a *retention* effect the
+cleaner respects up to a budget; `chattr +i` is a *deny* that no limit overrides and that aborts
+the whole cleanup for its configuration. A runbook that told the operator to "record it as a pin"
+was pointing at the weaker of the two and adding a side effect they had not asked for. The two
+compose — pin a snapshot and make it immutable — but they are separate acts and each has its own
+verb.
+
 A service with several state volumes gets several snapshots in one operation. btrfs has no
 atomic multi-subvolume primitive — one destination name and one source per ioctl — so the
 volumes are individually consistent and may be microseconds apart. That is a cost the
@@ -1954,8 +2093,12 @@ then the instance seeded.
 
 `weedr service fork <target> [--from <source>[@<number>]]`:
 
-1. Validate the complete set: every **state** volume of the target must have the requested
-   snapshot number in its own configuration. If any is missing, exit `1` having changed nothing.
+1. Validate the complete set: for every **state** volume of the target, resolve the source
+   snapshot — the target's recorded `seed` for that volume, or the one at or before the
+   `--from <service>@<timestamp>` time if one was given. **A number is never used to name a set,
+   because a service with several state volumes has a different number in each configuration and
+   no single number can mean the whole set.** If any volume resolves to nothing, exit `1` having
+   changed nothing, naming that volume.
 2. Pin the source snapshot for the duration, by creating its pin file.
 3. Stop the target's units.
 4. Move each target state subvolume aside to `<vol>.replaced.<timestamp>`.
@@ -2032,7 +2175,21 @@ read-only by default. It is used after a fork to confirm the clone's flag was cl
 
 ### 8.6 Rollback
 
-`weedr service rollback <name[/ref]> --to <number>` validates the complete set as in §8.4,
+**`--to` takes a timestamp, not a snapshot number, and that is the fix rather than a
+restriction.** A service with several `state` volumes has a *different* snapper number in each
+of their configurations, so there is no single number that names a set — `--to 41` is 41 in
+`data` and something else entirely in `cache`, and choosing which reading was intended was
+guesswork. The volumes are snapshotted together, microseconds apart (§8.2), so **a time selects
+a consistent set**: the mutator takes, for each `state` volume, the newest snapshot at or before
+that time, and refuses the whole operation with exit `1` naming any volume that has none. That is
+also the operator's actual mental model — "back to yesterday" — and it cannot be half-resolved.
+
+A single snapshot is still individually addressable, and nothing is lost: the pin syntax
+`myapp-production:data@41` names one snapshot of one volume exactly (§6.8), and an operator who
+means a specific number reads it with `weedr service list --json` and rolls back to the
+timestamp that snapshot carries.
+
+`weedr service rollback <name[/ref]> --to <timestamp>` validates the complete set as in §8.4,
 stops the service, replaces each state volume with a clone of that snapshot, and starts it.
 Refused outright on a track with `gated = true`, with no flag that overrides it — the verb is not
 on the `guarden` sudoers rule at all, so this is a refusal an operator can only lift by

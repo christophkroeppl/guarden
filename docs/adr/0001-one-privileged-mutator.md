@@ -34,19 +34,9 @@ that is a signal to add a verb rather than to run something else as root.
 The door is narrow because the rules that open it name verbs, and they name their runas target
 too. Written out, because the default reading of "a sudoers rule naming X" is that X runs as
 root — which would have made `furrow`, the program that handles repository-supplied paths, a root
-program:
-
-```
-guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service ingest, \
-    /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service gate, \
-    /usr/lib/guarden/bin/weedr service start, \
-    /usr/lib/guarden/bin/weedr service stop, /usr/lib/guarden/bin/weedr service restart, \
-    /usr/lib/guarden/bin/weedr service snapshot, \
-    /usr/lib/guarden/bin/weedr service build, \
-    /usr/lib/guarden/bin/weedr secret list, /usr/lib/guarden/bin/weedr port list, \
-    /usr/lib/guarden/bin/weedr service list, /usr/lib/guarden/bin/weedr service status, \
-    /usr/lib/guarden/bin/weedr module list
-```
+program. `docs/spec.md` §6.6 and §6.7 carry both blocks in full, once: they are the canonical
+statement and this document is deliberately not a second copy of a file that has changed four
+times.
 
 `furrow` is unprivileged and calls root `weedr` to install units and start services, and it is
 permitted exactly the verbs above. It is never permitted `weedr port open`, `weedr port close`,
