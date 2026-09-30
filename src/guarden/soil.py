@@ -17,9 +17,11 @@ produce.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+from pathlib import Path
 
-from guarden import hostprep
+from guarden import hostprep, packagelist, userdata
 from guarden.hostprep import PHASES
 from guarden.hosttool import Item, error
 
@@ -74,7 +76,57 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="arm the lockout timer for this run; `soil firewall --apply --deadman` only",
     )
+    packages = parser.add_argument_group("package list", "where the one list lives")
+    packages.add_argument(
+        "--list",
+        action="store_true",
+        help="print this family's packages from packages/packages.toml and exit 0",
+    )
+    packages.add_argument(
+        "--family",
+        metavar="NAME",
+        help="the distribution family to answer for; the host is asked when this is absent",
+    )
+    packages.add_argument(
+        "--render-user-data",
+        metavar="PATH",
+        help="write the cloud-init user-data rendered from that list to PATH",
+    )
+    modules = parser.add_argument_group(
+        "module selection",
+        "what `soil install` records into guarden.toml's [modules] enabled",
+    )
+    modules.add_argument(
+        "--modules",
+        metavar="a,b",
+        help="the modules to enable; recorded once and then left to `weedr module add`",
+    )
     return parser
+
+
+_MODULE_NAME = re.compile(r"[a-z][a-z0-9-]*")
+
+
+def _module_selection(value: str | None) -> list[str] | None:
+    """The modules the caller named, or a rejection.
+
+    A selection is names in a comma-separated list and nothing else: it is going
+    into `[modules] enabled`, which the config parser reads as a list of strings,
+    so a value carrying a flag, a path or a space is a caller asking for
+    something the key cannot hold and it is refused rather than written.
+    """
+    if value is None:
+        return None
+    if not value.strip():
+        raise ValueError("--modules takes module names, and this one is empty")
+    names = value.split(",")
+    for name in names:
+        if not _MODULE_NAME.fullmatch(name):
+            raise ValueError(
+                f"--modules takes names like gate and homepage, comma-separated; "
+                f"{name!r} is not one"
+            )
+    return list(dict.fromkeys(names))
 
 
 def _list() -> int:
@@ -89,31 +141,87 @@ def _reject(message: str) -> int:
     return EXIT_REJECTED
 
 
-def _collect(phases: list[str], deadman: bool) -> list[Item]:
+def _package_list(family: str | None) -> int:
+    """Print what this family needs, from the one list, and exit 0.
+
+    A family the list does not carry is a rejected input: the caller named one
+    that does not exist, and answering with a family that does would make the
+    question unanswerable rather than answered wrongly.
+    """
+    try:
+        name, row = packagelist.resolve(family)
+        packages = packagelist.package_names(name)
+    except packagelist.UnknownFamily as exc:
+        return _reject(str(exc))
+    sys.stdout.write(f"family   {name}\n")
+    sys.stdout.write(f"install  {' '.join(str(part) for part in row.get('install', []))}\n")
+    sys.stdout.write(f"query    {' '.join(str(part) for part in row.get('query', []))}\n")
+    for package in packages:
+        sys.stdout.write(f"{package}\n")
+    return EXIT_OK
+
+
+def _render_user_data(path: str, family: str | None) -> int:
+    """Write the document a cloud-init machine boots from, rendered from the list.
+
+    A path this program cannot write is a rejected input — the caller named one
+    that does not exist or is not writable — and it says so rather than writing
+    a document nobody will boot.
+    """
+    try:
+        document = userdata.render(family)
+    except packagelist.UnknownFamily as exc:
+        return _reject(str(exc))
+    target = Path(path)
+    if target.exists() and target.is_dir():
+        return _reject(f"{target} is a directory, not a file to write the user-data to")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(document, encoding="utf-8")
+    except OSError as exc:
+        return _reject(f"{target} could not be written: {exc.strerror}")
+    sys.stdout.write(f"rendered {target}\n")
+    sys.stdout.write(f"family   {family or 'this host'}\n")
+    sys.stdout.write(f"phases   {' '.join(userdata.phases())}\n")
+    return EXIT_OK
+
+
+def _collect(
+    phases: list[str], deadman: bool, family: str | None = None,
+    modules: list[str] | None = None,
+) -> list[Item]:
     items: list[Item] = []
     for phase in phases:
-        items.extend(hostprep.items_for(phase, deadman))
+        items.extend(hostprep.items_for(phase, deadman, family, modules))
     return items
 
 
-def _check(phases: list[str], deadman: bool) -> int:
+def _check(
+    phases: list[str], deadman: bool, family: str | None = None,
+    modules: list[str] | None = None,
+) -> int:
     drifted = 0
-    for item in _collect(phases, deadman):
+    for item in _collect(phases, deadman, family, modules):
         if not item.holds():
             error(f"drift: {item.what}")
             drifted += 1
     return EXIT_NOT_CONVERGED if drifted else EXIT_OK
 
 
-def _apply(phases: list[str], deadman: bool) -> int:
+def _apply(
+    phases: list[str], deadman: bool, family: str | None = None,
+    modules: list[str] | None = None,
+) -> int:
     unmet = 0
-    for item in _collect(phases, deadman):
+    for item in _collect(phases, deadman, family, modules):
         if item.holds():
             continue
         try:
             item.converge()
         except hostprep.IncompleteRecord as exc:
             return _reject(f"a pinned artefact is not installable: {exc}")
+        except packagelist.UnknownFamily as exc:
+            return _reject(str(exc))
         if item.correctable and not item.holds():
             error(f"drift: {item.what}")
             unmet += 1
@@ -124,17 +232,49 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    try:
+        modules = _module_selection(args.modules)
+    except ValueError as exc:
+        return _reject(str(exc))
+
     if args.command == "list":
-        if args.check or args.apply or args.deadman:
+        if args.check or args.apply or args.deadman or args.family or args.render_user_data:
             return _reject("soil list takes no mode.")
+        if modules:
+            return _reject("--modules is `soil install`'s.")
         return _list()
+
+    # `--list` and `--render-user-data` report and exit; neither converges a
+    # phase, so neither is a mode and neither changes the host. They are on the
+    # `packages` command because that is the phase that owns the list, and the
+    # renderer reads the same file the phase converges.
+    if args.list or args.render_user_data:
+        if args.deadman:
+            return _reject("--deadman is `soil firewall --apply`'s alone.")
+        if args.command not in (None, "packages"):
+            return _reject("--list and --render-user-data are `soil packages`'s.")
+        if args.list and args.render_user_data:
+            return _reject("--list and --render-user-data are one or the other.")
+        if modules:
+            return _reject("--modules is `soil install`'s, and it converges nothing.")
+        if args.list:
+            return _package_list(args.family)
+        return _render_user_data(args.render_user_data, args.family)
+
+    if args.family:
+        return _reject("--family is `soil packages`'s, and only with --list or "
+                       "--render-user-data.")
+    if modules and args.command not in (None, "install"):
+        return _reject("--modules is `soil install`'s.")
 
     if args.command is None:
         if args.deadman:
             return _reject("--deadman is `soil firewall --apply`'s alone.")
         if not (args.check or args.apply):
             return _reject("one of --check or --apply is required.")
-        return _check(list(PHASES), False) if args.check else _apply(list(PHASES), False)
+        if args.check:
+            return _check(list(PHASES), False, modules=modules)
+        return _apply(list(PHASES), False, modules=modules)
 
     if args.deadman and not (args.command == "firewall" and args.apply):
         return _reject("--deadman is `soil firewall --apply`'s alone.")
@@ -142,8 +282,8 @@ def main(argv: list[str] | None = None) -> int:
         return _reject("one of --check or --apply is required.")
 
     if args.check:
-        return _check([args.command], args.deadman)
-    return _apply([args.command], args.deadman)
+        return _check([args.command], args.deadman, modules=modules)
+    return _apply([args.command], args.deadman, modules=modules)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from guarden import paths
+
 PREFIX = Path(os.environ.get("GUARDEN_PREFIX", "/"))
 
 # The throwaway container the alias probe runs (spec 6.1). It is a constant and
@@ -298,7 +300,7 @@ def config_path() -> Path:
 
 
 def template_path(*parts: str) -> Path:
-    return hostpath("usr", "lib", "guarden", "templates").joinpath(*parts)
+    return paths.TEMPLATES.joinpath(*parts)
 
 
 def template(name: str) -> str:

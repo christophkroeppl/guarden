@@ -1,6 +1,8 @@
 #cloud-config
 #
-# The golden VM's cloud-init user-data.
+# Rendered by `tools/render-user-data` from packages/packages.toml. Do not edit
+# the package list here: this file is generated from the one in the repository,
+# and a package named in both is a package that can drift.
 #
 # The golden VM is the harness that cannot be faked: a throwaway machine with
 # real tools, proving the claims the fast harness cannot — that a rootless
@@ -10,24 +12,28 @@
 # runner that also decided what a pass was would be a harness whose result
 # nobody could audit.
 #
-# This file only PROVISIONS. It installs what the soil phases converge over, and
-# it installs nothing guarden owns. In particular it does not create the
+# This document only PROVISIONS and then CONVERGES. It installs what the soil
+# phases run over, and it installs nothing guarden owns: it does not create the
 # program users, does not write /usr/lib/guarden, and does not set the ingress
-# alias: `soil install` does those, and a file that pre-empted them would make
-# the phases untestable — a phase that finds its own work already done is a
+# alias. `soil install` does those, and a document that pre-empted them would
+# make the phases untestable — a phase that finds its own work already done is a
 # phase that proves nothing.
+#
+# It fetches nothing from PyPI and no wheel. Everything below is a distribution
+# package, and the one artefact from outside a distribution repository — the
+# pinned `podlet` release — is fetched by `soil packages` and verified against
+# the SHA256 recorded in this repository.
 #
 # What it must get right, and why:
 #
 # - podman must be new enough for pasta. Podman 5.0 made pasta the default
 #   rootless network; below that, rootless containers get slirp4netns and the
-#   alias probe's premise does not hold. Ubuntu 26.04 ships 5.x, so `pasta` is
-#   a plain apt install and the binary is /usr/bin/pasta (a symlink to
-#   /usr/bin/passt from the `passt` package, pulled in by podman's Recommends).
-#   Installing it explicitly rather than relying on Recommends is deliberate:
-#   a golden VM that silently lost pasta to a Recommends change would report
-#   "not run" for every networking claim, which is how ticket 15's eleven checks
-#   came back unproven in the first place.
+#   alias probe's premise does not hold. Ubuntu 26.04 ships 5.x, so `pasta` is a
+#   plain package install and the binary is /usr/bin/pasta. Installing it
+#   explicitly rather than relying on Recommends is deliberate: a golden VM that
+#   silently lost pasta to a Recommends change would report "not run" for every
+#   networking claim, which is how ticket 15's eleven checks came back unproven
+#   in the first place.
 #
 # - btrfs-progs and snapper are needed because `soil storage` converges a btrfs
 #   layout and a snapper value set. Ticket 15 measured a real deviation here
@@ -40,38 +46,38 @@
 #
 # - iproute2 and nftables-family tooling because `soil firewall` converges ferm
 #   and the inspection in ticket 140 reads the installed `nat PREROUTING` chain.
-#   ferm is iptables-nft on this distribution; the chain it installs is what
-#   the ticket's criterion is about, so the tools to read it must be present.
+#   ferm is iptables-nft on this distribution; the chain it installs is what the
+#   ticket's criterion is about, so the tools to read it must be present.
 
 package_update: true
 package_upgrade: false
 
 packages:
-  # The host converger's substrate.
-  - podman
-  - passt
+  # substrate: what `soil packages` converges, from packages.toml
   - btrfs-progs
   - snapper
+  - ferm
+  - fail2ban
+  - podman
+  - python3-yaml
+  - python3-jinja2
+
+  # harness: the throwaway machine's check tooling, and no host's
+  - passt
   - subvolume-subtools
   - snapper-support
   - python3
-  - python3-venv
   - git
   - rsync
   - ca-certificates
   - curl
   - jq
-
-  # The firewall and the network facts the checks read.
-  - ferm
   - iptables
   - nftables
   - iproute2
   - iputils-ping
   - dnsutils
   - netcat-openbsd
-
-  # The edge and the data path the behaviour phases exercise.
   - nginx
   - postgresql-client
   - libpq-dev
@@ -89,7 +95,7 @@ write_files:
   - path: /var/lib/guarden-evidence/PROVENANCE
     permissions: "0644"
     content: |
-      golden-vm user-data, guarden
+      guarden golden VM user-data, rendered from packages/packages.toml
       image: ubuntu 26.04 (resolute)
       provisioned by cloud-init; guarden itself is converged by `soil`
 
@@ -97,8 +103,6 @@ runcmd:
   # Verify the substrate the checks depend on, loudly and early. If pasta is
   # missing, every networking claim is unprovable and the run must say so at
   # the point of failure rather than eleven separate "not run" verdicts later.
-  # This writes a report and exits non-zero on a missing prerequisite; the
-  # checks read the report to decide what they can attempt.
   - |
     set -eu
     {
@@ -118,5 +122,12 @@ runcmd:
       echo "FATAL: btrfs-progs is absent; soil storage cannot converge" >&2
       exit 1
     fi
+
+  # Converge every phase, then check every phase. The order and the phase list
+  # are `soil list`'s, read from the program at render time, so this line and
+  # the program cannot disagree about what converged state is.
+  - |
+    set -eu
+    soil packages --apply;soil storage --apply;soil sysctl --apply;soil firewall --apply;soil install --apply;soil units --apply;soil packages --check;soil storage --check;soil sysctl --check;soil firewall --check;soil install --check;soil units --check
 
 final_message: "guarden golden VM ready after $UPTIME seconds"

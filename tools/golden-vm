@@ -23,7 +23,14 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
 
 target=${GUARDEN_VM_TARGET:-}
+# The user-data is rendered from `packages/packages.toml` rather than read from a
+# file that can go stale, because a document whose packages were copied by hand
+# is a second copy of the list and a package added to one is not installed on the
+# machine the ticket's claims are proven on. `tools/cloud-init/user-data.yaml`
+# is the rendered artefact and is committed for a human to read; regenerating it
+# is `--render` and happens here, so what is passed is what the list says today.
 user_data="$root/tools/cloud-init/user-data.yaml"
+family=""
 print_only=0
 remote=root
 connect_timeout=10
@@ -55,12 +62,21 @@ while [ "$#" -gt 0 ]; do
             connect_timeout=$2
             shift 2
             ;;
+        --family)
+            [ "$#" -ge 2 ] || die "--family needs a distribution family"
+            family=$2
+            shift 2
+            ;;
         --print)
             print_only=1
             shift
             ;;
         --help)
-            printf 'usage: golden-vm [--target HOST] [--user-data PATH] [--remote USER] [--print]\n'
+            printf 'usage: golden-vm [--target HOST] [--user-data PATH] [--remote USER]\n'
+            printf '                 [--family NAME] [--connect-timeout SECONDS] [--print]\n'
+            printf '\n'
+            printf 'The user-data is rendered from packages/packages.toml before it is passed,\n'
+            printf 'unless --user-data names a file to use as given.\n'
             exit 0
             ;;
         *)
@@ -68,9 +84,6 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
-
-[ -f "$user_data" ] || die "the cloud-init user-data is missing: $user_data"
-[ -r "$user_data" ] || die "the cloud-init user-data is not readable: $user_data"
 
 # The soil phases, in the order spec 6.1 gives them. Read from the program
 # rather than kept here, so the runner and the phase list cannot drift.
@@ -87,6 +100,38 @@ for phase in $phases; do
     sequence="$sequence soil $phase --check;"
 done
 sequence="${sequence%;}"
+
+# The document is rendered from `packages/packages.toml` and checked against the
+# committed one, and the committed path is what is passed. Both halves matter:
+# passing a temporary render would mean the file a reviewer reads in the
+# repository is not the file the machine boots, and passing the committed file
+# unchecked would mean a package added to the list and not re-rendered boots a
+# machine missing it. So the render is the check and the committed file is the
+# artefact, and a stale one is refused with the command that fixes it.
+#
+# The renderer is silenced on success: this script's own stdout is the plan, and
+# AGENTS.md's rule is that a diagnostic is one line. A render that succeeded has
+# nothing to say, so its chatter is discarded rather than prefixed.
+rendered=$(mktemp)
+trap 'rm -f "$rendered"' EXIT
+render_args=(--render-user-data "$rendered")
+[ -n "$family" ] && render_args+=(--family "$family")
+
+render_output=$(PYTHONPATH="$root/src" python3 -m guarden.soil packages "${render_args[@]}" 2>&1) || {
+    printf '%s\n' "$render_output" >&2
+    die "the cloud-init user-data could not be rendered from packages/packages.toml"
+}
+
+if [ "$user_data" = "$root/tools/cloud-init/user-data.yaml" ]; then
+    if ! diff -q "$rendered" "$user_data" >/dev/null 2>&1; then
+        die "$user_data is not what packages/packages.toml renders. Re-render it:
+     PYTHONPATH=$root/src python3 -m guarden.soil packages \\
+         --render-user-data $user_data${family:+ --family $family}"
+    fi
+else
+    [ -f "$user_data" ] || die "the cloud-init user-data is missing: $user_data"
+    [ -r "$user_data" ] || die "the cloud-init user-data is not readable: $user_data"
+fi
 
 if [ "$print_only" = 1 ]; then
     printf 'user-data  %s\n' "$user_data"

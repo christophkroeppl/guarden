@@ -30,3 +30,14 @@ class GuardenError(Exception):
 def warn(message: str) -> str:
     """The other diagnostic: one line, prefixed, and not a failure."""
     return f"warning: {message}"
+
+
+def oneline(message: str) -> str:
+    """Collapse a parser's message into the one line a diagnostic is.
+
+    A YAML error carries a mark and a snippet and can be four lines long, and
+    AGENTS.md is explicit that a diagnostic is one line prefixed `error:` — so
+    the collapsing happens here, once, rather than at each of the places that
+    read a document a stranger wrote.
+    """
+    return " ".join(message.split())

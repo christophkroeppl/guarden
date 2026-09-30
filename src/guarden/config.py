@@ -52,6 +52,20 @@ TRACK_DEFAULTS = {
     "fork_from": "",
     "cap": None,
 }
+NETWORK_KEYS = {"backend", "pasta_options"}
+
+# spec 3.1: pasta is the only backend v1 supports, and slirp4netns is refused
+# rather than degraded to. A rootless container on slirp4netns has a gateway that
+# reaches nothing on the host (ticket 15, item A), so "degrading" to it would
+# leave a box where no container can reach any other.
+BACKEND = "pasta"
+
+# spec 3.1 and ticket 15 item E: an option that removes the host mapping is exit
+# `2` naming the key. `--map-gw` is pasta's own default and is what makes the
+# host reachable at all, which is why the whole option set is written into
+# guarden.toml and refused here rather than left to `containers.conf`.
+REFUSED_PASTA_OPTIONS = ("--no-map-gw",)
+REFUSED_PASTA_PAIRS = (("--map-host-loopback", "none"),)
 
 
 @dataclass(frozen=True)
@@ -80,9 +94,18 @@ class Config:
     modules: tuple[str, ...]
     lanes: int
     tracks: tuple[Track, ...]
+    backend: str = BACKEND
+    pasta_options: tuple[str, ...] = ("--map-gw",)
 
     def track(self, name: str) -> Track | None:
         return next((track for track in self.tracks if track.name == name), None)
+
+    @property
+    def network(self) -> str:
+        """The `Network=` value every generated unit carries, verbatim and in
+        order: `pasta:` followed by the option set, from this table and nowhere
+        else (spec 3.1)."""
+        return ":".join([self.backend, *self.pasta_options])
 
 
 def _type_error(where: str, key: str, want: str) -> errors.GuardenError:
@@ -154,11 +177,13 @@ def load(path: Any = None) -> Config:
 
     host = document.get("host", {})
     ingress = document.get("ingress", {})
+    network = document.get("network", {})
     build = document.get("build", {})
     modules = document.get("modules", {})
     for table, name, keys in (
         (host, "host", {"domain", "interface", "admin_user"}),
         (ingress, "ingress", {"alias", "publication_range", "forwarded"}),
+        (network, "network", NETWORK_KEYS),
         (build, "build", {"lanes"}),
         (modules, "modules", {"enabled"}),
     ):
@@ -192,6 +217,58 @@ def load(path: Any = None) -> Config:
         modules=tuple(enabled),
         lanes=_int(build, "lanes", f"{where_file} [build]"),
         tracks=tuple(tracks),
+        backend=_backend(network, where_file),
+        pasta_options=_pasta_options(network, where_file),
+    )
+
+
+def _backend(table: dict, where_file: Any) -> str:
+    """`[network] backend`, refused rather than degraded to (spec 3.1).
+
+    A well-formed file that breaks a rule this table states is exit `2` naming
+    the key, which is the same rule the track table follows; a file that will not
+    parse is the host and is exit `1` (see the module note).
+    """
+    value = table.get("backend", BACKEND)
+    if not isinstance(value, str):
+        raise _type_error(str(where_file), "network.backend", "a string")
+    if value != BACKEND:
+        raise errors.GuardenError(
+            f"{where_file}: [network] backend is {value!r}, and the only backend v1 supports "
+            f"is {BACKEND!r}; the other is refused rather than degraded to, because a container "
+            f"that cannot reach the host is not a degraded guarden"
+        )
+    return value
+
+
+def _pasta_options(table: dict, where_file: Any) -> tuple[str, ...]:
+    """The complete set of pasta options, refused if one removes the host
+    mapping (spec 3.1, ticket 15 item E).
+
+    Both spellings of a valued option are refused, because both are how a list
+    gets written: `--map-host-loopback none` as two entries and
+    `--map-host-loopback=none` as one. A refusal that only understood one of them
+    would be a refusal that turns on punctuation.
+    """
+    value = table.get("pasta_options", ["--map-gw"])
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise _type_error(str(where_file), "network.pasta_options", "a list of strings")
+    for index, option in enumerate(value):
+        if option in REFUSED_PASTA_OPTIONS:
+            raise _refused_pasta(where_file, option)
+        for flag, setting in REFUSED_PASTA_PAIRS:
+            if option == f"{flag}={setting}":
+                raise _refused_pasta(where_file, option)
+            if option == flag and index + 1 < len(value) and value[index + 1] == setting:
+                raise _refused_pasta(where_file, f"{flag} {setting}")
+    return tuple(value)
+
+
+def _refused_pasta(where_file: Any, option: str) -> errors.GuardenError:
+    return errors.GuardenError(
+        f"{where_file}: [network] pasta_options has {option!r}, which removes the mapping "
+        f"that makes the host reachable from a container; a container with no route to the "
+        f"host is not a degraded guarden, it is a box where nothing can reach anything"
     )
 
 

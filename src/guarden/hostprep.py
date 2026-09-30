@@ -21,6 +21,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from guarden import hosttool as h
+from guarden import packagelist, paths
 from guarden.hosttool import Item, hostpath, lock
 
 # --------------------------------------------------------------------------
@@ -42,11 +43,16 @@ STORAGE_DIRECTORIES = (
 )
 
 INSTALL_DIRECTORIES = (
-    (("usr", "lib", "guarden"), 0o755, "root", "root"),
-    (("usr", "lib", "guarden", "bin"), 0o755, "root", "root"),
-    (("usr", "lib", "guarden", "lib"), 0o755, "root", "root"),
-    (("usr", "lib", "guarden", "modules"), 0o755, "root", "root"),
-    (("usr", "lib", "guarden", "templates"), 0o755, "root", "root"),
+    # Named from the constants rather than spelled as path tuples: spec 2's FHS
+    # rows are `paths`' to state, and a tuple here is the second copy of a
+    # layout that moved. The tuples are the phase's shape -- (parts, mode,
+    # owner, group) -- so each entry is the constant's parts under the prefix.
+    (paths.USR_LIB_GUARDEN.relative_to(h.hostpath()).parts,
+     0o755, "root", "root"),
+    (paths.BIN.relative_to(h.hostpath()).parts, 0o755, "root", "root"),
+    (paths.LIBDIR.relative_to(h.hostpath()).parts, 0o755, "root", "root"),
+    (paths.MODULES.relative_to(h.hostpath()).parts, 0o755, "root", "root"),
+    (paths.TEMPLATES.relative_to(h.hostpath()).parts, 0o755, "root", "root"),
     (("var", "lib", "guarden", "render"), 0o770, "guarden", "guarden"),
     (("run", "guarden"), 0o755, "root", "root"),
     (("run", "guarden", "locks"), 0o770, "root", "guarden"),
@@ -58,15 +64,15 @@ INSTALL_DIRECTORIES = (
 PROGRAM_USERS = ("guarden", "hose")
 PROGRAM_GROUP = "guarden"
 
-DISTRIBUTION_PACKAGES = (
-    "btrfs-progs",
-    "snapper",
-    "ferm",
-    "fail2ban",
-    "podman",
-    "python3-yaml",
-    "python3-jinja2",
-)
+# The packages come from `packages/packages.toml` and not from a tuple here,
+# because the cloud-init user-data is rendered from the same file and a second
+# copy in code is a second copy that can drift: a host would install three
+# things and converge on a fourth, and both machines would report success.
+# Resolved per call rather than at import, so `soil --help` still answers on a
+# host whose family this list has no row for.
+def distribution_packages(family: str | None = None) -> tuple[str, ...]:
+    """The packages this host's family needs, and the only list of them."""
+    return packagelist.package_names(family)
 
 # The one fetch from outside a distribution repository. Its version and SHA256
 # are recorded in the repository and verified on install, and there is no
@@ -133,9 +139,9 @@ UNITS = (
 # --------------------------------------------------------------------------
 
 
-def _installed(package: str) -> bool:
-    result = h.run("dpkg-query", "-W", "-f=${db:Status-Status}", package)
-    return result.ok and result.line == "installed"
+def _installed(package: str, row: dict) -> bool:
+    """Whether the family's own query says so, asked with the list's argv."""
+    return packagelist.is_installed(package, row)
 
 
 def _podlet_record() -> dict[str, str]:
@@ -149,21 +155,22 @@ def _podlet_record() -> dict[str, str]:
 
 
 def _podlet_binary() -> Path:
-    return hostpath("usr", "lib", "guarden", "bin", "podlet")
+    return paths.BIN / "podlet"
 
 
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def packages_items() -> list[Item]:
+def packages_items(family: str | None = None) -> list[Item]:
+    row = packagelist.family(family)
     items = [
         Item(
             f"the {package} package is installed",
-            lambda package=package: _installed(package),
-            lambda package=package: _install_packages([package]),
+            lambda package=package: _installed(package, row),
+            lambda package=package: _install_packages([package], row),
         )
-        for package in DISTRIBUTION_PACKAGES
+        for package in distribution_packages(family)
     ]
 
     def podlet_installed() -> bool:
@@ -210,9 +217,16 @@ def packages_items() -> list[Item]:
                          podlet_installed, install_podlet)]
 
 
-def _install_packages(packages: Iterable[str]) -> None:
-    names = list(packages)
-    h.run_or_die("apt-get", "install", "-y", *names)
+def _install_packages(packages: Iterable[str], row: dict | None = None) -> None:
+    """Install with the family's tool, named in the list and nowhere else.
+
+    One package at a time, because the item that failed is the item that has to
+    be reported: a single `apt-get install` of the whole list fails as a unit and
+    says which of seven packages was missing only by parsing the distribution's
+    prose.
+    """
+    for package in packages:
+        h.run_or_die(*packagelist.install_argv([package], row))
 
 
 class IncompleteRecord(Exception):
@@ -628,7 +642,7 @@ def _module_ingress() -> list[tuple[str, str]]:
     """
     config = h.read_config(h.config_path()) or h.shipped_config()
     enabled = config.get("modules", {}).get("enabled", [])
-    modules = hostpath("usr", "lib", "guarden", "modules")
+    modules = paths.MODULES
     found: list[tuple[str, str]] = []
     for module in enabled:
         manifest = modules / module / "module.toml"
@@ -781,6 +795,14 @@ def firewall_items(deadman: bool) -> list[Item]:
 
 _PROGRAMS = ("soil", "weedr", "loom", "roots", "twig", "furrow", "hose", "stakes")
 
+# The interpreter line the installed programs carry. The programs are modules in
+# the checkout (spec 11: a Python module with a `main`, exposed as a console
+# script, and no shell entry point), and a module has no shebang because nothing
+# executes it directly. The *installed* copy is executed directly, through
+# spec 2's `/usr/bin` symlink, and a symlink to a file with no interpreter line
+# is a link to something the kernel cannot run.
+SHEBANG = "#!/usr/bin/env python3"
+
 
 def _source_tree() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -788,31 +810,105 @@ def _source_tree() -> Path:
 
 def _install_programs() -> None:
     source = _source_tree()
-    binaries = hostpath("usr", "lib", "guarden", "bin")
+    binaries = paths.BIN
+    binaries.mkdir(parents=True, exist_ok=True)
     for program in _PROGRAMS:
         h.run_or_die("install", "-m", "0755", "-o", "root", "-g", "root",
                      str(source / "guarden" / f"{program}.py"),
                      str(binaries / program))
     h.run_or_die("install", "-m", "0644", "-o", "root", "-g", "root",
-                 str(source / "guarden" / "cli.py"), str(hostpath("usr", "lib", "guarden", "lib")))
+                 str(source / "guarden" / "cli.py"), str(paths.LIBDIR))
 
 
 def _programs_installed() -> bool:
-    binaries = hostpath("usr", "lib", "guarden", "bin")
+    binaries = paths.BIN
     return all((binaries / program).is_file() for program in _PROGRAMS)
 
 
+def _programs_runnable() -> bool:
+    """Whether each installed program starts with an interpreter line.
+
+    A `/usr/bin/soil` symlink to a file that begins with a docstring is a link to
+    something the kernel cannot execute: the shell that claims it runs the
+    docstring and reports `command not found` for whatever arguments followed.
+    The programs are modules (spec 11, no shell entry point), so they carry no
+    shebang in the checkout; the installed copy is a *program* and needs one, and
+    prepending it is what makes spec 2's symlink a working command rather than a
+    file that exists.
+    """
+    binaries = paths.BIN
+    return all(
+        (binaries / program).is_file()
+        and (binaries / program).read_text(encoding="utf-8").startswith("#!")
+        for program in _PROGRAMS
+    )
+
+
+def _make_programs_runnable() -> None:
+    """Prepend `#!/usr/bin/env python3` to each installed program.
+
+    Written through the spec 3.5 protocol like every other file, and rebuilt from
+    the checkout each time rather than edited in place: a second apply must be a
+    no-op, and appending a second shebang to an already-prefixed file would not
+    be one. The interpreter is the distribution's `python3`, which is what the
+    runtime dependencies assume and what `python3-yaml` and `python3-jinja2` are
+    installed for.
+    """
+    source = _source_tree()
+    binaries = paths.BIN
+    for program in _PROGRAMS:
+        body = (source / "guarden" / f"{program}.py").read_text(encoding="utf-8")
+        h.write_file(binaries / program, f"{SHEBANG}\n{body}", 0o755)
+    h.run_or_die("chown", "-R", "root:root", str(binaries))
+
+
 def _templates_installed() -> bool:
-    installed = hostpath("usr", "lib", "guarden", "templates")
+    installed = paths.TEMPLATES
     source = _source_tree() / "guarden" / "templates"
     return all((installed / path.name).is_file() for path in source.iterdir())
+
+
+def _link_target(program: str) -> str:
+    """Where `/usr/bin/<program>` points, as a root-absolute path.
+
+    Absolute rather than relative to the link so that `readlink` on the host
+    answers the same thing an operator reading `/usr/bin/soil` would, and so a
+    link is comparable as text in `--check` — a relative target would hold
+    correctly while pointing somewhere the checker computed differently.
+    """
+    return str(paths.BIN / program)
+
+
+def _program_linked(program: str) -> bool:
+    """Whether `/usr/bin/<program>` is a symlink into the installed tree."""
+    link = paths.USR_BIN / program
+    if not link.is_symlink():
+        return False
+    return os.readlink(link) == _link_target(program)
+
+
+def _link_programs() -> None:
+    """One symlink per program in `/usr/bin`, pointing into `/usr/lib/guarden`.
+
+    spec 2. Without this a program is installed and cannot be run by name: the
+    eight console scripts are the interface, and a box where `loom` exists under
+    `/usr/lib/guarden/bin` and not on `PATH` is a box whose interface is a
+    directory listing.
+
+    The link is replaced rather than followed: `ln -sfn` is idempotent, so a
+    converged host re-links nothing, and a `/usr/bin/loom` that something else
+    put there is corrected rather than silently kept.
+    """
+    paths.USR_BIN.mkdir(parents=True, exist_ok=True)
+    for program in _PROGRAMS:
+        h.run_or_die("ln", "-sfn", _link_target(program), str(paths.USR_BIN / program))
 
 
 def _install_templates() -> None:
     source = _source_tree() / "guarden" / "templates"
     for path in sorted(source.iterdir()):
         h.run_or_die("install", "-m", "0644", "-o", "root", "-g", "root",
-                     str(path), str(hostpath("usr", "lib", "guarden", "templates")))
+                     str(path), str(paths.TEMPLATES))
 
 
 def _user_exists(name: str) -> bool:
@@ -832,6 +928,44 @@ def _seed_config() -> None:
         h.write_file(h.config_path(), h.template("guarden.toml"), 0o644)
 
 
+def _enabled_modules() -> list[str]:
+    """The modules `[modules] enabled` currently records, in file order."""
+    enabled = h.read_config(h.config_path()).get("modules", {}).get("enabled", [])
+    return [str(name) for name in enabled]
+
+
+def _selection_recorded(selection: list[str]) -> bool:
+    """Whether every module the caller named is already enabled.
+
+    A subset test and not an equality one, and that is the whole claim: once a
+    choice is recorded it is never narrowed, so a `weedr module add` that
+    appended to `[modules] enabled` keeps what it appended and the next
+    `soil install --apply` calls that drift-free rather than erasing it. Two
+    writers share one key; this one seeds and then yields.
+    """
+    recorded = set(_enabled_modules())
+    return all(module in recorded for module in selection)
+
+
+def _seed_modules(selection: list[str]) -> None:
+    """Record the selection under the `modules` lock, re-reading under it.
+
+    spec 3.5: two writers share `[modules] enabled`, so the write takes the lock
+    and re-reads the file under it rather than trusting what it saw before it. A
+    `weedr module add` that appended while this waited for the lock is therefore
+    still in the list, and this writer adds its selection alongside it rather
+    than replacing the key — which is what makes the two writers compose instead
+    of overwriting one another.
+    """
+    with lock("modules"):
+        merged = list(dict.fromkeys([*_enabled_modules(), *selection]))
+        h.write_file(
+            h.config_path(),
+            h.set_string_list(_read_text(h.config_path()), "modules", "enabled", merged),
+            0o644,
+        )
+
+
 def _admin_user() -> str:
     return h.read_config(h.config_path()).get("host", {}).get("admin_user", "")
 
@@ -849,23 +983,60 @@ def _record_admin_user(user: str) -> None:
         )
 
 
-def install_items() -> list[Item]:
+def install_items(modules: list[str] | None = None) -> list[Item]:
     # Nothing in here touches the filesystem while the list is being built. An
     # item that seeded a file on the way to asking whether the file was there
     # would make `--check` write, and `--check` changes nothing.
+    modules = list(modules or [])
     config_path = h.config_path()
 
+    # The `guarden` group comes first, before any directory that names it as
+    # their group: `install -d -o root -g guarden` fails with `invalid group` on a
+    # host where the group does not exist yet, and a directory whose group is
+    # load-bearing is exactly the one that would fail. The golden VM found this;
+    # the fast harness stages a `guarden` group already, so it could not.
+    #
+    # Ordering rather than a filter, because a directory this run cannot own yet
+    # still has to be created — dropping it from the list would leave a fresh
+    # host without `/var/lib/guarden` and report a clean phase.
     items: list[Item] = [
-        h.directory_item(
-            f"/{'/'.join(parts)} is {mode:04o} {owner}:{group}",
-            hostpath(*parts), mode, owner, group,
-        )
-        for parts, mode, owner, group in INSTALL_DIRECTORIES
+        Item(
+            f"the {PROGRAM_GROUP} group exists, and it is the only group this phase makes",
+            lambda: _group_exists(PROGRAM_GROUP),
+            lambda: h.run_or_die("groupadd", "--system", PROGRAM_GROUP),
+        ),
+        *[
+            h.directory_item(
+                f"/{'/'.join(parts)} is {mode:04o} {owner}:{group}",
+                hostpath(*parts), mode, owner, group,
+            )
+            for parts, mode, owner, group in INSTALL_DIRECTORIES
+        ],
     ]
     items += [
         Item("the host configuration exists", lambda: config_path.is_file(), _seed_config),
         Item("guarden's programs are installed root-owned", _programs_installed,
              _install_programs),
+        # The installed copies carry an interpreter line, which is what makes
+        # spec 2's `/usr/bin` symlinks into working commands rather than links to
+        # files the kernel cannot execute. Separate from "installed" because they
+        # are different facts about the same file and a host can hold one without
+        # the other.
+        Item(
+            "every installed program starts with an interpreter line, so /usr/bin "
+            "runs it rather than the shell quoting it",
+            _programs_runnable,
+            _make_programs_runnable,
+        ),
+        # One symlink per program in /usr/bin, so each is runnable by name. The
+        # eight are the interface and they are listed together because a
+        # partially-linked set is a box where some commands work and others do
+        # not, which is the worst shape for an operator to discover.
+        Item(
+            "every program is on PATH as a symlink into /usr/lib/guarden/bin",
+            lambda: all(_program_linked(program) for program in _PROGRAMS),
+            _link_programs,
+        ),
         Item("guarden's templates are installed", _templates_installed, _install_templates),
         # The pin is seeded, not converged: an operator fills in a digest once and
         # it is theirs from then on, so a converge to the shipped template would
@@ -880,11 +1051,8 @@ def install_items() -> list[Item]:
         h.text_item("the tmpfiles entry recreates /run/guarden at every boot",
                     hostpath(*SYSTEMD_DIR, "guarden-tmpfiles.conf"),
                     _template("guarden-tmpfiles.conf")),
-        Item(
-            f"the {PROGRAM_GROUP} group exists, and it is the only group this phase makes",
-            lambda: _group_exists(PROGRAM_GROUP),
-            lambda: h.run_or_die("groupadd", "--system", PROGRAM_GROUP),
-        ),
+        # The program users follow the group, for the same reason the group leads
+        # the directories: `useradd --gid guarden` needs the group to exist.
         *[
             Item(
                 f"the {user} user exists, and it is a program user rather than a service",
@@ -903,6 +1071,19 @@ def install_items() -> list[Item]:
             _template("guarden-credential-materialiser@.service"),
         ),
     ]
+
+    # The module selection, when the caller gave one. It is an item rather than a
+    # write so that `--check` reports it and changes nothing, and it holds as
+    # soon as any choice is recorded so that a later `weedr module add` is not
+    # drift that the next apply would erase.
+    if modules:
+        items.append(
+            Item(
+                "[modules] enabled records a selection nobody has to choose twice",
+                lambda: _selection_recorded(modules),
+                lambda: _seed_modules(modules),
+            )
+        )
 
     items += [
         Item(
@@ -1069,9 +1250,12 @@ def units_items() -> list[Item]:
 PHASES = ("packages", "storage", "sysctl", "firewall", "install", "units")
 
 
-def items_for(phase: str, deadman: bool = False) -> list[Item]:
+def items_for(
+    phase: str, deadman: bool = False, family: str | None = None,
+    modules: list[str] | None = None,
+) -> list[Item]:
     if phase == "packages":
-        return packages_items()
+        return packages_items(family)
     if phase == "storage":
         return storage_items()
     if phase == "sysctl":
@@ -1079,7 +1263,7 @@ def items_for(phase: str, deadman: bool = False) -> list[Item]:
     if phase == "firewall":
         return firewall_items(deadman)
     if phase == "install":
-        return install_items()
+        return install_items(modules)
     if phase == "units":
         return units_items()
     h.error(f"unknown phase: {phase}")

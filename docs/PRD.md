@@ -295,12 +295,37 @@ reached from the internet, and neither case is a path guarden needs.
 
 The host layout and the phase structure are distro-neutral: `/usr/lib/guarden`,
 `/etc/guarden`, `/var/lib/guarden`, `/run/guarden` and the six soil phases do not name a
-distribution. What is still Ubuntu-only is the install path, and it is four things: the dracut
-hook for the btrfs convert, the `DPkg::Pre-Invoke` hook at
-`/etc/apt/apt.conf.d/80guarden-snapper`, the names of the distribution's packaged snapper units,
-and cloud-init. Everything else is behind a capability probe with a documented fallback. The
-install target is stated once, in the README: *Ubuntu 26.04 (the layout is portable; the install
-path is not yet).*
+distribution. Every path is a constant in `guarden/paths.py` and is written there once, because a
+path spelled twice is the copy that drifts.
+
+What is still Ubuntu-only is the install path, and it is four things:
+
+1. the dracut hook for the btrfs convert;
+2. the `DPkg::Pre-Invoke` hook at `/etc/apt/apt.conf.d/80guarden-snapper`;
+3. the names of the distribution's packaged snapper units;
+4. cloud-init.
+
+Everything else is behind a capability probe with a documented fallback. **The package list is the
+one place the difference is concentrated**, and it is per family rather than one list of one
+distribution's names: `packages/packages.toml` carries a row per family, each with its own install
+argv, its own query argv, and its own answer to "is it installed" — which is a separate key because
+that is where families differ most sharply, and a probe that asks the wrong question reports a
+package that is absent as present. The family itself is probed by `ID_LIKE` in `/etc/os-release`,
+then by the query tool on `PATH`; neither probe runs a command. A family the list does not carry is
+exit 2 naming the families it has, never a guess at the nearest one.
+
+That list is **the** list. `soil packages` converges its `packages` rows and the cloud-init
+user-data is rendered from them, so a package added to one and not the other is a box that installs
+three things and converges on a fourth with both machines reporting success. `tools/golden-vm`
+re-renders before it boots and refuses a committed document that has drifted from the list, so the
+file a reviewer reads in the repository is the file the machine boots.
+
+There is no PyPI and no wheel anywhere on the boot path: every package in the list is a
+distribution package, and the one artefact fetched from outside a distribution repository is the
+pinned `podlet` release, verified against the SHA256 recorded in the repository.
+
+The install target is stated once, in the README: *Ubuntu 26.04 (the layout is portable; the
+install path is not yet).*
 
 ---
 

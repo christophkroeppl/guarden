@@ -48,6 +48,21 @@ STAGING = LIB / "staging"
 SHARED = LIB / "shared"
 EDGE_DYNAMIC = LIB / "edge" / "dynamic"
 
+# /usr/lib/guarden and /usr/bin, spec 2's FHS rows.
+#
+# Guarden's own files live under /usr/lib/guarden, which is root-owned and never
+# written by a deploy; /usr/bin carries one symlink per program so each is
+# runnable by name. The split is what makes the tree reinstallable: the programs
+# can be replaced under /usr/lib/guarden without touching what an operator's
+# PATH resolves to, and a link that pointed into a checkout would break the
+# moment that checkout moved.
+USR_LIB = PREFIX / "usr" / "lib"
+USR_LIB_GUARDEN = USR_LIB / "guarden"
+BIN = USR_LIB_GUARDEN / "bin"
+LIBDIR = USR_LIB_GUARDEN / "lib"
+MODULES = USR_LIB_GUARDEN / "modules"
+USR_BIN = PREFIX / "usr" / "bin"
+
 # /run and /proc
 LOCKS = PREFIX / "run" / "guarden" / "locks"
 PROC_SYS = PREFIX / "proc" / "sys"
@@ -56,6 +71,14 @@ PROC_SYS = PREFIX / "proc" / "sys"
 # units and drop-ins go (ADR-0003): the home's own directory is searched first,
 # so a root-owned drop-in here survives a regeneration.
 QUADLET = Path(".config/containers/systemd")
+
+# /usr/lib/guarden/templates, where `soil install` puts them. The override is
+# the same kind of seam as GUARDEN_PREFIX and for the same reason: the render has
+# to be checkable against a template set that is not the one in the checkout. It
+# is the least powerful seam in the tree — it can only change the bytes a render
+# produces, and every decision the render makes about a unit is in the renderer
+# rather than in a template — so it widens no authority.
+TEMPLATES = Path(os.environ.get("GUARDEN_TEMPLATES") or (PREFIX / "usr/lib/guarden/templates"))
 
 
 def overrides(service: str) -> Path:

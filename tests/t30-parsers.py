@@ -110,8 +110,12 @@ def manifests() -> None:
     refuses(
         "environment: production\n", 2, "the host decides the environment", "an environment key"
     )
+    # A key a repository may not state is refused by name, and the four the
+    # renderer consumes — a weight, a retention value, a build priority, a
+    # lineage — now say *who owns it*, which is the answer somebody needs and an
+    # "unknown key" never was. They are still exit 2 and they still name the key.
     for key in ("fork_from", "weight", "priority", "lineage", "cap", "keep_last"):
-        refuses(f"{key}: whatever\n", 2, "unknown key", f"the {key} key")
+        refuses(f"{key}: whatever\n", 2, key, f"the {key} key")
 
     # A project name is a name; a service name's 31-character limit is applied to
     # the service name and not to this (spec 4).

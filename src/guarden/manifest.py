@@ -13,12 +13,14 @@ no diagnostic saying so. A silent drop is the failure this parser exists to make
 impossible, so the top-level check is here even for the keys this ticket does not
 consume.
 
-What this ticket consumes is `project`, `units`, `state`, `bulk` and `provides`:
-the volumes are what the mutator creates and what the registry records, and the
-project is one of two registry fields that may differ. The deep shape of
-`needs:`, `ports:`, `routes:` and `widgets:` belongs to the tickets that consume
-them — the renderer, the edge and the dashboard — and is not validated here
-rather than half-validated twice.
+What this ticket consumes is the whole of it: `project`, `units`, `state`, `bulk`,
+`provides`, `needs`, `ports`, `routes`, `widgets` and `schema`. The volumes are
+what the mutator creates and what the registry records, the project is one of two
+registry fields that may differ, and the remaining blocks are the renderer's
+input — the edges it validates against the registry, the containers it looks up
+in the unit source, and the keys whose credential *requests* it emits. The deep
+shape of each block is validated here rather than in the renderer, because a
+manifest is input and a manifest's failures are the ones nobody hears about.
 """
 
 from __future__ import annotations
@@ -62,11 +64,83 @@ BLOCK_KEYS = {
 # decides it. It is a key a developer would reach for, and the answer is never
 # in the repository.
 REFUSED_KEYS = {
-    "environment": "the host decides the environment; it is recorded in /etc/guarden/guarden.toml"
+    "environment": "the host decides the environment; it is recorded in /etc/guarden/guarden.toml",
+    "track": "the host decides the track; it is a row in the [[environments]] table of "
+    "/etc/guarden/guarden.toml",
+    "fork_from": "lineage is a field on the track, and a repository cannot set it",
+    "weight": "a resource weight is the track's, from /etc/guarden/guarden.toml",
+    "cpu_weight": "a resource weight is the track's, from /etc/guarden/guarden.toml",
+    "io_weight": "a resource weight is the track's, from /etc/guarden/guarden.toml",
+    "memory": "a resource cap is the operator's, in a root-owned drop-in",
+    "memory_max": "a resource cap is the operator's, in a root-owned drop-in",
+    "memory_high": "a resource cap is the operator's, in a root-owned drop-in",
+    "priority": "a build priority is the track's weight, which a manifest does not state",
+    "build_priority": "a build priority is the track's weight, which a manifest does not state",
+    "snapshot_priority": "a snapshot priority is an operator's, in overrides.toml or a pin",
+    "retention": "retention is the track's default or the admin's override, not the manifest's",
+    "keep_last": "retention is the track's default or the admin's override, not the manifest's",
+    "free_limit": "retention is the track's default or the admin's override, not the manifest's",
+    "data_source": "a data source is a path a container mounts, and the mounts are the admin's",
+    "grants": "a grant is recorded in the root-owned overrides.toml, never in a repository",
+    "open_ports": "a grant is recorded in the root-owned overrides.toml, never in a repository",
+    "published_ports": "the published-port set is the renderer's, from the grants and the "
+    "allocations",
+    "mounts": "[mounts] allow in the root-owned overrides.toml is the only mount surface",
 }
 
 VOLUME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+# spec 4: `as:` is the variable name uppercased, so it is a name and not a
+# string, and the closed form is what stops a manifest writing a prefix that
+# becomes an odd environment variable.
+AS_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# The route host, after the track's prefix, is a set of labels. The pattern is
+# closed rather than a list of prohibitions because a wildcard was the shape that
+# would have been dangerous.
+HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")
 PROVIDES_KINDS = ("db", "secret")
+AUTH_KINDS = ("database", "secret", "none")
+PORT_MIN = 1
+PORT_MAX = 65535
+
+
+@dataclass(frozen=True)
+class Edge:
+    """One `needs:` entry: an edge to another service."""
+
+    service: str
+    prefix: str
+    port: int
+    auth: str
+
+    @property
+    def variable(self) -> str:
+        return self.prefix.upper()
+
+
+@dataclass(frozen=True)
+class Publication:
+    """One `ports:` entry: a public port requested for a container of this service."""
+
+    container: str
+    port: int
+
+
+@dataclass(frozen=True)
+class Route:
+    """One `routes:` entry: a container of this service the edge dials."""
+
+    container: str
+    port: int
+    host: str
+    auth: bool
+
+
+@dataclass(frozen=True)
+class Widget:
+    """One `widgets:` entry: a file the dashboard copies, unparsed."""
+
+    container: str
+    file: str
 
 
 @dataclass
@@ -77,9 +151,22 @@ class Manifest:
     state: list[str] = field(default_factory=list)
     bulk: list[str] = field(default_factory=list)
     provides: list[str] = field(default_factory=list)
+    needs: list[Edge] = field(default_factory=list)
+    ports: list[Publication] = field(default_factory=list)
+    routes: list[Route] = field(default_factory=list)
+    widgets: list[Widget] = field(default_factory=list)
+    schema: str | None = None
 
     def volume_kind(self, name: str) -> str:
         return "state" if name in self.state else "bulk"
+
+    def volumes(self) -> list[tuple[str, str]]:
+        """Every declared volume with its kind: `state` first, then `bulk`, each
+        by name. A fixed order, so two renders agree byte for byte."""
+        return [
+            *((name, "state") for name in sorted(self.state)),
+            *((name, "bulk") for name in sorted(self.bulk)),
+        ]
 
 
 def _yaml():
@@ -115,7 +202,9 @@ def read(path: Path) -> Manifest:
     try:
         document = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        raise errors.GuardenError(f"the manifest {path} is not valid YAML: {exc}") from exc
+        raise errors.GuardenError(
+            f"the manifest {path} is not valid YAML: {errors.oneline(str(exc))}"
+        ) from exc
 
     if document is None:
         document = {}
@@ -148,11 +237,33 @@ def read(path: Path) -> Manifest:
         state=state,
         bulk=bulk,
         provides=_provides(document.get("provides", []), path),
+        needs=_needs(document.get("needs", []), path),
+        ports=_publications(document.get("ports", []), path),
+        routes=_routes(document.get("routes", []), path),
+        widgets=_widgets(document.get("widgets", []), path),
+        schema=_schema(document.get("schema"), path),
     )
 
 
 def _check_blocks(document: dict, path: Path) -> None:
-    """The closed key set of each list-of-entries block, refused by name."""
+    """The closed key set of each list-of-entries block, refused by name.
+
+    A `service:` key inside a `routes:`, `ports:` or `widgets:` block is checked
+    **first** and gets its own message, because it is the one mistake the block
+    structure exists to make impossible and an "unknown key" diagnostic would
+    not say which of the two things a developer has to tell apart went wrong.
+    """
+    for block in ("ports", "routes", "widgets"):
+        entries = document.get(block)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and "service" in entry:
+                raise errors.GuardenError(
+                    f"the manifest {path}: a {block} entry has a `service:` key; a {block} "
+                    f"entry names a container inside this service, and `service:` is how you "
+                    f"tell the two apart"
+                )
     for block, allowed in BLOCK_KEYS.items():
         entries = document.get(block)
         if entries is None:
@@ -221,4 +332,150 @@ def _units(value: Any, path: Path) -> str | None:
         return None
     if not isinstance(value, str) or not value.strip():
         raise errors.GuardenError(f"the manifest {path}: units is not a path")
+    return value
+
+
+def _schema(value: Any, path: Path) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise errors.GuardenError(f"the manifest {path}: schema is not a path")
+    return value
+
+
+def _needs(value: Any, path: Path) -> list[Edge]:
+    """`needs:` entries: a provider service, a prefix, a port and an auth kind.
+
+    A service that does not exist *yet* is not an error here — a poke creates
+    services in dependency order and a manifest may name one a later deploy
+    brings into being — so the existence check is the renderer's, against the
+    provider's registry, and it is exit `1` because the answer came from the
+    host.
+    """
+    entries = _entries(value, "needs", path)
+    out: list[Edge] = []
+    seen: dict[str, int] = {}
+    for entry in entries:
+        service = entry.get("service")
+        if not isinstance(service, str) or not names.NAME_RE.match(service):
+            raise errors.GuardenError(
+                f"the manifest {path}: a needs entry names {service!r} as its service, and "
+                f"a service is a name matching {names.NAME_RE.pattern}"
+            )
+        prefix = entry.get("as")
+        if not isinstance(prefix, str) or not AS_RE.match(prefix):
+            raise errors.GuardenError(
+                f"the manifest {path}: the needs entry for {service!r} has `as: "
+                f"{prefix!r}`, and it is the prefix of the generated variables, so it must "
+                f"match {AS_RE.pattern}"
+            )
+        if prefix in seen:
+            raise errors.GuardenError(
+                f"the manifest {path}: two needs entries use `as: {prefix}`, and it is the "
+                f"prefix of the generated variables, so it has to be unique"
+            )
+        seen[prefix] = 1
+        auth = entry.get("auth")
+        if auth not in AUTH_KINDS:
+            raise errors.GuardenError(
+                f"the manifest {path}: the needs entry for {service!r} has `auth: {auth!r}`, "
+                f"and there is no default: it is one of {', '.join(AUTH_KINDS)}"
+            )
+        out.append(
+            Edge(
+                service=service,
+                prefix=prefix,
+                port=_port(entry.get("port"), f"the needs entry for {service!r}", path),
+                auth=str(auth),
+            )
+        )
+    return out
+
+
+def _publications(value: Any, path: Path) -> list[Publication]:
+    """`ports:` entries. A bare `"8080/tcp"` string is not a valid entry: a grant
+    is a translation to a publication, and a publication is per container, so an
+    entry that named only a public number named no destination."""
+    out: list[Publication] = []
+    for entry in _entries(value, "ports", path):
+        container = entry.get("container")
+        if not isinstance(container, str) or not container.strip():
+            raise errors.GuardenError(
+                f"the manifest {path}: a ports entry names {container!r} as its container"
+            )
+        out.append(
+            Publication(
+                container=container,
+                port=_port(entry.get("port"), f"the ports entry for {container!r}", path),
+            )
+        )
+    return out
+
+
+def _routes(value: Any, path: Path) -> list[Route]:
+    out: list[Route] = []
+    for entry in _entries(value, "routes", path):
+        container = entry.get("container")
+        if not isinstance(container, str) or not container.strip():
+            raise errors.GuardenError(
+                f"the manifest {path}: a routes entry names {container!r} as its container"
+            )
+        host = entry.get("host")
+        if not isinstance(host, str) or not HOST_RE.match(host):
+            raise errors.GuardenError(
+                f"the manifest {path}: the routes entry for {container!r} has `host: "
+                f"{host!r}`, and it is a label rather than a domain — the full name is the "
+                f"track's host_prefix plus this, and it must match {HOST_RE.pattern}"
+            )
+        out.append(
+            Route(
+                container=container,
+                port=_port(entry.get("port"), f"the routes entry for {container!r}", path),
+                host=host,
+                auth=bool(entry.get("auth", False)),
+            )
+        )
+    return out
+
+
+def _widgets(value: Any, path: Path) -> list[Widget]:
+    out: list[Widget] = []
+    for entry in _entries(value, "widgets", path):
+        container = entry.get("container")
+        if not isinstance(container, str) or not container.strip():
+            raise errors.GuardenError(
+                f"the manifest {path}: a widgets entry names {container!r} as its container"
+            )
+        file = entry.get("file")
+        if not isinstance(file, str) or not file.strip():
+            raise errors.GuardenError(
+                f"the manifest {path}: the widgets entry for {container!r} has no file"
+            )
+        out.append(Widget(container=container, file=file))
+    return out
+
+
+def _entries(value: Any, block: str, path: Path) -> list[dict]:
+    if not isinstance(value, list):
+        raise errors.GuardenError(f"the manifest {path}: {block} is not a list")
+    for entry in value:
+        if isinstance(entry, dict) and "service" in entry and block != "needs":
+            raise errors.GuardenError(
+                f"the manifest {path}: a {block} entry has a `service:` key; a {block} entry "
+                f"names a container inside this service, and `service:` is how you tell the "
+                f"two apart"
+            )
+    return value
+
+
+def _port(value: Any, where: str, path: Path) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise errors.GuardenError(
+            f"the manifest {path}: {where} has `port: {value!r}`, which is not a number"
+        )
+    if not PORT_MIN <= value <= PORT_MAX:
+        raise errors.GuardenError(
+            f"the manifest {path}: {where} has port {value}, and a port is "
+            f"{PORT_MIN}-{PORT_MAX}"
+        )
     return value
