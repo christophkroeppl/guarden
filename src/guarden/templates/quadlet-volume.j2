@@ -1,0 +1,16 @@
+{#
+  One `.volume` unit, for every declared volume: `state` and `bulk` alike,
+  because a container must be able to mount either.
+
+  `Source=` is the path the mutator created the subvolume at, derived from the
+  service name and the volume name. A manifest never writes a host path.
+#}
+# Rendered by loom for {{ service }}.
+# Do not edit: the next render overwrites this file.
+
+[Unit]
+Description=the {{ kind }} volume {{ volume }} of {{ service }}
+
+[Volume]
+VolumeName={{ volume_name }}
+Source={{ source }}

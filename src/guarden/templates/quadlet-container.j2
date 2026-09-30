@@ -1,0 +1,30 @@
+{#
+  One quadlet container unit, rendered by loom.
+
+  The repository's own fields come first, in the order the unit source wrote
+  them, and every field guarden owns follows in a fixed order. There is no
+  [Install] table: quadlet generates it, and a unit that carries one is a unit
+  quadlet refuses.
+#}
+# Rendered by loom from {{ origin }} for {{ service }}.
+# Do not edit: the next render overwrites this file, and the mutator installs it
+# into the service user's own quadlet directory.
+#
+# {{ container }} of {{ service }}.
+
+[Unit]
+{% for line in unit_keys %}
+{{ line }}
+{% endfor %}
+
+[Container]
+{% for line in container_keys %}
+{{ line }}
+{% endfor %}
+{% if service_keys %}
+
+[Service]
+{% for line in service_keys %}
+{{ line }}
+{% endfor %}
+{% endif %}

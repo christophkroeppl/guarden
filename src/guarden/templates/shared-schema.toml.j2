@@ -1,0 +1,20 @@
+{#
+  The shape of this service's credentials, and never a value.
+
+  `roots`, `twig` and `weedr secret list` read names and verdicts from here.
+  There is no value in this file and no value in any rendered unit: the
+  credential materialiser has already turned each one into a podman secret in
+  this service's own store, and the renderer only names what it wants.
+#}
+# Rendered by loom. The mutator installs this read-only.
+service = "{{ service }}"
+{% for key in rows %}
+[[keys]]
+name = "{{ key.name }}"
+required = {{ "true" if key.required else "false" }}
+sensitive = {{ "true" if key.sensitive else "false" }}
+injection = "{{ key.injection }}"
+{% if key.example %}
+example = "{{ key.example }}"
+{% endif %}
+{% endfor %}
