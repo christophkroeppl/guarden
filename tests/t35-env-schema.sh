@@ -35,9 +35,12 @@
 run /usr/bin/git check-ignore -q .env.schema
 assert_exit 1
 
-# And visible to git as a file awaiting commit rather than suppressed, which is
-# the distinction a fake `git` returning 0 for everything would hide.
-run /usr/bin/git status --porcelain .env.schema
+# And visible to git as a tracked file rather than suppressed, which is the
+# distinction a fake `git` returning 0 for everything would hide. `ls-files`
+# rather than `status`: a committed file is tracked and correctly absent from
+# status, so the status form asserted a pre-commit moment and then stopped
+# meaning anything the moment the schema landed.
+run /usr/bin/git ls-files --error-unmatch .env.schema
 assert_exit 0
 assert_stdout_has ".env.schema"
 
@@ -68,12 +71,18 @@ assert_exit 1
 
 if command -v varlock >/dev/null; then
     # `varlock` exits 0 on an empty directory as well as on a resolved one, so
-    # the exit code alone would pass with no schema at all. The named keys are
-    # what separate the two. `--agent` is the redacted JSON form, so this stays
-    # safe against a checkout that has a real `.env` beside the schema.
+    # the exit code alone would pass with no schema at all. `--agent` is the
+    # redacted JSON form, so this stays safe against a checkout that has a real
+    # `.env` beside the schema.
+    #
+    # `--agent` emits RESOLVED values, so a declared key with no value is
+    # absent from its output entirely. Asserting a key name there tested the
+    # machine's environment rather than the schema, and passed only because a
+    # stray exported GUARDEN_PREFIX happened to be set. The declaration is
+    # asserted below against the human form, which lists every declared key
+    # with its value (`undefined` included), and against the audit.
     run varlock load --agent -p "$GUARDEN_ROOT"
     assert_exit 0
-    assert_stdout_has "GUARDEN_PREFIX"
 
     # Both seams the programs read through the environment, and the harness's
     # own three. A key that resolves is a key that is declared.
