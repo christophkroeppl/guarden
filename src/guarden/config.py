@@ -1,0 +1,248 @@
+"""`/etc/guarden/guarden.toml`: the host's own configuration, and the track table.
+
+**The environment set is this table, not a code enum** (spec 3.1). Adding
+`preprod` is appending a block, and nothing in guarden branches on a track's
+name — which is why a track carries a `fork_from` field rather than guarden
+recognising the words `production`, `staging` and `preview`.
+
+Two exit codes, and the split is the point:
+
+- A file that will not parse, or a key whose type is wrong, is **exit `1`**. It is
+  the host, not a rejected input: spec 1.2's `2` row is about a manifest and a
+  unit source, and this is a file on the filesystem.
+- A well-formed file that breaks a rule this document states is **exit `2`**
+  naming the track: `cap` on a `kind = "slot"` track or missing from a
+  `kind = "instance"` one, and a `fork_from` that names no track or its own.
+
+Nothing here writes the file. `weedr module add` appends to `[modules] enabled`
+and `soil install` writes the measured alias; a read is a read, and it takes no
+lock (spec 3.5).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from guarden import conf, errors, paths
+
+SLOT = "slot"
+INSTANCE = "instance"
+KINDS = (SLOT, INSTANCE)
+
+TOP_LEVEL_KEYS = {"host", "ingress", "network", "build", "modules", "environments"}
+TRACK_KEYS = {
+    "name",
+    "host_prefix",
+    "gated",
+    "weight",
+    "free_limit",
+    "keep_last",
+    "kind",
+    "fork_from",
+    "cap",
+}
+TRACK_DEFAULTS = {
+    "host_prefix": "",
+    "gated": False,
+    "weight": 100,
+    "free_limit": 0.10,
+    "keep_last": 0,
+    "kind": SLOT,
+    "fork_from": "",
+    "cap": None,
+}
+
+
+@dataclass(frozen=True)
+class Track:
+    """One `[[environments]]` row."""
+
+    name: str
+    host_prefix: str
+    gated: bool
+    weight: int
+    free_limit: float
+    keep_last: int
+    kind: str
+    fork_from: str
+    cap: int | None
+
+
+@dataclass(frozen=True)
+class Config:
+    path: str
+    domain: str
+    interface: str
+    admin_user: str
+    alias: str
+    publication_range: tuple[int, int]
+    modules: tuple[str, ...]
+    lanes: int
+    tracks: tuple[Track, ...]
+
+    def track(self, name: str) -> Track | None:
+        return next((track for track in self.tracks if track.name == name), None)
+
+
+def _type_error(where: str, key: str, want: str) -> errors.GuardenError:
+    return errors.GuardenError(f"{where}: {key} is not {want}", errors.HOST_NOT_AS_ASSUMED)
+
+
+def _str(table: dict, key: str, where: str) -> str:
+    value = table.get(key, "")
+    if not isinstance(value, str):
+        raise _type_error(where, key, "a string")
+    return value
+
+
+def _bool(table: dict, key: str, where: str) -> bool:
+    value = table.get(key, False)
+    if not isinstance(value, bool):
+        raise _type_error(where, key, "a boolean")
+    return value
+
+
+def _int(table: dict, key: str, where: str) -> int:
+    value = table.get(key, 0)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _type_error(where, key, "an integer")
+    return value
+
+
+def _float(table: dict, key: str, where: str) -> float:
+    """A number, written as one or as a numeric string.
+
+    The shipped table in spec 3.1 does both: `free_limit = 0.10` on the
+    production row and `free_limit = "0.20"` on the other two. Both are read as
+    numbers rather than one being refused, because a retention value that is
+    sometimes 0.1 and sometimes "0.2" is one two programs would round
+    differently, and refusing one row would refuse the shipped configuration.
+    """
+    value = table.get(key, 0.10)
+    if isinstance(value, bool):
+        raise _type_error(where, key, "a number")
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            raise _type_error(where, key, "a number") from None
+    if not isinstance(value, (int, float)):
+        raise _type_error(where, key, "a number")
+    return float(value)
+
+
+def _cap(table: dict, where: str) -> int | None:
+    value = table.get("cap")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _type_error(where, "cap", "an integer")
+    return value
+
+
+def load(path: Any = None) -> Config:
+    """Read the file. Never write it."""
+    where_file = paths.GUARDEN_TOML if path is None else path
+    document = conf.read_toml(where_file)
+
+    unknown = sorted(set(document) - TOP_LEVEL_KEYS)
+    if unknown:
+        raise errors.GuardenError(
+            f"{where_file}: unknown key {unknown[0]!r}", errors.HOST_NOT_AS_ASSUMED
+        )
+
+    host = document.get("host", {})
+    ingress = document.get("ingress", {})
+    build = document.get("build", {})
+    modules = document.get("modules", {})
+    for table, name, keys in (
+        (host, "host", {"domain", "interface", "admin_user"}),
+        (ingress, "ingress", {"alias", "publication_range", "forwarded"}),
+        (build, "build", {"lanes"}),
+        (modules, "modules", {"enabled"}),
+    ):
+        extra = sorted(set(table) - keys)
+        if extra:
+            raise errors.GuardenError(
+                f"{where_file}: [{name}] has an unknown key {extra[0]!r}",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+
+    span = ingress.get("publication_range", [20000, 32767])
+    if (
+        not isinstance(span, list)
+        or len(span) != 2
+        or not all(isinstance(port, int) and not isinstance(port, bool) for port in span)
+    ):
+        raise _type_error(str(where_file), "ingress.publication_range", "a pair of integers")
+
+    enabled = modules.get("enabled", [])
+    if not isinstance(enabled, list) or not all(isinstance(name, str) for name in enabled):
+        raise _type_error(str(where_file), "modules.enabled", "a list of strings")
+
+    tracks = _tracks(document.get("environments", []), where_file)
+    return Config(
+        path=str(where_file),
+        domain=_str(host, "domain", f"{where_file} [host]"),
+        interface=_str(host, "interface", f"{where_file} [host]"),
+        admin_user=_str(host, "admin_user", f"{where_file} [host]"),
+        alias=_str(ingress, "alias", f"{where_file} [ingress]"),
+        publication_range=(span[0], span[1]),
+        modules=tuple(enabled),
+        lanes=_int(build, "lanes", f"{where_file} [build]"),
+        tracks=tuple(tracks),
+    )
+
+
+def _tracks(rows: Any, where_file: Any) -> list[Track]:
+    if not isinstance(rows, list):
+        raise _type_error(str(where_file), "environments", "a list of [[environments]] tables")
+
+    tracks: list[Track] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise _type_error(str(where_file), "environments", "a list of tables")
+        extra = sorted(set(row) - TRACK_KEYS)
+        if extra:
+            raise errors.GuardenError(
+                f"{where_file}: a track has an unknown key {extra[0]!r}",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        name = _str(row, "name", f"{where_file} a track")
+        if not name:
+            raise errors.GuardenError(
+                f"{where_file}: a track has an empty name", errors.HOST_NOT_AS_ASSUMED
+            )
+        where = f"{where_file} track {name!r}"
+        kind = _str(row, "kind", where)
+        if kind not in KINDS:
+            raise errors.GuardenError(f"{where}: kind is {kind!r}; it is 'slot' or 'instance'")
+        tracks.append(
+            Track(
+                name=name,
+                host_prefix=_str(row, "host_prefix", where),
+                gated=_bool(row, "gated", where),
+                weight=_int(row, "weight", where),
+                free_limit=_float(row, "free_limit", where),
+                keep_last=_int(row, "keep_last", where),
+                kind=kind,
+                fork_from=_str(row, "fork_from", where),
+                cap=_cap(row, where),
+            )
+        )
+
+    by_name = {track.name: track for track in tracks}
+    for track in tracks:
+        where = f"track {track.name!r}"
+        if track.kind == INSTANCE and track.cap is None:
+            raise errors.GuardenError(f'{where}: kind = "instance" must carry a cap')
+        if track.kind == SLOT and track.cap is not None:
+            raise errors.GuardenError(f'{where}: kind = "slot" must not carry a cap')
+        if track.fork_from == track.name:
+            raise errors.GuardenError(f"{where}: fork_from names its own track")
+        if track.fork_from and track.fork_from not in by_name:
+            raise errors.GuardenError(
+                f"{where}: fork_from {track.fork_from!r} names no track in the table"
+            )
+    return tracks

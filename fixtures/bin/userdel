@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+# userdel — and the subid ranges go with it, or a recycled name would inherit
+# the previous occupant's range and two services would share one.
+
 . "$(dirname "$0")/../lib/fake.sh"
+. "$(dirname "$0")/../lib/users.sh"
+
 fake_init "$@"
+fake_early_exit "$@"
+
+[ "${1:-}" = "--remove" ] && shift
+[ "${1:-}" = "-r" ] && shift
+name=${1:-}
+[ -n "$name" ] || fake_die "no user name"
+fake_user_known "$name" || fake_die "user $name does not exist"
+
+for file in "$passwd_file" "$subuid_file" "$subgid_file"; do
+    [ -f "$file" ] || continue
+    grep -v "^$name:" "$file" >"$file.guardentmp" 2>/dev/null || true
+    mv "$file.guardentmp" "$file"
+done
 exit 0

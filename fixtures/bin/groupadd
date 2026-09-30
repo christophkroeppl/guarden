@@ -18,7 +18,9 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 [ -n "$name" ] || fake_die "groupadd: no group named"
-file="$GUARDEN_FAKE_DIR/groups"
+# Keyed on the prefix, matching getent and useradd: a test that stages two hosts
+# in one file must not refuse the second host's group as already present.
+file="$GUARDEN_FAKE_DIR/groups.${GUARDEN_PREFIX//\//_}"
 mkdir -p "$GUARDEN_FAKE_DIR"
 [ -f "$file" ] || : >"$file"
 if grep -q "^$name:" "$file"; then

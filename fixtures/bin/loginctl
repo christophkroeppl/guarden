@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+# loginctl — linger, which is what lets a service's user manager run without a
+# login session (spec 4 step 2).
+
 . "$(dirname "$0")/../lib/fake.sh"
+. "$(dirname "$0")/../lib/users.sh"
+
 fake_init "$@"
+fake_early_exit "$@"
+
+[ "${1:-}" = "enable-linger" ] || fake_die "unknown command ${1:-<none>}"
+user=${2:-}
+[ -n "$user" ] || fake_die "enable-linger needs a user"
+mkdir -p "$GUARDEN_FIXTURES/linger"
+: >"$GUARDEN_FIXTURES/linger/$user"
 exit 0

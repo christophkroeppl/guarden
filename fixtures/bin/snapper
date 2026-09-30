@@ -13,7 +13,12 @@
 # /etc/snapper/configs/, and `modify` records the userdata it was handed, because
 # a pin test that does not inspect the mark tests nothing.
 #
-# Seed a configuration by writing records to
+# `create-config` and `set-config` are here because the mutator creates a
+# service's configuration and writes its value set, and a fake that modelled
+# neither would make "the mutator wrote the canonical set" and "soil storage
+# converged it" the same untested claim.
+#
+# Seed a configuration's snapshots by writing records to
 # $GUARDEN_FIXTURES/snapper/<config>.list, one per line:
 #
 #   number|cleanup|date|description|k=v,k=v
@@ -41,6 +46,7 @@ merge_from=
 subvolume=
 records=()
 extra=()
+settings=()
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -83,6 +89,24 @@ while [ "$#" -gt 0 ]; do
             merge_from=$2
             shift 2
             ;;
+        set-config)
+            [ "$#" -ge 2 ] || fake_die "set-config needs a KEY=VALUE"
+            verb=set-config
+            settings+=("$2")
+            shift 2
+            ;;
+        create-config)
+            # snapper takes the subvolume either as a bare positional or with
+            # -p, and both callers in guarden are real: soil runs
+            # `create-config -f btrfs -p <mount>` and weedr runs
+            # `create-config <subvolume>`. So this arm records the verb and
+            # shifts one, and the positional that follows lands in `records`
+            # through the `*)` arm below. Reading `$2` here instead would
+            # capture `-f` from soil's form and reject the configuration as
+            # "not a subvolume".
+            verb=create-config
+            shift
+            ;;
         --)
             shift
             ;;
@@ -100,9 +124,14 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+conf_dir=${GUARDEN_SNAPPER_CONFIGS:-}
+if [ -z "$conf_dir" ] && [ -n "${GUARDEN_PREFIX:-}" ]; then
+    conf_dir="$GUARDEN_PREFIX/etc/snapper/configs"
+fi
+conf_dir=${conf_dir:-$GUARDEN_FAKE_SNAPPER}
 list_file="$GUARDEN_FAKE_SNAPPER/$config.list"
-conf_file="$GUARDEN_FAKE_SNAPPER/$config.conf"
-mkdir -p "$GUARDEN_FAKE_SNAPPER"
+conf_file="$conf_dir/$config"
+mkdir -p "$GUARDEN_FAKE_SNAPPER" "$conf_dir"
 
 # The distribution's default template: the state before soil converges anything.
 # The empty-pre/post cleaner is enabled and there is no minimum age, so a
@@ -124,6 +153,43 @@ default_config() {
         'NUMBER_LIMIT=2-10' \
         'NUMBER_LIMIT_IMPORTANT=8-12' \
         'FREE_LIMIT=0.1' >"$conf_file"
+}
+
+# canonical_config: the value set the mutator writes with set-config, as a
+# function rather than a literal in two places. Restored verbatim from ticket 30
+# (284fcc0), which lost it in the merge.
+#
+# In ticket 30 it backed `get-config` for a configuration whose file was short —
+# create-config wrote only SUBVOLUME and FSTYPE and get-config supplied the rest.
+# The merged fake does not have that shape: `default_config` above writes the
+# whole set, so the file is never short. It is kept, and kept wired to
+# `set-config`'s floor rather than deleted, for the reason the union lost: one
+# definition of "the canonical set" is what stops the mutator's write and soil's
+# converge from being two literals that drift apart. `default_config` is the
+# distribution's template and is deliberately a *different* set.
+canonical_config() {
+    local key value
+    for pair in \
+        'SUBVOLUME=/var/lib/guarden' \
+        'FSTYPE=btrfs' \
+        'EMPTY_PRE_POST_CLEANUP=no' \
+        'NUMBER_MIN_AGE=3600' \
+        'NUMBER_CLEANUP=yes' \
+        'TIMELINE_CLEANUP=yes' \
+        'TIMELINE_LIMIT_HOURLY=0' \
+        'TIMELINE_LIMIT_DAILY=0-7' \
+        'TIMELINE_LIMIT_WEEKLY=0-4' \
+        'TIMELINE_LIMIT_MONTHLY=0-6' \
+        'TIMELINE_LIMIT_QUARTERLY=0-2' \
+        'TIMELINE_LIMIT_YEARLY=0' \
+        'NUMBER_LIMIT=2-10' \
+        'NUMBER_LIMIT_IMPORTANT=8-12' \
+        'FREE_LIMIT=0.10'
+    do
+        key=${pair%%=*}
+        value=${pair#*=}
+        printf '%s=%s\n' "$key" "$value"
+    done
 }
 
 # A configuration exists once any of its three traces does: a stored
@@ -219,8 +285,7 @@ list_table() {
 }
 
 case "$verb" in
-    list)
-        case "$format" in
+    list)        case "$format" in
             json) list_json ;;
             csv) list_csv ;;
             table) list_table ;;
@@ -247,27 +312,74 @@ case "$verb" in
             }
             exit 0
         fi
+        # A configuration the mutator created but has not yet converged carries
+        # only what create-config wrote, and answers every other question from
+        # the canonical set. This is ticket 30's `canonical_config`, restored:
+        # a create that has not been followed by a converge still reports the
+        # effective value rather than a hole. The file is not rewritten — this is
+        # the read-back reporting, not a converge.
+        #
+        # "Created but not converged" is a recorded fact, not a guess from the
+        # line count: the `.created` marker is written by create-config and a
+        # config a test seeded by hand never has one, so a seeded short config
+        # still reads back exactly what the test put in it.
+        if [ -f "$GUARDEN_FAKE_SNAPPER/$config.created" ] \
+            && [ "$(wc -l <"$conf_file")" -lt 15 ]; then
+            canonical_config
+            exit 0
+        fi
         cat "$conf_file"
         ;;
     create-config)
-        # Creates no snapshot: a fake that invented one would be a lie. The
-        # default template it writes is what gives `soil storage` something real
-        # to converge.
+        # The mutator creates a service's configuration and sets its value set
+        # here; soil storage converges the same values later. Modelling both is
+        # what lets a test tell "the mutator wrote the canonical set" from "soil
+        # storage did", which is the difference between a correct create and a
+        # correct apply.
+        #
+        # The subvolume is read from whichever form the caller used: `-p <path>`
+        # (soil) or a bare positional (weedr). Both are real snapper, and the
+        # default template below records it as SUBVOLUME, so the two forms have
+        # to agree on one value here rather than one of them losing it.
+        subvol=${subvolume:-${records[0]:-}}
+        [ -n "$subvol" ] || fake_die "create-config needs a subvolume"
+        [ -d "$subvol" ] || fake_die "create-config: $subvol is not a subvolume"
+        [ -e "$conf_file" ] && fake_die "config $config already exists"
         printf '%s\n' "$config" >"$GUARDEN_FAKE_SNAPPER/$config.created"
+        subvolume=$subvol
         default_config
-        exit 0
+        ;;
+    set-config)
+        [ -f "$conf_file" ] || fake_die "no configuration $config"
+        [ "${#settings[@]}" -ge 1 ] || fake_die "set-config needs a KEY=VALUE"
+        for setting in "${settings[@]}"; do
+            case "$setting" in
+                *=*) ;;
+                *) fake_die "set-config: $setting is not KEY=VALUE" ;;
+            esac
+            key=${setting%%=*}
+            value=${setting#*=}
+            grep -v "^$key=" "$conf_file" >"$conf_file.tmp" || true
+            printf '%s=%s\n' "$key" "$value" >>"$conf_file.tmp"
+            mv "$conf_file.tmp" "$conf_file"
+        done
         ;;
     modify)
         if [ -n "$merge_from" ]; then
             [ -f "$merge_from" ] || fake_die "modify -f: no such file: $merge_from"
-            target="$GUARDEN_FAKE_SNAPPER/$config.conf"
+            # Merges into the configuration itself, which is the file
+            # `get-config` reads. Writing the merge anywhere else — and an
+            # earlier revision wrote it to $GUARDEN_FAKE_SNAPPER/<config>.conf
+            # — makes a converge that really happened look like drift, because
+            # the read-back is looking at a file nothing wrote.
+            target="$conf_file"
             touch "$target"
             while IFS= read -r line; do
                 case "$line" in
                     ''|'#'*) continue ;;
                 esac
                 key=${line%%=*}
-                grep -v "^$key=" "$target" >"$target.merged"
+                grep -v "^$key=" "$target" >"$target.merged" || true
                 printf '%s\n' "$line" >>"$target.merged"
                 mv "$target.merged" "$target"
             done <"$merge_from"

@@ -12,9 +12,11 @@ test:
     tests/run.sh
 
 # check the runtime dependencies `soil` installs, and that no program reaches
-# past the standard library and those two
+# past the standard library and those two. The interpreter is the checkout's own
+# venv when it has one, so a developer without the distribution's packages still
+# gets a real answer.
 check:
-    tools/check-deps
+    @if [ -x .venv/bin/python ]; then .venv/bin/python tools/check-deps; else python3 tools/check-deps; fi
 
 # lint the programs
 lint:

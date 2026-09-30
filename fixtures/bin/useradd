@@ -2,7 +2,15 @@
 # useradd — records the user so `getent passwd` finds it afterwards. It never
 # creates a home, because guarden has no /home for services and a program's
 # account is not a login.
+# useradd — a system user, and a subid range the system picks.
+#
+# ADR-0003: the range comes from `useradd --system --add-subuids-for-system`,
+# which needs shadow-utils 4.11 or later. A fixture marker stands in for an older
+# one, so the fallback path — plain useradd, then `usermod --add-subuids` — is a
+# thing a test can exercise rather than a branch nobody ever runs.
 . "$(dirname "$0")/../lib/fake.sh"
+. "$(dirname "$0")/../lib/users.sh"
+
 fake_init "$@"
 
 case "${1:-}" in
@@ -13,18 +21,109 @@ case "${1:-}" in
 esac
 
 name=
+subuids=0
+add_subuids=0
+shell=/bin/sh
+home_dir=""
+name=""
+
+fake_early_exit "$@"
+
+# The ticket-10 fake scanned for "the first argument that is not an option" to
+# find the name, and `--home-dir /h` made that `/h`. The loop below is
+# ticket-30's and is the one that understands options that take a value, so it
+# is the only name scan: two of them in one file means the first answer wins and
+# the second is dead code.
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        -*) shift ;;
-        *) name=$1; shift ;;
+        --add-subuids-for-system)
+            add_subuids=1
+            shift
+            ;;
+        --system|--no-create-home|-r|-M)
+            shift
+            ;;
+        --shell|-s)
+            shell=$2
+            shift 2
+            ;;
+        --home-dir|-d)
+            home_dir=$2
+            shift 2
+            ;;
+        # soil install creates the program users with a primary group, so this
+        # option is load-bearing for the idempotency path: without it the call
+        # is rejected, no user is written, and `getent passwd` still misses on
+        # the second apply, so the phase never converges.
+        --gid|-g)
+            shift 2
+            ;;
+        --comment|-c|--expiredate|-e)
+            shift 2
+            ;;
+        --)
+            shift
+            ;;
+        -*)
+            fake_die "unknown option $1"
+            ;;
+        *)
+            name=$1
+            shift
+            ;;
     esac
 done
-[ -n "$name" ] || fake_die "useradd: no user named"
-file="$GUARDEN_FAKE_DIR/users"
-mkdir -p "$GUARDEN_FAKE_DIR"
-[ -f "$file" ] || : >"$file"
-if grep -q "^$name:" "$file"; then
-    printf 'useradd: user %s already exists\n' "$name" >&2
+
+[ -n "$name" ] || fake_die "no user name"
+
+if fake_user_known "$name"; then
+    fake_out "useradd: user $name already exists"
     exit 9
 fi
-printf '%s:x:0:0::/nonexistent:/usr/sbin/nologin\n' "$name" >>"$file"
+
+# The old-shadow-utils rejection comes before anything is written. This is the
+# feature probe `useradd --add-subuids-for-system`, and weedr's fallback is to
+# call plain useradd for the same user: an earlier revision wrote the flat
+# users entry first, so the probe left a phantom user behind and the real create
+# after it was refused as already existing.
+if [ "$add_subuids" = 1 ] && [ -e "$GUARDEN_FIXTURES/shadow-utils-old" ]; then
+    fake_die "--add-subuids-for-system: unrecognized option"
+fi
+
+uid=$(_next_uid)
+fake_user_write "$name" "$uid" "$shell"
+
+# The flat users file is ticket-10's, and the `getent` fake reads it: soil asks
+# `getent passwd <name>` to keep its program-user create step idempotent, so
+# useradd has to be the writer of the file getent reads.
+#
+# It is keyed on the prefix, because a test that stages two hosts in one file
+# (`t30-identity.sh` does) would otherwise see the first host's user on the
+# second and refuse a create that never happened. weedr's service users are
+# tracked in <prefix>/etc/passwd by users.sh and are never asked about with
+# getent, so keying this on the prefix costs nothing and leaks nothing. The
+# prefix is an absolute path, so it is flattened rather than used as a file
+# name: `users./tmp/x` would be a path, not a name.
+#
+# It is written here rather than before the checks above, so a call that is
+# refused leaves no entry behind.
+flat_users="$GUARDEN_FAKE_DIR/users.${GUARDEN_PREFIX//\//_}"
+mkdir -p "$GUARDEN_FAKE_DIR"
+[ -f "$flat_users" ] || : >"$flat_users"
+printf '%s:x:0:0::/nonexistent:/usr/sbin/nologin\n' "$name" >>"$flat_users"
+
+if [ "$add_subuids" = 1 ]; then
+    # A marker makes the allocator hand out the same base to everyone, which is
+    # the "one hardcoded range for every service" failure weedr's read-back has
+    # to catch rather than accept.
+    if [ -e "$GUARDEN_FIXTURES/subid-collision" ]; then
+        subuids=100000
+    else
+        subuids=$(fake_subid_base 65536)
+    fi
+    fake_subid_write "$subuid_file" "$name" "$subuids" 65536
+    fake_subid_write "$subgid_file" "$name" "$subuids" 65536
+fi
+
+fake_out "$name:x:$uid:$uid::$home_dir:$shell"
+exit 0

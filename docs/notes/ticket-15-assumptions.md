@@ -34,6 +34,28 @@ The two refutations and the eleven not-runs share one cause, and it is worth sta
 the detail: **every check that needs pasta needs a podman that has pasta, and this host's
 podman does not.** See §0.
 
+### SUPERSEDED IN PART (2026-09-30): the not-runs are a host artefact, not a finding
+
+The conclusion above is **wrong as written, and the eleven not-runs are not evidence**.
+It confuses "the machine I happened to be standing on cannot do this" with "this cannot
+be done". Two facts invalidate it:
+
+1. **The not-run cause is Podman 3.4.4** (2021) on the host kernel 6.9.3. Podman
+   gained `pasta` as the default rootless network in 5.0. Nothing about the
+   assumption being checked is a property of this host; it is a property of a podman
+   that predates the feature by four years.
+2. **A target that IS 26.04 exists and was not used.** The golden VM is Ubuntu 26.04,
+   as is the VPS. Both carry a modern podman with pasta. Every "needs pasta" claim
+   below is runnable there.
+
+So the eleven not-runs must be re-read as **UNRUN ON THE WRONG MACHINE**, and they are
+still unproven either way -- they are not now refuted, and nothing here should be cited
+as a limit of the design. The two refutations (systemd scope limits, btrfs) were
+measured rather than blocked, and are unaffected by this correction.
+
+Re-run these on the 26.04 golden VM with a modern podman, and treat the result as
+authoritative. Until then the honest status of the eleven is UNKNOWN, not NOT-RUN.
+
 ---
 
 ## 0. The machine this ran on, and what it could not do

@@ -13,9 +13,12 @@ esac
 
 database=$1
 name=$2
+# The flat databases are keyed on the prefix, matching what useradd and groupadd
+# write: a test that stages two hosts in one file must not see the first host's
+# user when it asks getent about the second.
 case "$database" in
-    passwd) file="$GUARDEN_FAKE_DIR/users" ;;
-    group) file="$GUARDEN_FAKE_DIR/groups" ;;
+    passwd) file="$GUARDEN_FAKE_DIR/users.${GUARDEN_PREFIX//\//_}" ;;
+    group) file="$GUARDEN_FAKE_DIR/groups.${GUARDEN_PREFIX//\//_}" ;;
     *) fake_die "getent: only passwd and group are modelled" ;;
 esac
 [ -n "$name" ] || fake_die "getent: no name given"

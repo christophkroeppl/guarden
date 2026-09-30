@@ -76,11 +76,11 @@ assert_file_has "$(host etc/systemd/system/guarden-snapper-cleanup.service)" \
 # The canonical set reaches the host's own two configurations, and only the four
 # fixed keys: no track owns them, so there is no track to read a default from
 # and their ladder is left as the distribution shipped it.
-assert_file_has "$GUARDEN_FIXTURES/snapper/root.conf" "EMPTY_PRE_POST_CLEANUP=no"
-assert_file_has "$GUARDEN_FIXTURES/snapper/root.conf" "NUMBER_MIN_AGE=3600"
-assert_file_has "$GUARDEN_FIXTURES/snapper/root.conf" "NUMBER_LIMIT_IMPORTANT=8-12"
-assert_file_has "$GUARDEN_FIXTURES/snapper/root.conf" "TIMELINE_LIMIT_DAILY=0-7"
-assert_file_has "$GUARDEN_FIXTURES/snapper/root.conf" "FREE_LIMIT=0.1"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "EMPTY_PRE_POST_CLEANUP=no"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "NUMBER_MIN_AGE=3600"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "NUMBER_LIMIT_IMPORTANT=8-12"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "TIMELINE_LIMIT_DAILY=0-7"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "FREE_LIMIT=0.1"
 assert_called "snapper -c root modify -f"
 
 # A converged host checks clean, and a second apply changes nothing.
@@ -105,10 +105,10 @@ seed "$GUARDEN_HOST/etc/guarden/guarden.toml" \
     'kind = "slot"'
 run soil storage --apply
 assert_exit 0
-assert_file_has "$GUARDEN_FIXTURES/snapper/myapp-production-pgdata.conf" \
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-production-pgdata" \
     "TIMELINE_LIMIT_DAILY=0-7"
-assert_file_has "$GUARDEN_FIXTURES/snapper/myapp-production-pgdata.conf" "FREE_LIMIT=0.1"
-assert_file_has "$GUARDEN_FIXTURES/snapper/myapp-production-pgdata.conf" \
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-production-pgdata" "FREE_LIMIT=0.1"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-production-pgdata" \
     "TIMELINE_LIMIT_WEEKLY=0-4"
 
 # A staging volume keeps no daily snapshots and still keeps twelve in the buckets
@@ -118,17 +118,17 @@ seed "$GUARDEN_HOST/var/lib/guarden/registry/myapp-staging.toml" \
     'name = "myapp-staging"' 'environment = "staging"'
 seed "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "ignored"
 run soil storage --apply
-assert_file_has "$GUARDEN_FIXTURES/snapper/myapp-staging-data.conf" "TIMELINE_LIMIT_DAILY=0-0"
-assert_file_has "$GUARDEN_FIXTURES/snapper/myapp-staging-data.conf" "TIMELINE_LIMIT_MONTHLY=0-6"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "TIMELINE_LIMIT_DAILY=0-0"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "TIMELINE_LIMIT_MONTHLY=0-6"
 
 # A service's own overrides win over the track, and the ladder's other buckets
 # are per-volume for the same reason.
 seed "$GUARDEN_HOST/etc/guarden/services/myapp-staging/overrides.toml" \
     '[retention]' 'keep_last = 3' 'free_limit = 0.08' 'quarterly = 1'
 run soil storage --apply
-assert_file_has "$GUARDEN_FIXTURES/snapper/myapp-staging-data.conf" "TIMELINE_LIMIT_DAILY=0-3"
-assert_file_has "$GUARDEN_FIXTURES/snapper/myapp-staging-data.conf" "FREE_LIMIT=0.08"
-assert_file_has "$GUARDEN_FIXTURES/snapper/myapp-staging-data.conf" "TIMELINE_LIMIT_QUARTERLY=0-1"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "TIMELINE_LIMIT_DAILY=0-3"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "FREE_LIMIT=0.08"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "TIMELINE_LIMIT_QUARTERLY=0-1"
 
 # The longest registry entry wins, so `myapp` and `myapp-preview` both being
 # services is not ambiguous for `myapp-preview-data`, and an instance's
@@ -142,18 +142,20 @@ seed "$GUARDEN_HOST/var/lib/guarden/registry/myapp-preview.toml" \
     'name = "myapp-preview"' 'environment = "preview"'
 seed "$GUARDEN_HOST/etc/snapper/configs/myapp-preview-feature\\x2dx-data" "ignored"
 run soil storage --apply
-assert_file_has "$GUARDEN_FIXTURES/snapper/myapp-preview-feature\\x2dx-data.conf" \
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-preview-feature\\x2dx-data" \
     "TIMELINE_LIMIT_DAILY=0-1"
-assert_file_lacks "$GUARDEN_FIXTURES/snapper/myapp-preview-feature\\x2dx-data.conf" \
+assert_file_lacks "$GUARDEN_HOST/etc/snapper/configs/myapp-preview-feature\\x2dx-data" \
     "TIMELINE_LIMIT_DAILY=0-7"
 
 # Anything else is skipped with a warning naming it, and left byte for byte
 # alone: a configuration guarden did not create belongs to the operator.
-seed "$GUARDEN_FIXTURES/snapper/operator-owned.conf" "EMPTY_PRE_POST_CLEANUP=yes"
-seed "$GUARDEN_HOST/etc/snapper/configs/operator-owned" "ignored"
+# The seed is the operator's value; the second line makes the file look like
+# something a converge would have rewritten, so "left alone" is a claim about
+# the value rather than about the file merely existing.
+seed "$GUARDEN_HOST/etc/snapper/configs/operator-owned" "EMPTY_PRE_POST_CLEANUP=yes"
 run soil storage --apply
 assert_stderr_has "warning: the snapper configuration operator-owned is not guarden's"
-assert_file_has "$GUARDEN_FIXTURES/snapper/operator-owned.conf" "EMPTY_PRE_POST_CLEANUP=yes"
+assert_file_has "$GUARDEN_HOST/etc/snapper/configs/operator-owned" "EMPTY_PRE_POST_CLEANUP=yes"
 assert_not_called "operator-owned modify"
 
 # `soil storage` creates no service volume and never recreates a service's

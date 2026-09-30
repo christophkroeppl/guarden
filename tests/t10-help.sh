@@ -16,7 +16,7 @@ assert_verbs furrow deploy preview queue status
 assert_verbs hose poke drop check
 assert_verbs stakes pin unpin list query
 
-assert_subcommands weedr service add remove purge start stop restart list status snapshot fork rollback build
+assert_subcommands weedr service ingest add remove purge start stop restart list status snapshot fork rollback build
 assert_subcommands weedr secret set list
 assert_subcommands weedr port list open close
 assert_subcommands weedr pin sync
@@ -55,10 +55,10 @@ assert_file_has "$GUARDEN_ROOT/pyproject.toml" 'stakes = "guarden.stakes:main"'
 
 # A verb with no body is not a success, and it says so in one line naming the
 # verb. A test that could not tell the two apart would be worth nothing.
-run weedr service list
+run weedr service start myapp-production
 assert_exit 1
 assert_one_diagnostic "error:"
-assert_stderr_has "weedr service list is not implemented"
+assert_stderr_has "weedr service start is not implemented"
 assert_stdout_empty
 
 # A rejected input is exit 2, and names the thing it is about.

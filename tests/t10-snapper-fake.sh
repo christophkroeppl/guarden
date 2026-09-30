@@ -76,6 +76,11 @@ assert_exit 1
 # converged set leaves every other value alone.
 printf '%s\n' 'NUMBER_LIMIT_IMPORTANT=4-6' 'A_KEY_SOIL_DOES_NOT_OWN=kept' >"$GUARDEN_FIXTURES/merge.conf"
 fake snapper -c myapp-production-pgdata modify -f "$GUARDEN_FIXTURES/merge.conf"
+# A seeded configuration reads back what was written, which is the whole point
+# of reading rather than believing: weedr service list reports what snapper
+# holds, not what guarden thinks it wrote.
+printf '%s\n' 'NUMBER_LIMIT_IMPORTANT=4-6' 'TIMELINE_CLEANUP=no' >"$GUARDEN_FIXTURES/snapper/myapp-production-custom"
+fake snapper -c myapp-production-custom get-config
 assert_exit 0
 fake snapper -c myapp-production-pgdata get-config
 assert_stdout_has "NUMBER_LIMIT_IMPORTANT=4-6"
