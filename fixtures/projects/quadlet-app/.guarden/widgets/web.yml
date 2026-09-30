@@ -1,0 +1,7 @@
+# A widget file, copied through unparsed. `twig` merges these; the renderer
+# validates that the manifest names a container and that the file exists, and
+# reads no further.
+name: quadlet-app web
+panels:
+  - title: requests
+    stat: uptime

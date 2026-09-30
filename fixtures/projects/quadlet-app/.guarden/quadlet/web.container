@@ -1,0 +1,19 @@
+# Hand-written quadlet, used as they are: the checks in spec 6.3 apply to this
+# file exactly as they apply to a translated Compose file, and the fields
+# guarden owns are still the renderer's.
+#
+# Everything below the Image is deliberate. `PublishPort=`, `AddHost=`,
+# `Secret=`, `EnvironmentFile=` and `Network=` are the renderer's, and none of
+# them may survive into the installed unit — not because this repository is
+# hostile but because a unit that disagrees with the host's own allocation and
+# grant model is a unit the firewall does not know about.
+[Unit]
+Description=the web container
+
+[Container]
+Image=docker.io/library/nginx:1.27
+Environment=APP_HOST=${domain}
+Environment=APP_MODE=production
+Volume=data:/var/lib/app
+PublishPort=8080:8080
+Secret=STOLEN,type=file

@@ -1,0 +1,11 @@
+# The second container of a quadlet-only project. It exists so that "into every
+# unit of the consumer" is a claim about more than one unit.
+[Container]
+Image=docker.io/library/alpine:3.20
+Volume=chainstate:/data
+AddHost=elsewhere:10.0.0.1
+EnvironmentFile=/etc/guarden/services/quadlet-app/env
+Network=pasta:--map-gw
+
+[Service]
+Restart=always

@@ -43,6 +43,16 @@ You can install `soil`, `weedr`, `loom`, `roots`, `stakes` and `furrow` and stop
 
 ## Install
 
+There are two paths to the same state, and they converge on the same host. The command line, the
+exit codes and the word `drift` do not change with the path taken.
+
+**From cloud-init** — for a machine that boots a user-data document. `tools/golden-vm` renders one
+from [`packages/packages.toml`](packages/packages.toml) and hands it to the instance; the document
+installs the substrate and then converges every phase and checks every phase.
+
+**From the scripts** — for a host without cloud-init, which is most of them. Same phases, same
+order, run by hand:
+
 ```sh
 # 1. Install. This reboots once to convert the root filesystem to btrfs.
 soil packages --apply
@@ -61,6 +71,20 @@ weedr project add myapp --repository git@github.com:you/myapp.git
 ```
 
 `soil --check` is safe to run over ssh at any time: it reports and changes nothing.
+
+The module selection is made once, at install, and recorded in `/etc/guarden/guarden.toml`:
+
+```sh
+soil install --apply --modules gate,homepage
+```
+
+After that it is `weedr module add` that changes it, and a later `soil install --apply` leaves
+what it appended alone — three writers share that file and two of them share that key, so every one
+of them takes the `modules` lock.
+
+There is no PyPI and no wheel on either path. Every package is a distribution package, and the one
+thing fetched from outside a distribution repository is a pinned `podlet` release whose SHA256 is
+recorded in this repository.
 
 ---
 

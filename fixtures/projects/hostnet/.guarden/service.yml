@@ -1,0 +1,10 @@
+project: hostnet
+units: compose.yaml
+
+state:
+  - data
+
+routes:
+  - container: web
+    port: 3000
+    host: web

@@ -1,0 +1,17 @@
+# A Compose file that asks for the host's network namespace, publishes a port of
+# its own and names a host it likes. It renders, and none of the three survives:
+# `network_mode` is replaced with the host's own `[network]` backend, the
+# `PublishPort` set is regenerated from the allocations, and the `AddHost` set
+# comes from the declared edges.
+#
+# This is the fixture that says the converter is not a security boundary.
+services:
+  web:
+    image: docker.io/library/nginx:1.27
+    network_mode: host
+    ports:
+      - "8080:80"
+    extra_hosts:
+      - "elsewhere:10.0.0.1"
+    volumes:
+      - data:/var/lib/nginx

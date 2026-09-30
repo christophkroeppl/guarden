@@ -1,0 +1,154 @@
+# The one package list.
+#
+# spec 6.1 and AGENTS.md: the runtime dependencies are the distribution's
+# `python3-yaml` and `python3-jinja2`. There is no `pip install` at deploy time
+# and no wheel is checked in, so a program that reached for a third thing would
+# be a program the host cannot install -- which is what keeps the layout
+# portable to a distribution nobody has tried yet.
+#
+# It is this file rather than a tuple in `hostprep.py` because there are two
+# consumers that must not disagree: `soil packages` converges `packages`, and
+# `tools/render-user-data` renders `packages` + `harness` into the cloud-init
+# document the golden VM boots. A package added to one and forgotten in the other
+# is a host that installs three things and converges on a fourth, and both
+# machines report success. One file is the only way that cannot happen.
+#
+# ## Two roles, one file
+#
+# `packages` is what a **guarden host** needs, and it is exactly the list spec
+# 6.1 names. `soil packages` converges it and reads nothing else.
+#
+# `harness` is what a **throwaway machine** needs on top, and no real host wants:
+# an HTTP server and a Postgres client to exercise the edge against, the network
+# tools the golden-VM checks read the rule set with. It is here rather than in
+# the user-data document because a package list inside the document is a second
+# copy of this one, and the two would drift with nothing noticing. Keeping the
+# role separate is what stops the harness's tools from becoming every host's
+# dependency, which is the failure the other direction would cause.
+#
+# ## Per family
+#
+# The names are the part that is not portable: `python3-yaml` on Debian,
+# `python3-pyyaml` on Fedora, `python-yaml` on Arch. The layout, the six phases
+# and the FHS are the same everywhere; this table is where the difference lives,
+# and a family with no row is a family this design has not been run on. `soil
+# packages` says so rather than running apt-get on a Fedora box.
+#
+# ## The keys
+#
+#   install   the argv that installs a package, minus the package name
+#   query     the argv that answers whether one package is installed
+#   installed the output `query` prints when it is; empty means "exit 0 is yes"
+#   update    the argv that refreshes the package index
+#
+# `query`/`installed` are separate keys rather than one command because
+# answering that question is distribution-specific in a way installing a package
+# is not, and a probe that asks the wrong question reports a package that is
+# absent as present. An empty `installed` is the honest encoding for a query
+# whose exit code is the whole answer.
+
+[families.debian]
+install = ["apt-get", "install", "-y"]
+query = ["dpkg-query", "-W", "-f=${db:Status-Status}"]
+installed = "installed"
+update = ["apt-get", "update"]
+packages = [
+    "btrfs-progs",
+    "snapper",
+    "ferm",
+    "fail2ban",
+    "podman",
+    "python3-yaml",
+    "python3-jinja2",
+]
+
+[families.fedora]
+install = ["dnf", "install", "-y"]
+query = ["rpm", "-q"]
+installed = ""
+update = ["dnf", "check-update"]
+packages = [
+    "btrfs-progs",
+    "snapper",
+    "ferm",
+    "fail2ban",
+    "podman",
+    "python3-pyyaml",
+    "python3-jinja2",
+]
+
+[families.arch]
+install = ["pacman", "-S", "--needed", "--noconfirm"]
+query = ["pacman", "-Q"]
+installed = ""
+update = ["pacman", "-Sy"]
+packages = [
+    "btrfs-progs",
+    "snapper",
+    "ferm",
+    "fail2ban",
+    "podman",
+    "python-yaml",
+    "python-jinja2",
+]
+
+# The throwaway machine's extras. Deliberately a separate role: `soil packages`
+# never reads this table, so a golden-VM check can grow a dependency without
+# putting it on a production host.
+
+[harness.debian]
+harness = [
+    "passt",
+    "subvolume-subtools",
+    "snapper-support",
+    "python3",
+    "git",
+    "rsync",
+    "ca-certificates",
+    "curl",
+    "jq",
+    "iptables",
+    "nftables",
+    "iproute2",
+    "iputils-ping",
+    "dnsutils",
+    "netcat-openbsd",
+    "nginx",
+    "postgresql-client",
+    "libpq-dev",
+]
+
+[harness.fedora]
+harness = [
+    "passt",
+    "python3",
+    "git",
+    "rsync",
+    "ca-certificates",
+    "curl",
+    "jq",
+    "nftables",
+    "iproute",
+    "iputils",
+    "bind-utils",
+    "nginx",
+    "postgresql",
+    "libpq-devel",
+]
+
+[harness.arch]
+harness = [
+    "passt",
+    "python",
+    "git",
+    "rsync",
+    "ca-certificates",
+    "curl",
+    "jq",
+    "nftables",
+    "iproute2",
+    "iputils",
+    "nginx",
+    "postgresql",
+    "libpq",
+]

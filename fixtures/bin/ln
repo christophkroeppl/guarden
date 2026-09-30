@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# ln — really creates the symlink, because soil's `--check` reads it back and a
+# fake that only logged would make every program look linked when none is.
+#
+# `soil install` links each program into /usr/bin so it is runnable by name
+# (spec 2), and `--check` compares `readlink` against the installed tree. Both
+# halves read the filesystem, so this fake has to write to it.
+. "$(dirname "$0")/../lib/fake.sh"
+fake_init "$@"
+
+# fixtures/bin is first on PATH, so `ln` here is this file. Everything below
+# that creates a link has to reach the real one, and the only reliable way is an
+# absolute path found before PATH is doctored.
+REAL_LN=$(PATH=/usr/bin:/bin:/usr/sbin type -P ln)
+
+case "${1:-}" in
+    --version|-V)
+        printf '%s\n' "ln (guarden fake) 1.0"
+        exit 0
+        ;;
+esac
+
+force=0
+symlink=0
+operands=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -sfn|-fns)
+            force=1
+            symlink=1
+            shift
+            ;;
+        -sf|-fs)
+            force=1
+            symlink=1
+            shift
+            ;;
+        -s) symlink=1; shift ;;
+        -f) force=1; shift ;;
+        -n) shift ;;
+        -*) shift ;;
+        *) operands+=("$1"); shift ;;
+    esac
+done
+
+[ "$symlink" = 1 ] || fake_die "ln: only \`-sfn TARGET LINK\` is modelled"
+
+[ "${#operands[@]}" -ge 1 ] || fake_die "ln: no target"
+target=${operands[0]}
+
+if [ "${#operands[@]}" -ge 2 ]; then
+    link=${operands[1]}
+else
+    link=$(basename "$target")
+fi
+
+mkdir -p "$(dirname "$link")"
+[ "$force" = 1 ] && rm -f "$link"
+# The real `ln`, by absolute path: fixtures/bin is first on PATH, so a bare `ln`
+# here is this script calling itself.
+"$REAL_LN" -s "$target" "$link"
