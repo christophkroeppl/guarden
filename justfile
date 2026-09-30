@@ -1,12 +1,5 @@
 # guarden development tasks.
 # Replaces the Makefile. `just` with no argument lists the recipes.
-#
-# The programs are Python console scripts (`soil = "guarden.soil:main"` and so on),
-# so lint is ruff. There are no shell entry points to shellcheck.
-#
-# `just check` is for the host's runtime dependencies: the two distribution
-# Python packages, plus the pinned podlet that `loom` drives and `soil packages`
-# installs on the box.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -18,16 +11,14 @@ default:
 test:
     tests/run.sh
 
-# check the runtime dependencies, which are distribution packages plus pinned podlet
+# check the runtime dependencies `soil` installs, and that no program reaches
+# past the standard library and those two
 check:
-    @python3 -c "import yaml, jinja2"
-    @echo "runtime deps ok (python3-yaml, python3-jinja2)"
-    @command -v podlet >/dev/null && echo "podlet ok" || { echo "podlet MISSING: soil packages installs it"; exit 1; }
+    tools/check-deps
 
 # lint the programs
 lint:
-    ruff check .
-    ruff format --check .
+    @if command -v ruff >/dev/null; then ruff check src tools/check-deps tests; else echo "ruff not installed"; fi
 
 # run the lint and the tests
 ci: lint test

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# The golden-VM runner entry point.
+#
+# The golden VM is the harness that cannot be faked: a throwaway machine with
+# real tools, proving that a rootless container reaches a dependency by the
+# alias the probe measured, that nothing unprivileged binds below 1024, that a
+# forwarded port answers from a second machine, and that a clone of a live data
+# volume starts and recovers. Minutes, manual or nightly (spec 11).
+#
+# This is the entry point and nothing else: it resolves a target, resolves the
+# cloud-init user-data, and prints or runs the command sequence. What the run
+# asserts is tickets 15, 20, 30 and 140's work, and this script does not assert
+# any of it — a runner that also decided what a pass was would be a harness
+# whose result nobody could audit.
+#
+#   tools/golden-vm --print                  the plan, and no machine
+#   tools/golden-vm --target HOST            boot one and run it
+#   GUARDEN_VM_TARGET=HOST tools/golden-vm   the same, from the environment
+
+set -euo pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+root=$(dirname "$here")
+
+target=${GUARDEN_VM_TARGET:-}
+user_data="$root/tools/cloud-init/user-data.yaml"
+print_only=0
+remote=root
+connect_timeout=10
+
+die() {
+    printf 'error: %s\n' "$*" >&2
+    exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --target)
+            [ "$#" -ge 2 ] || die "--target needs a host"
+            target=$2
+            shift 2
+            ;;
+        --user-data)
+            [ "$#" -ge 2 ] || die "--user-data needs a path"
+            user_data=$2
+            shift 2
+            ;;
+        --remote)
+            [ "$#" -ge 2 ] || die "--remote needs a user"
+            remote=$2
+            shift 2
+            ;;
+        --connect-timeout)
+            [ "$#" -ge 2 ] || die "--connect-timeout needs seconds"
+            connect_timeout=$2
+            shift 2
+            ;;
+        --print)
+            print_only=1
+            shift
+            ;;
+        --help)
+            printf 'usage: golden-vm [--target HOST] [--user-data PATH] [--remote USER] [--print]\n'
+            exit 0
+            ;;
+        *)
+            die "unknown argument: $1"
+            ;;
+    esac
+done
+
+[ -f "$user_data" ] || die "the cloud-init user-data is missing: $user_data"
+[ -r "$user_data" ] || die "the cloud-init user-data is not readable: $user_data"
+
+# The soil phases, in the order spec 6.1 gives them. Read from the program
+# rather than kept here, so the runner and the phase list cannot drift.
+phases=$(PYTHONPATH="$root/src" python3 -m guarden.soil list | cut -d' ' -f1)
+phases_line=$(printf '%s' "$phases" | tr '\n' ' ')
+
+# The command the machine runs: converge every phase, then report drift for
+# every phase. A run that ends with drift is a run that failed.
+sequence=""
+for phase in $phases; do
+    sequence="$sequence soil $phase --apply;"
+done
+for phase in $phases; do
+    sequence="$sequence soil $phase --check;"
+done
+sequence="${sequence%;}"
+
+if [ "$print_only" = 1 ]; then
+    printf 'user-data  %s\n' "$user_data"
+    printf 'phases     %s\n' "$phases_line"
+    printf 'sequence   %s\n' "$sequence"
+    exit 0
+fi
+
+[ -n "$target" ] || die "no target; pass --target HOST or set GUARDEN_VM_TARGET"
+
+printf 'booting %s from %s\n' "$target" "$user_data"
+printf 'phases     %s\n' "$phases_line"
+printf 'running   %s\n' "$sequence"
+
+scp -q "$user_data" "$remote@$target:/var/tmp/guarden-user-data.yaml"
+ssh -o ConnectTimeout="$connect_timeout" "$remote@$target" \
+    "cloud-init --file /var/tmp/guarden-user-data.yaml; $sequence"
