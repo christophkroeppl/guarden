@@ -10,6 +10,12 @@ CLAUDE.md
 .env
 .env.*
 !**/.guarden/.env.schema
+# The root contract is anchored, unlike the rule above it: `/.env.schema` names
+# the one at the top and leaves every nested schema to `!**/.guarden/.env.schema`.
+# Unanchored it would also re-admit the fixture repositories', quietly making
+# the rule above it dead — and a second rule that never fires is a rule nobody
+# can tell is broken.
+!/.env.schema
 
 __pycache__/
 *.pyc

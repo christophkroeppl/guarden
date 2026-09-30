@@ -22,6 +22,14 @@ check:
 lint:
     @if command -v ruff >/dev/null; then ruff check src tools/check-deps tests; else echo "ruff not installed"; fi
 
+# resolve the root .env.schema, the tracked half of the varlock contract.
+# varlock is not a declared dependency — `just check` exists to prove nothing
+# reaches past the standard library and the two distribution packages — so this
+# reports rather than fails when it is absent, as `lint` does for ruff.
+# tests/t35-env-schema.sh asserts the same thing and more.
+env:
+    @if command -v varlock >/dev/null; then varlock load -p .env.schema; else echo "varlock not installed"; fi
+
 # run the lint and the tests
 ci: lint test
 
