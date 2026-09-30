@@ -1,0 +1,19 @@
+{#
+  The service's start-order target, in the root path.
+
+  `loom` emits the edges and the mutator installs this file, which keeps the
+  unprivileged renderer's output one install step away from the privileged
+  target (ADR-0011). `guarden-order.target` Wants= every enabled service's
+  target, and the mutator converges the symlinks under
+  /etc/systemd/system/<service>.target.wants/.
+#}
+# Rendered by loom for {{ service }}. Do not edit; the mutator installs this.
+
+[Unit]
+Description=the start order of {{ service }}
+{% if providers %}
+{% for provider in providers %}
+Wants={{ provider }}.target
+After={{ provider }}.target
+{% endfor %}
+{% endif %}

@@ -17,13 +17,16 @@ tool golden-vm --help
 assert_exit 0
 assert_stdout_has "--target"
 
-# The user-data is ticket 130's, and until it exists the runner says so and
-# names the file rather than booting something.
+# With the user-data present, `--print` is the whole plan and needs no machine.
+# This assertion used to be the opposite: it asserted exit 1, because the
+# user-data was ticket 130's and did not exist yet, and the runner correctly
+# refused. Ticket 130 has since landed the file, so the refusal is gone and the
+# contract is the plan. What still has to hold is the refusal for a user-data
+# that is genuinely absent -- asserted below against a path that cannot exist,
+# which tests the runner rather than the state of the checkout.
 tool golden-vm --print
-assert_exit 1
-assert_one_diagnostic "error:"
-assert_stderr_has "user-data"
-assert_stderr_has "tools/cloud-init/user-data.yaml"
+assert_exit 0
+assert_stdout_has "tools/cloud-init/user-data.yaml"
 
 mkdir -p "$GUARDEN_FIXTURES/cloud-init"
 printf '%s\n' '#cloud-config' 'packages: [btrfs-progs, snapper]' >"$GUARDEN_FIXTURES/cloud-init/user-data.yaml"
@@ -49,5 +52,8 @@ tool golden-vm --user-data "$GUARDEN_FIXTURES/cloud-init/user-data.yaml" --nonse
 assert_exit 1
 assert_stderr_has "--nonsense"
 tool golden-vm --user-data "$GUARDEN_FIXTURES/absent.yaml" --print
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "absent.yaml"
 assert_exit 1
 assert_stderr_has "absent.yaml"

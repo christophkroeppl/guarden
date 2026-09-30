@@ -97,9 +97,13 @@ def read_toml(path: Path) -> dict[str, Any]:
     except FileNotFoundError:
         return {}
     except tomllib.TOMLDecodeError as exc:
-        line = f", line {exc.lineno}" if exc.lineno else ""
+        # `TOMLDecodeError` has carried only `args` since 3.11, and has no `.msg`
+        # or `.lineno` attribute on any version. Reading them raised AttributeError
+        # from inside the handler, so a malformed root file escaped as a traceback
+        # instead of the one diagnostic the contract promises. Take the message
+        # from str(), which formats the position itself.
         raise errors.GuardenError(
-            f"{path} is not valid TOML{line}: {exc.msg}", errors.HOST_NOT_AS_ASSUMED
+            f"{path} is not valid TOML: {exc}", errors.HOST_NOT_AS_ASSUMED
         ) from exc
     except OSError as exc:
         raise errors.GuardenError(

@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# The refusal list, and the mounts that are not the service's own (ticket 40,
+# spec 6.3).
+#
+# **These refusals are guardrails against accidents and not a boundary against a
+# hostile repository.** The repository's code runs as the service user, the
+# service user can write files in its own home, and the property that actually
+# holds is the per-service uid with `0700` on the service tree. What these buy is
+# that a capability, a device or a host mount cannot be obtained by adding a line
+# to a file, and that the mistake is visible in review.
+
+. "$(dirname "$0")/lib.sh"
+
+guarden_prefix
+stage_config guarden-measured.toml
+
+project=$GUARDEN_FIXTURES/project
+seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml"
+seed "$project/compose.yaml" "services:" "  web:" "    image: docker.io/library/nginx:1.27"
+
+# The refusal list, in the vocabulary a Compose file is written in. Each is exit 2
+# and each names the key, because a diagnostic that says "not allowed" is not one
+# a developer can act on.
+refuse_compose() {
+    local key=$1
+    seed "$project/compose.yaml" "services:" "  web:" \
+        "    image: docker.io/library/nginx:1.27" "    $2"
+    run loom check "$project"
+    assert_exit 2
+    assert_one_diagnostic "error:"
+    assert_stderr_has "$key"
+}
+
+refuse_compose "cap_add" "cap_add: [ SYS_ADMIN ]"
+refuse_compose "cap_drop" "cap_drop: [ ALL ]"
+refuse_compose "devices" "devices: [ /dev/dri ]"
+refuse_compose "privileged" "privileged: true"
+refuse_compose "pid" "pid: host"
+refuse_compose "userns_mode" "userns_mode: keep-id"
+refuse_compose "podman_args" "podman_args: [ --privileged ]"
+
+# The same list in the vocabulary a hand-written quadlet file is written in.
+quadlet=$GUARDEN_FIXTURES/quadlet
+seed "$quadlet/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/"
+
+refuse_quadlet() {
+    local key=$1
+    seed "$quadlet/.guarden/quadlet/web.container" "[Container]" \
+        "Image=docker.io/library/nginx:1.27" "  $2"
+    run loom check "$quadlet"
+    assert_exit 2
+    assert_one_diagnostic "error:"
+    assert_stderr_has "$key"
+}
+
+refuse_quadlet "PodmanArgs" "PodmanArgs=--privileged"
+refuse_quadlet "PodmanArgs" "PodmanArgs=--cap-add=ALL"
+refuse_quadlet "BindReadOnlyPaths" "BindReadOnlyPaths=/etc/shadow"
+refuse_quadlet "Mounts" "Mounts=type=bind,src=/,destination=/host"
+refuse_quadlet "Device" "Device=/dev/dri"
+refuse_quadlet "Userns" "Userns=keep-id"
+
+# A unit source naming a backend other than pasta is refused with the key named.
+# On the Compose path `network_mode` is *replaced* rather than refused, which is
+# what the spec says and is checked in t40-untrusted.sh.
+seed "$quadlet/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27" "Network=slirp4netns"
+run loom check "$quadlet"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "Network"
+assert_stderr_has "pasta"
+
+# A host-path bind outside the service's own volumes, `/etc/guarden` and the
+# admin's allow list, naming the path.
+seed "$quadlet/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27" "Volume=/var/lib/postgresql/data:/data"
+run loom check "$quadlet"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "/var/lib/postgresql/data"
+assert_stderr_has "mounts"
+
+# `/etc/guarden` is the one tree every service may read, because it is root-owned
+# and holds no secret a service has any business seeing.
+seed "$quadlet/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27" "Volume=/etc/guarden/edge:/etc/guarden:ro"
+run loom check "$quadlet"
+assert_exit 0
+assert_stderr_empty
+
+# A relative host path is refused: it resolves against whatever directory
+# podman happens to be started in, which is not a thing a manifest gets to choose.
+seed "$quadlet/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27" "Volume=./config:/etc/app"
+run loom check "$quadlet"
+assert_exit 2
+assert_stderr_has "relative"
+
+# A volume with no source is an anonymous volume in the service's image store,
+# which is the same mistake as an undeclared one.
+seed "$project/compose.yaml" "services:" "  web:" \
+    "    image: docker.io/library/nginx:1.27" "    volumes:" "      - /var/lib/nginx"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "anonymous volume"
+
+# A tmpfs is neither a named volume nor a host path, and a manifest that wants
+# one gets a name for what it is asking for.
+seed "$project/compose.yaml" "services:" "  web:" \
+    "    image: docker.io/library/nginx:1.27" "    volumes:" \
+    "      - type: tmpfs" "        target: /scratch"
+run loom check "$project"
+assert_exit 2
+assert_stderr_has "tmpfs"
+
+# The host's own configuration is refused the same way: pasta is the only backend
+# v1 supports, and an option that removes the host mapping would leave a box where
+# no container can reach any other (spec 3.1, ticket 15 item E). These are only
+# reachable through `render`, because the render is what reads them.
+stage_service() {
+    seed "$GUARDEN_PREFIX/var/lib/guarden/registry/$1.toml" \
+        "service = \"$1\"" "workload = \"myapp\"" "project = \"myapp\"" \
+        "environment = \"staging\"" "uid = 1101" "created = \"2026-09-30T09:00:00Z\""
+}
+stage_service myapp-staging
+seed "$project/compose.yaml" "services:" "  web:" "    image: docker.io/library/nginx:1.27"
+
+refuse_config() {
+    local expected=$1
+    shift
+    seed "$GUARDEN_PREFIX/etc/guarden/guarden.toml" \
+        '[host]' 'domain = "example.com"' 'admin_user = "operator"' \
+        '[ingress]' 'alias = "192.0.2.1"' 'publication_range = [ 20000, 32767 ]' \
+        '[build]' 'lanes = 1' '[network]' "$@" \
+        '[[environments]]' 'name = "staging"' 'host_prefix = "staging."' 'weight = 100' \
+        'kind = "slot"' 'fork_from = ""'
+    run loom render "$project" --service myapp-staging --out "$GUARDEN_FIXTURES/render"
+    assert_exit 2
+    assert_one_diagnostic "error:"
+    assert_stderr_has "$expected"
+}
+
+refuse_config 'slirp4netns' 'backend = "slirp4netns"'
+refuse_config '--no-map-gw' 'pasta_options = [ "--map-gw", "--no-map-gw" ]'
+refuse_config '--map-host-loopback none' \
+    'pasta_options = [ "--map-gw", "--map-host-loopback", "none" ]'
+refuse_config '--map-host-loopback=none' 'pasta_options = [ "--map-host-loopback=none" ]'
