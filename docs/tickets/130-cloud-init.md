@@ -33,5 +33,9 @@ serves both, and the layout is a portability decision rather than a portability 
       `/etc/apt/apt.conf.d/80guarden-snapper`, the names of the distribution's packaged snapper
       units, and cloud-init. The layout and the phase structure are distro-neutral; the install
       path is not, and the PRD says so and points at the README's single statement of the target
-- [ ] The fast harness verifies the rendered user-data and package list against fakes
+- [ ] The fast harness verifies the rendered user-data and package list against fakes.
+      Per ticket 35, a fake is added as a line in the shared call-logger rather than a
+      new file in `fixtures/bin`, and nothing in `fixtures/` is relied on outside a test
+      run — a fixture that escapes its harness shadows the real tool for every process
+      that inherits the environment
 - [ ] No program installs anything from PyPI or fetches a wheel at deploy time
