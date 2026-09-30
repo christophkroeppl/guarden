@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# groupadd — records the group so `getent group` finds it afterwards.
+. "$(dirname "$0")/../lib/fake.sh"
+fake_init "$@"
+
+case "${1:-}" in
+    --version|-V)
+        printf '%s\n' "groupadd (guarden fake) 1.0"
+        exit 0
+        ;;
+esac
+
+name=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -*) shift ;;
+        *) name=$1; shift ;;
+    esac
+done
+[ -n "$name" ] || fake_die "groupadd: no group named"
+file="$GUARDEN_FAKE_DIR/groups"
+mkdir -p "$GUARDEN_FAKE_DIR"
+[ -f "$file" ] || : >"$file"
+if grep -q "^$name:" "$file"; then
+    printf 'groupadd: group %s already exists\n' "$name" >&2
+    exit 9
+fi
+printf '%s:x:\n' "$name" >>"$file"

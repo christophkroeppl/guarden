@@ -1,12 +1,17 @@
 """soil — the host converger.
 
-spec 6.1. The only program with two modes and the only one besides nothing
-else with a `--check`. It creates no service user, no service directory and no
-identity belonging to a service: the two program users belong to `install`, and
-a service's own user belongs to `weedr service add`.
+spec 6.1. The only program with two modes and the only other one with a
+`--check`. It creates no service user, a service directory, or any identity
+belonging to a service: the two program users belong to `install`, and a
+service's own user belongs to `weedr service add`. There is no `soil users`
+phase, and `soil` must not grow one.
 
-`soil list` is real here because it names the phases, which is the one thing
-about the interface that has to be true before any phase body exists.
+The phases live in `hostprep`, and this file is only the shape of the interface
+and the difference between the two modes. `--check` asks every item whether it
+already holds and reports the ones that do not; `--apply` asks every item to
+make itself hold. Neither mode has its own idea of what converged means, which
+is the only way to keep `--check` from describing a state `--apply` does not
+produce.
 """
 
 from __future__ import annotations
@@ -14,22 +19,18 @@ from __future__ import annotations
 import argparse
 import sys
 
-from guarden import cli
+from guarden import hostprep
+from guarden.hostprep import PHASES
+from guarden.hosttool import Item, error
 
-PHASES: tuple[tuple[str, str], ...] = (
-    ("packages", "the distribution packages, and the one pinned podlet release"),
-    ("storage", "btrfs layout, the snapper value set, root and home, the cleanup timer"),
-    ("sysctl", "route_localnet on the ingress interface, IPv6 off, the port threshold"),
-    ("firewall", "ferm, fail2ban, 10-framework.conf, 20-ingress-nat.conf, the dead-man timer"),
-    ("install", "guarden into /usr/lib/guarden, the two program users, the alias probe"),
-    ("units", "the system units of the unprivileged programs"),
-)
+EXIT_OK = 0
+EXIT_NOT_CONVERGED = 1
+EXIT_REJECTED = 2
 
-PHASE_NAMES = tuple(name for name, _ in PHASES)
-COMMANDS = (*PHASE_NAMES, "list")
+COMMANDS = (*PHASES, "list")
 
 EPILOG = f"""\
-phases, in order: {", ".join(PHASE_NAMES)}
+phases, in order: {", ".join(PHASES)}
 
   soil <phase> --check      report drift, change nothing, exit 1 with the word "drift"
   soil <phase> --apply      converge
@@ -38,7 +39,16 @@ phases, in order: {", ".join(PHASE_NAMES)}
   soil list                 the phases and what each owns
 
 --deadman is the firewall's alone: it arms a timer whose effect is to open the
-firewall, so it is never something a converge does on its own.
+firewall, so it is never something a converge does on its own. The armed timer
+is fifteen minutes, fires by stopping ferm and putting the distribution's own
+firewall back, is one-shot, and a plain `soil firewall --apply` disarms it.
+
+GUARDEN_PREFIX moves every host path soil touches under one directory. It is a
+test seam: the fast harness points it at a scratch directory, and on a host it
+is unset, so every path is the absolute one in spec 2. It is an environment
+variable and not a flag because a flag on a phase is part of the interface the
+spec and the sudoers lines both name, and a prefix can only narrow what a run
+touches.
 """
 
 
@@ -68,10 +78,46 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _list() -> int:
-    width = max(len(name) for name in PHASE_NAMES)
-    for name, owns in PHASES:
-        sys.stdout.write(f"{name.ljust(width)}  {owns}\n")
-    return 0
+    width = max(len(phase) for phase in PHASES)
+    for phase in PHASES:
+        sys.stdout.write(f"{phase.ljust(width)}  {hostprep.what_for(phase)}\n")
+    return EXIT_OK
+
+
+def _reject(message: str) -> int:
+    error(message)
+    return EXIT_REJECTED
+
+
+def _collect(phases: list[str], deadman: bool) -> list[Item]:
+    items: list[Item] = []
+    for phase in phases:
+        items.extend(hostprep.items_for(phase, deadman))
+    return items
+
+
+def _check(phases: list[str], deadman: bool) -> int:
+    drifted = 0
+    for item in _collect(phases, deadman):
+        if not item.holds():
+            error(f"drift: {item.what}")
+            drifted += 1
+    return EXIT_NOT_CONVERGED if drifted else EXIT_OK
+
+
+def _apply(phases: list[str], deadman: bool) -> int:
+    unmet = 0
+    for item in _collect(phases, deadman):
+        if item.holds():
+            continue
+        try:
+            item.converge()
+        except hostprep.IncompleteRecord as exc:
+            return _reject(f"a pinned artefact is not installable: {exc}")
+        if item.correctable and not item.holds():
+            error(f"drift: {item.what}")
+            unmet += 1
+    return EXIT_NOT_CONVERGED if unmet else EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,28 +126,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         if args.check or args.apply or args.deadman:
-            sys.stderr.write("error: soil list takes no mode.\n")
-            return 2
+            return _reject("soil list takes no mode.")
         return _list()
 
     if args.command is None:
         if args.deadman:
-            sys.stderr.write("error: --deadman is `soil firewall --apply`'s alone.\n")
-            return 2
+            return _reject("--deadman is `soil firewall --apply`'s alone.")
         if not (args.check or args.apply):
-            sys.stderr.write("error: one of --check or --apply is required.\n")
-            return 2
-        return cli.pending("soil --check" if args.check else "soil --apply")
+            return _reject("one of --check or --apply is required.")
+        return _check(list(PHASES), False) if args.check else _apply(list(PHASES), False)
 
     if args.deadman and not (args.command == "firewall" and args.apply):
-        sys.stderr.write("error: --deadman is `soil firewall --apply`'s alone.\n")
-        return 2
+        return _reject("--deadman is `soil firewall --apply`'s alone.")
     if not (args.check or args.apply):
-        sys.stderr.write("error: one of --check or --apply is required.\n")
-        return 2
+        return _reject("one of --check or --apply is required.")
 
-    mode = "--check" if args.check else "--apply"
-    return cli.pending(f"soil {args.command} {mode}")
+    if args.check:
+        return _check([args.command], args.deadman)
+    return _apply([args.command], args.deadman)
 
 
 if __name__ == "__main__":

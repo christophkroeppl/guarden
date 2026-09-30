@@ -3,37 +3,28 @@
 # `--check` and `--apply`, `soil --check` is every phase, and `soil list` names
 # them. `--deadman` is the firewall's alone, because what it arms is a timer
 # whose effect is to open the firewall.
+#
+# This file is the interface, not the converges: that every phase accepts both
+# modes and that a phase which exists never rejects its own name. What a phase
+# converges is ticket 20's subject and is tested there.
 
 . "$(dirname "$0")/lib.sh"
 
-run soil packages --check
-assert_exit 1
-assert_stderr_has "soil packages --check is not implemented"
-run soil packages --apply
-assert_exit 1
-assert_stderr_has "soil packages --apply is not implemented"
-run soil storage --check
-assert_exit 1
-assert_stderr_has "soil storage --check is not implemented"
-run soil sysctl --check
-assert_exit 1
-assert_stderr_has "soil sysctl --check is not implemented"
-run soil firewall --check
-assert_exit 1
-assert_stderr_has "soil firewall --check is not implemented"
-run soil install --apply
-assert_exit 1
-assert_stderr_has "soil install --apply is not implemented"
-run soil units --apply
-assert_exit 1
-assert_stderr_has "soil units --apply is not implemented"
+for phase in packages storage sysctl firewall install units; do
+    run soil "$phase" --check
+    assert_not_rejected
+done
+
+# `packages --apply` is the one exception, and it is exit 2 on purpose: the
+# pinned podlet record is a repository input, and an unpinned third-party binary
+# is refused rather than fetched. The other five have nothing to reject.
+for phase in storage sysctl firewall install units; do
+    run soil "$phase" --apply
+    assert_not_rejected
+done
 
 run soil --check
-assert_exit 1
-assert_stderr_has "soil --check is not implemented"
-run soil --apply
-assert_exit 1
-assert_stderr_has "soil --apply is not implemented"
+assert_not_rejected
 
 # `soil list` is the one verb that answers, because naming the phases is the one
 # thing about the interface that has to be true before a phase body exists.
@@ -50,8 +41,7 @@ assert_stdout_lines 6
 # The armed-timer form is accepted as written; the same flag anywhere else is a
 # rejected input, not a silently ignored one.
 run soil firewall --apply --deadman
-assert_exit 1
-assert_stderr_has "soil firewall --apply is not implemented"
+assert_not_rejected
 run soil packages --apply --deadman
 assert_exit 2
 assert_one_diagnostic "error:"

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# ss — the host side of the alias probe: who owns the socket a container's
+# connection arrived on, and what the source address was.
+. "$(dirname "$0")/../lib/fake.sh"
+fake_init "$@"
+
+case "${1:-}" in
+    --version|-V)
+        printf '%s\n' "ss (guarden fake) 1.0"
+        exit 0
+        ;;
+esac
+
+printf '%s\n' 'State Recv-Q Send-Q Local Address:Port Peer Address:Port Process'
+row="$GUARDEN_FAKE_DIR/ss-row"
+if [ -f "$row" ]; then
+    cat "$row"
+else
+    printf '%s\n' 'ESTAB 0 0 127.0.0.1:44312 127.0.0.1:20000 users:(("python3",pid=1,fd=3)) uid:1000'
+fi

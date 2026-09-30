@@ -1,0 +1,19 @@
+[Unit]
+Description=recompute the snapper marks from the pin files and the registries
+Documentation=file:///usr/share/doc/guarden/
+# A root reconciler, a separate action from `stakes` on purpose: `stakes` runs
+# unprivileged and writing snapper's metadata is not something it can do. The
+# marks are derived from the registries plus the pin files — no holders, no
+# refcounts, no ledger — so this recomputes rather than appends, and it is
+# idempotent: it adds before it removes and stops rather than clearing anything
+# when its state is unreadable.
+Requires=snapperd.service
+After=snapperd.service
+
+[Service]
+Type=oneshot
+# The same lock the cleanup unit takes, and the reason both take it: snapper
+# takes no lock that `snapper modify` participates in, and its cleaner reuses
+# one reference to the snapshot list across all three passes, so a mark written
+# during a running cleanup is lost silently with no error anywhere.
+ExecStart=/usr/bin/flock -w 30 /run/guarden/locks/snapshots.lock /usr/lib/guarden/bin/weedr pin sync

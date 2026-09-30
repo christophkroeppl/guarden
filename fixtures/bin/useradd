@@ -1,4 +1,30 @@
 #!/usr/bin/env bash
+# useradd — records the user so `getent passwd` finds it afterwards. It never
+# creates a home, because guarden has no /home for services and a program's
+# account is not a login.
 . "$(dirname "$0")/../lib/fake.sh"
 fake_init "$@"
-exit 0
+
+case "${1:-}" in
+    --version|-V)
+        printf '%s\n' "useradd (guarden fake) 1.0"
+        exit 0
+        ;;
+esac
+
+name=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -*) shift ;;
+        *) name=$1; shift ;;
+    esac
+done
+[ -n "$name" ] || fake_die "useradd: no user named"
+file="$GUARDEN_FAKE_DIR/users"
+mkdir -p "$GUARDEN_FAKE_DIR"
+[ -f "$file" ] || : >"$file"
+if grep -q "^$name:" "$file"; then
+    printf 'useradd: user %s already exists\n' "$name" >&2
+    exit 9
+fi
+printf '%s:x:0:0::/nonexistent:/usr/sbin/nologin\n' "$name" >>"$file"

@@ -25,11 +25,20 @@
 
 fake_init "$@"
 
+case "${1:-}" in
+    --version|-V)
+        printf '%s\n' "snapper (guarden fake) 1.0"
+        exit 0
+        ;;
+esac
+
 config=root
 verb=
 format=table
 algorithm=
 userdata=
+merge_from=
+subvolume=
 records=()
 extra=()
 
@@ -64,6 +73,16 @@ while [ "$#" -gt 0 ]; do
             extra+=("description=$2")
             shift 2
             ;;
+        -p|--subvolume)
+            [ "$#" -ge 2 ] || fake_die "-p needs a subvolume"
+            subvolume=$2
+            shift 2
+            ;;
+        -f|--file)
+            [ "$#" -ge 2 ] || fake_die "-f needs a file"
+            merge_from=$2
+            shift 2
+            ;;
         --)
             shift
             ;;
@@ -84,6 +103,42 @@ done
 list_file="$GUARDEN_FAKE_SNAPPER/$config.list"
 conf_file="$GUARDEN_FAKE_SNAPPER/$config.conf"
 mkdir -p "$GUARDEN_FAKE_SNAPPER"
+
+# The distribution's default template: the state before soil converges anything.
+# The empty-pre/post cleaner is enabled and there is no minimum age, so a
+# converge has something real to change.
+default_config() {
+    printf '%s\n' \
+        "SUBVOLUME=$subvolume" \
+        'FSTYPE=btrfs' \
+        'EMPTY_PRE_POST_CLEANUP=yes' \
+        'NUMBER_MIN_AGE=0' \
+        'NUMBER_CLEANUP=yes' \
+        'TIMELINE_CLEANUP=yes' \
+        'TIMELINE_LIMIT_HOURLY=0' \
+        'TIMELINE_LIMIT_DAILY=0-7' \
+        'TIMELINE_LIMIT_WEEKLY=0-4' \
+        'TIMELINE_LIMIT_MONTHLY=0-6' \
+        'TIMELINE_LIMIT_QUARTERLY=0-2' \
+        'TIMELINE_LIMIT_YEARLY=0' \
+        'NUMBER_LIMIT=2-10' \
+        'NUMBER_LIMIT_IMPORTANT=8-12' \
+        'FREE_LIMIT=0.1' >"$conf_file"
+}
+
+# A configuration exists once any of its three traces does: a stored
+# configuration, a snapshot list, or a create. Snapshots for a configuration
+# that does not exist are not a thing, and a `.list` seed is how a test writes
+# one.
+config_exists() {
+    [ -f "$conf_file" ] || [ -f "$list_file" ] || [ -f "$GUARDEN_FAKE_SNAPPER/$config.created" ]
+}
+
+ensure_config() {
+    config_exists || return 1
+    [ -f "$conf_file" ] || default_config
+    return 0
+}
 
 json_escape() {
     local text=$1
@@ -163,34 +218,6 @@ list_table() {
     fi
 }
 
-# soil storage converges this fixed set into every configuration it can see
-# (spec 8.1) and rewrites nothing else, so it is what an unseeded get-config
-# answers with.
-canonical_config() {
-    local key value
-    for pair in \
-        'SUBVOLUME=/var/lib/guarden' \
-        'FSTYPE=btrfs' \
-        'EMPTY_PRE_POST_CLEANUP=no' \
-        'NUMBER_MIN_AGE=3600' \
-        'NUMBER_CLEANUP=yes' \
-        'TIMELINE_CLEANUP=yes' \
-        'TIMELINE_LIMIT_HOURLY=0' \
-        'TIMELINE_LIMIT_DAILY=0-7' \
-        'TIMELINE_LIMIT_WEEKLY=0-4' \
-        'TIMELINE_LIMIT_MONTHLY=0-6' \
-        'TIMELINE_LIMIT_QUARTERLY=0-2' \
-        'TIMELINE_LIMIT_YEARLY=0' \
-        'NUMBER_LIMIT=2-10' \
-        'NUMBER_LIMIT_IMPORTANT=8-12' \
-        'FREE_LIMIT=0.10'
-    do
-        key=${pair%%=*}
-        value=${pair#*=}
-        printf '%s=%s\n' "$key" "$value"
-    done
-}
-
 case "$verb" in
     list)
         case "$format" in
@@ -205,21 +232,47 @@ case "$verb" in
             fake_die "get-config takes at most one key"
         fi
         key=${records[0]:-}
-        if [ -f "$conf_file" ]; then
-            if [ -n "$key" ]; then
-                grep "^$key=" "$conf_file"
-                exit 0
-            fi
-            cat "$conf_file"
-            exit 0
+        # A configuration that does not exist is an error, and that is the whole
+        # reason soil asks this question rather than statting the path: the
+        # effective configuration is read with get-config and never by parsing
+        # /etc/snapper/configs/<name>.
+        if ! ensure_config; then
+            printf 'error: snapper: no configuration for %s\n' "$config" >&2
+            exit 1
         fi
         if [ -n "$key" ]; then
-            canonical_config | grep "^$key="
+            grep "^$key=" "$conf_file" || {
+                printf 'error: snapper: no such key: %s\n' "$key" >&2
+                exit 1
+            }
             exit 0
         fi
-        canonical_config
+        cat "$conf_file"
+        ;;
+    create-config)
+        # Creates no snapshot: a fake that invented one would be a lie. The
+        # default template it writes is what gives `soil storage` something real
+        # to converge.
+        printf '%s\n' "$config" >"$GUARDEN_FAKE_SNAPPER/$config.created"
+        default_config
+        exit 0
         ;;
     modify)
+        if [ -n "$merge_from" ]; then
+            [ -f "$merge_from" ] || fake_die "modify -f: no such file: $merge_from"
+            target="$GUARDEN_FAKE_SNAPPER/$config.conf"
+            touch "$target"
+            while IFS= read -r line; do
+                case "$line" in
+                    ''|'#'*) continue ;;
+                esac
+                key=${line%%=*}
+                grep -v "^$key=" "$target" >"$target.merged"
+                printf '%s\n' "$line" >>"$target.merged"
+                mv "$target.merged" "$target"
+            done <"$merge_from"
+            exit 0
+        fi
         [ "${#records[@]}" -eq 1 ] || fake_die "modify takes exactly one snapshot number"
         [ -n "$algorithm" ] || fake_die "modify needs --cleanup-algorithm"
         printf '%s|%s|%s\n' "${records[0]}" "$algorithm" "$userdata" \

@@ -70,6 +70,32 @@ run() {
     fi
 }
 
+# scratch_host: point soil at a directory of its own, and hand back the path.
+#
+# soil's paths are the absolute ones in spec 2, and the fast harness cannot
+# write to the host it runs on. GUARDEN_PREFIX is the program's test seam for
+# exactly that, and every test in this file needs a fresh one.
+scratch_host() {
+    GUARDEN_HOST=$(mktemp -d)
+    export GUARDEN_PREFIX="$GUARDEN_HOST"
+    host() {
+        printf '%s\n' "$GUARDEN_HOST/$1"
+    }
+}
+
+# seed <path> <line>...: write a file the host is pretending to already have.
+seed() {
+    local target=$1
+    shift
+    mkdir -p "$(dirname "$target")"
+    printf '%s\n' "$@" >"$target"
+}
+
+# say <path> <line>: append one line, for a host file a test is building up.
+say() {
+    printf '%s\n' "$2" >>"$1"
+}
+
 # fake <name> [args...]: run one of the fakes in fixtures/bin.
 fake() {
     _capture "$GUARDEN_ROOT/fixtures/bin/$1" "${@:2}"
@@ -87,6 +113,16 @@ _fail() {
 
 assert_exit() {
     [ "$GUARDEN_EXIT" = "$1" ] || _fail "expected exit $1, got $GUARDEN_EXIT"
+}
+
+# assert_not_rejected: exit 0 (done or already true) or 1 (the host is not in
+# the assumed state), never 2. 2 would mean the input was rejected, and a verb
+# that exists cannot reject its own name.
+assert_not_rejected() {
+    case "$GUARDEN_EXIT" in
+        0|1) return 0 ;;
+        *) _fail "expected exit 0 or 1, got $GUARDEN_EXIT" ;;
+    esac
 }
 
 assert_stdout_has() {
@@ -166,6 +202,26 @@ assert_file_has() {
     grep -qF -- "$2" "$1" || _fail "$1 does not name $2"
 }
 
+# A ferm rule is a line that starts with "[ ", so the count of rules is the count
+# of such lines and the absence of a rule is not the absence of the word.
+assert_no_firewall_rule() {
+    if grep -qE '^\[ ' "$1"; then
+        _fail "$1 carries a firewall rule and should not"
+    fi
+}
+
+assert_rule_count() {
+    local count
+    count=$(grep -cE '^\[ ' "$1")
+    [ "$count" = "$2" ] || _fail "$1 carries $count rules, expected $2"
+}
+
+assert_file_lacks() {
+    if grep -qF -- "$2" "$1"; then
+        _fail "$1 names $2 and should not"
+    fi
+}
+
 assert_executable() {
     [ -x "$1" ] || _fail "$1 is not executable"
 }
@@ -188,6 +244,19 @@ assert_fake() {
 assert_called() {
     [ -f "$GUARDEN_CALLS" ] || _fail "nothing was called"
     grep -qF -- "$1" "$GUARDEN_CALLS" || _fail "no call names $1"
+}
+
+# assert_called_count <n> <text>: how many calls name the text. Used for the
+# claims that are about absence -- no service user, no second group -- where a
+# single matching call would not be enough to fail.
+assert_called_count() {
+    local count
+    if [ ! -f "$GUARDEN_CALLS" ]; then
+        count=0
+    else
+        count=$(grep -cF -- "$2" "$GUARDEN_CALLS")
+    fi
+    [ "$count" = "$1" ] || _fail "expected $1 calls naming $2, got $count"
 }
 
 assert_not_called() {

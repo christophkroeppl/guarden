@@ -1,0 +1,14 @@
+# The one fetch from outside a distribution repository, pinned.
+#
+# Guarden installs no artefact it has not verified, so this file is deliberately
+# shipped with its digest unfilled: an unfilled pin means the fetch does not
+# happen, which is the fail-closed outcome. There is no "latest" and no
+# unpinned fallback, because "one third-party binary, verified" is the whole
+# claim and a convenience fetch would make it false.
+#
+# Fill in all three from the release you mean, then `soil packages --apply`.
+# The SHA256 is of the release artefact, and `soil` re-reads it on every
+# `--check`, so a binary that was replaced under it is drift.
+version =
+url =
+sha256 =
