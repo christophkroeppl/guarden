@@ -11,7 +11,10 @@
 
 . "$(dirname "$0")/lib.sh"
 
-guarden_prefix
+export GUARDEN_PREFIX=/
+# The real path, not a relocated one: stage_config writes where guarden reads,
+# and /etc/guarden is absent on a host where `soil install` has never run.
+mkdir -p /etc/guarden
 stage_config guarden.toml
 
 # A host with the shipped table and no services is a done state, not a failure.
@@ -37,7 +40,12 @@ run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 1
 assert_one_diagnostic "error:"
 assert_stderr_has "guarden.toml is not valid TOML"
-assert_makes_no_calls weedr service list
+# The status command still answers on a host whose table will not parse: it reads
+# the registries and not the configuration, so a corrupt file is a rejected
+# ingest rather than a box that cannot report itself.
+run weedr service list
+assert_exit 0
+assert_stdout_has "no services"
 
 # A key of the wrong type names the key. `weight = "heavy"` is a typo in a
 # root-owned file, not a manifest a stranger wrote, and the dividing line in
@@ -64,7 +72,9 @@ stage_config guarden-badfork.toml
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 2
 assert_stderr_has "fork_from 'nope' names no track"
-assert_makes_no_calls weedr service list
+run weedr service list
+assert_exit 0
+assert_stdout_has "no services"
 
 # A track with kind = "instance" and no cap is the same rule from the other side,
 # so it is checked in a file of its own rather than a copy of the shipped one.

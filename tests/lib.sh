@@ -1,30 +1,49 @@
-# tests/lib.sh — the fast harness's shared helpers.
+# tests/lib.sh — the harness's shared helpers.
 #
 # Append to this file only when a helper is genuinely shared, and never
 # restructure it: every later ticket's tests are written against what is here.
 #
 # The seam is the command line (spec 11), so every helper here either runs one
 # command or asserts on what running it produced: the exit code, the diagnostic
-# lines, the files that appeared or vanished, and the call log. No helper
-# imports a program, and no test may.
+# lines, and the files that appeared or vanished. No helper imports a program,
+# and no test may.
 #
-# `run` drives a guarden program, `fake` drives one of the fakes in
-# fixtures/bin, and `tool` drives a repo tool. All three capture stdout, stderr
-# and the exit code, so an assertion never has to re-run the command.
+# `run` drives a guarden program and `tool` drives a repo tool. Both capture
+# stdout, stderr and the exit code, so an assertion never has to re-run the
+# command.
+#
+# **There is no stand-in on `PATH` and there is no call log** (ADR-0014, spec
+# §11). A helper here that needs the machine's answer reads the machine: the
+# "real-host state" section at the bottom is what replaced the call-log
+# assertions, because a call log records an intent and these record an outcome.
 #
 # `set -e` is on so that a failed assertion ends the test file where it failed
 # rather than being outvoted by the assertions after it.
 
 set -euo pipefail
 
+# A suite that dies on a command rather than on an assertion has said nothing at
+# all, and the line it died on is the whole of what is missing. `set -e` is what
+# stops a suite at its first failure rather than being outvoted by the assertions
+# after it, and this is what turns its silence into a report: the same reason
+# `tests/lxc.sh` gives a suite a wall clock.
+#
+# It does not fire inside a condition, so a helper that tests a command with `||`
+# or `if` is not reported twice.
+trap 'printf "error: failed at line %s: %s (exit %s)\n" "$LINENO" "$BASH_COMMAND" "$?" >&2' ERR
+
 GUARDEN_ROOT=${GUARDEN_ROOT:-$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")}
 GUARDEN_FIXTURES=${GUARDEN_FIXTURES:-$(mktemp -d)}
 
-# fixtures/bin is first on PATH, so every fake wins over a real tool of the same
-# name, and PYTHONPATH is the source tree so the programs run from a checkout
-# with nothing installed.
+# GUARDEN_FIXTURES is a scratch directory and nothing more: it is not a
+# directory of stand-ins, and the tests that use it are staging a file a program
+# then reads or writes.
+#
+# PYTHONPATH is the source tree so the programs run from a checkout with nothing
+# installed. Nothing else goes on PATH ahead of the machine: a stand-in that
+# wins over a real tool is a tool that lies, and this repository has paid for
+# that twice. tests/t10-no-fakes.sh holds that line.
 export GUARDEN_FIXTURES
-export PATH="$GUARDEN_ROOT/fixtures/bin:$PATH"
 export PYTHONPATH="$GUARDEN_ROOT/src"
 
 # A checkout with no root and no distribution packages still needs pyyaml and
@@ -40,7 +59,6 @@ fi
 
 GUARDEN_STDOUT="$GUARDEN_FIXTURES/stdout"
 GUARDEN_STDERR="$GUARDEN_FIXTURES/stderr"
-GUARDEN_CALLS="$GUARDEN_FIXTURES/calls.log"
 
 GUARDEN_EXIT=0
 
@@ -87,9 +105,9 @@ run() {
 
 # scratch_host: point soil at a directory of its own, and hand back the path.
 #
-# soil's paths are the absolute ones in spec 2, and the fast harness cannot
-# write to the host it runs on. GUARDEN_PREFIX is the program's test seam for
-# exactly that, and every test in this file needs a fresh one.
+# soil's paths are the absolute ones in spec 2, and the VM is a throwaway one
+# that a test may write to. GUARDEN_PREFIX is the program's test seam, and a
+# suite that needs a host of its own makes a fresh one.
 scratch_host() {
     GUARDEN_HOST=$(mktemp -d)
     export GUARDEN_PREFIX="$GUARDEN_HOST"
@@ -111,14 +129,21 @@ say() {
     printf '%s\n' "$2" >>"$1"
 }
 
-# fake <name> [args...]: run one of the fakes in fixtures/bin.
-fake() {
-    _capture "$GUARDEN_ROOT/fixtures/bin/$1" "${@:2}"
-}
-
 # tool <name> [args...]: run a repo tool.
 tool() {
     _capture "$GUARDEN_ROOT/tools/$1" "${@:2}"
+}
+
+# run_installed <path> [args...]: run something at a path that is not one of
+# guarden's own programs — the pinned `podlet` under `/usr/lib/guarden/bin`, an
+# installed unit, a repository's script.
+#
+# Not `run`: that dispatches by program *name* through the wrapper and passes only
+# the first argument through, so `run "$path" --version` runs the binary as a
+# command named after itself and the wrapper answers "unknown run mode". This is
+# the same capture, with the arguments intact.
+run_installed() {
+    _capture "$@"
 }
 
 _fail() {
@@ -126,8 +151,19 @@ _fail() {
     return 1
 }
 
+# The exit code alone is rarely the whole of what a program said, and a suite that
+# stops on the code leaves the diagnostic inside a temporary the next run
+# overwrites. So the failure names what the program wrote, which is the one thing
+# the person reading the failure needs and cannot get any other way.
 assert_exit() {
-    [ "$GUARDEN_EXIT" = "$1" ] || _fail "expected exit $1, got $GUARDEN_EXIT"
+    if [ "$GUARDEN_EXIT" = "$1" ]; then
+        return 0
+    fi
+    printf 'error: expected exit %s, got %s\n' "$1" "$GUARDEN_EXIT" >&2
+    if [ -s "$GUARDEN_STDERR" ]; then
+        sed 's/^/  stderr: /' "$GUARDEN_STDERR" >&2
+    fi
+    return 1
 }
 
 # assert_not_rejected: exit 0 (done or already true) or 1 (the host is not in
@@ -170,21 +206,6 @@ assert_stderr_empty() {
     if [ -s "$GUARDEN_STDERR" ]; then
         _fail "stderr is not empty: $(cat "$GUARDEN_STDERR")"
     fi
-}
-
-# assert_makes_no_calls <program> [args...]: runs the program and asserts the
-# call log did not grow. Counted, not merely absent, so the assertion holds in a
-# file where earlier tests have already made calls.
-assert_makes_no_calls() {
-    local before=0 after=0
-    if [ -f "$GUARDEN_CALLS" ]; then
-        before=$(wc -l <"$GUARDEN_CALLS")
-    fi
-    run "$@"
-    if [ -f "$GUARDEN_CALLS" ]; then
-        after=$(wc -l <"$GUARDEN_CALLS")
-    fi
-    [ "$before" = "$after" ] || _fail "$* called a tool it has no body to call"
 }
 
 # assert_one_diagnostic <prefix>: a diagnostic is one line, prefixed, and names
@@ -244,49 +265,20 @@ assert_executable() {
     [ -x "$1" ] || _fail "$1 is not executable"
 }
 
-# assert_fake <name>: the fake is where the spec says it is, PATH resolves to it
-# rather than to a real tool of the same name, and it records its own call.
-assert_fake() {
-    local name=$1
-    local path="$GUARDEN_ROOT/fixtures/bin/$name"
-    assert_file_exists "$path"
-    assert_executable "$path"
-    run env sh -c "command -v $name"
-    assert_exit 0
-    assert_stdout_has "fixtures/bin/$name"
-    fake "$name" --version
-    assert_exit 0
-    assert_called "$name --version"
-}
-
-assert_called() {
-    [ -f "$GUARDEN_CALLS" ] || _fail "nothing was called"
-    grep -qF -- "$1" "$GUARDEN_CALLS" || _fail "no call names $1"
-}
-
-# assert_called_count <n> <text>: how many calls name the text. Used for the
-# claims that are about absence -- no service user, no second group -- where a
-# single matching call would not be enough to fail.
-assert_called_count() {
-    local count
-    if [ ! -f "$GUARDEN_CALLS" ]; then
-        count=0
-    else
-        count=$(grep -cF -- "$2" "$GUARDEN_CALLS")
-    fi
-    [ "$count" = "$1" ] || _fail "expected $1 calls naming $2, got $count"
-}
-
-assert_not_called() {
-    if [ -f "$GUARDEN_CALLS" ] && grep -qF -- "$1" "$GUARDEN_CALLS"; then
-        _fail "a call names $1 and should not"
-    fi
-}
-
-assert_no_calls() {
-    if [ -f "$GUARDEN_CALLS" ]; then
-        _fail "something was called and should not have been"
-    fi
+# assert_elf <path>: the file is an ELF object, which is what separates a program
+# from an archive that was installed under a program's name.
+#
+# The executable bit does not: an XZ file named `podlet` and made 0755 is
+# present, is executable, and is not a program, and that is the state a fetch
+# without an unpack step leaves behind. Four bytes at offset 0 is the whole
+# distinction, so it is read with `od` rather than guessed at from a `file` that
+# a minimal image may not carry.
+assert_elf() {
+    local magic
+    magic=$(od -An -N4 -tx1 -- "$1" 2>/dev/null || true)
+    [ "$magic" != "" ] || _fail "$1 is not there, so it is not an ELF object"
+    magic=${magic//[[:space:]]/}
+    [ "$magic" = "7f454c46" ] || _fail "$1 starts with 0x$magic, which is not an ELF header"
 }
 
 # assert_verbs <program> <expected...>: the verbs --help lists are the verbs the
@@ -340,15 +332,36 @@ assert_only_alias_rm() {
 
 # --- the mutator's host, staged -----------------------------------------------
 #
-# `GUARDEN_PREFIX` relocates every path the programs use, and the fast harness
-# needs it because /etc/guarden, /var/lib/guarden, /etc/snapper and /etc/passwd
-# are not a test's to write. See guarden/paths.py for why a single prefix is a
-# poor candidate for widening authority.
+# `GUARDEN_PREFIX` relocates every path the programs use, and a suite that must
+# not touch the VM's own /etc/guarden, /var/lib/guarden or /etc/snapper stages
+# one instead. It does not relocate the host's *identity* databases, because it
+# cannot: `useradd` writes the machine's /etc/passwd and a program reading
+# `$GUARDEN_PREFIX/etc/passwd` is reading another database than the one it was
+# promised. See guarden/paths.py for why a single prefix is a poor candidate for
+# widening authority.
 
-# guarden_prefix: stage a host and point the programs at it. The `guarden` group
-# and a root passwd entry are staged because they are load-bearing rather than
-# tidiness: the registry and every overrides.toml are root:guarden and the
-# unprivileged programs read them through the group.
+# guarden_prefix: stage a host and point the programs at it. A staged host is
+# guarden's own tree and nothing else: `/etc/guarden`, `/var/lib/guarden`,
+# `/etc/snapper`, `/etc/containers/systemd/users`, and the two sysctl values a
+# host invariant is checked against.
+#
+# **No identity is staged, and that is the rule rather than an omission.** There is
+# no `/etc/passwd`, `/etc/group`, `/etc/subuid` or `/etc/subgid` here, because a real
+# `useradd` writes the machine's four and a program that reads `$GUARDEN_PREFIX/etc/passwd`
+# is reading a different database from the one it just asked to be written to. A suite
+# that stages those files *and* lets a real tool create a service user asserts against two
+# databases and is about neither: `weedr service ingest` created `qapp-production` on the
+# machine, read back the staged file, found nothing, and reported "qapp-production was
+# created but is not in <staged>/etc/passwd" — which is a true sentence about two
+# databases rather than a fact about a service.
+#
+# So a suite that needs real identity — a real `useradd`, a real uid, a real
+# `/etc/subuid` range — sets `GUARDEN_PREFIX=/` and drives the machine's own tools, the
+# way `t20-*`, `t30-*`, `t40-untrusted`, `t70-*` and `t130-*` do (ticket 35: "a suite
+# that needed a staged host gets a real one"). A suite that stages one has no `useradd`
+# in its path, so it is not testing identity and does not get a pretend database to make
+# it look as though it were. `guarden/paths.py` is why one prefix is a poor candidate for
+# widening authority.
 guarden_prefix() {
     GUARDEN_HOST=${1:-$GUARDEN_FIXTURES/host}
     mkdir -p "$GUARDEN_HOST/etc/guarden/services" "$GUARDEN_HOST/etc/snapper/configs"
@@ -357,10 +370,6 @@ guarden_prefix() {
     mkdir -p "$GUARDEN_HOST/var/lib/guarden/shared" "$GUARDEN_HOST/run/guarden/locks"
     mkdir -p "$GUARDEN_HOST/etc/containers/systemd/users" "$GUARDEN_HOST/proc/sys/net/ipv4"
     mkdir -p "$GUARDEN_HOST/proc/sys/net/ipv6/conf/all" "$GUARDEN_HOST/etc/snapper/configs"
-    printf '%s\n' 'root:x:0:0:root:/root:/bin/bash' >"$GUARDEN_HOST/etc/passwd"
-    printf '%s\n' 'guarden:x:1000:' 'edge:x:1001:' >"$GUARDEN_HOST/etc/group"
-    : >"$GUARDEN_HOST/etc/subuid"
-    : >"$GUARDEN_HOST/etc/subgid"
     printf '%s\n' '1' >"$GUARDEN_HOST/proc/sys/net/ipv6/conf/all/disable_ipv6"
     printf '%s\n' '1024' >"$GUARDEN_HOST/proc/sys/net/ipv4/ip_unprivileged_port_start"
     chmod 0750 "$GUARDEN_HOST/var/lib/guarden/registry"
@@ -378,10 +387,38 @@ stage_poke() {
     cp -r "$GUARDEN_ROOT/fixtures/projects/$1/." "$GUARDEN_PREFIX/var/lib/guarden/staging/$1/$2/"
 }
 
+# install_pinned_converter: the pinned podlet release, installed into this suite's
+# staged host by the phase that owns the fetch.
+#
+# A suite that feeds a `compose.yaml` to the renderer needs a converter, and the
+# renderer resolves it at the pinned path under `GUARDEN_PREFIX` rather than on
+# PATH — the fetch is digest-verified, and a PATH lookup would run whatever a
+# repository put first on the renderer's path (spec 6.3, ADR-0012). There is no
+# second way to get one: no stand-in and nothing on `PATH` (ADR-0014), no
+# hand-copied binary, and no flag that skips the digest. So this seeds the record
+# this repository ships and runs `soil packages --apply`, which fetches, compares
+# the artefact's digest before it unpacks anything, and installs the one member
+# named `podlet`.
+#
+# The phase is asked for the converter and not for a converged host, so the exit
+# is 0 or 1 and only a 2 would be a refusal: a package that would not install is
+# drift on a throwaway machine, and the item this suite needs is not that one. The
+# ELF header and the answer are asserted because "the file exists" is the state the
+# pin exists to prevent; `t20-podlet.sh` is where that claim is the whole subject.
+install_pinned_converter() {
+    install -D -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" \
+        "$GUARDEN_PREFIX/etc/guarden/podlet.release"
+    run soil packages --apply
+    assert_not_rejected
+    assert_elf "$GUARDEN_PREFIX/usr/lib/guarden/bin/podlet"
+    run_installed "$GUARDEN_PREFIX/usr/lib/guarden/bin/podlet" --version
+    assert_exit 0
+    assert_stdout_has "podlet"
+}
+
 # assert_mode and assert_owner: the mode table in spec 2.1 is a set of claims a
-# test has to be able to point at, and `stat` is how it is pointed at. The owner
-# is the golden VM's to prove — the fast harness runs unprivileged, so `chown` is
-# skipped rather than faked.
+# test has to be able to point at, and `stat` is how it is pointed at. The VM
+# runs as root, so `chown` is a real one and the owner is a real fact.
 assert_mode() {
     local actual
     actual=$(stat -c %a "$1")
@@ -396,6 +433,247 @@ assert_owner() {
     if [ "$actual" != "$2" ]; then
         _fail "$1 is owned by $actual, not $2"
     fi
+}
+
+assert_link() {
+    local found
+    found=$(readlink "$1")
+    if [ "$found" != "$2" ]; then
+        _fail "$1 points at $found, not $2"
+    fi
+}
+
+# ---- real-host state -------------------------------------------------------
+#
+# These assert what the machine actually holds. They replace the call-log
+# helpers, which could only ask a fake what it had been asked to do: a call log
+# records an intent, and these record an outcome. Every one of them runs inside
+# the LXD VM against the real tool.
+
+# assert_passwd <name> / assert_no_passwd <name>: a system account.
+assert_passwd() {
+    getent passwd "$1" >/dev/null 2>&1 || _fail "no passwd entry for $1"
+}
+assert_no_passwd() {
+    if getent passwd "$1" >/dev/null 2>&1; then
+        _fail "passwd entry for $1 exists: $(getent passwd "$1")"
+    fi
+}
+
+# assert_passwd_field <name> <field> <expected>: 1-indexed colon field.
+assert_passwd_field() {
+    local actual
+    actual=$(getent passwd "$1" | cut -d: -f"$2")
+    if [ "$actual" != "$3" ]; then
+        _fail "passwd field $2 of $1 is '$actual', not '$3'"
+    fi
+}
+
+assert_group() {
+    getent group "$1" >/dev/null 2>&1 || _fail "no group entry for $1"
+}
+assert_no_group() {
+    if getent group "$1" >/dev/null 2>&1; then
+        _fail "group entry for $1 exists"
+    fi
+}
+
+# assert_subid <file> <user> <start> <count>: the delegated range is the fact,
+# not the flag that was supposed to produce it.
+assert_subid() {
+    local line
+    line=$(grep "^$2:" "$1" 2>/dev/null | tail -1)
+    if [ "$line" != "$2:$3:$4" ]; then
+        _fail "$1 has no line '$2:$3:$4' (found: ${line:-none})"
+    fi
+}
+
+# assert_no_subid <file> <user>
+assert_no_subid() {
+    if grep -q "^$2:" "$1" 2>/dev/null; then
+        _fail "$1 still carries a range for $2: $(grep "^$2:" "$1")"
+    fi
+}
+
+# assert_subvolume <path> / assert_no_subvolume <path>
+assert_subvolume() {
+    btrfs subvolume show "$1" >/dev/null 2>&1 \
+        || _fail "$1 is not a btrfs subvolume"
+}
+assert_no_subvolume() {
+    if btrfs subvolume show "$1" >/dev/null 2>&1; then
+        _fail "$1 is a btrfs subvolume and should not be"
+    fi
+}
+
+# assert_property <path> <key> <value>: `btrfs property get` is how the box
+# reports a subvolume's own properties, and `ro` is the one a clone has to have
+# cleared. btrfs does not make a snapshot read-only (docs/notes item O measured
+# it), so asking is a real question with a real answer.
+#
+# The answer is `<key>=<value>` — `btrfs property get <path> ro` prints `ro=false`
+# and not `false` — so the key is part of what is compared. Comparing the bare
+# value asked a question the tool does not answer, and it failed on a machine that
+# had done the right thing.
+assert_property() {
+    local actual
+    actual=$(btrfs property get "$1" "$2" 2>/dev/null || true)
+    if [ "$actual" != "$2=$3" ]; then
+        _fail "$1 has $2='${actual:-unreadable}', not '$2=$3'"
+    fi
+}
+
+# assert_unit_not_active <user> <unit>: the user manager's own answer. A unit
+# that is not running is the outcome of a stop whatever order the stop and the
+# start were issued in, so this is the form of "the units were stopped before the
+# volumes moved" that a machine can report.
+#
+# A deleted user answers `unknown`, which is also not running, and that is
+# correct rather than convenient: a unit belonging to a user the machine has never
+# heard of cannot be running.
+assert_unit_not_active() {
+    local state
+    state=$(systemctl --user --machine "$1@" is-active "$2" 2>/dev/null || true)
+    [ "$state" != active ] || _fail "$2 is $state in $1's user manager"
+}
+
+# assert_snapper_config <config> <key> <value>
+assert_snapper_config() {
+    local actual
+    actual=$(snapper -c "$1" get-config 2>/dev/null | awk -F'|' -v k="$2" '
+        $1 ~ "^[[:space:]]*"k"[[:space:]]*$" {gsub(/[[:space:]]/,"",$2); print $2}')
+    if [ "$actual" != "$3" ]; then
+        _fail "snapper config $1: $2 is '$actual', not '$3'"
+    fi
+}
+
+assert_no_snapper_config() {
+    if snapper -c "$1" get-config >/dev/null 2>&1; then
+        _fail "snapper configuration $1 exists and should not"
+    fi
+}
+
+# assert_dpkg <pkg> / assert_no_dpkg <pkg>: what a converge actually installed.
+assert_dpkg() {
+    local state
+    state=$(dpkg-query -W -f='${db:Status-Status}' "$1" 2>/dev/null || true)
+    [ "$state" = installed ] || _fail "package $1 is '${state:-absent}', not installed"
+}
+assert_no_dpkg() {
+    if [ "$(dpkg-query -W -f='${db:Status-Status}' "$1" 2>/dev/null || true)" = installed ]; then
+        _fail "package $1 is installed and should not be"
+    fi
+}
+
+# ---- the value is the answer, the exit code is the tool's convention ---------
+#
+# Every helper below asks a real system tool a question whose **answer is the
+# stdout**, and the answer and the exit code disagree by design: `systemctl
+# is-enabled` prints `disabled` and exits **1**, prints `static` and exits 0, and
+# exits **4** for a unit that is not there; `dpkg-query -W` exits 1 for a package
+# that is not installed, which is exactly the case `assert_dpkg` exists to report.
+# So the substitution carries `|| true` and the *value* is compared.
+#
+# It is not a style choice. A suite runs `set -e`, and a command substitution
+# whose command exits non-zero fails the assignment — and because the tool's own
+# diagnostics are redirected into the substitution, the ERR trap fires inside the
+# subshell where they are discarded, so the suite **dies with no message at all**.
+# That is how `tests/t20-storage.sh` came to fail on a green assertion: the suite
+# reached `assert_not_enabled snapper-cleanup.timer`, the assertion *passed*, and
+# the shell died on the exit code of the very command that answered it.
+
+# assert_enabled <unit> / assert_not_enabled <unit>
+assert_enabled() {
+    local state
+    state=$(systemctl is-enabled "$1" 2>/dev/null || true)
+    [ "$state" = enabled ] || _fail "unit $1 is '$state', not enabled"
+}
+assert_not_enabled() {
+    local state
+    state=$(systemctl is-enabled "$1" 2>/dev/null || true)
+    case "$state" in
+        enabled | enabled-runtime) _fail "unit $1 is $state and should not be" ;;
+    esac
+}
+assert_active() {
+    local state
+    state=$(systemctl is-active "$1" 2>/dev/null || true)
+    [ "$state" = active ] || _fail "unit $1 is '$state', not active"
+}
+assert_inactive() {
+    local state
+    state=$(systemctl is-active "$1" 2>/dev/null || true)
+    [ "$state" != active ] || _fail "unit $1 is active and should not be"
+}
+
+# assert_linger <user>: loginctl, which only a real systemd answers.
+assert_linger() {
+    local state
+    state=$(loginctl show-user "$1" -p Linger --value 2>/dev/null || true)
+    [ "$state" = yes ] || _fail "linger for $1 is '$state', not yes"
+}
+assert_no_linger() {
+    local state
+    state=$(loginctl show-user "$1" -p Linger --value 2>/dev/null || true)
+    [ "$state" != yes ] || _fail "linger for $1 is enabled and should not be"
+}
+
+# assert_supplementary_group <user> <group> / assert_no_supplementary_group
+assert_supplementary_group() {
+    id -nG "$1" | tr ' ' '\n' | grep -qx "$2" \
+        || _fail "$1 is not a member of $2 (members: $(id -nG "$1"))"
+}
+assert_no_supplementary_group() {
+    if id -nG "$1" | tr ' ' '\n' | grep -qx "$2"; then
+        _fail "$1 is a member of $2 and should not be"
+    fi
+}
+
+# hide_sysctl <path>: make a knob unreadable, so "could not read" is proven.
+#
+# The staged prefix holds a plain file, so removing it is safe. Under a real root
+# it is a live sysfs knob, and unlinking it is not a thing to attempt as root:
+# the stand-in could do it because the file was never a knob.
+#
+# A bind mount of a **directory** is what makes the read fail. A bind of
+# /dev/null does not: reading it returns the empty string rather than raising,
+# and an empty value is not "1" either, so the caller would report the knob as
+# re-enabled instead of unreadable — a different diagnostic, and the wrong one.
+# Reading a directory raises IsADirectoryError, which is an OSError, which is
+# the branch this is here to reach.
+#
+# **The empty directory is bound over the directory that holds the knob, not over
+# the knob.** Both other shapes are refused by this kernel, and one of them is
+# refused in a way that looks like a pass:
+#
+# - a new entry inside a knob's own directory: `/proc/sys/net/ipv6/conf/all` is
+#   `0555` and does not take one — `mkdir` there answers `No such file or
+#   directory`, and the directory a bind mount needs never comes into being;
+# - a directory bound onto the knob file itself: `mount: <knob>: mount point is
+#   not a directory` — the source and the mountpoint must agree in kind.
+#
+# So the empty directory comes from the suite's own scratch and is bound over
+# `dirname <knob>`; `cat <knob>` then answers `No such file or directory`, which
+# is the ENOENT `weedr service list` reports as "could not read".
+hide_sysctl() {
+    if [ -n "${GUARDEN_PREFIX:-}" ] && [[ "$1" == "$GUARDEN_PREFIX"/* ]]; then
+        rm -f "$1"
+        return 0
+    fi
+    local dir knob_dir
+    knob_dir=$(dirname "$1")
+    dir=$(mktemp -d)
+    if mount --bind "$dir" "$knob_dir" 2>/dev/null; then
+        rmdir "$dir" 2>/dev/null || true
+        return 0
+    fi
+    rmdir "$dir" 2>/dev/null || true
+    return 1
+}
+
+# unhide_sysctl <path>: undo hide_sysctl, for the same path it was given.
+unhide_sysctl() {
+    umount "$(dirname "$1")" 2>/dev/null || true
 }
 
 # assert_json <dotted.path> <expected>: one field out of the captured stdout.
@@ -426,5 +704,179 @@ assert_json_missing() {
     if python3 "$GUARDEN_ROOT/tests/jsonfield.py" "$path" <"$GUARDEN_FIXTURES/target.json" \
         >/dev/null 2>&1; then
         _fail "$path is a field of this document, and should not be"
+    fi
+}
+
+# assert_immutable <path> / assert_mutable <path>: `chattr +i` is a filesystem
+# attribute, so `lsattr` is what reports one. This is the whole replacement for
+# reading `chattr +i <path>` out of a call log: the log recorded the intent, and
+# the attribute is the outcome.
+#
+# The `i` flag is one character in `lsattr`'s output among others, so the first
+# field is split and matched exactly rather than grepped for a substring — a
+# substring test would read a neighbouring flag as the immutable one.
+assert_immutable() {
+    local flags
+    flags=$(lsattr -d "$1" 2>/dev/null | awk '{print $1}')
+    case "$flags" in
+        *i*) return 0 ;;
+    esac
+    _fail "$1 is not immutable (lsattr: ${flags:-unreadable})"
+}
+
+assert_mutable() {
+    local flags
+    flags=$(lsattr -d "$1" 2>/dev/null | awk '{print $1}')
+    case "$flags" in
+        *i*) _fail "$1 is immutable and should not be" ;;
+        *) return 0 ;;
+    esac
+}
+
+# ---- snapshot state, read the way spec 8.2 says to read it --------------------
+#
+# `snapper --machine-readable json -c <config> list` renders a snapshot's
+# `userdata` as an **object**, so `important` and `guarden` are keys of it. These
+# are the replacements for the call-log assertions that asked a stand-in what it
+# had been asked to write: a mark is asserted by reading the mark off the
+# snapshot, and an unmark by reading its absence. Nothing here parses CSV, because
+# the CSV rendering joins the whole map into one comma-joined quoted field and a
+# consumer of it ends up string-matching a value it was told was structured.
+#
+# `--machine-readable` is a **global** option on snapper 0.10.6 and goes before
+# the command. This helper and `guarden/snapper.py` are the only two readers in
+# the tree, and they were written the same wrong way for the same reason: the
+# retired `snapper` stand-in accepted the flag after `list` because the code used
+# it, and answered a flat list because the code expected one. The real tool
+# refuses the flag in that position and answers an object keyed by the
+# configuration's name, so `tests/snapfield.py` is where both are handled.
+#
+# Every one of these takes the configuration's own name. A service with two
+# state volumes has a different number in each, so the name is never derived
+# from a service name and a volume name in a test.
+
+# _snapentry <config>: the JSON document for one configuration, kept in a file
+# so the assertions below read one list rather than re-asking `snapper` for it.
+# Every caller refreshes it: a configuration's snapshot list changes under these
+# tests on purpose, and a cached copy from before a `snapper create` would be a
+# lie rather than a cache.
+_snapentry() {
+    mkdir -p "$GUARDEN_FIXTURES"
+    if ! snapper --machine-readable json -c "$1" list \
+        >"$GUARDEN_FIXTURES/snapper-$1.json" 2>/dev/null; then
+        : >"$GUARDEN_FIXTURES/snapper-$1.json"
+        return 1
+    fi
+    return 0
+}
+
+# _snapfield <config> <number> <field>: the value, or an empty string when the
+# snapshot does not carry it. A missing field is an answer — "the mark is not
+# there" — and a missing *snapshot* is a different claim, handled by
+# assert_no_snapshot.
+_snapfield() {
+    _snapentry "$1" || true
+    python3 "$GUARDEN_ROOT/tests/snapfield.py" "$1" "$2" "$3" \
+        <"$GUARDEN_FIXTURES/snapper-$1.json" 2>/dev/null || true
+}
+
+# assert_snapshot_marked <config> <number> <yes|no>: `important` read as a key
+# of the userdata object.
+#
+# **`yes` is exact and `no` means *not marked*, and those are not the same
+# question.** `yes` is the value snapper's number cleaner counts, so it has to be
+# the literal key. `no` is the absence of that value: the key unset, or set to
+# `no`. The two are different on disk and the same to every consumer — the
+# cleaner tests for `yes` and nothing else — and the distinction is the machine's:
+#
+#   - A snapshot `weedr service snapshot` took carries **no userdata at all**.
+#     The mutator writes the cleanup tag and the description and stops, so snapper
+#     renders `userdata: null` and `important` is unset rather than `no`. The
+#     snapshot is unmarked, and it is unmarked by never having been marked.
+#   - A snapshot `weedr pin sync` unmarked carries `important=no`, because the
+#     reconciler's `modify` wrote it (`snapper unmark` in `guarden/snapper.py`).
+#
+# A helper that demanded the literal `no` in both places was asserting a value
+# snapper only writes when something asks for it, and it read as a defect in the
+# mutator. `no` also checks the snapshot is there at all: "unmarked" said of a
+# number snapper never issued would be vacuously true, and the whole point of the
+# assertion is that a snapshot which **is** wanted carries no mark.
+assert_snapshot_marked() {
+    local found number
+    if [ "$3" = no ]; then
+        number=$(_snapfield "$1" "$2" number)
+        if [ -z "$number" ]; then
+            _fail "configuration $1 has no snapshot numbered $2, so 'unmarked' would say nothing"
+        fi
+        found=$(_snapfield "$1" "$2" important)
+        if [ "$found" = yes ]; then
+            _fail "snapshot $1:$2 is marked important=yes and should not be"
+        fi
+        return 0
+    fi
+    found=$(_snapfield "$1" "$2" important)
+    if [ "$found" != "$3" ]; then
+        _fail "snapshot $1:$2 has important='${found:-unset}', not '$3'"
+    fi
+}
+
+# assert_snapshot_userdata <config> <number> <key> <expected>: the provenance
+# key, `guarden=`, which is what says which service wants a snapshot.
+assert_snapshot_userdata() {
+    local found
+    found=$(_snapfield "$1" "$2" "$3")
+    if [ "$found" != "$4" ]; then
+        _fail "snapshot $1:$2 has $3='${found:-unset}', not '$4'"
+    fi
+}
+
+# assert_snapshot_lacks_userdata <config> <number> <key>: no such key at all.
+assert_snapshot_lacks_userdata() {
+    local found
+    found=$(_snapfield "$1" "$2" "$3")
+    if [ -n "$found" ]; then
+        _fail "snapshot $1:$2 has $3='$found' and should not"
+    fi
+}
+
+# assert_snapshot_tag <config> <number> <cleanup-algorithm>: which of the two
+# kinds of snapshot this is. A routine one is `timeline` and lives by the ladder;
+# an on-demand one is `number` and is what the marks protect.
+assert_snapshot_tag() {
+    local found
+    found=$(_snapfield "$1" "$2" cleanup)
+    if [ "$found" != "$3" ]; then
+        _fail "snapshot $1:$2 is tagged $found, not $3"
+    fi
+}
+
+# assert_snapshot_count <config> <n>: how many snapshots the configuration
+# holds, which is what "a routine snapshot was taken" and "no bulk volume was
+# snapshotted" both reduce to.
+assert_snapshot_count() {
+    local found
+    found=$(_snapfield "$1" - count)
+    if [ "$found" != "$2" ]; then
+        _fail "configuration $1 holds ${found:-?} snapshots, not $2"
+    fi
+}
+
+# assert_newest_snapshot <config> <number>: the newest number snapper issued,
+# which is what a fork clones and what the registry records.
+assert_newest_snapshot() {
+    local found
+    found=$(_snapfield "$1" - newest)
+    if [ "$found" != "$2" ]; then
+        _fail "the newest snapshot in $1 is ${found:-none}, not $2"
+    fi
+}
+
+# assert_no_snapshot <config> <number>: a number snapper has not issued. A
+# record naming one is exactly as unfindable as a flag nobody wrote down.
+assert_no_snapshot() {
+    _snapentry "$1" || true
+    if python3 "$GUARDEN_ROOT/tests/snapfield.py" "$1" "$2" number \
+        <"$GUARDEN_FIXTURES/snapper-$1.json" >/dev/null 2>&1; then
+        _fail "snapshot $1:$2 exists and should not"
     fi
 }

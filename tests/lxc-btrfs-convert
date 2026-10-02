@@ -1,0 +1,379 @@
+#!/usr/bin/env bash
+# soil-storage-convert.sh — offline ext4 → btrfs conversion + @/@var migration.
+#
+# The guarden port of .install/30-convert-btrfs.sh from the retired `next` branch.
+# Two things differ from that script and both are forced by the spec:
+#
+#   * the subvolumes are `@` and `@var`, not `@` and `@home` — spec 6.1 and
+#     src/guarden/hostprep.py `_btrfs_layout_holds()`, which reads
+#     `btrfs subvolume list /` and requires exactly those two names;
+#   * the state directory is `/var/lib/guarden/soil/` (spec 6.1's filesystem
+#     table: "soil/ — the btrfs convert state and the reboot marker", 0750
+#     root:guarden), not a private /var/lib tree of its own.
+#
+# /home is NOT split off. hostprep.HOST_CONFIGURATIONS maps snapper config
+# `home` → "/home", and snapper snapshots a subvolume, so /home must be a btrfs
+# subvolume for `snapper -c home create-config -f btrfs -p /home` to work —
+# see the NOTES section at the bottom.
+#
+# Usage: soil-storage-convert.sh [--check|--apply] [--yes]
+set -euo pipefail
+
+# --- layout, per spec 6.1 and hostprep.py ------------------------------------
+STATE_DIR="/var/lib/guarden/soil"
+STATE_FILE="${STATE_DIR}/state"
+ROOT_MOUNT="/"
+ROOT_SUBVOL="@"
+VAR_MOUNT="/var"
+VAR_SUBVOL="@var"
+MOUNT_OPTS="subvol=%s,noatime,compress=zstd"
+FSTAB_TAG="guarden-storage"
+REBOOT_MARKER="${STATE_DIR}/reboot-required"
+ASSUME_YES=0
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DRACUT_MODULE_SRC="${SCRIPT_DIR}/dracut/99guarden-convert"
+DRACUT_MODULE_DST="/usr/lib/dracut/modules.d/99guarden-convert"
+# /var goes into @var, /home stays a plain directory inside @.
+RSYNC_EXCLUDES=(
+  --exclude=/proc/ --exclude=/sys/ --exclude=/dev/ --exclude=/run/
+  --exclude=/tmp/ --exclude=/mnt/ --exclude=/media/
+  --exclude=/var/ --exclude=/lost+found/
+  --exclude=/ext2_saved/ --exclude=/ext3_saved/ --exclude=/ext4_saved/
+  '--exclude=/btrfs_convert_backup*'
+)
+
+usage() {
+  printf 'usage: soil-storage-convert.sh [--check|--apply] [--yes]\n'
+  printf '  --check  read-only; exit 0 only when / is btrfs on @ and /var on @var\n'
+  printf '  --apply  converge one step; exit 75 when a reboot is required (re-run after)\n'
+  printf '  --yes    skip the destructive-conversion confirmation\n'
+}
+
+log() { printf '[soil-storage] %s\n' "$*"; }
+err() { printf '[soil-storage] %s\n' "$*" >&2; }
+
+MODE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help) usage; exit 0 ;;
+  --check | --apply) MODE="$1" ;;
+  --yes | -y) ASSUME_YES=1 ;;
+  *) usage >&2; exit 2 ;;
+  esac
+  shift
+done
+[[ -n "$MODE" ]] || { usage >&2; exit 2; }
+
+# --- filesystem helpers ------------------------------------------------------
+root_fstype() { findmnt -n -o FSTYPE --target / 2>/dev/null || stat -f -c %T /; }
+root_device() {
+  local d
+  d="$(findmnt -n -o SOURCE --target / 2>/dev/null || true)"
+  printf '%s' "${d%%[*}"
+}
+root_uuid() { findmnt -n -o UUID --target / 2>/dev/null || true; }
+mount_opts() { findmnt -n -o OPTIONS --target "$1" 2>/dev/null || true; }
+is_mountpoint() { findmnt -n --mountpoint "$1" >/dev/null 2>&1; }
+opt_has_subvol() { [[ ",$1," == *",subvol=/$2,"* || ",$1," == *",subvol=$2,"* ]]; }
+root_disk() {
+  lsblk -sno NAME,TYPE "$(root_device)" 2>/dev/null | awk '$2=="disk"{print "/dev/"$1; exit}'
+}
+
+require_root() {
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || { err "needs root"; exit 1; }
+}
+
+state_get() { [[ -r "$STATE_FILE" ]] && cat "$STATE_FILE" 2>/dev/null || printf 'none'; }
+state_set() {
+  mkdir -p "$STATE_DIR"
+  chown root:guarden "$STATE_DIR" 2>/dev/null || true
+  chmod 0750 "$STATE_DIR" 2>/dev/null || true
+  printf '%s\n' "$1" >"$STATE_FILE"
+}
+
+# The reboot marker is what spec/sysadmin.md means by "reports the reboot marker
+# and names it": --check prints the path whenever the marker is present.
+reboot_marker_set() { mkdir -p "$STATE_DIR"; : >"$REBOOT_MARKER"; }
+reboot_marker_clear() { rm -f "$REBOOT_MARKER"; }
+reboot_marker() { [[ -e "$REBOOT_MARKER" ]] && printf '%s' "$REBOOT_MARKER" || printf ''; }
+
+check_mount() { # <mount> <subvol>
+  local opts
+  is_mountpoint "$1" || { err "$1: not a separate mountpoint (want subvol $2)"; return 1; }
+  opts="$(mount_opts "$1")"
+  opt_has_subvol "$opts" "$2" && { log "$1: btrfs subvol $2"; return 0; }
+  err "$1: mounted but not subvol $2 (got '${opts}')"
+  return 1
+}
+
+# This is the same predicate hostprep._btrfs_layout_holds() applies:
+#   h.run("btrfs", "subvolume", "list", "/")  then  "@" in layout and "@var" in layout
+verify_layout() {
+  local rc=0
+  [[ "$(root_fstype)" == btrfs ]] || { err "root filesystem is '$(root_fstype)', not btrfs"; return 1; }
+  check_mount "$ROOT_MOUNT" "$ROOT_SUBVOL" || rc=1
+  check_mount "$VAR_MOUNT" "$VAR_SUBVOL" || rc=1
+  return "$rc"
+}
+
+# --- stage 1: schedule the offline conversion --------------------------------
+space_check() {
+  local used="" avail=""
+  read -r used avail < <(df -Pk / | awk 'NR==2 {print $3, $4}') || true
+  [[ "$avail" =~ ^[0-9]+$ ]] || { err "cannot parse df for /"; return 0; }
+  ((avail >= 1048576)) || {
+    err "not enough free space for btrfs-convert: ${avail}KB free (<1GB)"
+    return 1
+  }
+  ((used == 0 || avail * 10 >= used)) ||
+    err "low free space (${avail}KB free vs ${used}KB used); conversion may fail"
+  log "free space: ${avail}KB"
+}
+
+confirm_conversion() {
+  local dev="$1" answer=""
+  ((ASSUME_YES == 1)) && return 0
+  [[ -t 0 ]] || { err "refusing destructive conversion without --yes (non-interactive)"; return 1; }
+  err "the next boot converts ${dev} ($(root_fstype)) to btrfs OFFLINE in the initramfs,"
+  err "then reboots again to migrate into @/@var; the ext4 backup is kept until verified."
+  read -r -p "[soil-storage] type 'convert' to continue: " answer || true
+  [[ "$answer" == "convert" ]]
+}
+
+install_convert_hook() {
+  local f
+  command -v dracut >/dev/null 2>&1 || {
+    err "automated conversion needs dracut; other initramfs generators convert"
+    err "offline from a rescue environment instead"
+    return 1
+  }
+  if ! command -v btrfs-convert >/dev/null 2>&1; then
+    log "installing btrfs-progs..."
+    apt-get update && apt-get install -y btrfs-progs
+  fi
+  command -v btrfs-convert >/dev/null 2>&1 || { err "btrfs-convert missing"; return 1; }
+  log "installing dracut module to ${DRACUT_MODULE_DST}..."
+  install -d -m 0755 "$DRACUT_MODULE_DST"
+  for f in module-setup.sh guarden-convert-hook.sh; do
+    install -m 0755 "${DRACUT_MODULE_SRC}/${f}" "${DRACUT_MODULE_DST}/${f}"
+  done
+  log "rebuilding the initramfs with dracut (embeds the one-shot conversion hook)..."
+  # dracut only: update-initramfs succeeds without embedding the module, and the
+  # conversion then silently never happens.
+  dracut -f || { err "could not rebuild the initramfs with dracut"; return 1; }
+  log "offline conversion scheduled: the hook runs before root mount on next boot"
+}
+
+remove_convert_hook() {
+  [[ -d "$DRACUT_MODULE_DST" ]] || return 0
+  log "removing the dracut conversion module..."
+  rm -rf "$DRACUT_MODULE_DST"
+  local out
+  if command -v dracut >/dev/null 2>&1; then
+    out="$(dracut -f 2>&1)" || err "could not rebuild the initramfs: ${out//$'\n'/; }"
+  fi
+}
+
+schedule_conversion() {
+  local dev="$1"
+  space_check || return 1
+  confirm_conversion "$dev" || return 1
+  # State must say "converting" BEFORE the initramfs is rebuilt: the dracut
+  # module bakes the enable marker only while the state file says converting.
+  state_set converting
+  install_convert_hook || return 1
+  reboot_marker_set
+  log "conversion scheduled; a reboot is required (the initramfs hook converts offline)"
+  exit 75
+}
+
+# --- stage 2: migrate flat btrfs → @/@var -----------------------------------
+TOP="" CHROOT=""
+cleanup_mounts() {
+  if [[ -n "$CHROOT" ]]; then
+    unmount_binds "$CHROOT"
+    umount "$CHROOT" 2>/dev/null || true
+    rmdir "$CHROOT" 2>/dev/null || true
+    CHROOT=""
+  fi
+  if [[ -n "$TOP" ]]; then
+    umount "$TOP" 2>/dev/null || true
+    rmdir "$TOP" 2>/dev/null || true
+    TOP=""
+  fi
+}
+trap cleanup_mounts EXIT
+
+unmount_binds() {
+  local rootfs="$1" d
+  for d in run proc sys dev boot/efi boot; do umount "${rootfs}/${d}" 2>/dev/null || true; done
+}
+
+try_mount() {
+  local what="$1" dir="$2" out
+  shift 2
+  if out="$(mount "$@" "$dir" 2>&1)"; then return 0; fi
+  err "cannot mount ${what}: ${out//$'\n'/; }"
+  return 1
+}
+
+migrate_subvolumes() {
+  local dev uuid disk name d fstab_new
+  dev="$(root_device)"
+  [[ -n "$dev" ]] || { err "cannot determine root device"; return 1; }
+
+  TOP="$(mktemp -d /tmp/guarden-btrfs-top.XXXXXX)"
+  log "mounting btrfs top-level at ${TOP}..."
+  try_mount "${dev} top-level" "$TOP" -o subvolid=5 "$dev" || return 1
+
+  for name in "$ROOT_SUBVOL" "$VAR_SUBVOL"; do
+    if btrfs subvolume show "${TOP}/${name}" >/dev/null 2>&1; then
+      log "subvol ${name} already present"
+    elif [[ -e "${TOP}/${name}" ]]; then
+      err "${TOP}/${name} exists but is not a subvolume; move it aside manually"
+      return 1
+    else
+      log "creating subvol ${name}..."
+      btrfs subvolume create "${TOP}/${name}" || return 1
+    fi
+  done
+
+  log "copying / into @ (virtual dirs and /var excluded)..."
+  rsync -aAXHS --delete --numeric-ids --one-file-system "${RSYNC_EXCLUDES[@]}" \
+    / "${TOP}/${ROOT_SUBVOL}/" || { err "rsync / → @ failed"; return 1; }
+  log "copying /var into @var..."
+  rsync -aAXHS --delete --numeric-ids --one-file-system --exclude=/lost+found/ \
+    /var/ "${TOP}/${VAR_SUBVOL}/" || { err "rsync /var → @var failed"; return 1; }
+
+  # The excludes never create these on the receiver; /var is now a mountpoint.
+  for d in dev proc sys run tmp mnt media var; do mkdir -p "${TOP}/${ROOT_SUBVOL}/${d}"; done
+
+  uuid="$(root_uuid)"
+  [[ -n "$uuid" ]] || uuid="$dev"
+  log "rewriting fstab in @ (keeping /boot and /boot/efi entries)..."
+  fstab_new="${TOP}/${ROOT_SUBVOL}/etc/fstab"
+  awk '/^[[:space:]]*#/ {print; next} $2=="/" || $2=="/var" {next} {print}' \
+    "$fstab_new" >"${fstab_new}.new"
+  {
+    printf 'UUID=%s / btrfs %s 0 0 # %s\n' "$uuid" "$(printf "$MOUNT_OPTS" "$ROOT_SUBVOL")" "$FSTAB_TAG"
+    printf 'UUID=%s /var btrfs %s 0 0 # %s\n' "$uuid" "$(printf "$MOUNT_OPTS" "$VAR_SUBVOL")" "$FSTAB_TAG"
+  } >>"${fstab_new}.new"
+  mv "${fstab_new}.new" "$fstab_new"
+
+  log "regenerating GRUB from @..."
+  # chroot into a real mount of @ (not a directory of the top-level mount):
+  # grub-probe resolves the device for / through the mount table.
+  CHROOT="$(mktemp -d /tmp/guarden-btrfs-chroot.XXXXXX)"
+  try_mount "subvol ${ROOT_SUBVOL} at ${CHROOT}" "$CHROOT" -o "$(printf "$MOUNT_OPTS" "$ROOT_SUBVOL")" "$dev" ||
+    return 1
+  for d in dev sys proc run; do try_mount "/${d} → ${CHROOT}/${d}" "${CHROOT}/${d}" --bind "/${d}" || true; done
+  is_mountpoint /boot && { try_mount "/boot → ${CHROOT}/boot" "${CHROOT}/boot" --bind /boot || true; }
+  is_mountpoint /boot/efi && { try_mount "/boot/efi → ${CHROOT}/boot/efi" "${CHROOT}/boot/efi" --bind /boot/efi || true; }
+
+  local rc=0
+  chroot "$CHROOT" update-grub || rc=1
+  # Reinstall only when /boot lives on the converted root: a BIOS core.img embeds
+  # an ext4 driver and must be rebuilt to read btrfs; a separate /boot partition
+  # is untouched and keeps working.
+  if ((rc == 0)) && ! is_mountpoint /boot; then
+    disk="$(root_disk)"
+    if [[ -z "$disk" ]]; then
+      err "cannot determine whole disk for grub-install"
+      rc=1
+    elif [[ -d /sys/firmware/efi ]]; then
+      log "grub-install --efi-directory=/boot/efi..."
+      chroot "$CHROOT" grub-install --efi-directory=/boot/efi || rc=1
+    else
+      log "grub-install ${disk}..."
+      chroot "$CHROOT" grub-install "$disk" || rc=1
+    fi
+  fi
+  ((rc == 0)) || { err "GRUB regeneration failed inside @"; return 1; }
+
+  # The running system is still the top-level subvolume, so after reboot the
+  # script reads @var's copy of /var/lib/guarden/soil: seed the state there too.
+  mkdir -p "${TOP}/${VAR_SUBVOL}/lib/guarden/soil"
+  printf 'migrated\n' >"${TOP}/${VAR_SUBVOL}/lib/guarden/soil/state"
+  : >"${TOP}/${VAR_SUBVOL}/lib/guarden/soil/reboot-required"
+  state_set migrated
+  reboot_marker_set
+  log "migration staged; a reboot is required to boot from subvol ${ROOT_SUBVOL}"
+  exit 75
+}
+
+# --- stage 3: verify + drop the conversion backup ----------------------------
+cleanup_backup() {
+  local dev top name out
+  dev="$(root_device)"
+  top="$(mktemp -d /tmp/guarden-btrfs-top.XXXXXX)"
+  if out="$(mount -o subvolid=5 "$dev" "$top" 2>&1)"; then
+    for name in ext2_saved ext3_saved ext4_saved; do
+      if btrfs subvolume show "${top}/${name}" >/dev/null 2>&1; then
+        log "deleting conversion backup subvol ${name}..."
+        btrfs subvolume delete "${top}/${name}" || err "could not delete ${name}"
+      fi
+    done
+    rm -f "${top}"/btrfs_convert_backup* 2>/dev/null || true
+    umount "$top" || err "could not unmount ${top}"
+  else
+    err "could not mount top-level to drop the conversion backup: ${out//$'\n'/; }"
+  fi
+  rmdir "$top" 2>/dev/null || true
+}
+
+# --- dispatch ----------------------------------------------------------------
+require_root
+state="$(state_get)"
+log "state: ${state}; root: $(root_fstype) on $(root_device)"
+
+if [[ "$MODE" == --check ]]; then
+  marker="$(reboot_marker)"
+  [[ -n "$marker" ]] && log "reboot marker present: ${marker}"
+  if verify_layout && [[ "$state" == done ]]; then
+    log "btrfs @/@var layout is in place"
+    exit 0
+  fi
+  log "conversion needed: this script --apply [--yes]"
+  exit 1
+fi
+
+case "$state" in
+done)
+  verify_layout && exit 0
+  err "state=done but the layout does not verify; manual inspection needed"
+  exit 1
+  ;;
+migrated)
+  verify_layout || { err "state=migrated but layout does not verify; reboot and re-run"; exit 1; }
+  cleanup_backup
+  remove_convert_hook
+  state_set done
+  reboot_marker_clear
+  log "btrfs conversion complete (backup removed, initramfs hook removed)"
+  exit 0
+  ;;
+converting | none)
+  case "$(root_fstype)" in
+  btrfs)
+    if verify_layout; then
+      cleanup_backup
+      state_set done
+      reboot_marker_clear
+      log "btrfs @/@var layout already present"
+      exit 0
+    fi
+    state_set converting
+    migrate_subvolumes || exit 1 # exits 75 on success
+    ;;
+  ext4) schedule_conversion "$(root_device)" || exit 1 ;; # exits 75 on success
+  *)
+    err "unsupported root filesystem '$(root_fstype)' (want ext4 or btrfs)"
+    exit 1
+    ;;
+  esac
+  ;;
+*)
+  err "unknown state '${state}' in ${STATE_FILE}"
+  exit 1
+  ;;
+esac

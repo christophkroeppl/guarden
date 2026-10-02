@@ -16,8 +16,8 @@ assert_verbs furrow deploy preview queue status
 assert_verbs hose poke drop check
 assert_verbs stakes pin unpin list query
 
-assert_subcommands weedr service ingest add remove purge start stop restart list status snapshot fork rollback build
-assert_subcommands weedr secret set list
+assert_subcommands weedr service ingest add remove purge gate start stop restart list status snapshot fork rollback build immutable mutable
+assert_subcommands weedr secret set list materialise
 assert_subcommands weedr port list open close
 assert_subcommands weedr pin sync
 assert_subcommands weedr module list add remove
@@ -55,10 +55,12 @@ assert_file_has "$GUARDEN_ROOT/pyproject.toml" 'stakes = "guarden.stakes:main"'
 
 # A verb with no body is not a success, and it says so in one line naming the
 # verb. A test that could not tell the two apart would be worth nothing.
-run weedr service start myapp-production
+# `start` is not the verb here any more: ticket 60 gave it a body, because the
+# gate it re-evaluates is the reason a start is a mutator verb.
+run weedr service build myapp-production
 assert_exit 1
 assert_one_diagnostic "error:"
-assert_stderr_has "weedr service start is not implemented"
+assert_stderr_has "weedr service build is not implemented"
 assert_stdout_empty
 
 # A rejected input is exit 2, and names the thing it is about.
@@ -69,7 +71,15 @@ assert_stdout_empty
 
 # `hose` has no project argument at all: an invocation carrying one is exit 2,
 # because a client-supplied --project would beat the forced command's.
+#
+# The exit code and the diagnostic are the claim, and they are the whole of it.
+# The assertion that used to sit here — that the rejected call reached no tool —
+# was a call-log assertion, and **it was dropped rather than ported**: nothing on
+# the box records which programs a rejected `hose` invocation reached, and
+# "a program did not call X" is not a fact about a machine. The parser refuses
+# the argument before it resolves any path, so there is no state to read back,
+# and inventing a probe to preserve the claim would be a stand-in of the other
+# kind.
 run hose poke main 9f2c1ab --project other
 assert_exit 2
 assert_stderr_has "--project"
-assert_no_calls

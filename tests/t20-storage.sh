@@ -1,165 +1,242 @@
 #!/usr/bin/env bash
-# soil storage: the layout it verifies, the directories it creates, the
-# configurations it converges, and the two it must not touch.
+# soil storage: the directories it creates, the configurations it converges, and
+# the two it must not touch.
 #
 # The skip rule is the part worth pinning (spec 8.1). A configuration's name is
 # opaque, nothing parses it, and there are exactly three cases: a service's, the
-# host's own two, and everything else — which is skipped with a warning naming
-# it, because a rule that skipped whatever it did not recognise would silently
-# drop a configuration the operator owns.
+# host's own, and everything else — which is skipped with a warning naming it,
+# because a rule that skipped whatever it did not recognise would silently drop a
+# configuration the operator owns.
+#
+# The host's own layout — the `@` and `@var` subvolumes and `/boot` on ext4 — is
+# the harness's to build (tests/lxc.sh) and not this file's to stand in for. A
+# stand-in for `btrfs subvolume list` proves only that the phase asked the
+# question, not that the box has the answer, so those items are asserted by the
+# machine's own state instead: a converge that ran on this layout and a `--check`
+# that finds nothing left to do can only both be true of a host that has it.
 
 . "$(dirname "$0")/lib.sh"
-scratch_host
 
-# The distribution ships its snapper cleanup timer enabled, and it overlaps the
-# reconciler for the same reason guarden replaces it: on its own schedule it is
-# the same overlap by another name.
-mkdir -p "$GUARDEN_FIXTURES/systemd"
-say "$GUARDEN_FIXTURES/systemd/snapper-cleanup.timer.enabled" "enabled"
-say "$GUARDEN_FIXTURES/systemd/snapper-cleanup.service.enabled" "enabled"
+# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
+# directory on PATH, and this file's whole subject is what the machine holds: the
+# fake `install` creates a directory and applies the mode but *cannot* set the
+# owner, so a converge run under it leaves `/var/lib/guarden` root:root, and the
+# mode is already right, which is the combination this suite exists to catch.
+# `.venv/bin` is kept first because it is the checkout's interpreter and not a
+# stand-in for anything.
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# A host that has not been converted has no @ and no @var, and soil verifies
-# that rather than converting it.
-seed "$GUARDEN_FIXTURES/btrfs-subvolumes" "ID 256 gen 42 top level 5 path @"
+export GUARDEN_PREFIX=/
+
+# `soil install` creates the group and is not this file's phase. It is load-bearing
+# rather than tidiness: the registry and every `overrides.toml` are root:guarden
+# and the unprivileged programs read them through it, so a converge told to hand a
+# directory to a group that does not exist is reporting a missing precondition
+# rather than testing the phase. The probe's own complaint goes to stderr and is
+# silenced: a suite that says out loud that it had to create a precondition is
+# noise in a log somebody reads for failures.
+if ! getent group guarden >/dev/null 2>&1; then
+    groupadd --system guarden
+fi
+
 run soil storage --check
 assert_exit 1
-assert_stderr_has "drift: btrfs with the @ and @var subvolumes"
+assert_stderr_has "drift:"
 
-# A converted host does, and /boot stays on ext4 so the next boot finds a
-# kernel.
-seed "$GUARDEN_FIXTURES/btrfs-subvolumes" \
-    "ID 256 gen 42 top level 5 path @" \
-    "ID 257 gen 42 top level 5 path @var"
 run soil storage --apply
 assert_exit 0
-assert_called "snapper -c root create-config -f btrfs -p /"
-assert_called "snapper -c home create-config -f btrfs -p /home"
 
 # Every mode is one spec 2.1 gives, and the two that were wrong there are the
 # ones a converge has to get right: `queue/` and `stakes/` are 0770 because
 # `furrow` enqueues and `stakes` creates pin files, and 0750's group bits are
-# r-x.
-assert_called "install -d -m 0750 -o root -g guarden $GUARDEN_HOST/var/lib/guarden"
-assert_called "install -d -m 0711 -o root -g root $GUARDEN_HOST/var/lib/guarden/services"
-assert_called "install -d -m 0770 -o root -g guarden $GUARDEN_HOST/var/lib/guarden/queue"
-assert_called "install -d -m 0770 -o root -g guarden $GUARDEN_HOST/var/lib/guarden/stakes"
-assert_called "install -d -m 0755 -o root -g root $GUARDEN_HOST/var/lib/guarden/staging"
-assert_called "install -d -m 0750 -o root -g guarden $GUARDEN_HOST/var/lib/guarden/soil"
-
-# /boot sharing the filesystem that becomes btrfs is how a conversion leaves a
-# box with no kernel, so it is checked and never silently assumed.
-seed "$GUARDEN_FIXTURES/boot-fstype" "btrfs"
-run soil storage --check
-assert_exit 1
-assert_stderr_has "drift: /boot is on ext4"
-seed "$GUARDEN_FIXTURES/boot-fstype" "ext4"
+# r-x. The owner is asserted too, which the fast harness could not do and the
+# machine can: `root:guarden` on the registry is what makes it readable by the
+# unprivileged programs, and `root:root` on `services/` is what keeps a listing
+# from leaking a workload.
+assert_mode /var/lib/guarden 0750
+assert_owner /var/lib/guarden root:guarden
+assert_mode /var/lib/guarden/services 0711
+assert_owner /var/lib/guarden/services root:root
+assert_mode /var/lib/guarden/queue 0770
+assert_owner /var/lib/guarden/queue root:guarden
+assert_mode /var/lib/guarden/stakes 0770
+assert_owner /var/lib/guarden/stakes root:guarden
+assert_mode /var/lib/guarden/staging 0755
+assert_owner /var/lib/guarden/staging root:root
+assert_mode /var/lib/guarden/soil 0750
+assert_owner /var/lib/guarden/soil root:guarden
 
 # The package hook snapshots root before every transaction, and the conversion's
 # state and reboot marker have somewhere to live.
-assert_file_has "$(host etc/apt/apt.conf.d/80guarden-snapper)" "DPkg::Pre-Invoke"
-assert_file_has "$(host etc/apt/apt.conf.d/80guarden-snapper)" "snapper -c root create"
-assert_file_exists "$(host var/lib/guarden/soil)"
+assert_file_has /etc/apt/apt.conf.d/80guarden-snapper "DPkg::Pre-Invoke"
+assert_file_has /etc/apt/apt.conf.d/80guarden-snapper "snapper -c root create"
+assert_file_exists /var/lib/guarden/soil
 
 # The distribution's packaged cleanup timer is disabled and guarden's own oneshot
-# replaces it, because snapper takes no lock that `snapper modify` participates
-# in and its cleaner reuses one reference to the snapshot list across all three
+# replaces it, because snapper takes no lock that `snapper modify` participates in
+# and its cleaner reuses one reference to the snapshot list across all three
 # passes: a mark written during a running cleanup is lost silently.
-assert_called "systemctl disable --now snapper-cleanup.timer"
-assert_called "systemctl disable --now snapper-cleanup.service"
-assert_file_has "$(host etc/systemd/system/guarden-snapper-cleanup.service)" \
+#
+# snapper is asserted installed first, because "the distribution's cleaner is not
+# enabled" is otherwise true of a box that has no distribution's cleaner at all.
+assert_dpkg snapper
+assert_not_enabled snapper-cleanup.timer
+assert_not_enabled snapper-cleanup.service
+assert_file_exists /etc/systemd/system/guarden-snapper-cleanup.timer
+assert_file_has /etc/systemd/system/guarden-snapper-cleanup.service \
     "/run/guarden/locks/snapshots.lock"
-assert_file_has "$(host etc/systemd/system/guarden-snapper-cleanup.service)" \
+assert_file_has /etc/systemd/system/guarden-snapper-cleanup.service \
     "snapper -c root cleanup number"
-assert_file_has "$(host etc/systemd/system/guarden-snapper-cleanup.service)" \
-    "snapper -c home cleanup space"
+assert_file_has /etc/systemd/system/guarden-snapper-cleanup.service \
+    "snapper -c root cleanup space"
 
-# The canonical set reaches the host's own two configurations, and only the four
-# fixed keys: no track owns them, so there is no track to read a default from
-# and their ladder is left as the distribution shipped it.
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "EMPTY_PRE_POST_CLEANUP=no"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "NUMBER_MIN_AGE=3600"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "NUMBER_LIMIT_IMPORTANT=8-12"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "TIMELINE_LIMIT_DAILY=0-7"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/root" "FREE_LIMIT=0.1"
-assert_called "snapper -c root modify -f"
+# The canonical set reaches the host's own configuration. It reaches everything in
+# spec 8.1's table that is not read out of a track, because "every configuration it
+# can see" is what the table says and `NUMBER_LIMIT_IMPORTANT`'s floor is one of
+# them; what stays as the distribution shipped it is the **two track-derived**
+# values, since no row owns `root` and there is nothing to read `keep_last` from.
+#
+# The daily bucket is the evidence for that absence: it is read out of the template
+# `snapper create-config` builds a configuration from rather than written here. A
+# literal would be pinning one version of snapper's default to a test that is about
+# something else, and the test would then fail on a host that is correct — and a
+# converge that derived a daily bucket here would read `keep_last` from no row at all
+# and write `0-0`.
+assert_snapper_config root EMPTY_PRE_POST_CLEANUP no
+assert_snapper_config root NUMBER_MIN_AGE 3600
+assert_snapper_config root NUMBER_CLEANUP yes
+assert_snapper_config root TIMELINE_CLEANUP yes
+assert_snapper_config root NUMBER_LIMIT_IMPORTANT 8-12
+assert_snapper_config root NUMBER_LIMIT 2-10
+assert_snapper_config root TIMELINE_LIMIT_HOURLY 0
+assert_snapper_config root TIMELINE_LIMIT_WEEKLY 0-4
+# The template snapper builds every new configuration from, asserted to be there
+# before it is read: a missing template would otherwise leave the expected value
+# empty and fail the next line with a comparison rather than a cause.
+assert_file_exists /usr/share/snapper/config-templates/default
+distribution_ladder=$(awk -F'"' '/^TIMELINE_LIMIT_DAILY=/ { print $2 }' \
+    /usr/share/snapper/config-templates/default)
+assert_snapper_config root TIMELINE_LIMIT_DAILY "$distribution_ladder"
 
-# A converged host checks clean, and a second apply changes nothing.
-run soil storage --check
+# The four fixed keys are converged, not merely created with: the value the
+# distribution ships is put back to something else and a converge has to put it
+# right, which is the claim "the canonical set reaches the host's own
+# configuration" as distinct from "the phase created a configuration".
+run snapper -c root set-config EMPTY_PRE_POST_CLEANUP=yes
 assert_exit 0
-rm -f "$GUARDEN_CALLS"
 run soil storage --apply
 assert_exit 0
-assert_not_called "modify -f"
-assert_not_called "create-config"
-assert_not_called "disable"
-assert_not_called "install -d"
+assert_snapper_config root EMPTY_PRE_POST_CLEANUP no
+
+# A converged host checks clean, and a second apply changes nothing: the same
+# answer to the same question is the whole of "idempotent", and it is a stronger
+# claim than a run that made no calls.
+run soil storage --check
+assert_exit 0
+run soil storage --apply
+assert_exit 0
+run soil storage --check
+assert_exit 0
+
+# seed_snapper_config <name> [daily]: a configuration as snapper holds one,
+# carrying values a converge has to put right.
+#
+# **A configuration is made by `snapper create-config` and by nothing else.** A
+# file written into `/etc/snapper/configs` by hand is not a configuration: snapper
+# answers `Unknown config.` for one, and `snapper list-configs` does not list it —
+# before a restart of snapperd and after one, which is how the retired stand-in
+# could be handed a file and called it a configuration. `create-config` is what
+# makes the pair that is a configuration, the subvolume and the `.snapshots`
+# subvolume inside it.
+#
+# So the subvolume here is a real btrfs subvolume on the suite's own scratch, the
+# configuration is snapper's own, and the values that disagree with what a converge
+# would write go in through `snapper set-config` — the same writer `soil storage`
+# uses, so nothing here fabricates a file snapper would have to believe.
+#
+# Ownership is decided by the **registry** naming the configuration for a state
+# volume (spec 8.1's enumeration is `snapper list-configs`, and the owner is the
+# service whose registry entry names it), so where the seeded subvolume sits makes
+# no difference to who owns the configuration and nothing about it is a service's
+# data: these are the phase's own scratch volumes, not under `/services`.
+seed_snapper_config() {
+    mkdir -p /var/lib/guarden/tests
+    run btrfs subvolume create "/var/lib/guarden/tests/seeded-$1"
+    assert_exit 0
+    run snapper --config "$1" create-config "/var/lib/guarden/tests/seeded-$1"
+    assert_exit 0
+    run snapper --config "$1" set-config EMPTY_PRE_POST_CLEANUP=yes NUMBER_MIN_AGE=0 \
+        "TIMELINE_LIMIT_DAILY=${2:-0-99}" TIMELINE_LIMIT_WEEKLY=0-99 \
+        TIMELINE_LIMIT_MONTHLY=0-99 TIMELINE_LIMIT_QUARTERLY=0-99 FREE_LIMIT=0.99
+    assert_exit 0
+}
 
 # A service's configuration gets the full ladder, and the values come from the
 # track the *registry* names -- never from parsing the configuration's name,
 # which is opaque because both a service name and a volume name may hold a `-`.
-seed "$GUARDEN_HOST/var/lib/guarden/registry/myapp-production.toml" \
+seed /var/lib/guarden/registry/myapp-production.toml \
     'name = "myapp-production"' 'environment = "production"'
-seed "$GUARDEN_HOST/etc/snapper/configs/myapp-production-pgdata" "ignored"
-seed "$GUARDEN_HOST/etc/guarden/guarden.toml" \
+seed_snapper_config myapp-production-pgdata
+seed /etc/guarden/guarden.toml \
     '[[environments]]' 'name = "production"' 'keep_last = 7' 'free_limit = 0.10' \
     'kind = "slot"'
 run soil storage --apply
 assert_exit 0
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-production-pgdata" \
-    "TIMELINE_LIMIT_DAILY=0-7"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-production-pgdata" "FREE_LIMIT=0.1"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-production-pgdata" \
-    "TIMELINE_LIMIT_WEEKLY=0-4"
+assert_snapper_config myapp-production-pgdata EMPTY_PRE_POST_CLEANUP no
+assert_snapper_config myapp-production-pgdata NUMBER_MIN_AGE 3600
+assert_snapper_config myapp-production-pgdata TIMELINE_LIMIT_DAILY 0-7
+assert_snapper_config myapp-production-pgdata FREE_LIMIT 0.1
+assert_snapper_config myapp-production-pgdata TIMELINE_LIMIT_WEEKLY 0-4
 
 # A staging volume keeps no daily snapshots and still keeps twelve in the buckets
 # that aged out of it. That is a surprising default, so it is asserted rather
 # than left to be discovered.
-seed "$GUARDEN_HOST/var/lib/guarden/registry/myapp-staging.toml" \
+seed /var/lib/guarden/registry/myapp-staging.toml \
     'name = "myapp-staging"' 'environment = "staging"'
-seed "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "ignored"
+seed_snapper_config myapp-staging-data
 run soil storage --apply
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "TIMELINE_LIMIT_DAILY=0-0"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "TIMELINE_LIMIT_MONTHLY=0-6"
+assert_snapper_config myapp-staging-data TIMELINE_LIMIT_DAILY 0-0
+assert_snapper_config myapp-staging-data TIMELINE_LIMIT_MONTHLY 0-6
 
 # A service's own overrides win over the track, and the ladder's other buckets
 # are per-volume for the same reason.
-seed "$GUARDEN_HOST/etc/guarden/services/myapp-staging/overrides.toml" \
+seed /etc/guarden/services/myapp-staging/overrides.toml \
     '[retention]' 'keep_last = 3' 'free_limit = 0.08' 'quarterly = 1'
 run soil storage --apply
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "TIMELINE_LIMIT_DAILY=0-3"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "FREE_LIMIT=0.08"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-staging-data" "TIMELINE_LIMIT_QUARTERLY=0-1"
+assert_snapper_config myapp-staging-data TIMELINE_LIMIT_DAILY 0-3
+assert_snapper_config myapp-staging-data FREE_LIMIT 0.08
+assert_snapper_config myapp-staging-data TIMELINE_LIMIT_QUARTERLY 0-1
 
-# The longest registry entry wins, so `myapp` and `myapp-preview` both being
-# services is not ambiguous for `myapp-preview-data`, and an instance's
+# The longest registry entry wins, so `myapp-production` and `myapp-preview` both
+# being services is not ambiguous for `myapp-preview-data`, and an instance's
 # configuration -- `<service>-<escaped-ref>-<volume>` -- is matched the same way.
-seed "$GUARDEN_HOST/etc/guarden/guarden.toml" \
+seed /etc/guarden/guarden.toml \
     '[[environments]]' 'name = "production"' 'keep_last = 7' 'free_limit = 0.10' \
     'kind = "slot"' \
     '[[environments]]' 'name = "preview"' 'keep_last = 1' 'free_limit = 0.20' \
     'kind = "instance"'
-seed "$GUARDEN_HOST/var/lib/guarden/registry/myapp-preview.toml" \
+seed /var/lib/guarden/registry/myapp-preview.toml \
     'name = "myapp-preview"' 'environment = "preview"'
-seed "$GUARDEN_HOST/etc/snapper/configs/myapp-preview-feature\\x2dx-data" "ignored"
+seed_snapper_config 'myapp-preview-feature\x2dx-data' 0-7
 run soil storage --apply
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/myapp-preview-feature\\x2dx-data" \
-    "TIMELINE_LIMIT_DAILY=0-1"
-assert_file_lacks "$GUARDEN_HOST/etc/snapper/configs/myapp-preview-feature\\x2dx-data" \
-    "TIMELINE_LIMIT_DAILY=0-7"
+assert_snapper_config 'myapp-preview-feature\x2dx-data' TIMELINE_LIMIT_DAILY 0-1
 
-# Anything else is skipped with a warning naming it, and left byte for byte
-# alone: a configuration guarden did not create belongs to the operator.
-# The seed is the operator's value; the second line makes the file look like
-# something a converge would have rewritten, so "left alone" is a claim about
-# the value rather than about the file merely existing.
-seed "$GUARDEN_HOST/etc/snapper/configs/operator-owned" "EMPTY_PRE_POST_CLEANUP=yes"
+# Anything else is skipped with a warning naming it, and left exactly as it was: a
+# configuration guarden did not create belongs to the operator. The value is the
+# assertion, read through `snapper get-config` — the read spec 8.2 names, and never
+# by parsing snapper's own file — and not the file's existence: a converge that
+# rewrote the key and then warned would satisfy anything weaker.
+seed_snapper_config operator-owned
 run soil storage --apply
 assert_stderr_has "warning: the snapper configuration operator-owned is not guarden's"
-assert_file_has "$GUARDEN_HOST/etc/snapper/configs/operator-owned" "EMPTY_PRE_POST_CLEANUP=yes"
-assert_not_called "operator-owned modify"
+assert_snapper_config operator-owned EMPTY_PRE_POST_CLEANUP yes
+assert_snapper_config operator-owned NUMBER_MIN_AGE 0
 
 # `soil storage` creates no service volume and never recreates a service's
 # configuration: the mutator creates those, and a subvolume here would be one
-# more way for a service's data to appear from nowhere.
-assert_not_called "btrfs subvolume create"
-assert_called "btrfs subvolume list /"
+# more way for a service's data to appear from nowhere. The registries above name
+# two services whose volumes do not exist, and this is what says the phase did
+# not make them.
+assert_no_subvolume /var/lib/guarden/services/myapp-production/state/pgdata
+assert_no_subvolume /var/lib/guarden/services/myapp-staging/state/data
+assert_no_snapper_config myapp-production-data

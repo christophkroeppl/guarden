@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-. "$(dirname "$0")/../lib/fake.sh"
-fake_init "$@"
-exit 0

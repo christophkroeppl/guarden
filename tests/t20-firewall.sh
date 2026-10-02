@@ -11,13 +11,71 @@
 # keep.
 
 . "$(dirname "$0")/lib.sh"
-scratch_host
 
-# A fresh Ubuntu ships ufw installed and enabled, and two policies on one box is
-# one too many -- so the phase has to turn it off rather than route around it.
-mkdir -p "$GUARDEN_FIXTURES/systemd"
-say "$GUARDEN_FIXTURES/systemd/ufw.service.enabled" "enabled"
-say "$GUARDEN_FIXTURES/systemd/ufw.service.active" "active"
+# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
+# directory on PATH for the fake tier, and both the assertions below and the
+# programs under them have to reach the real `getent`, `dpkg-query`, `systemctl`,
+# `snapper`, `sysctl` and `install` -- otherwise this file is asking a fake what
+# it had been asked to do, which is the whole thing the rewrite exists to stop.
+# `.venv/bin` is kept first because it is the checkout's interpreter and not a
+# stand-in for anything.
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+export GUARDEN_PREFIX=/
+
+# The ingress interface is the one the default route leaves by, which is where
+# hostprep.ingress_interface looks when guarden.toml names none. It is read
+# rather than written down because the rendered rules name it and nothing in the
+# design fixes a name.
+interface=$(ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") print $(i + 1)}')
+[ -n "$interface" ] || _fail "the default route names no interface, so there is no ingress"
+
+
+
+# The drill this file performs fires fifteen minutes after it arms the timer and
+# puts ufw back, which in a throwaway machine is an INPUT chain that drops the
+# guest's own traffic. It is disarmed here rather than only at the end of the
+# file, so a failure half way through does not leave it armed. The seeded module
+# and registry entry go with it: a service registry entry that outlives the test
+# is a phantom service on every file that runs after this one.
+disarm() {
+    systemctl disable --now guarden-firewall-deadman.timer >/dev/null 2>&1 || :
+    rm -f /usr/lib/guarden/modules/gate/module.toml \
+        /var/lib/guarden/registry/traefik-production.toml
+}
+trap disarm EXIT
+
+# This file owns the phase's starting state: a fresh distribution's firewall is
+# installed and running, because two policies on one box is one too many and the
+# phase has to turn it off rather than route around it. The machine is left in
+# the converged state rather than put back, because a host that has had this
+# phase run and still carries ufw is a host nobody converged.
+#
+# **The distribution's own apt timers are off first, and that is a precondition
+# rather than tidiness.** `apt-daily-upgrade.service` runs `unattended-upgrade`,
+# whose post-invoke hook answers this machine's `/etc/ufw/ufw.conf` by running
+# `systemctl enable ufw` — measured on this golden at uptime 27.7 s for the
+# service and 30.2 s for the `systemctl enable`, with the symlink created at
+# 31.2 s and `ufw.service` started at 31.7 s. So a host whose timers are armed
+# cannot hold the state this phase converges, and a suite that asserted the
+# converged state on one was racing a timer rather than testing the phase.
+#
+# `soil packages` is what turns them off, on a guarden host and before this phase
+# ever runs — spec 6.1's `packages` item, the same rule and the same "not enabled
+# is enough" answer it applies to `snapper-cleanup.timer` — and `t20-packages.sh`
+# is where that converge is asserted. This suite drives the firewall phase without
+# the packages phase, so it plants the precondition the way
+# `t20-storage.sh` plants the `guarden` group, and says so.
+for timer in apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer; do
+    systemctl disable --now "$timer" >/dev/null 2>&1 || :
+done
+assert_not_enabled apt-daily.timer
+assert_not_enabled apt-daily-upgrade.timer
+assert_not_enabled dpkg-db-backup.timer
+
+run systemctl enable --now ufw.service
+assert_exit 0
+assert_enabled ufw.service
 
 run soil firewall --check
 assert_exit 1
@@ -25,63 +83,68 @@ assert_stderr_has "drift: the distribution's own firewall is disabled"
 
 run soil firewall --apply
 assert_exit 0
-assert_called "systemctl disable --now ufw.service"
-assert_not_called "systemctl start guarden-firewall-deadman.timer"
-assert_file_exists "$(host etc/guarden/firewall/10-framework.conf)"
-assert_file_exists "$(host etc/guarden/firewall/20-ingress-nat.conf)"
-assert_file_exists "$(host etc/systemd/system/guarden-firewall.service)"
-assert_file_exists "$(host etc/systemd/system/guarden-firewall-deadman.timer)"
+assert_not_enabled ufw.service
+assert_inactive ufw.service
+assert_file_exists /etc/guarden/firewall/10-framework.conf
+assert_file_exists /etc/guarden/firewall/20-ingress-nat.conf
+assert_file_exists /etc/systemd/system/guarden-firewall.service
+assert_file_exists /etc/systemd/system/guarden-firewall-deadman.timer
 
 # 10-framework.conf is the skeleton, and it carries the ingress interface's
 # route_localnet because that is the whole requirement for the forwarding to
 # work at all.
-assert_file_has "$(host etc/guarden/firewall/10-framework.conf)" "route_localnet is scoped to eth0"
-assert_file_has "$(host etc/guarden/firewall/10-framework.conf)" "/etc/sysctl.d/90-guarden.conf"
-assert_file_has "$(host etc/guarden/firewall/10-framework.conf)" "30-services.conf"
+assert_file_has /etc/guarden/firewall/10-framework.conf \
+    "route_localnet is scoped to $interface"
+assert_file_has /etc/guarden/firewall/10-framework.conf "/etc/sysctl.d/90-guarden.conf"
+assert_file_has /etc/guarden/firewall/10-framework.conf "30-services.conf"
 
-# A fresh host has no edge installed, so it has no ingress: a module that has
-# not been added contributes nothing and no publication is invented.
-assert_no_firewall_rule "$(host etc/guarden/firewall/20-ingress-nat.conf)"
+# A host with no edge installed has no ingress: a module that has not been added
+# contributes nothing and no publication is invented.
+assert_no_firewall_rule /etc/guarden/firewall/20-ingress-nat.conf
 
 # The three rules, once the gate module is enabled and the edge's publication
 # exists. The publication is read from the registry and never assumed, because
 # it is allocated from `ingress.publication_range`.
-seed "$GUARDEN_HOST/usr/lib/guarden/modules/gate/module.toml" \
+seed /usr/lib/guarden/modules/gate/module.toml \
     'name = "gate"' \
     '[[services]]' 'service = "traefik-production"' \
     'ingress = [ "80/tcp", "443/tcp", "443/udp" ]' 'api = true'
-seed "$GUARDEN_HOST/var/lib/guarden/registry/traefik-production.toml" \
+seed /var/lib/guarden/registry/traefik-production.toml \
     'name = "traefik-production"' '[publication]' 'port = 20000'
 run soil firewall --apply
 assert_exit 0
-assert_file_has "$(host etc/guarden/firewall/20-ingress-nat.conf)" \
-    "[ 'i eth0' 'p tcp' '--dport 80' ] -j DNAT --to-destination 127.0.0.1:20000"
-assert_file_has "$(host etc/guarden/firewall/20-ingress-nat.conf)" \
-    "[ 'i eth0' 'p tcp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20000"
+assert_file_has /etc/guarden/firewall/20-ingress-nat.conf \
+    "[ 'i $interface' 'p tcp' '--dport 80' ] -j DNAT --to-destination 127.0.0.1:20000"
+assert_file_has /etc/guarden/firewall/20-ingress-nat.conf \
+    "[ 'i $interface' 'p tcp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20000"
 
 # 443/udp is HTTP/3, and it is a different protocol and a different nat rule:
 # three forwarding rules, not two.
-assert_file_has "$(host etc/guarden/firewall/20-ingress-nat.conf)" \
-    "[ 'i eth0' 'p udp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20000"
+assert_file_has /etc/guarden/firewall/20-ingress-nat.conf \
+    "[ 'i $interface' 'p udp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20000"
 
 # No masquerade, in any form a rule could take.
-assert_file_lacks "$(host etc/guarden/firewall/20-ingress-nat.conf)" "-j MASQUERADE"
-assert_file_lacks "$(host etc/guarden/firewall/20-ingress-nat.conf)" "CHAIN=POSTROUTING"
-assert_file_lacks "$(host etc/guarden/firewall/20-ingress-nat.conf)" "--to-source"
+assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "-j MASQUERADE"
+assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "CHAIN=POSTROUTING"
+assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "--to-source"
 
-# The alias never appears in a firewall rule. Pasta maps the gateway, so a
-# connection is addressed to 127.0.0.1 by the time the kernel's packet path sees
-# it, and a rule matching the alias would match nothing.
-assert_file_lacks "$(host etc/guarden/firewall/20-ingress-nat.conf)" "192.0.2.1"
-assert_file_lacks "$(host etc/guarden/firewall/10-framework.conf)" "192.0.2.1"
+# Every rule lands on the host's loopback and nowhere else, which is the alias
+# claim stated as a fact about the file: pasta maps the gateway, so a connection
+# is addressed to 127.0.0.1 by the time the kernel's packet path sees it, and a
+# rule matching the alias would match nothing. Asking it of the rendered rules
+# rather than of one recorded address is what makes it hold on a host whose
+# alias has never been measured.
+assert_file_lacks /etc/guarden/firewall/10-framework.conf "--to-destination"
+[ "$(grep -c -- '--to-destination' /etc/guarden/firewall/20-ingress-nat.conf)" = 3 ] \
+    || _fail "a rule in 20-ingress-nat.conf translates somewhere other than the three loopback publications"
 
 # The edge's API is a control surface, not ingress: it is restricted to
 # `host.admin_user` and never forwarded, so a module's `api = true` contributes
 # no rule -- and the three rules above are the only ones in the file.
-assert_rule_count "$(host etc/guarden/firewall/20-ingress-nat.conf)" 3
+assert_rule_count /etc/guarden/firewall/20-ingress-nat.conf 3
 
 # 30-services.conf is the mutator's, and this phase does not write it.
-assert_file_missing "$(host etc/guarden/firewall/30-services.conf)"
+assert_file_missing /etc/guarden/firewall/30-services.conf
 
 # The dead-man timer is armed only by the flag, and it lasts fifteen minutes and
 # opens the firewall when it fires: stopping ferm and putting the
@@ -89,11 +152,11 @@ assert_file_missing "$(host etc/guarden/firewall/30-services.conf)"
 # ssh back in".
 run soil firewall --apply --deadman
 assert_exit 0
-assert_called "systemctl start guarden-firewall-deadman.timer"
-assert_file_has "$(host etc/systemd/system/guarden-firewall-deadman.timer)" "OnActiveSec=15min"
-assert_file_has "$(host etc/systemd/system/guarden-firewall-deadman.service)" \
+assert_active guarden-firewall-deadman.timer
+assert_file_has /etc/systemd/system/guarden-firewall-deadman.timer "OnActiveSec=15min"
+assert_file_has /etc/systemd/system/guarden-firewall-deadman.service \
     "stop guarden-firewall.service"
-assert_file_has "$(host etc/systemd/system/guarden-firewall-deadman.service)" \
+assert_file_has /etc/systemd/system/guarden-firewall-deadman.service \
     "enable --now ufw.service"
 
 # An armed timer is drift for a plain check, because a timer that outlives its
@@ -106,6 +169,10 @@ assert_stderr_has "drift: the dead-man timer is not armed"
 # And a plain apply disarms it, so it cannot be left armed.
 run soil firewall --apply
 assert_exit 0
-assert_called "systemctl stop guarden-firewall-deadman.timer"
+assert_inactive guarden-firewall-deadman.timer
 run soil firewall --check
 assert_exit 0
+
+# The machine is left converged: ufw disabled, the phase's own files in place, and
+# the dead-man timer stopped by the plain apply above -- and stopped again by the
+# trap if this file failed before it got there.

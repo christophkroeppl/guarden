@@ -1,0 +1,66 @@
+# The shipped environment table (spec 3.1). It is a fixture rather than a
+# constant in a program, and this file existing is the evidence: appending a
+# `preprod` block is a configuration change and needs no code change.
+#
+# Two things differ from the shipped table, and each earns its place.
+# `[modules] enabled` is **empty**, which is what makes the merge claim
+# non-vacuous: every other shipped fixture already carries `["gate",
+# "homepage"]`, so a suite that started from one of those could not tell "the
+# installer's selection was merged" from "the file already said this" — the
+# first assertion would be satisfied before the apply ran. And `ingress.alias`
+# is **measured**, because the alias is the one item of `soil install` that only
+# the probe can write, this repository ships no probe image, and a suite that
+# borrowed that item as its guaranteed non-zero exit would be asserting the
+# probe's absence rather than the phase's convergence. The address below is
+# TEST-NET-1 from RFC 5737: nothing measured it and nothing dials it here, and
+# `soil sysctl --check` reports it as drift on any host whose default route
+# says otherwise — which is the correct answer for a fixture.
+[host]
+domain = "example.com"
+interface = ""
+admin_user = "operator"
+
+[ingress]
+alias = "192.0.2.1"
+publication_range = [20000, 32767]
+
+[network]
+backend = "pasta"
+pasta_options = [ "--map-gw" ]
+
+[build]
+lanes = 1
+
+[modules]
+enabled = []
+
+[[environments]]
+name = "production"
+host_prefix = ""
+gated = true
+weight = 1000
+free_limit = 0.10
+keep_last = 7
+kind = "slot"
+fork_from = ""
+
+[[environments]]
+name = "staging"
+host_prefix = "staging."
+gated = false
+weight = 100
+free_limit = "0.20"
+keep_last = 0
+kind = "slot"
+fork_from = "production"
+
+[[environments]]
+name = "preview"
+host_prefix = "preview."
+gated = false
+weight = 10
+free_limit = "0.20"
+keep_last = 0
+kind = "instance"
+fork_from = "staging"
+cap = 3

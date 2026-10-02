@@ -60,6 +60,34 @@ def _write(body: str) -> Path:
     return Path(handle.name)
 
 
+def refuses_seed(value: str, contains: str, what: str) -> None:
+    """One `seed` value as it arrives — as text in a file — and one refusal.
+
+    Planted as text rather than built as a document, because the case is a hand
+    edit: a registry is a file, and the shape an operator would type is the one
+    the parser has to refuse. Quoting the number would have made it a string and
+    tested something nobody would write.
+    """
+    path = Path(tempfile.mkdtemp()) / "myapp-preview.toml"
+    path.write_text(
+        'service = "myapp-preview"\n'
+        'workload = "myapp"\n'
+        'created = "2026-09-29T10:12:00Z"\n'
+        '\n[instances."feature\\\\x2dlogin"]\n'
+        'ref = "feature-login"\n'
+        f"seed = {{ data = {value} }}\n",
+        encoding="utf-8",
+    )
+    table = conf.read_toml(path)["instances"]["feature\\x2dlogin"]
+    try:
+        registry.Instance.from_document("feature\\x2dlogin", table)
+    except errors.GuardenError as exc:
+        check(exc.code == 1, f"{what}: exit {exc.code}, expected 1")
+        check(contains in exc.message, f"{what}: {exc.message!r} does not name {contains!r}")
+    else:
+        FAILURES.append(f"{what}: accepted")
+
+
 def manifests() -> None:
     document = manifest.read(_write("project: myapp\nstate:\n  - data\nbulk:\n  - chainstate\n"))
     check(document.project == "myapp", "project is read")
@@ -179,7 +207,11 @@ def registries() -> None:
                 escaped_ref="feature\\x2dlogin",
                 created="2026-09-29T10:12:00Z",
                 publication={"web": 20120},
-                seed={"data": 38},
+                seed={
+                    "data": registry.Seed(
+                        service="myapp-staging", volume="data", number=38
+                    )
+                },
             )
         },
     )
@@ -206,7 +238,26 @@ def registries() -> None:
     instance = back.instances["feature\\x2dlogin"]
     check(instance.ref == "feature-login", "the raw ref round-trips, not the escaped key")
     check(instance.publication == {"web": 20120}, "an instance publication round-trips")
-    check(instance.seed == {"data": 38}, "a seed round-trips")
+    check(
+        instance.seed["data"] == record.instances["feature\\x2dlogin"].seed["data"],
+        "a seed round-trips",
+    )
+    check(
+        instance.seed["data"].service == "myapp-staging",
+        "a seed names the service the snapshot belongs to",
+    )
+    # A seed is a table of service, volume and number, and a bare number is
+    # refused: the snapshot a fork took belongs to the **source**, and a preview
+    # is protected because something was forked from the production snapshot it
+    # came from. `{ data = 38 }` names a number with no service beside it, so the
+    # reconciler could not mark anything and the number it held was unowned. This
+    # is the assertion that says the registry refuses the shape spec 3.4's example
+    # shows, and it is here rather than left to the reading because a bare number
+    # is the shape an operator would hand-edit in.
+    refuses_seed("38", "a bare number", "a bare seed number")
+    refuses_seed(
+        '{ volume = "data", number = 38 }', "is missing service", "a seed with no service"
+    )
     check(
         [v.name for v in back.volume_list()] == ["data", "chainstate"],
         "state volumes are listed before bulk ones",

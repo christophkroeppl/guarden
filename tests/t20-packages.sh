@@ -2,82 +2,210 @@
 # soil packages: the distribution's packages, and the one fetch that is not a
 # distribution package.
 #
-# podlet is that fetch, and it is pinned: a version and a SHA256 recorded in the
-# repository and verified on install. There is no "latest" and no unpinned
-# fallback, because "one third-party binary, verified" is the whole claim and a
-# convenient fetch would make it false.
+# podlet is that fetch, and it is pinned: a release, an artefact's SHA256 and the
+# installed program's SHA256 recorded in the repository, and a row per host
+# architecture so the pin can be correct on more than one machine. There is no
+# "latest" and no unpinned fallback, because "one third-party binary, verified" is
+# the whole claim and a convenient fetch would make it false.
+#
+# **What this file claims and what `t20-podlet.sh` claims are different questions.**
+# Here the phase's own behaviour: the record the repository ships, the drift a host
+# that has not fetched reports, the install, the re-check, a tampered program, and
+# the three refusals. There, the artefact itself — that what lands is an ELF program
+# and running it answers, which is the state this ticket exists to make impossible
+# and cannot be told apart with an existence assertion. So the archive installed
+# below is staged rather than fetched: it is a real program off the machine in a
+# real archive, the digest really is compared, and the network is not part of this
+# file's claim.
 
 . "$(dirname "$0")/lib.sh"
-scratch_host
+
+# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
+# directory on PATH for the fake tier, and both the assertions below and the
+# programs under them have to reach the real `getent`, `dpkg-query`, `systemctl`,
+# `snapper`, `sysctl` and `install` -- otherwise this file is asking a fake what
+# it had been asked to do, which is the whole thing the rewrite exists to stop.
+# `.venv/bin` is kept first because it is the checkout's interpreter and not a
+# stand-in for anything.
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+export GUARDEN_PREFIX=/
+mkdir -p /etc/guarden
+
+record=/etc/guarden/podlet.release
+binary=/usr/lib/guarden/bin/podlet
+archive=$GUARDEN_FIXTURES/podlet.tar.xz
+arch=$(uname -m)
+
+digest() {
+    sha256sum "$1" | cut -d' ' -f1
+}
+
+# seed_record <format> <url> <artefact-digest> <program-digest>
+seed_record() {
+    seed "$record" \
+        'version = "1.4.0"' \
+        "[artefacts.$arch]" \
+        "format = \"$1\"" \
+        "url = \"$2\"" \
+        "sha256 = \"$3\"" \
+        "binary_sha256 = \"$4\""
+}
 
 # The pin is a shipped template, so it exists on a host `soil install` has run.
+# The apply exits 1 because the measured alias is the one thing `install` cannot
+# produce on any machine; everything else it converges has already converged.
 run soil install --apply
 assert_exit 1
+assert_file_exists "$record"
 
+# What the machine already carries is asked of the machine. These four are the
+# harness's own substrate, and a golden that stopped shipping one would make the
+# drift lines below silent rather than wrong, so they are asserted as the
+# precondition they are.
+assert_dpkg btrfs-progs
+assert_dpkg snapper
+assert_dpkg python3-yaml
+assert_dpkg python3-jinja2
+
+# The other three are absent, and a `--check` that converged nothing says so by
+# naming each one: the phase asks the distribution's own query rather than a
+# second opinion of its own.
+assert_no_dpkg ferm
+assert_no_dpkg fail2ban
+assert_no_dpkg podman
 run soil packages --check
 assert_exit 1
-assert_stderr_has "drift: the btrfs-progs package is installed"
-assert_stderr_has "drift: the snapper package is installed"
 assert_stderr_has "drift: the ferm package is installed"
 assert_stderr_has "drift: the fail2ban package is installed"
 assert_stderr_has "drift: the podman package is installed"
-assert_stderr_has "drift: the python3-yaml package is installed"
-assert_stderr_has "drift: the python3-jinja2 package is installed"
-assert_not_called "apt-get"
 
-# The two python packages are the runtime dependencies and the only imports
+# The two python packages above are the runtime dependencies and the only imports
 # outside the standard library, which is what keeps the host installable on a
-# distribution nobody has tried yet.
-assert_file_has "$(host etc/guarden/podlet.release)" "sha256 ="
+# distribution nobody has tried yet -- and the only reason the list is not a single
+# `apt-get install` of everything.
 
-# An unfilled pin means the fetch does not happen, and it is exit 2 rather than
-# exit 1: the record is a repository input, and a rejected input is 2.
-run soil packages --apply
-assert_exit 2
-assert_stderr_has "the pinned podlet record is incomplete"
-assert_not_called "curl"
+# **The record the repository ships, in full.** Not "it has a sha256 key" — that
+# was true of a placeholder — but a release, a row for *this* machine's
+# architecture, a format the unpack knows, an https url and two 64-character
+# digests. A pin that cannot be read on the machine it is installed on is not a
+# pin, and every value here is checked for being a value.
+assert_file_has "$record" "[artefacts.$arch]"
+assert_file_has "$record" 'url = "https://'
+grep -qE '^sha256 = "[0-9a-f]{64}"$' "$record" \
+    || _fail "the record's artefact digest is not 64 hex characters"
+grep -qE '^binary_sha256 = "[0-9a-f]{64}"$' "$record" \
+    || _fail "the record's program digest is not 64 hex characters"
 
-# With a record filled in and a body that matches it, the artefact installs.
-seed "$GUARDEN_FIXTURES/curl-body" "the podlet release bytes"
-digest=$(sha256sum "$GUARDEN_FIXTURES/curl-body" | cut -d' ' -f1)
-seed "$(host etc/guarden/podlet.release)" \
-    'version = "1.4.0"' \
-    'url = "https://example.invalid/podlet"' \
-    "sha256 = \"$digest\""
+# A host that has not fetched the pin reports it as not installed, which is exit 1
+# and not 2: nothing is wrong with the record, the host simply does not have the
+# program yet. This is the claim that replaced "an unfilled record refuses".
+run soil packages --check
+assert_exit 1
+assert_stderr_has "drift: the pinned podlet is installed"
+assert_file_missing "$binary"
+
+# **And the apply installs it.** The three distribution packages converge in the
+# same run -- the record is the last item, so everything before it has already
+# converged -- which is what makes a single exit `0` here a statement about the
+# whole phase rather than about the one fetch.
+#
+# The url is a `file://` path and the scheme is not the claim: curl really fetches
+# it, the digest of the artefact really is compared before it is opened, and what
+# is unpacked out of it really is written in place of the name. `t20-podlet.sh`
+# says the same with the real release and says what came out of it.
+cp /bin/echo "$GUARDEN_FIXTURES/payload"
+python3 "$GUARDEN_ROOT/tests/pinarchive.py" tar.xz "$GUARDEN_FIXTURES/payload" "$archive"
+payload_digest=$(digest "$GUARDEN_FIXTURES/payload")
+archive_digest=$(digest "$archive")
+seed_record tar.xz "file://$archive" "$archive_digest" "$payload_digest"
 run soil packages --apply
 assert_exit 0
-assert_called "apt-get install -y btrfs-progs"
-assert_called "curl --fail --silent --show-error --location"
-assert_file_exists "$(host usr/lib/guarden/bin/podlet)"
+assert_file_exists "$binary"
+assert_executable "$binary"
+assert_elf "$binary"
 run soil packages --check
 assert_exit 0
+assert_stderr_empty
+assert_dpkg ferm
+assert_dpkg fail2ban
+assert_dpkg podman
 
-# A body that is not the pinned one is refused and the binary is not installed.
-rm -f "$(host usr/lib/guarden/bin/podlet)"
-seed "$GUARDEN_FIXTURES/curl-body" "some other bytes"
+# **The distribution's own apt timers are off, and the same rule `soil storage`
+# applies to `snapper-cleanup.timer`.** A packaging timer running on its own
+# schedule is the same overlap as any other writer of the index, and `apt-get`
+# does not queue for a lock it cannot take: two concurrent real `apt-get update`
+# runs on this machine gave one exit 0 and one exit 100 with
+# `E: Could not get lock /var/lib/apt/lists/lock`, both inside five seconds. So a
+# `soil packages` that met `apt-daily.timer` mid-refresh would fail the run
+# rather than wait. "Disabled" means not enabled — the `.service` names are
+# `static` and `systemctl disable` cannot act on them, so asking for one exact
+# word is a check no real host can satisfy.
+for unit in apt-daily.timer apt-daily.service apt-daily-upgrade.timer \
+    apt-daily-upgrade.service dpkg-db-backup.timer dpkg-db-backup.service; do
+    assert_not_enabled "$unit"
+done
+
+# And `--check` re-asks the question rather than trusting that this run put it
+# there, which is the shape the pinned artefact is checked with above: put one
+# back, the phase names it, the apply takes it away again, and a converged host
+# is silent. `unattended-upgrades.service` is deliberately left enabled — it
+# installs security updates and that is an operator's decision, not this phase's.
+systemctl enable apt-daily.timer
+run soil packages --check
+assert_exit 1
+assert_stderr_has "drift: the distribution's own apt timers are disabled"
+run soil packages --apply
+assert_not_rejected
+assert_not_enabled apt-daily.timer
+assert_enabled unattended-upgrades.service
+
+# A body that is not the pinned one is refused, and it is refused before anything
+# is unpacked: the installed program is the byte-for-byte one the last run left.
+installed=$(digest "$binary")
+other_digest=$(digest "$archive")
+seed_record tar.xz "file://$archive" "$payload_digest" "$other_digest"
 run soil packages --apply
 assert_exit 2
 assert_stderr_has "the SHA256 does not match"
-assert_file_missing "$(host usr/lib/guarden/bin/podlet)"
+now=$(digest "$binary")
+[ "$now" = "$installed" ] || _fail "a digest mismatch replaced the installed program"
 
-# A binary that was replaced under the pin is drift, and `--check` re-reads the
-# digest rather than trusting that it installed it.
-seed "$GUARDEN_FIXTURES/curl-body" "the podlet release bytes"
+# A program replaced under the pin is drift, and `--check` re-reads the digest
+# rather than trusting that it installed it.
+seed_record tar.xz "file://$archive" "$archive_digest" "$payload_digest"
 run soil packages --apply
 assert_exit 0
-say "$(host usr/lib/guarden/bin/podlet)" "tampered"
+say "$binary" "tampered"
 run soil packages --check
 assert_exit 1
-assert_stderr_has "drift: the pinned podlet is installed and its SHA256 verified"
+assert_stderr_has "drift: the pinned podlet is installed"
 
 # A pin that is filled in is the only thing that makes the fetch reachable, so
 # removing the record puts the fetch back out of reach rather than making it
 # unpinned -- and it says which of the two faults it is, because an absent record
-# and an unfilled one have different fixes.
-rm -f "$GUARDEN_CALLS"
-rm -f "$(host etc/guarden/podlet.release)"
+# and an unfilled one have different fixes. Nothing is fetched and nothing is
+# removed: the binary on disk is the byte-for-byte one the previous run left.
+installed=$(digest "$binary")
+rm -f "$record"
 run soil packages --apply
 assert_exit 2
 assert_stderr_has "the pinned podlet record is absent"
 assert_stderr_has "soil install"
-assert_not_called "curl"
+now=$(digest "$binary")
+[ "$now" = "$installed" ] \
+    || _fail "an absent record removed or replaced the installed binary"
+
+# The record is `soil install`'s to seed and this file is not that phase, and the
+# staged program is this file's own artefact rather than anything the shipped pin
+# installs, so both are put back: the host ends as `soil install` leaves it, with
+# the record seeded and the pin not yet fetched. Which of the two that leaves for a
+# host to install the real release is `t20-podlet.sh`'s subject, and it is the only
+# suite here that reaches the network.
+rm -f "$binary"
+install -m 0644 /usr/lib/guarden/templates/podlet.release "$record"
+assert_file_has "$record" "[artefacts.$arch]"
+run soil packages --check
+assert_exit 1
+assert_stderr_has "drift: the pinned podlet is installed"
+assert_file_missing "$binary"

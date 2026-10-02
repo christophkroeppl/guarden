@@ -17,6 +17,11 @@
 guarden_prefix
 stage_config guarden-measured.toml
 
+# The last block of this file renders a Compose source, and the converter is what
+# turns one into units — installed by the phase that owns the fetch, at the pinned
+# path, and a program rather than a file that merely exists.
+install_pinned_converter
+
 registry=$GUARDEN_PREFIX/var/lib/guarden/registry
 stage_service() {
     seed "$registry/$1.toml" \

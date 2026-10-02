@@ -9,93 +9,160 @@
 # no `edge` group and the edge's group belongs to `weedr module add gate`.
 
 . "$(dirname "$0")/lib.sh"
-scratch_host
+
+# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
+# directory on PATH for the fake tier, and both the assertions below and the
+# programs under them have to reach the real `getent`, `dpkg-query`, `systemctl`,
+# `snapper`, `sysctl` and `install` -- otherwise this file is asking a fake what
+# it had been asked to do, which is the whole thing the rewrite exists to stop.
+# `.venv/bin` is kept first because it is the checkout's interpreter and not a
+# stand-in for anything.
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+export GUARDEN_PREFIX=/
+mkdir -p /etc/guarden
+
+# This file owns the phase's starting state, because which items drift is
+# otherwise a fact about whichever file ran before it on a shared machine: the
+# configuration is unseeded and the programs are not installed, so both items
+# below are drift this run provably caused rather than inherited. The apply puts
+# both back.
+rm -f /etc/guarden/guarden.toml
+rm -rf /usr/lib/guarden
+etcd_before=$(stat -c %y /etc/guarden)
 
 run soil install --check
 assert_exit 1
 assert_stderr_has "drift: the host configuration exists"
 assert_stderr_has "drift: guarden's programs are installed root-owned"
 
-# The alias probe cannot run in the fast harness, because a fake podman starts no
-# container, and spec 6.1 says what that means: exit 1, naming which of the four
-# failed, with `ingress.alias` left empty. Everything else the phase converges has
-# already happened, because a failed probe is a finding and not a rollback.
+# `--check` changed nothing: no file appeared under the configuration
+# directory, and the directory's own mtime is the proof, because every write
+# guarden makes into /etc/guarden is a create or a rename inside it.
+assert_file_missing /etc/guarden/guarden.toml
+[ "$(stat -c %y /etc/guarden)" = "$etcd_before" ] \
+    || _fail "--check wrote into /etc/guarden"
+
+# Everything the phase converges has converged even though the one item it
+# cannot converge is still unmet, because a failed probe is a finding and not a
+# rollback. The probe is the last item in the phase, so this is also the evidence
+# that it is last.
+#
+# The probe's own diagnostic is not asserted: it needs podman on PATH and the
+# image it measures with is `localhost/guarden-probe`, which this repository
+# neither builds nor ships, so which of the probe's four facts fails is a
+# property of the machine. What guarden owns either way is that it records no
+# address it did not measure, and that is asserted below.
 run soil install --apply
 assert_exit 1
-assert_stderr_has "alias probe 1 of 4"
 
 # The shipped table is seeded, and it is a table and not a list in the code: a
 # track is a row, and adding one is appending a block.
-assert_file_has "$(host etc/guarden/guarden.toml)" "[[environments]]"
-assert_file_has "$(host etc/guarden/guarden.toml)" 'name = "production"'
-assert_file_has "$(host etc/guarden/guarden.toml)" 'name = "preview"'
-assert_file_has "$(host etc/guarden/guarden.toml)" 'fork_from = "production"'
+assert_file_has /etc/guarden/guarden.toml "[[environments]]"
+assert_file_has /etc/guarden/guarden.toml 'name = "production"'
+assert_file_has /etc/guarden/guarden.toml 'name = "preview"'
+assert_file_has /etc/guarden/guarden.toml 'fork_from = "production"'
 
 # The programs, templates and units are in /usr/lib/guarden, root-owned and
 # never written by a deploy.
-assert_file_exists "$(host usr/lib/guarden/bin/soil)"
-assert_file_exists "$(host usr/lib/guarden/bin/weedr)"
-assert_file_exists "$(host usr/lib/guarden/bin/hose)"
-assert_file_has "$(host etc/systemd/system/guarden-tmpfiles.conf)" "d /run/guarden"
+assert_file_exists /usr/lib/guarden/bin/soil
+assert_file_exists /usr/lib/guarden/bin/weedr
+assert_file_exists /usr/lib/guarden/bin/hose
+assert_file_has /etc/systemd/system/guarden-tmpfiles.conf "d /run/guarden"
 
-# The two program users and the one group, and nothing else. `admin_user` is the
-# uid allowed to reach the edge's API, so it is recorded when it is empty.
-assert_called "groupadd --system guarden"
-assert_called "useradd --system --no-create-home --shell /usr/sbin/nologin --gid guarden guarden"
-assert_called "useradd --system --no-create-home --shell /usr/sbin/nologin --gid guarden hose"
-assert_not_called "groupadd --system edge"
-assert_called_count 2 "useradd"
-assert_called_count 1 "groupadd"
-assert_file_has "$(host etc/guarden/guarden.toml)" 'admin_user = "'
-assert_file_has "$(host etc/guarden/guarden.toml)" 'name = "production"'
+# The two program users and the one group, and nothing else. What the account is
+# is the claim, not the argv that made it: a system account with no login shell,
+# no home and the guarden group as its primary group. `--no-create-home` is
+# asserted as the absence of a home directory rather than as the flag, because
+# the flag is an intent and the missing directory is the outcome.
+guarden_gid=$(getent group guarden | cut -d: -f3)
+assert_group guarden
+assert_passwd guarden
+assert_passwd hose
+assert_passwd_field guarden 4 "$guarden_gid"
+assert_passwd_field hose 4 "$guarden_gid"
+assert_passwd_field guarden 7 /usr/sbin/nologin
+assert_passwd_field hose 7 /usr/sbin/nologin
+assert_file_missing /home/guarden
+assert_file_missing /home/hose
+assert_no_group edge
+
+# `admin_user` is the uid allowed to reach the edge's API, so it is recorded
+# when it is empty -- and left alone afterwards, which is why the recorded value
+# is asserted to be a value rather than the template's empty string.
+assert_file_has /etc/guarden/guarden.toml 'admin_user = "'
+assert_file_lacks /etc/guarden/guarden.toml 'admin_user = ""'
 
 # No service identity of any kind.
-assert_not_called "myapp"
-assert_file_missing "$(host var/lib/guarden/services/myapp-production)"
-assert_file_missing "$(host var/lib/guarden/services/myapp-production/state)"
+assert_no_passwd myapp-production
+assert_file_missing /var/lib/guarden/services/myapp-production
+assert_file_missing /var/lib/guarden/services/myapp-production/state
 
 # The render directory is the one the unprivileged programs may write into, and
-# the lock directory takes the same mode because unprivileged programs take
-# those locks.
-assert_called "install -d -m 0770 -o guarden -g guarden $GUARDEN_HOST/var/lib/guarden/render"
-assert_called "install -d -m 0770 -o root -g guarden $GUARDEN_HOST/run/guarden/locks"
+# the lock directory takes the same mode because unprivileged programs take those
+# locks. The group is the load-bearing half of both: `root:guarden` on the
+# registry is what makes it readable by the programs that run as `guarden`.
+assert_mode /var/lib/guarden/render 0770
+assert_owner /var/lib/guarden/render guarden:guarden
+assert_mode /run/guarden/locks 0770
+assert_owner /run/guarden/locks root:guarden
 
 # The credential materialiser decrypts once, in the system manager, and the
 # generated unit for a service carries no LoadCredentialEncrypted= because it
 # runs in that service's user manager and cannot read a 0600 root host key.
-assert_file_has "$(host etc/systemd/system/guarden-credential-materialiser@.service)" \
+assert_file_has /etc/systemd/system/guarden-credential-materialiser@.service \
     "LoadCredentialEncrypted=credentials:"
-assert_file_has "$(host etc/systemd/system/guarden-credential-materialiser@.service)" \
+assert_file_has /etc/systemd/system/guarden-credential-materialiser@.service \
     "ExecStart=/usr/lib/guarden/bin/weedr secret materialise %i"
-assert_file_has "$(host etc/systemd/system/guarden-credential-materialiser@.service)" \
+assert_file_has /etc/systemd/system/guarden-credential-materialiser@.service \
     "After=snapperd.service"
 
 # The probe is the one thing this phase cannot converge without, so it is drift
 # on every run until the probe has run: an alias that is wrong is worse than an
-# alias that is absent, because the edge refuses to start without it.
+# alias that is absent, because the edge refuses to start without it. One drift
+# line and no other is the whole of the claim -- a converged host with an
+# unmeasurable alias is exactly what this is.
 run soil install --check
 assert_exit 1
+# The line count is read with wc and not with lib.sh's assert_one_diagnostic,
+# whose `grep -c` prints 0 for no match while exiting 1 -- so its `|| true` turns
+# an empty stderr into a pass.
+[ "$(wc -l < "$GUARDEN_FIXTURES/stderr")" = 1 ] \
+    || _fail "expected exactly one drift line, got $(wc -l < "$GUARDEN_FIXTURES/stderr")"
 assert_stderr_has "drift: ingress.alias holds an address the probe measured"
-assert_file_has "$(host etc/guarden/guarden.toml)" 'alias = ""'
+assert_file_has /etc/guarden/guarden.toml 'alias = ""'
 assert_stderr_has "the edge does not start without it"
-
-# The probe runs a throwaway rootless container with the `[network]` table's
-# options, because pasta recomputes the gateway per container and the alias may
-# not be derived from the host's route on faith.
-assert_called "podman run --rm --network pasta:--map-gw"
 
 # guarden.toml has three writers and two of them share a key, so a write takes
 # the modules lock and rewrites only the key it owns. The file is otherwise the
 # shipped one, with the operator's own tracks intact.
-assert_file_exists "$GUARDEN_HOST/run/guarden/locks/modules.lock"
-assert_file_has "$(host etc/guarden/guarden.toml)" 'publication_range = [20000, 32767]'
-assert_file_has "$(host etc/guarden/guarden.toml)" 'pasta_options = [ "--map-gw" ]'
+assert_file_exists /run/guarden/locks/modules.lock
+assert_file_has /etc/guarden/guarden.toml 'publication_range = [20000, 32767]'
+assert_file_has /etc/guarden/guarden.toml 'pasta_options = [ "--map-gw" ]'
 
-# A second apply changes nothing that it can converge, and re-runs the probe
-# because the alias is still not measured.
-rm -f "$GUARDEN_CALLS"
+# A second apply converges nothing that it can: no account and no group is
+# created, and no installed file is rewritten. The counts are the claim, and the
+# inode is the proof for the file -- a converge writes through a temporary in the
+# same directory and renames, so a rewrite cannot leave the inode it found.
+accounts=$(getent passwd | wc -l)
+groups=$(getent group | wc -l)
+tmpfiles_inode=$(stat -c %i /etc/systemd/system/guarden-tmpfiles.conf)
 run soil install --apply
 assert_exit 1
-assert_not_called "useradd"
-assert_not_called "groupadd"
-assert_not_called "install -m"
+[ "$(getent passwd | wc -l)" = "$accounts" ] \
+    || _fail "a second apply created an account"
+[ "$(getent group | wc -l)" = "$groups" ] \
+    || _fail "a second apply created a group"
+[ "$(stat -c %i /etc/systemd/system/guarden-tmpfiles.conf)" = "$tmpfiles_inode" ] \
+    || _fail "a second apply rewrote guarden-tmpfiles.conf"
+assert_passwd guarden
+assert_passwd hose
+assert_no_group edge
+
+# And the host still answers exactly the same question, which is the same claim
+# asked from the other side and is stronger than a run that made no calls.
+run soil install --check
+assert_exit 1
+[ "$(wc -l < "$GUARDEN_FIXTURES/stderr")" = 1 ] \
+    || _fail "expected exactly one drift line, got $(wc -l < "$GUARDEN_FIXTURES/stderr")"
+assert_stderr_has "drift: ingress.alias"

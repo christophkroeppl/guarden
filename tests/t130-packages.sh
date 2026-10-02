@@ -1,121 +1,245 @@
 #!/usr/bin/env bash
-# One package list, with per-family entries, and no second copy that can drift.
+# One package list, and nothing from PyPI.
 #
-# The list is data, not code: `packages/packages.toml` names every package a
-# guarden host needs, once, per distribution family. `soil packages` reads it,
-# and the cloud-init user-data is rendered from it, so a package added to one
-# and forgotten in the other is a test failure rather than a box that installs
-# three things and converges on a fourth.
+# (ticket 130, spec 6.1, AGENTS.md "Conventions")
 #
-# This is also where "no PyPI at deploy time" is checked rather than assumed:
-# the rendered user-data carries the packages and nothing else, so a program
-# cannot smuggle a wheel in through the boot path.
+# **The packages are distribution packages and there is exactly one list of
+# them.** It is `packages/packages.toml`, and the cloud-init user-data is
+# rendered from the same file — a second copy in code would be a second copy that
+# drifts, and a host would install three things and converge on a fourth while
+# both machines reported success. The assertion that matters below is therefore a
+# comparison: every package the phase converges is a package the rendered
+# document carries, read out of the two real outputs.
+#
+# `python3-yaml` and `python3-jinja2` are the only imports outside the standard
+# library, which is what keeps the host installable on a distribution nobody has
+# tried yet. There is no `pip install` at deploy time, no wheels checked in, and
+# nothing in the user-data that would fetch from PyPI.
+#
+# **The converge runs against the real machine.** There is no staged
+# `/var/lib/dpkg/status` and no `dpkg-query` that answers from a file: the
+# question "is this package installed" is asked of the distribution's own
+# database, so a test that seeded a status file was asking a stand-in what it had
+# been asked. Which packages are missing from a fresh golden is the golden's
+# business, so each absence is asked of the machine and the converge is checked by
+# asking the phase again.
 
 . "$(dirname "$0")/lib.sh"
-scratch_host
 
-# --- the list itself --------------------------------------------------------
+# The machine's own tools, not the stand-ins in fixtures/bin. `.venv/bin` is kept
+# first because it is the checkout's interpreter and not a stand-in for anything.
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# Per-family entries are the point, and they are not cosmetic: the same
-# dependency has a different name per family, and asking for another family
-# answers with that family's names rather than this host's. `python3-yaml` on
-# Debian, `python3-pyyaml` on Fedora -- so a single hard-coded list could not
-# produce both, which is what "per family" is for.
+export GUARDEN_PREFIX=/
+arch=$(uname -m)
+mkdir -p /etc/guarden
+
+# The one list, and the two of its entries this file is about. Read with `soil`
+# rather than out of the TOML, because the question is what the phase converges and
+# not what a file says.
+run soil packages --list
+assert_exit 0
+assert_stdout_has "python3-yaml"
+assert_stdout_has "python3-jinja2"
+# The names are the part that is not portable, and that is the claim: the same
+# list has different names per family, and the query is the family's own rather
+# than a second opinion about it. `python3-yaml` on Debian, `python3-pyyaml` on
+# Fedora, `python-yaml` on Arch — so asking the wrong family for a package would
+# report a package that is installed as absent.
 run soil packages --list --family fedora
 assert_exit 0
 assert_stdout_has "family   fedora"
 assert_stdout_has "python3-pyyaml"
 assert_stdout_lacks "python3-yaml"
-assert_stdout_has "dnf install -y"
-assert_stdout_has "rpm -q"
-
-# A family the list does not carry is a rejected input: the caller named one
-# that does not exist, and answering with a family that does would make the
-# question unanswerable rather than answered wrongly.
-run soil packages --list --family nonsense
-assert_exit 2
-assert_stderr_has "nonsense"
-assert_stderr_has "debian"
-
-# The list itself names a family per entry and each family's own tools.
-assert_file_has "$GUARDEN_ROOT/packages/packages.toml" "[families.debian]"
-assert_file_has "$GUARDEN_ROOT/packages/packages.toml" "[families.fedora]"
-assert_file_has "$GUARDEN_ROOT/packages/packages.toml" "install = "
-
-# `python3-yaml` and `python3-jinja2` are the distribution's, by name, in every
-# family -- the whole dependency rule is that there is nothing else to install.
-run soil packages --list
+run soil packages --list --family arch
 assert_exit 0
+assert_stdout_has "family   arch"
+assert_stdout_has "python-yaml"
+run soil packages --list --family debian
+assert_exit 0
+# Captured here, while it is the answer, because `$GUARDEN_STDOUT` belongs to
+# whichever command ran last and the comparison below is twenty lines further
+# down. Reading it there compared the *rendered* document's summary — a `phases`
+# line and nothing else — against the package list, and the fake tier's silent
+# `--render-user-data` is why that never showed up before.
+cp "$GUARDEN_STDOUT" "$GUARDEN_FIXTURES/list-stdout"
+assert_stdout_has "family   debian"
 assert_stdout_has "python3-yaml"
-assert_stdout_has "python3-jinja2"
+# `ufw` is a dependency for two reasons and is not optional: it is the unit
+# guarden turns off and the one the dead-man timer re-enables to hand a locked-out
+# operator their shell back. A failsafe naming a package the host lacks is not a
+# failsafe, so the list carries it and this asserts it is in the list.
+assert_stdout_has "ufw"
+# A family the table has no row for is exit 2 and names the families it does have,
+# because a host on an unknown family would otherwise install nothing and report
+# that as success.
+run soil packages --list --family gentoo
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "fedora"
 
-# --- the list and the phase agree -------------------------------------------
-
-# The phase converges exactly the packages the list names, so a package in one
-# and not the other is drift the fast harness can see. Seeded as installed, and
-# the pinned podlet fetched, so this checks the packages and nothing else.
-seed "$GUARDEN_FIXTURES/packages" "btrfs-progs" "snapper" "ferm" "fail2ban" \
-    "podman" "python3-yaml" "python3-jinja2"
-seed "$GUARDEN_FIXTURES/curl-body" "the podlet release bytes"
-digest=$(sha256sum "$GUARDEN_FIXTURES/curl-body" | cut -d' ' -f1)
-seed "$(host etc/guarden/podlet.release)" \
-    'version = "1.4.0"' \
-    'url = "https://example.invalid/podlet"' \
-    "sha256 = \"$digest\""
-
-run soil packages --apply
+# The rendered user-data. This is the second copy of the list, and the point of
+# the file is that it is rendered from the first rather than typed out again.
+run soil packages --render-user-data "$GUARDEN_FIXTURES/user-data.yaml" --family debian
 assert_exit 0
+assert_file_exists "$GUARDEN_FIXTURES/user-data.yaml"
+assert_file_has "$GUARDEN_FIXTURES/user-data.yaml" "python3-yaml"
+assert_file_has "$GUARDEN_FIXTURES/user-data.yaml" "python3-jinja2"
+# Nothing from PyPI: no `pip`, no `venv`, no `.whl`, and no index. The document is
+# a cloud-init one and a machine that fetched from PyPI at boot would be a machine
+# whose state depends on a network nobody controls.
+assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "pip"
+assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" ".whl"
+assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "pypi"
+assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "index-url"
+# The two lists agree, and that is the whole claim. A package added to one and
+# forgotten in the other is a host that installs three things and converges on a
+# fourth while both machines report success, so the comparison is made between the
+# two real outputs rather than against a third copy written here.
+#
+# Only the **substrate** half is compared, and that is the point of the two roles
+# in `packages.toml`: the document also carries a `harness:` list, which is the
+# throwaway machine's check tooling and no host's dependency. Comparing the whole
+# document against `soil packages`' list would report every harness package as a
+# disagreement, and the two lists are meant to differ exactly there — so the
+# substrate is cut out of the document and the comparison is between the two
+# halves that are supposed to be one.
+grep -vE '^(family|install|query) ' "$GUARDEN_FIXTURES/list-stdout" | sort >"$GUARDEN_FIXTURES/list-packages"
+sed -n '/^  # harness:/,$d; s/^  - //p' "$GUARDEN_FIXTURES/user-data.yaml" \
+    | sort >"$GUARDEN_FIXTURES/rendered-packages"
+comm -23 "$GUARDEN_FIXTURES/list-packages" "$GUARDEN_FIXTURES/rendered-packages" \
+    >"$GUARDEN_FIXTURES/only-in-the-list"
+[ ! -s "$GUARDEN_FIXTURES/only-in-the-list" ] || _fail "converged but not rendered: $(tr '\n' ' ' <"$GUARDEN_FIXTURES/only-in-the-list")"
+# And the other direction, which is the one that would put a substrate package on
+# a machine the phase never asked to install.
+comm -13 "$GUARDEN_FIXTURES/list-packages" "$GUARDEN_FIXTURES/rendered-packages" \
+    >"$GUARDEN_FIXTURES/only-in-the-render"
+[ ! -s "$GUARDEN_FIXTURES/only-in-the-render" ] || _fail "rendered but not converged: $(tr '\n' ' ' <"$GUARDEN_FIXTURES/only-in-the-render")"
 
-run soil packages --check
+# The python packages are already on the golden, because the harness's own
+# substrate needs them, and that is asserted first as the precondition it is: a
+# golden that had stopped shipping one would make the drift this file is about a
+# different drift rather than none.
+assert_dpkg python3-yaml
+assert_dpkg python3-jinja2
+# And `.venv` is not the reason: the host carries its own copies, which is the
+# property the list exists to deliver. Asked with the checkout's venv off PATH
+# entirely, so a `.venv` answering would be the stand-in this ticket removed.
+run env -u PYTHONPATH PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    python3 -c "import yaml, jinja2; print('the host carries both')"
 assert_exit 0
+assert_stdout_has "the host carries both"
 
-# The install argv is the family's own, from the list, not a hard-coded
-# `apt-get`: that is what makes the phase portable and the list the only copy.
-# A converged host asks once per package and installs nothing.
-assert_not_called "apt-get install"
-assert_not_called "dnf install"
-assert_called_count 14 "dpkg-query -W"
+# The rest of the list is not on a fresh golden, so this is the real drift and the
+# real converge. Which of them are missing is the golden's business rather than this
+# file's, so each absence is asked of the machine and the converge is checked by
+# asking again: a `--check` that found nothing would be silent about them, and the
+# point is that it is not.
+assert_no_dpkg ferm
+assert_no_dpkg fail2ban
+assert_no_dpkg podman
 
-# A host where the list says a package is absent is drift, and the converge
-# installs it with the family's tool named in the list.
-seed "$GUARDEN_FIXTURES/packages" "btrfs-progs" "snapper" "ferm" "fail2ban" \
-    "podman" "python3-yaml"
+# The pinned podlet is the last item of the phase, and it is the only fetch in it,
+# so it is what decides this suite's exit codes rather than the packages. Two facts
+# about this machine make the sequence below deterministic rather than incidental.
+# `soil install` is what seeds the record from the template and this suite ran no
+# `install`, so on a golden the rest of the suite also expects to be fresh — the
+# three absences above are the same freshness claim — and the record is absent
+# rather than half-filled. And being last, everything before it converges first,
+# which is what the `dpkg-query` answers after the apply record.
+assert_file_missing /etc/guarden/podlet.release
+assert_file_missing /usr/lib/guarden/bin/podlet
 run soil packages --check
 assert_exit 1
-assert_stderr_has "drift: the python3-jinja2 package is installed"
-assert_not_called "apt-get install"
+assert_stderr_has "drift: the ferm package is installed"
+assert_stderr_has "drift: the fail2ban package is installed"
+assert_stderr_has "drift: the podman package is installed"
+assert_stderr_has "drift: the pinned podlet is installed"
 
+# **The apply converges the list and stops at the record.** One diagnostic is the
+# whole of what it said: the three packages were installed by this same run —
+# `dpkg-query` is the distribution's own record of that — and the one thing it
+# could not do was fetch an artefact nothing had told it how to fetch.
+run soil packages --apply
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "the pinned podlet record is absent"
+assert_dpkg ferm
+assert_dpkg fail2ban
+assert_dpkg podman
+# `ufw` is named rather than folded into the three absences above because those
+# three were asked of the machine and this one was not: what is asserted is that it
+# is installed afterwards, whichever starting state the golden had. It is in the
+# list for the two reasons `packages.toml` gives — the unit guarden turns off and
+# the one the dead-man timer hands back — and it converges with the rest or the
+# one-list claim is not true.
+assert_dpkg ufw
+
+# Asking again narrows the drift to exactly one item: every package in the one list
+# holds now, and the only thing left is the one fetch. The phase is silent about
+# the packages and says which single thing it wants.
+run soil packages --check
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "drift: the pinned podlet is installed"
+assert_stderr_lacks "package is installed"
+
+# **And now the record is there, so the claim this block used to be the opposite of
+# becomes the claim.** This is what `soil install` seeds on a host, copied from the
+# checkout because running the `install` phase is not this suite's business — the
+# seed is a file copy and the file is the one the repository ships.
+install -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" /etc/guarden/podlet.release
+assert_file_has /etc/guarden/podlet.release "[artefacts.$arch]"
+# A host that has not fetched it reports the pinned release as not installed, which
+# is exit 1: nothing is wrong with the record, the host does not have the program
+# yet. That was the old exit-2 refusal's opposite, and it is the exit code the
+# specification gives a host rather than an input.
+run soil packages --check
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "drift: the pinned podlet is installed"
+assert_stderr_lacks "package is installed"
+assert_file_missing /usr/lib/guarden/bin/podlet
+
+# **The apply installs it, and what it installs is a program.** Not "a file
+# appeared": every published podlet artefact is an archive, so a pin filled in
+# without an unpack step leaves an XZ file named `podlet` that exists, is
+# executable, and cannot be run — and `assert_file_exists` and `assert_executable`
+# both pass on it. The ELF header and the answer to `--version` are what tell that
+# from a program, and the answer names the release the record pins.
+pinned=$(sed -n 's/^version = "\(.*\)"$/\1/p' /etc/guarden/podlet.release)
 run soil packages --apply
 assert_exit 0
-assert_called "apt-get install -y python3-jinja2"
-run soil packages --check
+assert_stderr_empty
+assert_file_exists /usr/lib/guarden/bin/podlet
+assert_executable /usr/lib/guarden/bin/podlet
+assert_elf /usr/lib/guarden/bin/podlet
+run_installed /usr/lib/guarden/bin/podlet --version
 assert_exit 0
-
-# --- the rendered user-data carries the list, and nothing from PyPI ---------
-
-run soil packages --render-user-data "$GUARDEN_FIXTURES/rendered.yaml"
-assert_exit 0
-assert_file_exists "$GUARDEN_FIXTURES/rendered.yaml"
-assert_file_has "$GUARDEN_FIXTURES/rendered.yaml" "#cloud-config"
-assert_file_has "$GUARDEN_FIXTURES/rendered.yaml" "- podman"
-assert_file_has "$GUARDEN_FIXTURES/rendered.yaml" "- passt"
-
-# The rendered document is the one the golden VM boots, so a package added to
-# the list and not rendered is a boot that converges on less than the host needs.
-assert_stdout_has "packages storage sysctl firewall install units"
-
-# No wheel, no pip, no venv: the boot path installs distribution packages and
-# runs the phases, and that is all it does.
-assert_file_lacks "$GUARDEN_FIXTURES/rendered.yaml" "pip install"
-assert_file_lacks "$GUARDEN_FIXTURES/rendered.yaml" "python3 -m venv"
-assert_file_lacks "$GUARDEN_FIXTURES/rendered.yaml" ".whl"
-assert_file_lacks "$GUARDEN_FIXTURES/rendered.yaml" "pypi.org"
-
-# --- an already-converged host reports no drift ------------------------------
-
-# The scripts path on a host without cloud-init converges to the same state, and
-# the second run is a no-op: the word `drift` and the exit code are the contract
-# whichever path got there.
+assert_stdout_has "podlet $pinned"
+# The fetched archive and the half-written temporary are both gone: what the
+# unpack left behind is the program and nothing else.
+assert_file_missing /usr/lib/guarden/bin/podlet.fetch
+assert_file_missing /usr/lib/guarden/bin/.podlet.new
 run soil packages --check
 assert_exit 0
 assert_stderr_empty
+
+# And a converged host stays converged. This is what replaced
+# `assert_not_called "apt-get install"` on a second run — not "no new package was
+# installed" as a separate probe, but the phase's own answer on a host that holds
+# what it asked for, the absence of any package drift on it, and this time with the
+# one fetch already made rather than refused.
+run soil packages --apply
+assert_exit 0
+assert_stderr_empty
+assert_dpkg ferm
+assert_dpkg fail2ban
+assert_dpkg podman
+assert_dpkg ufw
+
+# The harness's own substrate is on the golden and is a precondition rather than a
+# claim, so it is asserted as one: a golden that stopped shipping one would make
+# the absences above different absences.
+assert_dpkg btrfs-progs
+assert_dpkg snapper

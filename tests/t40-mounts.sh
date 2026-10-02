@@ -13,6 +13,13 @@
 guarden_prefix
 stage_config guarden-measured.toml
 
+# Two of the three fixture projects this file renders ship a `compose.yaml`, so the
+# property it asserts — that no rendered unit names a host path outside the
+# service's own volumes — is a property of a converter's output as much as of the
+# renderer's. The converter is installed by the phase that owns the fetch, at the
+# pinned path, and is a program; `t20-podlet.sh` is where that is the subject.
+install_pinned_converter
+
 registry=$GUARDEN_PREFIX/var/lib/guarden/registry
 overrides=$GUARDEN_PREFIX/etc/guarden/services
 

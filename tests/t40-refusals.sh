@@ -14,6 +14,11 @@
 guarden_prefix
 stage_config guarden-measured.toml
 
+# The blocks below that reach `render` do so on a Compose source, and the
+# converter is what turns one into units — installed by the phase that owns the
+# fetch, at the pinned path, and a program rather than a file that merely exists.
+install_pinned_converter
+
 project=$GUARDEN_FIXTURES/project
 seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml"
 seed "$project/compose.yaml" "services:" "  web:" "    image: docker.io/library/nginx:1.27"

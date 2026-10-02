@@ -13,6 +13,12 @@
 guarden_prefix
 stage_config guarden-measured.toml
 
+# This file's unit source is `compose.yaml`, so the renderer needs the pinned
+# converter to answer anything about it — including whether the manifest beside it
+# is renderable. The converter is installed by the phase that owns the fetch, at
+# the pinned path, and is a program; `t20-podlet.sh` is where that is the subject.
+install_pinned_converter
+
 project=$GUARDEN_FIXTURES/project
 seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml"
 seed "$project/compose.yaml" "services:" "  web:" "    image: docker.io/library/nginx:1.27"

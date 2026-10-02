@@ -1,0 +1,46 @@
+# The shipped environment table with one row whose `fork_from` names **itself**,
+# which is the other half of the same refusal `guarden-badfork.toml` covers.
+#
+# A track that forks from itself is not a lineage, it is a cycle with no base: the
+# automatic fork would ask for a service on that track's own track and find
+# nothing, and an operator reading the row would reasonably expect the service to
+# have an origin. It is exit `2` naming the track, and the table is read before
+# any verb gets a chance to be ambiguous about it.
+[host]
+domain = "example.com"
+interface = ""
+admin_user = "operator"
+
+[ingress]
+alias = ""
+publication_range = [20000, 32767]
+
+[network]
+backend = "pasta"
+pasta_options = [ "--map-gw" ]
+
+[build]
+lanes = 1
+
+[modules]
+enabled = ["gate", "homepage"]
+
+[[environments]]
+name = "production"
+host_prefix = ""
+gated = true
+weight = 1000
+free_limit = 0.10
+keep_last = 7
+kind = "slot"
+fork_from = ""
+
+[[environments]]
+name = "staging"
+host_prefix = "staging."
+gated = false
+weight = 100
+free_limit = "0.20"
+keep_last = 0
+kind = "slot"
+fork_from = "staging"

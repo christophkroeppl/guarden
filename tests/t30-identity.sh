@@ -2,94 +2,90 @@
 # The service user: one per service, a subid range the system allocates, and the
 # read-back that is the whole point of the rule (ADR-0003, ticket 30 item 6).
 #
-# `useradd --add-subuids-for-system` succeeding is the tool's word for it;
-# `/etc/subuid` holding the range is the fact. An unallocated range is a container
-# that starts and then cannot map its own root, which is a long way from the
-# cause, so the read-back is a step and not a courtesy.
+# The range in `/etc/subuid` is the fact, and a call to useradd is not: which free
+# block the host hands out is the system's own arithmetic, so what is asserted is
+# that a block was delegated, how wide it is, and that two services do not hold
+# the same one. A range nobody allocated is a container that starts and then
+# cannot map its own root, which is a long way from the cause.
 
 . "$(dirname "$0")/lib.sh"
 
-# The read-back fails loudly, naming the service. A fixture marker stands in for
-# a system where the allocation silently did not happen — and the service is not
-# repaired, because the spec's remedy is the operator's and a mutator that
-# allocated a second range on the retry would hide the first failure.
-guarden_prefix "$GUARDEN_FIXTURES/host-unallocated"
-stage_config guarden.toml
-stage_poke myapp 9f2c1ab
-touch "$GUARDEN_FIXTURES/subid-unallocated"
-run weedr service ingest myapp-production --from poke myapp@9f2c1ab
-assert_exit 1
-assert_one_diagnostic "error:"
-assert_stderr_has "myapp-production has no subid range"
-assert_stderr_has "could not map its own root"
-assert_file_lacks "$GUARDEN_PREFIX/var/lib/guarden/registry/myapp-production.toml" "myapp-production"
+# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
+# directory on PATH, and the whole of this file is the read-back: a range the
+# real `useradd` put in the real `/etc/subuid`, a membership the real `usermod`
+# set, a linger the real `loginctl` holds. The fake `useradd` numbered every user
+# from a counter and the fake `loginctl` knew only `enable-linger`, so under it
+# the read-back proved only that the stand-ins agreed with each other.
+# `.venv/bin` is kept first because it is the checkout's interpreter and not a
+# stand-in for anything.
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# Without the marker, the range is there and the service is created.
-rm -f "$GUARDEN_FIXTURES/subid-unallocated"
-guarden_prefix "$GUARDEN_FIXTURES/host-allocated"
+export GUARDEN_PREFIX=/
+# The real path, not a relocated one: stage_config writes where guarden reads,
+# and /etc/guarden is absent on a host where `soil install` has never run.
+mkdir -p /etc/guarden
+# `soil install` creates the group and is not this file's phase, but
+# `users.group_id` refuses to write a service without it, so the precondition is
+# established here rather than inherited from whichever suite ran first.
+if ! getent group guarden >/dev/null 2>&1; then
+    groupadd --system guarden
+fi
 stage_config guarden.toml
 stage_poke myapp 9f2c1ab
+
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 0
-assert_file_has "$GUARDEN_PREFIX/etc/subuid" "myapp-production:100000:65536"
-assert_file_has "$GUARDEN_PREFIX/etc/subgid" "myapp-production:100000:65536"
+assert_passwd myapp-production
+assert_linger myapp-production
+production_subuid=$(awk -F: '$1 == "myapp-production" { print $2 }' /etc/subuid)
+production_subgid=$(awk -F: '$1 == "myapp-production" { print $2 }' /etc/subgid)
+assert_subid /etc/subuid myapp-production "$production_subuid" 65536
+assert_subid /etc/subgid myapp-production "$production_subgid" 65536
 
 # A second service gets a **different** range, because one hardcoded range for
 # everyone is not a fallback — it maps every container's root to the same host
-# uid, and the firewall's uid matching stops meaning what it says.
-stage_poke myapp 9f2c1ab
+# uid, and the moment two services share a directory the ownership is ambiguous
+# and the firewall's uid matching stops meaning what it says. This one is created
+# with the grant surface an admin wrote, so the two claims are asked of one run:
+# `video` is on the host and `nosuchgroup` is nothing's.
+seed /etc/guarden/services/myapp-staging/overrides.toml \
+    '[groups]' 'add = ["video", "nosuchgroup"]'
 run weedr service ingest myapp-staging --from poke myapp@9f2c1ab
 assert_exit 0
-assert_file_has "$GUARDEN_PREFIX/etc/subuid" "myapp-staging:165536:65536"
-assert_file_has "$GUARDEN_PREFIX/etc/subgid" "myapp-staging:165536:65536"
-assert_file_has "$GUARDEN_PREFIX/etc/passwd" "myapp-production:x:1000:1000"
-assert_file_has "$GUARDEN_PREFIX/etc/passwd" "myapp-staging:x:1001:1001"
-assert_called "loginctl enable-linger myapp-staging"
-
-# A range two users hold is refused, not silently accepted: this is the check
-# that makes "a distinct range per service user" a fact rather than an intention.
-guarden_prefix "$GUARDEN_FIXTURES/host3"
-stage_config guarden.toml
-stage_poke myapp 9f2c1ab
-printf '%s\n' 'myapp-production:100000:65536' >"$GUARDEN_PREFIX/etc/subuid"
-printf '%s\n' 'myapp-production:100000:65536' >"$GUARDEN_PREFIX/etc/subgid"
-printf '%s\n' 'myapp-production:x:1000:1000' >>"$GUARDEN_PREFIX/etc/passwd"
-touch "$GUARDEN_FIXTURES/subid-collision"
-run weedr service ingest myapp-staging --from poke myapp@9f2c1ab
-assert_exit 1
-assert_stderr_has "share the subid range 100000:65536"
-assert_stderr_has "maps its root to the same host uid"
-
-# The fallback path, for shadow-utils older than 4.11: the user is created plain
-# and the range written afterwards, and only there does the call log carry the
-# range, which is why the read-back matters on both paths.
-guarden_prefix "$GUARDEN_FIXTURES/host4"
-stage_config guarden.toml
-stage_poke myapp 9f2c1ab
-touch "$GUARDEN_FIXTURES/shadow-utils-old"
-run weedr service ingest myapp-production --from poke myapp@9f2c1ab
-assert_exit 0
-assert_called "usermod --add-subuids 100000-165535 myapp-production"
-assert_called "usermod --add-subgids 100000-165535 myapp-production"
-assert_file_has "$GUARDEN_PREFIX/etc/subuid" "myapp-production:100000:65536"
+assert_passwd myapp-staging
+assert_linger myapp-staging
+staging_subuid=$(awk -F: '$1 == "myapp-staging" { print $2 }' /etc/subuid)
+assert_subid /etc/subuid myapp-staging "$staging_subuid" 65536
+[ "$staging_subuid" != "$production_subuid" ] \
+    || _fail "myapp-staging was delegated myapp-production's range $staging_subuid"
 
 # A group that does not exist is reported and skipped, and no group is ever
 # created: the groups a service needs belong to the system and the distribution,
 # and a mutator that could create one could hand out a group nobody meant to grant.
-guarden_prefix "$GUARDEN_FIXTURES/host5"
-stage_config guarden.toml
-stage_poke myapp 9f2c1ab
-mkdir -p "$GUARDEN_PREFIX/etc/guarden/services/myapp-production"
-printf '%s\n' '[groups]' 'add = ["video", "nosuchgroup"]' >"$GUARDEN_PREFIX/etc/guarden/services/myapp-production/overrides.toml"
-printf '%s\n' 'video:x:44:' >>"$GUARDEN_PREFIX/etc/group"
-run weedr service ingest myapp-production --from poke myapp@9f2c1ab
-assert_exit 0
-assert_stderr_has "supplementary group 'nosuchgroup' is not on the host"
-assert_called "usermod --append --groups video myapp-production"
-assert_not_called "nosuchgroup"
-assert_file_lacks "$GUARDEN_PREFIX/etc/group" "nosuchgroup"
+assert_group video
+assert_supplementary_group myapp-staging video
+assert_stderr_has "the supplementary group 'nosuchgroup' is not on the host"
+assert_no_supplementary_group myapp-staging nosuchgroup
+assert_no_group nosuchgroup
+
+# A range two users hold is refused, not silently accepted: this is the check
+# that makes "a distinct range per service user" a fact rather than an intention.
+#
+# The colliding line is staged rather than provoked, because a real useradd
+# allocates around a block that is taken and will not collide on its own: the
+# duplicated line is what a hand edit or a migration leaves behind, and it is the
+# case the check exists for. The registry entry goes with it — a second ingest of
+# an unchanged service converges without reading the range back, so the read-back
+# is only reachable while the service is un-recorded.
+impostor_range=$(awk -F: '$1 == "myapp-staging" { print $2 ":" $3 }' /etc/subuid)
+say /etc/subuid "impostor:$impostor_range"
+rm -f /var/lib/guarden/registry/myapp-staging.toml
+run weedr service ingest myapp-staging --from poke myapp@9f2c1ab
+assert_exit 1
+assert_stderr_has "share the subid range $impostor_range"
+assert_stderr_has "maps its root to the same host uid"
+assert_file_missing /var/lib/guarden/registry/myapp-staging.toml
 
 # No login shell, and a home inside the service's own tree.
-assert_called "--shell /usr/sbin/nologin"
-assert_file_has "$GUARDEN_PREFIX/etc/passwd" ":/usr/sbin/nologin"
-assert_file_has "$GUARDEN_PREFIX/etc/passwd" "/var/lib/guarden/services/myapp-production/home"
+assert_passwd_field myapp-production 7 /usr/sbin/nologin
+assert_passwd_field myapp-production 6 /var/lib/guarden/services/myapp-production/home

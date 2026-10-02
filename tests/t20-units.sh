@@ -7,11 +7,44 @@
 # and a mark nobody writes.
 
 . "$(dirname "$0")/lib.sh"
-scratch_host
 
-# A host that has not been converted, so `soil --check` has something to say
-# about a phase other than the one this file is about.
-seed "$GUARDEN_FIXTURES/btrfs-subvolumes" "ID 256 gen 42 top level 5 path @"
+# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
+# directory on PATH for the fake tier, and both the assertions below and the
+# programs under them have to reach the real `getent`, `dpkg-query`, `systemctl`,
+# `snapper`, `sysctl` and `install` -- otherwise this file is asking a fake what
+# it had been asked to do, which is the whole thing the rewrite exists to stop.
+# `.venv/bin` is kept first because it is the checkout's interpreter and not a
+# stand-in for anything.
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+export GUARDEN_PREFIX=/
+
+# This file owns the phase's starting state, because a timer left enabled by
+# whichever file ran before it would make the first check below a fact about the
+# machine rather than about this run. What the phase converges is the same state,
+# and the machine is left in it.
+for timer in guarden-snapshot.timer guarden-pin-sync.timer; do
+    systemctl disable --now "$timer" >/dev/null 2>&1 || :
+done
+rm -f /etc/systemd/system/guarden-snapshot.service \
+    /etc/systemd/system/guarden-snapshot.timer \
+    /etc/systemd/system/guarden-pin-sync.service \
+    /etc/systemd/system/guarden-pin-sync.timer
+systemctl daemon-reload >/dev/null 2>&1 || :
+
+# The phase enables three timers and installs two of them: the cleanup timer and
+# its oneshot belong to `storage`, which is the phase before this one in spec
+# 6.1's order, and a timer whose oneshot is absent cannot be started. That phase
+# is converged here for what this one depends on rather than stood in for,
+# because a missing prerequisite is a prerequisite failure and not a fact about
+# this phase; its own drift is t20-storage's subject and is not this file's exit
+# code to judge. The group is `install`'s and the same reason applies.
+if ! getent group guarden >/dev/null; then
+    groupadd --system guarden
+fi
+run soil storage --apply
+assert_file_exists /etc/systemd/system/guarden-snapper-cleanup.timer
+assert_file_exists /etc/systemd/system/guarden-snapper-cleanup.service
 
 run soil units --check
 assert_exit 1
@@ -19,70 +52,62 @@ assert_stderr_has "drift: /guarden-snapshot.service is installed"
 
 run soil units --apply
 assert_exit 0
-assert_file_has "$(host etc/systemd/system/guarden-snapshot.service)" \
+assert_file_has /etc/systemd/system/guarden-snapshot.service \
     "ExecStart=/usr/lib/guarden/bin/weedr service snapshot --all"
-assert_file_has "$(host etc/systemd/system/guarden-pin-sync.service)" \
+assert_file_has /etc/systemd/system/guarden-pin-sync.service \
     "ExecStart=/usr/bin/flock -w 30 /run/guarden/locks/snapshots.lock /usr/lib/guarden/bin/weedr pin sync"
-assert_called "systemctl enable --now guarden-snapshot.timer"
-assert_called "systemctl enable --now guarden-pin-sync.timer"
-assert_called "systemctl enable --now guarden-snapper-cleanup.timer"
+
+# All three are enabled *and* running, and the two claims are separate: an
+# enabled timer that was not started waits for nothing, and a started timer that
+# was not enabled does not survive the next boot.
+assert_enabled guarden-snapshot.timer
+assert_active guarden-snapshot.timer
+assert_enabled guarden-pin-sync.timer
+assert_active guarden-pin-sync.timer
+assert_enabled guarden-snapper-cleanup.timer
+assert_active guarden-snapper-cleanup.timer
 
 # The reconciler is a root action and `stakes` is not: `stakes` runs
 # unprivileged and writing snapper's metadata is not something it can do, so the
 # marks have to be written by something that can. It is also the phase that
 # converges the snapshot ladder, so a box that is not converged is a box whose
 # retention is a convention.
-assert_file_has "$(host etc/systemd/system/guarden-snapshot.service)" "Requires=snapperd.service"
+assert_file_has /etc/systemd/system/guarden-snapshot.service "Requires=snapperd.service"
 
 # A routine snapshot is never marked, and the unit that makes them says so.
-assert_file_has "$(host etc/systemd/system/guarden-snapshot.service)" "Type=oneshot"
+assert_file_has /etc/systemd/system/guarden-snapshot.service "Type=oneshot"
 
 run soil units --check
 assert_exit 0
 
 # The two modes, as the spec states them: `--check` is safe over ssh at any time
-# and `soil --check` is every phase.
+# and `soil --check` is every phase. Which phases drift is the host's business --
+# a machine this file has not converged has every package phase item on it -- so
+# the claim is that the whole-host check reads the host and finds something to
+# say, not what it found.
 run soil --check
 assert_exit 1
 assert_stderr_has "drift:"
-assert_stderr_has "btrfs with the @ and @var subvolumes"
 
 # `--check` changed nothing, so the drift it reported is still there.
 run soil units --check
 assert_exit 0
 run soil --check
 assert_exit 1
-assert_stderr_has "drift: btrfs with the @ and @var subvolumes"
+assert_stderr_has "drift:"
 
-# And every phase converges, after which the whole host checks clean. The pin is
-# filled in first, because an unpinned third-party artefact is a rejected input
-# and a rejected input stops the run before the phases that follow it -- which is
-# the right order for an input, and the reason a host cannot be converged with an
-# unfilled pin.
-seed "$GUARDEN_FIXTURES/curl-body" "the podlet release bytes"
-digest=$(sha256sum "$GUARDEN_FIXTURES/curl-body" | cut -d' ' -f1)
-seed "$GUARDEN_HOST/etc/guarden/podlet.release" \
-    'version = "1.4.0"' \
-    'url = "https://example.invalid/podlet"' \
-    "sha256 = \"$digest\""
-seed "$GUARDEN_FIXTURES/btrfs-subvolumes" \
-    "ID 256 gen 42 top level 5 path @" \
-    "ID 257 gen 42 top level 5 path @var"
-run soil --apply
-assert_stderr_has "ingress.alias is empty"
-assert_stderr_has "alias probe 1 of 4"
-run soil --check
-assert_stderr_has "drift: ingress.alias holds an address the probe measured"
-
-# A second whole-host apply creates nothing: the two program users and the one
-# group already exist, every directory is already at its mode, and every package
-# is already installed. The alias is the one thing it re-runs, because the probe
-# is the only thing that can produce it.
-rm -f "$GUARDEN_CALLS"
-run soil --apply
-assert_not_called "useradd"
-assert_not_called "groupadd"
-assert_not_called "install -d"
-assert_not_called "apt-get"
-assert_not_called "create-config"
-assert_called "podman run --rm --network"
+# There is deliberately no `soil --apply` here. The whole-host converge stops at
+# `install`'s alias probe, which no machine can satisfy while the probe's image
+# is absent from this repository, so a run never reaches `units` and could never
+# report anything about this phase. The claim the old whole-host block was making
+# -- a second apply creates nothing -- is asked of this file's own phase instead,
+# where it can be answered.
+accounts=$(getent passwd | wc -l)
+run soil units --apply
+assert_exit 0
+[ "$(getent passwd | wc -l)" = "$accounts" ] \
+    || _fail "a second apply created an account"
+assert_enabled guarden-snapshot.timer
+assert_active guarden-pin-sync.timer
+run soil units --check
+assert_exit 0
