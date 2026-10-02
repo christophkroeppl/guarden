@@ -11,3 +11,11 @@ After=snapperd.service
 [Service]
 Type=oneshot
 ExecStart=/usr/lib/guarden/bin/weedr service snapshot --all
+# Then the reconciler, under the same lock the cleanup uses (spec 6.9): a routine
+# snapshot is never marked, so nothing writes a mark tonight, and the pass that
+# does is what makes the fork sources of any fork taken since the last run
+# protected before snapper's algorithms see them. Same key as
+# guarden-snapper-cleanup.service, because snapper takes no lock that
+# `snapper modify` participates in and its cleaner reuses one reference to the
+# snapshot list across all three passes.
+ExecStart=/usr/bin/flock -w 30 /run/guarden/locks/snapshots.lock /usr/lib/guarden/bin/weedr pin sync

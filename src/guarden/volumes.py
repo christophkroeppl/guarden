@@ -22,12 +22,17 @@ workload and volume names may both contain `-`.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from guarden import conf, paths, tool
 
-SUBVOLUME = "state"
-BULK = "bulk"
+# The two kinds and the directories they live under are `paths`' to state (spec 2):
+# `state/` and `bulk/` are split precisely so a snapshotted subvolume is never a
+# parent of an unsnapshotted one, and that is a layout fact rather than a volume
+# fact, so the constants live with the rest of the layout.
+SUBVOLUME = paths.STATE
+BULK = paths.BULK
 
 EMPTY_PRE_POST_CLEANUP = "no"
 NUMBER_MIN_AGE = "3600"
@@ -84,7 +89,7 @@ def create_subvolume(target, owner: tuple[int, int]) -> None:
     """One btrfs subvolume, owned by the service user. Never a plain directory."""
     target.parent.mkdir(parents=True, exist_ok=True)
     tool.run(["btrfs", "subvolume", "create", str(target)])
-    _own(target, owner)
+    own(target, owner)
 
 
 def create_state(
@@ -112,9 +117,13 @@ def create_bulk(
     create_subvolume(paths.volume(name, BULK, vol, escaped_ref), owner)
 
 
-def _own(target, owner: tuple[int, int]) -> None:
-    import os
+def own(target, owner: tuple[int, int]) -> None:
+    """A clone or a subvolume handed to the service's user, `0700` to it.
 
+    The `0700` is the isolation boundary rather than tidiness: a service's tree
+    is not readable by any other unprivileged uid, which is why `stakes` cannot
+    read a volume's size and asks `weedr service list --json` instead.
+    """
     conf.set_owner(target, owner)
     os.chmod(target, 0o700)
 
