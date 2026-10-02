@@ -111,11 +111,31 @@ def _used_blocks(path: Path) -> list[tuple[int, int]]:
     return blocks
 
 
+def _overlaps(start: int, first: int, count: int) -> bool:
+    """Whether the block at `start` and the line at `first` claim a uid in common.
+
+    Both halves are load-bearing, and asking for only one of them is the loop
+    that was here. Asking whether `start` fell *inside* a line answers true of
+    every later `start` too once the base is covered, so the walk never advanced
+    past the line that covered it.
+    """
+    return start < first + count and start + SUBUID_SIZE > first
+
+
 def free_block(path: Path) -> str:
-    """The first free `<first>-<last>` at the system's base, for the fallback path."""
+    """The first free `<first>-<last>` at the system's base, for the fallback path.
+
+    **The bound is the file.** A candidate overlaps a line in it only while the
+    candidate starts below that line's end, and the lines are finite, so the walk
+    stops at the latest the first slot past the highest end in the file — it is a
+    walk, not a search that can come back. The staged harness empties
+    `/etc/subuid`, so its `taken` is empty and this loop has never run there; a
+    host whose `/etc/subuid` holds one range at the system's base has always run
+    it, which is why the defect that lived here could only be seen on a machine.
+    """
     taken = _used_blocks(path)
     start = SUBUID_BASE
-    while any(first <= start and start + SUBUID_SIZE > first + count - 1 for first, count in taken):
+    while any(_overlaps(start, first, count) for first, count in taken):
         start += SUBUID_SIZE
     return f"{start}-{start + SUBUID_SIZE - 1}"
 
@@ -209,7 +229,18 @@ def reconcile_groups(name: str, wanted: list[str]) -> list[str]:
     ]
 
 
-def destroy(name: str) -> None:
+def destroy(name: str, uid: int) -> None:
+    """Take the account away, and the user manager that is holding it.
+
+    Every service's user has linger enabled (spec 5.3, and a service's units have
+    to run without anybody logging in), and **a lingering user has a
+    `systemd --user` running for its uid** — measured on the machine: right after
+    an ingest, `user@<uid>.service` is active, `loginctl show-user` says
+    `State=lingering`, and `userdel <name>` answers `user <name> is currently used
+    by process <pid>` and exits 8. So the manager is stopped first, which is what
+    takes the process away; `userdel` then does its work.
+    """
+    tool.run(["systemctl", "stop", f"user@{uid}.service"])
     tool.run(["userdel", name])
 
 

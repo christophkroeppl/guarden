@@ -25,3 +25,4 @@ __pycache__/
 *.tar.gz
 *.dump
 evidence/
+.lxc-state/

@@ -35,7 +35,8 @@ class Result:
         return self.returncode == 0
 
 
-def call(argv: list[str] | tuple[str, ...], stdin: str | None = None) -> Result:
+def call(argv: list[str] | tuple[str, ...], stdin: str | None = None,
+         cwd: str | Path | None = None) -> Result:
     log.debug("ran: %s", " ".join(argv))
     finished = subprocess.run(
         list(argv),
@@ -43,13 +44,25 @@ def call(argv: list[str] | tuple[str, ...], stdin: str | None = None) -> Result:
         capture_output=True,
         text=True,
         check=False,
+        cwd=cwd,
     )
     return Result(tuple(argv), finished.returncode, finished.stdout, finished.stderr)
 
 
-def run(argv: list[str] | tuple[str, ...]) -> Result:
-    """Run a tool whose success the caller assumes. A failure is exit `1`."""
-    result = call(argv)
+def run(argv: list[str] | tuple[str, ...], stdin: str | None = None,
+        cwd: str | Path | None = None) -> Result:
+    """Run a tool whose success the caller assumes. A failure is exit `1`.
+
+    `stdin` is for the one tool that takes a value on a pipe rather than an
+    argument: `systemd-creds encrypt` and `podman secret create`. It is not
+    accepted as an argv element, so a value can never become a command-line
+    argument that a process list would show.
+
+    `cwd` is for the one call whose child must not inherit this process's working
+    directory, and it is a directory the child's own uid can enter — see
+    `credentials.materialise`, which is why it exists.
+    """
+    result = call(argv, stdin=stdin, cwd=cwd)
     if not result.ok:
         detail = result.stderr.strip() or result.stdout.strip()
         raise errors.GuardenError(

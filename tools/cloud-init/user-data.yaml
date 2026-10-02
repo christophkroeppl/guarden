@@ -57,6 +57,7 @@ packages:
   - btrfs-progs
   - snapper
   - ferm
+  - ufw
   - fail2ban
   - podman
   - python3-yaml

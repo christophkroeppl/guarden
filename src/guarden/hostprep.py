@@ -6,6 +6,14 @@ every item, `--apply` asks the second. Nothing else decides what a phase means,
 so the two modes cannot drift apart, and `--check` changing nothing is a
 property of the shape rather than of care in each phase.
 
+**A phase may also have one step that runs before any of its items, and only
+`--apply` runs it.** That is `prepare_for`, and it exists for the one thing in
+the whole set that is not a fact about the host: the distribution's package
+index. A step with nothing to converge it against cannot be an `Item` — asking
+whether a stale index holds would report drift on every host forever — so it is
+outside the list, and a check that ran it would be a check that changed
+something.
+
 The order the phases run in is the order in spec 6.1, and it is not
 interchangeable: `storage` creates the directories `install` writes into and the
 registry `install` reads a track from.
@@ -14,14 +22,19 @@ registry `install` reads a track from.
 from __future__ import annotations
 
 import hashlib
+import lzma
 import os
+import platform
 import socket
+import stat
+import tarfile
 import threading
-from collections.abc import Iterable
-from pathlib import Path
+import zipfile
+from collections.abc import Callable, Iterable
+from pathlib import Path, PurePosixPath
 
+from guarden import errors, packagelist, paths
 from guarden import hosttool as h
-from guarden import packagelist, paths
 from guarden.hosttool import Item, hostpath, lock
 
 # --------------------------------------------------------------------------
@@ -74,11 +87,44 @@ def distribution_packages(family: str | None = None) -> tuple[str, ...]:
     """The packages this host's family needs, and the only list of them."""
     return packagelist.package_names(family)
 
-# The one fetch from outside a distribution repository. Its version and SHA256
-# are recorded in the repository and verified on install, and there is no
-# version of guarden that fetches an unpinned artefact.
+# The one fetch from outside a distribution repository. Its version, the artefact's
+# SHA256 and the installed program's SHA256 are recorded in the repository and
+# verified on install, and there is no version of guarden that fetches an unpinned
+# artefact.
 PODLET_RECORD_NAME = "podlet.release"
 PODLET_RECORD = ("etc", "guarden", PODLET_RECORD_NAME)
+
+# The record carries one row per host architecture rather than one url, because a
+# single url is a pin that cannot be correct on any host but the machine it was
+# written on: installing the wrong row's bytes produces a file that exists, is
+# executable, and is not a program, and refusing the fetch everywhere except one
+# machine tells an operator nothing about which row is missing. The host's own
+# `platform.machine()` picks the row, and both spellings of each architecture are
+# accepted because a pin written on an amd64 machine says `x86_64` and one that
+# calls itself `amd64` is the same machine. See the record's own comment.
+_PODLET_MACHINES = {
+    "x86_64": "x86_64",
+    "amd64": "x86_64",
+    "aarch64": "aarch64",
+    "arm64": "aarch64",
+}
+
+# What an artefact may be. A closed set of two, because the unpack reads the
+# archive as the format says it is and a format nobody has looked at is a format
+# nobody can claim is unpacked safely.
+PODLET_FORMATS = ("tar.xz", "zip")
+
+# The four fields a row must carry, and the order a diagnostic names the first
+# missing one in. Both digests are required: one is the artefact's, checked before
+# anything is unpacked out of it, and one is the program's, re-read on every
+# `--check` because the artefact is not kept.
+PODLET_FIELDS = ("format", "url", "sha256", "binary_sha256")
+
+# The temporary the fetch lands in, a sibling of the installed program rather
+# than a path under /tmp: its digest is compared from there, before anything is
+# unpacked out of it, and a file another process could see is not where that
+# happens.
+PODLET_FETCH = "podlet.fetch"
 
 # spec 6.1: the kernel owns the public ports and nothing unprivileged binds
 # below 1024. Raising the threshold to the kernel default is a tightening;
@@ -87,9 +133,13 @@ IP_UNPRIVILEGED_PORT_START = "1024"
 
 SNAPPER_CONFIG_DIR = ("etc", "snapper", "configs")
 
-# The host's own two configurations and the subvolume each is for. `root` is
-# what the package hook snapshots; `home` is the host's.
-HOST_CONFIGURATIONS = {"root": "/", "home": "/home"}
+# The host's own configuration and the subvolume it is for. `root` is the whole
+# of it: spec 6.1's layout is `@` for `/` and `@var` for `/var`, and `/home` is
+# inside `@` rather than a subvolume of its own. snapper snapshots a subvolume,
+# so a configuration for `/home` could not be created on that layout at all, and
+# `_btrfs_layout_holds()` accepting it is what let that go unnoticed until a
+# real machine ran the phase.
+HOST_CONFIGURATIONS = {"root": "/"}
 
 # spec 8.1's canonical set, in the order the table gives them. A `None` is a
 # value that comes from somewhere else rather than a constant.
@@ -109,28 +159,57 @@ CANONICAL: tuple[tuple[str, str | None], ...] = (
     ("FREE_LIMIT", None),
 )
 
-# `root` and `home` get these four and nothing else: no track owns them, so
-# there is no track to read a default from and their ladder is left as the
-# distribution shipped it.
-HOST_FIXED = (
-    "EMPTY_PRE_POST_CLEANUP",
-    "NUMBER_MIN_AGE",
-    "NUMBER_CLEANUP",
-    "TIMELINE_CLEANUP",
-)
+# The host's own configuration converges every canonical value that is **not**
+# derived from a track: spec 8.1 converges "this fixed set of values into *every*
+# configuration it can see", and the two that are not constants — the daily
+# bucket's maximum and the free-space floor — are read from the `[[environments]]`
+# row that owns the volume. No row owns `root`, so those two are left as the
+# distribution shipped them and the other eleven are held.
+HOST_FIXED = tuple(key for key, value in CANONICAL if value is not None)
 
 PACKAGED_CLEANUP = ("snapper-cleanup.timer", "snapper-cleanup.service")
+
+# The distribution's own apt timers, which mutate the index and the package set
+# on a schedule. They are the packages phase's `PACKAGED_CLEANUP`, for the reason
+# ADR-0007 gives snapper's: a packaging timer running on its own schedule is the
+# same overlap as any other writer, and `apt-get` does not wait for a lock it
+# cannot take — two concurrent `apt-get update` runs on the golden VM, one
+# succeeded and the other answered `E: Could not get lock /var/lib/apt/lists/lock`
+# and exit 100 rather than blocking, so a `soil packages` that met a timer mid
+# refresh would fail the run rather than queue behind it.
+#
+# The `.service` names are here for the same reason `PACKAGED_CLEANUP` carries
+# them: they are `static`, `systemctl disable` cannot act on them, and the check
+# asks for "not enabled" rather than for one exact word.
+#
+# **This does not disable `unattended-upgrades.service`,** which measures enabled
+# and active on the golden. That unit installs security updates unattended, and
+# switching it off is a security-posture decision this phase does not get to make
+# on an operator's behalf; `apt-daily-upgrade.timer` is what triggers it on a
+# schedule, and that is the trigger this removes. The limit is real and it is
+# stated: anything that starts that service deliberately can still meet a
+# `soil packages` run, and the run reports it rather than retrying.
+PACKAGED_APT = (
+    "apt-daily.timer",
+    "apt-daily.service",
+    "apt-daily-upgrade.timer",
+    "apt-daily-upgrade.service",
+    "dpkg-db-backup.timer",
+    "dpkg-db-backup.service",
+)
 
 SYSCTL_FILE = ("etc", "sysctl.d", "90-guarden.conf")
 SYSTEMD_DIR = ("etc", "systemd", "system")
 APT_DIR = ("etc", "apt", "apt.conf.d")
 FIREWALL_DIR = ("etc", "guarden", "firewall")
+CREDS_DIR = ("etc", "guarden", "creds")
 REGISTRY_DIR = ("var", "lib", "guarden", "registry")
 UNITS = (
     "guarden-snapshot.service",
     "guarden-snapshot.timer",
     "guarden-pin-sync.service",
     "guarden-pin-sync.timer",
+    "guarden-pins.path",
 )
 
 
@@ -144,7 +223,7 @@ def _installed(package: str, row: dict) -> bool:
     return packagelist.is_installed(package, row)
 
 
-def _podlet_record() -> dict[str, str]:
+def _podlet_record() -> dict:
     """The pin, read as TOML because it is a TOML file and a digest is quoted.
 
     A hand-rolled line split would compare the digest against a string carrying
@@ -158,8 +237,241 @@ def _podlet_binary() -> Path:
     return paths.BIN / "podlet"
 
 
+def _machine() -> str:
+    """This host's architecture, in the spelling the record's table is keyed by.
+
+    `platform.machine()` rather than a subprocess: it is the standard library's own
+    answer and `uname -m` is a second program on the path of a root converge, run
+    for a string the interpreter already holds.
+    """
+    reported = platform.machine().lower()
+    return _PODLET_MACHINES.get(reported, reported)
+
+
+def _podlet_pin(record: dict, record_path: Path) -> tuple[str, dict[str, str]]:
+    """The version and this host's row, or a rejection naming what is missing.
+
+    Every one of these is about the **record**, and none of them is about the
+    host, which is what keeps them exit 2: the record is a repository input, and a
+    pin that is unfilled, half-filled or silent about this machine is not a host
+    out of state -- it is a pin nobody filled in. Each message names the key, so
+    one diagnostic says which field to edit rather than that a file is incomplete.
+    """
+    version = str(record.get("version", "")).strip()
+    if not version:
+        raise IncompleteRecord(
+            f"the pinned podlet record is incomplete: it names no version: {record_path}"
+        )
+    rows = record.get("artefacts")
+    if not isinstance(rows, dict) or not rows:
+        raise IncompleteRecord(
+            f"the pinned podlet record is incomplete: it carries no [artefacts] table: "
+            f"{record_path}"
+        )
+    machine = _machine()
+    if machine not in rows:
+        raise IncompleteRecord(
+            f"the pinned podlet record is incomplete: it has no artefact for this host's "
+            f"architecture ({machine}); it carries {', '.join(sorted(rows))}: {record_path}"
+        )
+    row = rows[machine]
+    if not isinstance(row, dict):
+        raise IncompleteRecord(
+            f"the pinned podlet record is incomplete: [artefacts.{machine}] is not a "
+            f"table: {record_path}"
+        )
+    for key in PODLET_FIELDS:
+        if not str(row.get(key, "")).strip():
+            raise IncompleteRecord(
+                f"the pinned podlet record is incomplete: [artefacts.{machine}] has no "
+                f"{key}: {record_path}"
+            )
+    pin = {key: str(row[key]).strip() for key in PODLET_FIELDS}
+    if pin["format"] not in PODLET_FORMATS:
+        raise IncompleteRecord(
+            f"the pinned podlet record names format {pin['format']!r} for "
+            f"[artefacts.{machine}], which is not one of {', '.join(PODLET_FORMATS)}: "
+            f"{record_path}"
+        )
+    return version, pin
+
+
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _fetch_artefact(fetched: Path, version: str, pin: dict[str, str]) -> None:
+    """curl into the temporary, and nothing else.
+
+    A fetch that does not happen is a **host** that is not in the state the
+    request assumed -- the network, the URL and the release server are all host,
+    and spec 1.2's dividing line puts the remote on that side of it. So this says
+    one line naming the artefact and returns; the phase's own `--apply` then
+    reports the item as drift and exits 1. It is not a rejection: nothing about
+    the record is wrong, and a caller who read 2 here would go looking for a typo
+    in a file that is correct.
+    """
+    result = h.run("curl", "--fail", "--silent", "--show-error", "--location",
+                   "--output", str(fetched), pin["url"])
+    if result.ok:
+        return
+    reason = errors.oneline(result.err.strip()) or str(result.code)
+    h.error(f"fetching podlet {version} for this host: {pin['url']}: {reason}")
+
+
+def _verify_artefact(fetched: Path, version: str, pin: dict[str, str], record: Path) -> None:
+    """The digest of the artefact as downloaded, before anything is unpacked.
+
+    This is the whole of the pin. Nothing out of the archive is read into a file,
+    renamed into place or run until it has matched, and the check is on the bytes
+    that arrived rather than on anything derived from them.
+    """
+    found = _digest(fetched)
+    if found == pin["sha256"]:
+        return
+    raise IncompleteRecord(
+        f"podlet {version}: the SHA256 does not match {record}: the artefact fetched "
+        f"from {pin['url']} is {found} and the record pins {pin['sha256']}"
+    )
+
+
+def _one_member(members: list, path_of, pin: dict[str, str], version: str, record: Path):
+    """The single regular member named `podlet`, or a refusal naming the archive.
+
+    Exactly one, because an archive with two members of that name is ambiguous and
+    an archive with none is not the artefact the record pins. Both are one line
+    naming the member that was wanted and the format the record says it is in; the
+    ambiguous one names the **paths**, because two members whose basename is the
+    same are not distinguishable by their basenames.
+    """
+    found = [
+        member for member in members if PurePosixPath(path_of(member)).name == "podlet"
+    ]
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        raise IncompleteRecord(
+            f"podlet {version}: the artefact {pin['url']} is a {pin['format']} archive "
+            f"with no regular member named podlet, and {record} pins it as the "
+            f"program this install puts in place"
+        )
+    names = ", ".join(sorted(path_of(member) for member in found))
+    raise IncompleteRecord(
+        f"podlet {version}: the artefact {pin['url']} is a {pin['format']} archive "
+        f"with {len(found)} regular members named podlet ({names}), and {record} pins "
+        f"it as the program this install puts in place"
+    )
+
+
+def _tar_xz_bytes(fetched: Path, pin: dict[str, str], version: str, record: Path) -> bytes:
+    with tarfile.open(fetched, "r:xz") as archive:
+        regular = [member for member in archive.getmembers() if member.isfile()]
+        member = _one_member(
+            regular, lambda entry: entry.name, pin, version, record
+        )
+        stream = archive.extractfile(member)
+        if stream is None:
+            raise IncompleteRecord(
+                f"podlet {version}: the artefact {pin['url']} carries no readable "
+                f"contents for podlet, and {record} pins it as the program this "
+                f"install puts in place"
+            )
+        with stream:
+            return stream.read()
+
+
+def _zip_regular(entry: zipfile.ZipInfo) -> bool:
+    """Whether a zip member is a plain file carrying bytes.
+
+    A zip says what a member **is** in the unix mode in the high half of
+    `external_attr`, and that half is how a symlink is distinguishable at all:
+    a zip stores a symlink as an ordinary file whose *content* is the target's
+    name, so a reader that only asks `is_dir()` finds no directory, selects the
+    member, and installs `/usr/lib/curl` as though it were the program. The
+    record's comment says a symlink is not a candidate, and for the tar reader
+    that is `isfile()` doing it; this is the zip half of the same claim.
+
+    A zip written without unix modes leaves the high half zero, which is not a
+    type anything claims, so it is a file. That is the honest default: the
+    archive said nothing about the member, and refusing everything that said
+    nothing would make a format guarden cannot read the one it refuses.
+    """
+    mode = entry.external_attr >> 16
+    if mode == 0:
+        return not entry.is_dir()
+    return stat.S_ISREG(mode)
+
+
+def _zip_bytes(fetched: Path, pin: dict[str, str], version: str, record: Path) -> bytes:
+    with zipfile.ZipFile(fetched) as archive:
+        regular = [entry for entry in archive.infolist() if _zip_regular(entry)]
+        member = _one_member(
+            regular, lambda entry: entry.filename, pin, version, record
+        )
+        return archive.read(member)
+
+
+PODLET_UNPACK = {"tar.xz": _tar_xz_bytes, "zip": _zip_bytes}
+
+
+def _unpacked_program(fetched: Path, pin: dict[str, str], version: str, record: Path) -> bytes:
+    """The program's bytes, and the program's bytes rather than the archive's.
+
+    The archive is read into memory and the member is written out by `soil`, so
+    **no member name is ever used as a path**: a name that is absolute and one
+    that carries `..` are things this code cannot be asked about rather than
+    things it checks.
+
+    A member that is not a regular file is not a candidate, and each reader says
+    so in its own vocabulary. The tar reader asks `isfile()`, which is false for a
+    symlink, a hardlink, a directory, a fifo and a device alike. The zip reader
+    cannot: a zip stores a symlink as an ordinary file whose content is the
+    target's name, so it asks the unix mode (`_zip_regular`) — without that, an
+    archive carrying a symlink named `podlet` installed the *path it pointed at*
+    as the program, which is the exact state this install exists to prevent.
+
+    A truncated or mislabelled archive is one diagnostic and not a traceback:
+    every library that reads one raises its own error, and `curl` happily writes
+    whatever the remote sent.
+    """
+    try:
+        return PODLET_UNPACK[pin["format"]](fetched, pin, version, record)
+    except IncompleteRecord:
+        raise
+    except (OSError, EOFError, tarfile.TarError, zipfile.BadZipFile, lzma.LZMAError) as exc:
+        raise IncompleteRecord(
+            f"podlet {version}: the artefact fetched from {pin['url']} is not a "
+            f"{pin['format']} archive this host can unpack: {errors.oneline(str(exc))}"
+        ) from None
+
+
+def _discard(path: Path) -> None:
+    """Remove a temporary, and never raise: this runs where an install is failing.
+
+    An exception here would replace the diagnostic that says what actually went
+    wrong with an `OSError` about litter, and the exit code with it. A temporary
+    that cannot be removed is worth one line and is not worth that.
+    """
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        h.error(f"the temporary {path} could not be removed: {exc.strerror}")
+
+
+def _packaged_apt_disabled() -> bool:
+    """No distribution apt timer is enabled.
+
+    The same predicate `_packaged_cleanup_disabled` uses and for the same reason:
+    the `.service` names are `static`, so the literal word `disabled` is a
+    requirement no real host can satisfy and the phase would report the same
+    drift forever. Any answer that is not enabled means the timer will not fire.
+    """
+    for unit in PACKAGED_APT:
+        if h.run("systemctl", "is-enabled", unit).line in ("enabled", "enabled-runtime"):
+            return False
+    return True
 
 
 def packages_items(family: str | None = None) -> list[Item]:
@@ -174,47 +486,81 @@ def packages_items(family: str | None = None) -> list[Item]:
     ]
 
     def podlet_installed() -> bool:
+        """Whether the pinned release is on this host, and it is the pinned one.
+
+        The digest compared is the **program's**, because the artefact is not
+        kept: a host that installed the pin holds one file, and the claim
+        `--check` makes is about that file. The artefact's own digest is checked
+        once, by the install, before anything was unpacked out of it — so this is
+        not a weaker check, it is the only one that can still be asked on a host
+        that fetched it weeks ago.
+
+        An absent or unfilled record is drift and not an error: `--check` reports
+        what a host does not have yet and exits 1, and refusing to answer would
+        make the phase's own reporting mode unusable on the host it is for.
+        """
         record = _podlet_record()
-        binary = _podlet_binary()
-        if not record.get("sha256") or not binary.is_file():
+        if not record:
             return False
-        return _digest(binary) == record["sha256"]
+        try:
+            _, pin = _podlet_pin(record, hostpath(*PODLET_RECORD))
+        except IncompleteRecord:
+            return False
+        binary = _podlet_binary()
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            return False
+        return _digest(binary) == pin["binary_sha256"]
 
     def install_podlet() -> None:
         record_path = hostpath(*PODLET_RECORD)
         record = _podlet_record()
-        version = record.get("version", "")
-        url = record.get("url", "")
-        expected = record.get("sha256", "")
-        if not (version and url and expected):
+        if not record_path.is_file():
             # Absent and unfilled are different faults with different fixes, so
-            # they are different messages. Both are exit 2: the record is a
-            # repository input, and an unfilled pin is not a host that is out of
-            # state -- it is a record nobody filled in.
-            if not record_path.is_file():
-                raise IncompleteRecord(
-                    f"the pinned podlet record is absent: {record_path}, and `soil install` "
-                    f"seeds it from the template"
-                )
-            raise IncompleteRecord(f"the pinned podlet record is incomplete: {record_path}")
+            # they are different messages, and both are exit 2: the record is a
+            # repository input, and a record nobody filled in is not a host that
+            # is out of state.
+            raise IncompleteRecord(
+                f"the pinned podlet record is absent: {record_path}, and `soil install` "
+                f"seeds it from the template"
+            )
+        version, pin = _podlet_pin(record, record_path)
         binary = _podlet_binary()
         binary.parent.mkdir(parents=True, exist_ok=True)
-        fetched = binary.parent / "podlet.fetch"
-        result = h.run("curl", "--fail", "--silent", "--show-error", "--location",
-                       "--output", str(fetched), url)
-        if not result.ok:
-            raise IncompleteRecord(
-                f"fetching podlet {version}: {result.err.strip() or result.code}"
-            )
-        if _digest(fetched) != expected:
-            raise IncompleteRecord(
-                f"podlet {version}: the SHA256 does not match {hostpath(*PODLET_RECORD)}"
-            )
-        os.replace(fetched, binary)
-        os.chmod(binary, 0o755)
+        fetched = binary.parent / PODLET_FETCH
+        # One lock over the read of the record, the fetch, the unpack and the
+        # install, because the installed program is a file `loom` reads while
+        # this replaces it: spec 3.5 says every file one process may read while
+        # another writes is written that way, with no exceptions. The write itself
+        # goes through `write_bytes`, which is the same protocol — a temporary in
+        # the target's own directory, fsync, rename.
+        with lock("podlet"):
+            try:
+                _fetch_artefact(fetched, version, pin)
+                if not fetched.is_file():
+                    return
+                _verify_artefact(fetched, version, pin, record_path)
+                h.write_bytes(binary, _unpacked_program(fetched, pin, version, record_path),
+                              0o755)
+            finally:
+                # Both temporaries, on every path. A failed unpack must leave
+                # nothing that could be mistaken for an install: `podlet.fetch`
+                # next to the programs and `.podlet.new` beside it are both
+                # plausible-looking, and the second is a rename waiting to happen.
+                _discard(fetched)
+                _discard(binary.parent / f".{binary.name}.new")
 
-    return [*items, Item("the pinned podlet is installed and its SHA256 verified",
-                         podlet_installed, install_podlet)]
+    return [
+        *items,
+        Item(
+            "the distribution's own apt timers are disabled, so nothing else "
+            "mutates the package index underneath this phase",
+            _packaged_apt_disabled,
+            lambda: [h.run("systemctl", "disable", "--now", unit) for unit in PACKAGED_APT],
+        ),
+        Item("the pinned podlet is installed, and the SHA256 of the program "
+             "on the host is the one the record pins",
+             podlet_installed, install_podlet),
+    ]
 
 
 def _install_packages(packages: Iterable[str], row: dict | None = None) -> None:
@@ -227,6 +573,59 @@ def _install_packages(packages: Iterable[str], row: dict | None = None) -> None:
     """
     for package in packages:
         h.run_or_die(*packagelist.install_argv([package], row))
+
+
+def prepare_for(phase: str, family: str | None = None) -> Callable[[], None] | None:
+    """The step a phase runs before any of its items, or nothing at all.
+
+    **This is `--apply` only, and the difference is the whole of it.** A step with
+    nothing to converge it against cannot be an `Item`: `--check` asks every item
+    whether it already holds, and the package index is not a piece of declared
+    state — there is no file of guarden's that says how fresh it is, and a check
+    that reported a stale index as drift would report it on every host forever
+    and every morning after. So it is a step rather than an item, and the two
+    modes cannot disagree about it because only one of them has it.
+
+    One phase has one, and it is the packages phase. An install is resolved
+    against the distribution's index, so the index is refreshed first: an apply
+    against an index the mirror has moved past fails on a version that exists and
+    is not the one available, and the failure reads as a package problem rather
+    than as the host's own view of its mirror being weeks old.
+    """
+    if phase == "packages":
+        return lambda: _refresh_package_index(family)
+    return None
+
+
+def _refresh_package_index(family: str | None) -> None:
+    """Run the family's own refresh argv, from the list, once, before the installs.
+
+    **The two failures here are different things and carry different codes.** An
+    argv the list does not carry is a repository input nobody filled in, and it is
+    exit `2`; a refresh that runs and fails is a host that cannot reach its own
+    mirror, and it is exit `1` (spec 1.2's dividing line: the list is input, the
+    mirror is the host). Getting that backwards would tell an operator to edit a
+    file in this repository when the thing to fix is the network.
+    """
+    row = packagelist.family(family)
+    argv = packagelist.update_argv(row)
+    if not argv:
+        raise errors.GuardenError(
+            f"the package list at {packagelist.list_path()} carries no update argv for this "
+            f"family, and an install is resolved against the distribution's index: an install "
+            f"against an index nothing refreshed is a converge that fails on a version the "
+            f"mirror has moved past",
+            errors.REJECTED_INPUT,
+        )
+    result = h.run(*argv)
+    if result.ok:
+        return
+    reason = result.err.strip().splitlines()
+    raise errors.GuardenError(
+        f"the package index could not be refreshed: {argv[0]} {' '.join(argv[1:])}: "
+        f"{reason[0] if reason else result.code}, so nothing is installed against it",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
 
 
 class IncompleteRecord(Exception):
@@ -264,27 +663,52 @@ def _converged(values: dict[str, str], desired: dict[str, str]) -> bool:
 
 
 def _snapper_values(name: str) -> dict[str, str]:
+    # snapper 0.10.6 renders `get-config` as a two-column table:
+    #
+    #     Key                    | Value
+    #     -----------------------+------
+    #     EMPTY_PRE_POST_CLEANUP | no
+    #
+    # with a header row, a rule row and padded empty values.
     result = h.run("snapper", "-c", name, "get-config")
     values: dict[str, str] = {}
     for line in result.out.splitlines():
-        key, _, value = line.partition("=")
-        if key.strip():
-            values[key.strip()] = value.strip()
+        key, sep, value = line.partition("|")
+        key = key.strip()
+        if not sep or not key or key == "Key" or set(key) == {"-"}:
+            continue
+        values[key] = value.strip()
     return values
 
 
 def _write_snapper(name: str, values: dict[str, str]) -> None:
-    """Merge and hand the whole thing back, so nothing else in it is rewritten.
+    """Hand back the converged set and let snapper merge it.
 
     spec 8.1: the effective configuration is read with `get-config` and never by
     parsing /etc/snapper/configs/<name>, and the converged set is applied to what
     is already there rather than replacing it.
+
+    `set-config` merges: it rewrites the keys it is given and leaves every other
+    key in the configuration alone. That is the property this depends on, and it
+    is measured rather than assumed — one key set leaves the other twenty-four
+    exactly as they were.
+
+    **It is handed only the converged keys, never the whole configuration read
+    back.** Two reasons, and the first is the tool's: snapper 0.10.6 **refuses**
+    `SUBVOLUME` and `FSTYPE` with `Invalid configdata` and exit `1`, because those
+    two are what `create-config` established and the daemon will not have them
+    rewritten. A read-modify-write therefore hands back two keys that cannot be
+    written and fails on every configuration it converges, whatever else is in the
+    set — an empty `ALLOW_USERS=` beside them is accepted and is not the fault.
+    The second is spec §8.1's own: the phase converges a fixed set of values and
+    **rewrites nothing else**, so the keys it did not come for are not its to
+    send back.
+
+    `modify` is not the verb for a configuration at all — it modifies a
+    *snapshot*, by number — and it has no `-f`.
     """
-    target = hostpath("run", "guarden", "snapper-merge.conf")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    h.write_file(target, "".join(f"{k}={v}\n" for k, v in values.items()), 0o600)
-    h.run_or_die("snapper", "-c", name, "modify", "-f", str(target))
-    target.unlink(missing_ok=True)
+    h.run_or_die("snapper", "-c", name, "set-config",
+                 *[f"{k}={v}" for k, v in sorted(values.items())])
 
 
 def _registry_services() -> list[str]:
@@ -359,7 +783,10 @@ def _desired_for(name: str, config: dict) -> dict[str, str]:
 
 
 def _create_configuration(name: str) -> None:
-    h.run_or_die("snapper", "-c", name, "create-config", "-f", "btrfs", "-p",
+    # The subvolume is positional. snapper 0.10.6 has no `-p` for create-config
+    # and answers "Unknown option '-p'", which a fake built to match this call
+    # hid: the fake accepted the flag because the code used it.
+    h.run_or_die("snapper", "-c", name, "create-config", "-f", "btrfs",
                  HOST_CONFIGURATIONS[name])
 
 
@@ -428,8 +855,17 @@ def _cleanup_unit(configurations: list[str]) -> str:
 
 
 def _packaged_cleanup_disabled() -> bool:
+    """The packaged cleaner must not be enabled.
+
+    `snapper-cleanup.service` is a `static` unit: `systemctl is-enabled` answers
+    "static" for it and `systemctl disable` refuses to act on it at all. Asking
+    for the literal word "disabled" of every name in PACKAGED_CLEANUP is a check
+    no real host can satisfy, so the phase reported the same drift forever. Any
+    answer that is not enabled is fine — disabled, static and masked all mean the
+    distribution's cleaner will not run.
+    """
     for unit in PACKAGED_CLEANUP:
-        if h.run("systemctl", "is-enabled", unit).line != "disabled":
+        if h.run("systemctl", "is-enabled", unit).line in ("enabled", "enabled-runtime"):
             return False
     return True
 
@@ -523,9 +959,12 @@ def storage_items() -> list[Item]:
 
 
 def _converge_configuration(name: str, desired: dict[str, str]) -> None:
+    # The converged keys and nothing else. Reading the whole configuration back
+    # and handing it to `set-config` again looks like the polite thing to do and
+    # is what put `SUBVOLUME` and `FSTYPE` in an argv snapper refuses; see
+    # `_write_snapper`, and spec 8.1's "rewrites nothing else in them".
     with lock("snapshots"):
-        merged = {**_snapper_values(name), **desired}
-        _write_snapper(name, merged)
+        _write_snapper(name, desired)
 
 
 def _template(name: str) -> str:
@@ -624,8 +1063,21 @@ DISTRIBUTION_FIREWALL_UNITS = ("ufw.service",)
 
 
 def _distribution_firewall_disabled() -> bool:
-    return all(h.run("systemctl", "is-enabled", unit).line == "disabled"
-               for unit in DISTRIBUTION_FIREWALL_UNITS)
+    """The distribution's own firewall is not in charge.
+
+    "Disabled" is not the only answer that means guarden owns the box. A unit
+    that is `static` cannot be enabled or disabled at all, and a unit that is
+    not installed answers `is-enabled` with "No such file or directory" rather
+    than any state word. ufw IS a dependency guarden installs — spec 6.1 — so
+    the failsafe and the dead-man timer can rely on the unit being there, but on
+    a family whose package list does not name it the unit is simply absent, and
+    demanding the literal word `disabled` made the phase report drift forever on
+    exactly the hosts it was written for.
+    """
+    for unit in DISTRIBUTION_FIREWALL_UNITS:
+        if h.run("systemctl", "is-enabled", unit).line in ("enabled", "enabled-runtime"):
+            return False
+    return True
 
 
 def _deadman_armed() -> bool:
@@ -990,21 +1442,42 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
     modules = list(modules or [])
     config_path = h.config_path()
 
-    # The `guarden` group comes first, before any directory that names it as
-    # their group: `install -d -o root -g guarden` fails with `invalid group` on a
-    # host where the group does not exist yet, and a directory whose group is
-    # load-bearing is exactly the one that would fail. The golden VM found this;
-    # the fast harness stages a `guarden` group already, so it could not.
+    # The `guarden` group comes first, before anything that names it: a directory
+    # is installed `root:guarden` and a program user is created `--gid guarden`,
+    # and `install -d -g guarden` fails with `invalid group` and `useradd --gid`
+    # fails with `invalid group` on a host where the group does not exist yet.
+    # The golden VM found this; the fast harness stages a `guarden` group already,
+    # so it could not.
     #
-    # Ordering rather than a filter, because a directory this run cannot own yet
-    # still has to be created — dropping it from the list would leave a fresh
-    # host without `/var/lib/guarden` and report a clean phase.
+    # Ordering rather than a filter, because a thing this run cannot own yet still
+    # has to be created — dropping it from the list would leave a fresh host
+    # without `/var/lib/guarden` and report a clean phase.
+    #
+    # The program users come second, and before the directories for the same
+    # reason one step further along: `/var/lib/guarden/render` is `guarden:guarden`
+    # (spec 2.1), and `install -d -o guarden` fails with `invalid user` on a host
+    # where `guarden` does not exist yet. So a converge in the other order left
+    # the one directory whose owner is a program user missing from a fresh host,
+    # while every later item succeeded and the phase still reported its drift —
+    # which is the shape of a report nobody reads. Group, users, directories: the
+    # only order in which all three fit.
     items: list[Item] = [
         Item(
             f"the {PROGRAM_GROUP} group exists, and it is the only group this phase makes",
             lambda: _group_exists(PROGRAM_GROUP),
             lambda: h.run_or_die("groupadd", "--system", PROGRAM_GROUP),
         ),
+        *[
+            Item(
+                f"the {user} user exists, and it is a program user rather than a service",
+                lambda user=user: _user_exists(user),
+                lambda user=user: h.run_or_die(
+                    "useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin",
+                    "--gid", PROGRAM_GROUP, user,
+                ),
+            )
+            for user in PROGRAM_USERS
+        ],
         *[
             h.directory_item(
                 f"/{'/'.join(parts)} is {mode:04o} {owner}:{group}",
@@ -1051,24 +1524,44 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
         h.text_item("the tmpfiles entry recreates /run/guarden at every boot",
                     hostpath(*SYSTEMD_DIR, "guarden-tmpfiles.conf"),
                     _template("guarden-tmpfiles.conf")),
-        # The program users follow the group, for the same reason the group leads
-        # the directories: `useradd --gid guarden` needs the group to exist.
-        *[
-            Item(
-                f"the {user} user exists, and it is a program user rather than a service",
-                lambda user=user: _user_exists(user),
-                lambda user=user: h.run_or_die(
-                    "useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin",
-                    "--gid", PROGRAM_GROUP, user,
-                ),
-            )
-            for user in PROGRAM_USERS
-        ],
         h.text_item(
             "the credential materialiser unit is installed, and it decrypts once in the "
             "system manager",
             hostpath(*SYSTEMD_DIR, "guarden-credential-materialiser@.service"),
             _template("guarden-credential-materialiser@.service"),
+        ),
+        # spec 6.9: the credential materialiser is a `.path` on the blob directory
+        # and one boot-time oneshot — two units for the whole host. There is no
+        # `guarden-creds.service`, because a runbook that named one would send an
+        # operator to start a unit that does not exist.
+        h.text_item(
+            "the credential materialiser's path unit is installed, and it watches "
+            "/etc/guarden/creds/",
+            hostpath(*SYSTEMD_DIR, "guarden-creds.path"),
+            _template("guarden-creds.path"),
+            0o644,
+        ),
+        h.text_item(
+            "the credential materialiser's boot oneshot is installed, and it "
+            "re-materialises everything",
+            hostpath(*SYSTEMD_DIR, "guarden-creds-boot.service"),
+            _template("guarden-creds-boot.service"),
+            0o644,
+        ),
+        h.directory_item(
+            "/etc/guarden/creds is 0700 root: every blob under it is 0600, and the "
+            "directory is the reason",
+            hostpath(*CREDS_DIR), 0o700, "root", "root",
+        ),
+        # Enabled here rather than in `units`, because `install` is the phase that
+        # installs the two units: enabling a unit this phase has not written yet
+        # is a phase asking its predecessor for something. A rotated value would
+        # otherwise sit in a blob until the next boot.
+        Item(
+            "the credential materialiser's path unit is enabled, or a rotated value "
+            "would sit in a blob until the next boot",
+            lambda: h.run("systemctl", "is-enabled", "guarden-creds.path").line == "enabled",
+            lambda: h.run("systemctl", "enable", "guarden-creds.path"),
         ),
     ]
 
@@ -1122,15 +1615,27 @@ def alias_probe() -> int:
     config = h.read_config(h.config_path()) or h.shipped_config()
     network = ",".join(config.get("network", {}).get("pasta_options", []))
 
-    gateway = _probe_gateway(network)
-    if not gateway:
-        h.error("alias probe 1 of 4: the container's default route names no gateway")
+    # A tool that is not installed is the host, not a crash: `podman` is a
+    # `packages` item, so a host that has not run that phase cannot measure the
+    # alias, and the answer to that is one line naming the tool (spec 1.2: the
+    # host is exit 1, and a diagnostic names the thing it is about). Letting the
+    # interpreter's traceback out of here instead made `soil install --apply` on
+    # such a host exit 1 with nothing on stderr but a stack, which is the one
+    # outcome an operator cannot act on and a test cannot assert about.
+    try:
+        gateway = _probe_gateway(network)
+        if not gateway:
+            h.error("alias probe 1 of 4: the container's default route names no gateway")
+            return 1
+        if not _probe_reaches_host(gateway, network):
+            h.error(f"alias probe 2 of 4: a socket bound to 127.0.0.1 on the host is not "
+                    f"reachable from the container at {gateway}")
+            return 1
+        owner, source = _probe_socket_owner()
+    except OSError as exc:
+        h.error(f"alias probe: {exc.filename} is not installed or not on PATH, so this host "
+                f"cannot measure the alias; `soil packages --apply` installs it")
         return 1
-    if not _probe_reaches_host(gateway, network):
-        h.error(f"alias probe 2 of 4: a socket bound to 127.0.0.1 on the host is not "
-                f"reachable from the container at {gateway}")
-        return 1
-    owner, source = _probe_socket_owner()
     if not owner:
         h.error("alias probe 3 of 4: the connection did not arrive with a uid as the "
                 "socket owner, so the OUTPUT accept rules could not match it")
@@ -1229,6 +1734,19 @@ def units_items() -> list[Item]:
         h.text_item(f"/{unit} is installed", hostpath(*SYSTEMD_DIR, unit), _template(unit), 0o644)
         for unit in UNITS
     ]
+    # spec 6.9's trigger table: the marks are recomputed when a pin or a seed
+    # changes, and the pin store and the registry are the two places either does.
+    # A `.path` rather than a longer timer period, because a pin is a thing an
+    # operator does at three in the morning and expects to have taken effect
+    # before the next command they type.
+    items.append(
+        Item(
+            "the pin path unit is enabled, or a mark an operator just wrote waits for "
+            "the next hourly timer",
+            lambda: h.run("systemctl", "is-enabled", "guarden-pins.path").line == "enabled",
+            lambda: h.run("systemctl", "enable", "guarden-pins.path"),
+        )
+    )
     items.append(
         Item(
             "the recurring jobs are enabled, so a converged host keeps its ladder",
@@ -1272,7 +1790,8 @@ def items_for(
 
 def what_for(phase: str) -> str:
     return {
-        "packages": "the distribution packages, and the one pinned podlet release",
+        "packages": "the distribution's apt timers, the package index, the distribution "
+                    "packages, and the one pinned podlet release",
         "storage": "btrfs layout, the snapper value set, root and home, the cleanup timer",
         "sysctl": "route_localnet on the ingress interface, IPv6 off, the port threshold",
         "firewall": "ferm, fail2ban, 10-framework.conf, 20-ingress-nat.conf, the dead-man timer",

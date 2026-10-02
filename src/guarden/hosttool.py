@@ -58,8 +58,30 @@ def error(message: str) -> None:
 
 
 def drift_line(what: str) -> None:
-    """One drift line, and the word the spec's `--check` contract names."""
-    error(f"drift: {what}")
+    """One drift line, and the word the spec's `--check` contract names.
+
+    **`what` is the converged state, so the line has to say which side of it the
+    host is on.** An `Item` describes the state that holds once the phase has
+    converged — "the ferm package is installed", "the dead-man timer is not
+    armed" — and the bare `drift: <that sentence>` reads as a claim about the
+    present. An operator reading `error: drift: the ferm package is installed`
+    cannot tell whether `ferm` is fine and something else is wrong, or whether
+    `ferm` is missing and needs installing, and the two want opposite actions.
+
+    The sentence is carried whole and the fact is one clause, rather than the
+    other way round, for two reasons. The descriptions are not negotiable by any
+    rule: one of the twenty-seven names a state that is *itself* a negative, so a
+    mechanical negation would be wrong for it, and hand-negating twenty-seven
+    heterogeneous sentences is twenty-seven chances to state a falsehood. And the
+    requirement is the informative half — for the pinned artefact it is the
+    compound "installed, and the SHA256 of the program on the host is the one the
+    record pins", which is what tells a reader which of two conditions to go and
+    look at.
+
+    There is one producer of this line and both modes of `soil` go through it, so
+    the shape cannot differ between `--check` and `--apply`.
+    """
+    error(f"drift: {what} — does not hold on this host")
 
 
 # --------------------------------------------------------------------------
@@ -84,7 +106,21 @@ class Result:
 
 
 def run(*argv: str) -> Result:
-    done = subprocess.run(argv, capture_output=True, text=True, check=False)
+    """A tool that may be absent.
+
+    **A missing tool is a host that is not in the assumed state, not a crash.**
+    `subprocess.run` raises `FileNotFoundError` when the executable is not there,
+    and that traceback reached the operator's terminal on the golden VM, where
+    `podman` is genuinely not installed: the alias probe called it, the exception
+    escaped, and `soil install` died with a stack trace instead of the one line
+    naming the tool and the item. Every one of the six phases calls out to tools
+    the host may not carry — `podman`, `ferm`, `snapper`, `btrfs` — so the guard
+    belongs here rather than in each caller.
+    """
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        return Result(tuple(argv), 127, "", f"{argv[0]} is not installed ({exc.strerror})")
     return Result(tuple(argv), done.returncode, done.stdout, done.stderr)
 
 
@@ -178,16 +214,26 @@ def install_directory(path: Path, mode: int, owner: str = "root", group: str = "
 
 
 def write_file(target: Path, content: str, mode: int = MODE_CONFIG) -> None:
+    """A file whose content is soil's, written by the protocol below."""
+    write_bytes(target, content.encode("utf-8"), mode)
+
+
+def write_bytes(target: Path, payload: bytes, mode: int = MODE_CONFIG) -> None:
     """spec 3.5: flock, a temporary file in the same directory, fsync, rename.
 
     The temporary file is a sibling rather than a path elsewhere because rename
     is only atomic within a filesystem, and because a temporary file in /tmp
     would be a file another process could see.
+
+    One implementation for text and for bytes rather than two, because the pinned
+    program is bytes -- it arrives out of an archive and is never decoded -- and a
+    second copy of this protocol would be a second thing to keep true. The caller
+    takes the lock; this is the write half of it.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.parent / f".{target.name}.new"
-    with open(temporary, "w", encoding="utf-8") as handle:
-        handle.write(content)
+    with open(temporary, "wb") as handle:
+        handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
     os.chmod(temporary, mode)

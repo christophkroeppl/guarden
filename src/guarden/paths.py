@@ -32,6 +32,10 @@ ETC_GUARDEN = ETC / "guarden"
 GUARDEN_TOML = ETC_GUARDEN / "guarden.toml"
 ETC_SERVICES = ETC_GUARDEN / "services"
 PROJECTS_TOML = ETC_GUARDEN / "projects.toml"
+# spec 2: the credential blobs, `0700 root`. One directory per service, one
+# `<KEY>.cred` per key, and the pair is the whole of what a value is on this host
+# outside the service that owns it.
+CREDS = ETC_GUARDEN / "creds"
 ALLOW_GATED_DROP = ETC_GUARDEN / "allow-gated-drop"
 SNAPPER_CONFIGS = ETC / "snapper" / "configs"
 SUBUID = ETC / "subuid"
@@ -46,6 +50,7 @@ REGISTRY = LIB / "registry"
 REMOVED = LIB / "removed"
 STAGING = LIB / "staging"
 SHARED = LIB / "shared"
+STAKES = LIB / "stakes"
 EDGE_DYNAMIC = LIB / "edge" / "dynamic"
 
 # /usr/lib/guarden and /usr/bin, spec 2's FHS rows.
@@ -83,6 +88,17 @@ TEMPLATES = Path(os.environ.get("GUARDEN_TEMPLATES") or (PREFIX / "usr/lib/guard
 
 def overrides(service: str) -> Path:
     return ETC_SERVICES / service / "overrides.toml"
+
+
+def creds(service: str) -> Path:
+    """One service's blobs, root-owned and unreadable by any service user."""
+    return CREDS / service
+
+
+def cred_blob(service: str, key: str) -> Path:
+    """`<KEY>.cred`, mode `0600`. The key is a name from the project's own schema
+    and is validated before it reaches this function, so it is never a path."""
+    return CREDS / service / f"{key}.cred"
 
 
 def registry(service: str) -> Path:
@@ -136,6 +152,17 @@ def removed(service: str, when: str, vol: str) -> Path:
     return REMOVED / service / when / vol
 
 
+def snapshot(name: str, vol: str, number: int, escaped_ref: str | None = None) -> Path:
+    """The subvolume a snapshot is, inside the configuration's own layout.
+
+    snapper's own convention, `.snapshots/<number>/snapshot` under the volume, and
+    it is the path `weedr service immutable` sets `chattr +i` on (spec 8.2). The
+    runbook quotes it because a hand-rolled `chattr` leaves no record, and the
+    verb is here so that nobody has to.
+    """
+    return volume(name, STATE, vol, escaped_ref) / ".snapshots" / str(number) / "snapshot"
+
+
 def lock_path(name: str) -> Path:
     return LOCKS / f"{name}.lock"
 
@@ -145,3 +172,11 @@ def sysctl(name: str) -> Path:
 
 
 NO_LOGIN_SHELL = "/usr/sbin/nologin"
+
+# The two volume kinds, and the directory each lives under (spec 2). They are
+# here rather than in `volumes.py` because `volumes` imports this module, and a
+# layout constant a second module had to be read for would be the copy that
+# drifts: `state/` and `bulk/` are split so that a snapshotted subvolume is
+# never a parent of an unsnapshotted one.
+STATE = "state"
+BULK = "bulk"

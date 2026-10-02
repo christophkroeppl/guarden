@@ -1,14 +1,71 @@
 # The one fetch from outside a distribution repository, pinned.
 #
-# Guarden installs no artefact it has not verified, so this file is deliberately
-# shipped with its digest unfilled: an unfilled pin means the fetch does not
-# happen, which is the fail-closed outcome. There is no "latest" and no
-# unpinned fallback, because "one third-party binary, verified" is the whole
+# Guarden installs no artefact it has not verified, so the digests below are the
+# claim and everything else in this file is bookkeeping. There is no "latest" and
+# no unpinned fallback, because "one third-party binary, verified" is the whole
 # claim and a convenience fetch would make it false.
 #
-# Fill in all three from the release you mean, then `soil packages --apply`.
-# The SHA256 is of the release artefact, and `soil` re-reads it on every
-# `--check`, so a binary that was replaced under it is drift.
-version =
-url =
-sha256 =
+# `soil packages --apply` reads this file. `soil install` seeds it from this
+# template once and never overwrites it afterwards, because an operator who edits
+# a pin owns it from then on.
+#
+# ## The keys
+#
+#   version          the release, for the diagnostics and for whoever reads this
+#
+#   [artefacts.<arch>]
+#                    one row per host architecture. The row installed is the one
+#                    this machine's own answer names.
+#     format         tar.xz | zip: what the artefact IS, so the unpack knows how
+#                    to read it rather than guessing from the url's suffix
+#     url            where this architecture's artefact is
+#     sha256         of the artefact **as downloaded**, compared before anything
+#                    is unpacked. Nothing out of an archive is written, renamed
+#                    into place or run before this matches, which is the whole
+#                    point of a pin
+#     binary_sha256  of the file installed *out of* the artefact. The artefact is
+#                    not kept, so this is what `--check` re-reads on every run
+#                    and the only claim about the host that outlives the fetch
+#
+# ## Why a row per architecture
+#
+# A single `url` with no architecture is a pin that cannot be correct on any host
+# but the one it was written on. The two ways out are both this file's failure:
+# install the wrong architecture's bytes, or refuse the fetch everywhere except
+# one machine. The second is fail-closed but tells an operator nothing about
+# which row is missing, and the first is a file that exists, is executable, and
+# is not a program -- the exact state this pin exists to make unreachable.
+#
+# So the host's own `platform.machine()` selects the row, normalised because a
+# pin written on one machine names its architecture the way that machine spells
+# it (`amd64` is `x86_64`, `arm64` is `aarch64`), and a machine the table says
+# nothing about is refused by name rather than served somebody else's bytes.
+#
+# The `unknown-linux-gnu` in each url is deliberate and is not a second axis:
+# every architecture below is a glibc Linux host, which is what guarden is. A
+# musl host is a row somebody adds with its own digest, never a guess.
+#
+# ## What comes out of an archive
+#
+# Exactly one regular member named `podlet`. Its bytes are read into memory and
+# written out by `soil`, so no member name is ever used as a path and a member
+# called `../../etc/shadow` is not a question this install can be asked. A
+# symlink, a hardlink, a directory and a device are not candidates at all.
+#
+# containers/podlet v0.3.2. Both digests per row were computed from the release
+# artefacts and compared against upstream's own `<artefact>.sha256` sidecars and
+# against the aggregate `sha256.sum`, which is a second, independent statement of
+# the same numbers by the publisher.
+version = "0.3.2"
+
+[artefacts.x86_64]
+format = "tar.xz"
+url = "https://github.com/containers/podlet/releases/download/v0.3.2/podlet-x86_64-unknown-linux-gnu.tar.xz"
+sha256 = "d28975df717ce20374a6dc4176670ce6faf8dcb3ab4af761a39fdd2f863d03f6"
+binary_sha256 = "c1d037a07fb9fff0af5cbd8ea3511440a3c36602c69b6bcb4fbe8fe9f15e3b9d"
+
+[artefacts.aarch64]
+format = "tar.xz"
+url = "https://github.com/containers/podlet/releases/download/v0.3.2/podlet-aarch64-unknown-linux-gnu.tar.xz"
+sha256 = "ff9f25b72c4871b0507fe1e6f31c8ef6836dcaf5151bb0d424f81a79832ce2e1"
+binary_sha256 = "f694089ea5b9117b8da1ad54313ae4519cb4ceaa95c8dd05c7cd137584a23ac8"

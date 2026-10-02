@@ -12,6 +12,13 @@ already holds and reports the ones that do not; `--apply` asks every item to
 make itself hold. Neither mode has its own idea of what converged means, which
 is the only way to keep `--check` from describing a state `--apply` does not
 produce.
+
+**`--apply` also runs the one step a phase may have before its items, and
+`--check` never does.** A step is not an item: it is not a fact about the host
+with a "does it already hold" question, so there is nothing for `--check` to ask
+it and asking anyway would be a check that changed something. The only step that
+exists is the package index, and the whole of the difference between the two
+modes is that one of them refreshes it.
 """
 
 from __future__ import annotations
@@ -21,9 +28,9 @@ import re
 import sys
 from pathlib import Path
 
-from guarden import hostprep, packagelist, userdata
+from guarden import errors, hostprep, packagelist, userdata
 from guarden.hostprep import PHASES
-from guarden.hosttool import Item, error
+from guarden.hosttool import Item, drift_line, error
 
 EXIT_OK = 0
 EXIT_NOT_CONVERGED = 1
@@ -196,14 +203,60 @@ def _collect(
     return items
 
 
+def _prepare(phase: str, family: str | None) -> tuple[bool, int | None]:
+    """The phase's own step before any of its items, and what the run does about it.
+
+    `(True, None)` is the ordinary case: the step is absent or it ran.
+
+    `(False, None)` is a step that ran and failed because **the host is not in the
+    state the request assumed** — the package index could not be refreshed, so the
+    host cannot reach its own mirror. Nothing is refused and the run does not
+    stop: the phase's items are reported rather than converged, and the next phase
+    still gets its turn, so one unreachable mirror does not stop a host
+    converging everything else. The run ends in exit `1`, which is the code
+    spec 1.2 gives that condition.
+
+    `(False, 2)` is a rejected input, and it stops the run: the next phase would be
+    reading the same bad input, and carrying on past it would report a second,
+    invented fault after the first.
+    """
+    try:
+        prepare = hostprep.prepare_for(phase, family)
+        if prepare is not None:
+            prepare()
+    except hostprep.IncompleteRecord as exc:
+        return False, _reject(f"a pinned artefact is not installable: {exc}")
+    except packagelist.UnknownFamily as exc:
+        return False, _reject(str(exc))
+    except errors.GuardenError as exc:
+        if exc.code == errors.REJECTED_INPUT:
+            return False, _reject(exc.message)
+        error(exc.message)
+        return False, None
+    return True, None
+
+
 def _check(
     phases: list[str], deadman: bool, family: str | None = None,
     modules: list[str] | None = None,
 ) -> int:
+    # A host whose family the list carries no row for is **exit 2**, naming the
+    # families it does have, in both modes: the list is repository input and there
+    # is no row for it, which is spec 1.2's dividing line rather than a host fact.
+    # `packages_items` resolves the family while it builds, so this is where it
+    # escapes — and uncaught it was a traceback and an exit 1, which is the wrong
+    # code for a rejected input and says nothing about which families exist. An
+    # operator on an unsupported distribution gets one line and a fix instead of a
+    # stack trace. `--apply` does not need the same guard: it calls `prepare_for`
+    # before this phase's items and `_prepare` already answers 2 for it.
+    try:
+        items = _collect(phases, deadman, family, modules)
+    except packagelist.UnknownFamily as exc:
+        return _reject(str(exc))
     drifted = 0
-    for item in _collect(phases, deadman, family, modules):
+    for item in items:
         if not item.holds():
-            error(f"drift: {item.what}")
+            drift_line(item.what)
             drifted += 1
     return EXIT_NOT_CONVERGED if drifted else EXIT_OK
 
@@ -213,18 +266,25 @@ def _apply(
     modules: list[str] | None = None,
 ) -> int:
     unmet = 0
-    for item in _collect(phases, deadman, family, modules):
-        if item.holds():
-            continue
-        try:
-            item.converge()
-        except hostprep.IncompleteRecord as exc:
-            return _reject(f"a pinned artefact is not installable: {exc}")
-        except packagelist.UnknownFamily as exc:
-            return _reject(str(exc))
-        if item.correctable and not item.holds():
-            error(f"drift: {item.what}")
-            unmet += 1
+    for phase in phases:
+        ready, reject = _prepare(phase, family)
+        if reject is not None:
+            return reject
+        for item in hostprep.items_for(phase, deadman, family, modules):
+            if item.holds():
+                continue
+            if ready:
+                try:
+                    item.converge()
+                except hostprep.IncompleteRecord as exc:
+                    return _reject(f"a pinned artefact is not installable: {exc}")
+                except packagelist.UnknownFamily as exc:
+                    return _reject(str(exc))
+                if item.correctable and item.holds():
+                    continue
+            if item.correctable:
+                drift_line(item.what)
+                unmet += 1
     return EXIT_NOT_CONVERGED if unmet else EXIT_OK
 
 

@@ -26,7 +26,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from guarden import conf, errors, names, paths, registry, tool, users, volumes
+from guarden import conf, errors, gate, names, paths, registry, tool, users, volumes
 from guarden import manifest as manifest_mod
 from guarden import overrides as overrides_mod
 
@@ -144,6 +144,13 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
             ref=str(resolved.ref), escaped_ref=resolved.escaped_ref, created=now
         )
 
+    # spec 5.3 step 9: on an ungated track every `@sensitive` key nothing has been
+    # planted for gets a value minted once, so a poke is never blocked on a human.
+    # A gated track gets none — there a missing key is a gate failure, and
+    # generating one would hide exactly what the gate is for.
+    if not resolved.track.gated:
+        gate.mint_generated(record, gate.schema_for(resolved.name), now)
+
     retention = volumes.retention_from(resolved.track, granted)
     for vol in manifest.state:
         _record(
@@ -255,11 +262,15 @@ def _ensure_admin_units(uid: int) -> None:
         os.chmod(target, ADMIN_UNITS_MODE)
 
 
-def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
+def units_dir(name: str, escaped_ref: str | None = None) -> Path:
     home = paths.service_home(name)
     if escaped_ref:
         home = home / escaped_ref
-    directory = home / paths.QUADLET
+    return home / paths.QUADLET
+
+
+def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
+    directory = units_dir(name, escaped_ref)
     if not directory.is_dir():
         return []
     return sorted(path.stem for path in directory.glob("*.container"))
@@ -267,7 +278,58 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
 
 def stop_units(name: str, escaped_ref: str | None = None) -> None:
     for unit in units_of(name, escaped_ref):
-        tool.run(["systemctl", "--user", "--machine", f"{name}@", "stop", unit])
+        _unit(name, "stop", unit)
+
+
+def start_units(name: str, escaped_ref: str | None = None) -> None:
+    """The other half of `stop_units`, and in the same user's manager.
+
+    A fork and a rollback are stop/swap/start, so something has to start the
+    units again on the way out, and a verb that started them through a different
+    mechanism would be a second way to start a service. This starts what the home
+    declares and says nothing about a service that declares nothing: whether an
+    empty unit directory is a failure is a question for the verb that promises a
+    start, and `weedr service start` is the only one.
+    """
+    for unit in units_of(name, escaped_ref):
+        _unit(name, "start", unit)
+
+
+def _unit(name: str, verb: str, unit: str) -> None:
+    """One unit in the service's own manager, and exit 5 means one thing per verb.
+
+    A `.container` file in the home is a declaration, not a systemd unit: the unit
+    exists once the generator has made one, and until then `systemctl ... stop
+    <unit>` answers `Failed to stop <unit>: Unit <unit> not loaded.` and exits 5.
+    **For a stop that is the state the verb asked for** — not running is what a
+    stop is for — so 5 is not a failure, it is measured, and a fork that refused
+    would refuse to clone a volume because of a unit that was never there.
+
+    **For a start the same answer is the opposite of what was asked.** Nothing is
+    running and the caller asked for something running, so exit `0` here reports
+    work that did not happen, which is the one thing `0` may not mean (spec 1.2).
+    The declaration is in the service's own home, so this is not a unit nobody ever
+    wrote: either the manager has not reloaded since the units were installed and
+    the generator has not run, or the unit is there and the manager will not load
+    it. Both are the host not being in the state the request assumed, both are `1`,
+    and neither is distinguished from the other by anything guarden can see — so the
+    line names the unit and quotes what systemd said rather than guessing which.
+
+    Any other non-zero exit is a failure for the same reason: a manager that cannot
+    be reached answers `Transport endpoint is not connected`, and pretending the
+    units were stopped would be a lie about the state a fork requires.
+    """
+    result = tool.call(["systemctl", "--user", "--machine", f"{name}@", verb, unit])
+    if result.returncode == 0:
+        return
+    if result.returncode == 5 and verb == "stop":
+        return
+    detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
+    raise errors.GuardenError(
+        f"{name}: systemctl {verb} of the unit {unit} exited {result.returncode}"
+        + (f": {detail}" if detail else ""),
+        errors.HOST_NOT_AS_ASSUMED,
+    )
 
 
 def remove(resolved, config, now: str) -> list[str]:
@@ -323,7 +385,7 @@ def _remove_service(resolved, record, now: str) -> list[str]:
         os.rename(source, target)
         printed.append(f"moved the {volume.kind} volume {volume.name} to {target}")
 
-    users.destroy(resolved.name)
+    users.destroy(resolved.name, record.uid)
     _drop(paths.ADMIN_UNITS / str(record.uid))
     _drop(paths.service_tree(resolved.name))
     _drop(paths.ETC_SERVICES / resolved.name)
@@ -357,7 +419,10 @@ def _remove_instance(resolved, record) -> list[str]:
 
     released = ", ".join(f"{key}={port}" for key, port in sorted(instance.publication.items()))
     printed.append(f"released the instance's publications ({released or 'none'})")
-    seeds = ", ".join(f"{vol}@{number}" for vol, number in sorted(instance.seed.items()))
+    seeds = ", ".join(
+        f"{volume}={seed.service}:{seed.volume}@{seed.number}"
+        for volume, seed in sorted(instance.seed.items())
+    )
     printed.append(f"released the seed ({seeds or 'none'})")
     return printed
 

@@ -22,15 +22,45 @@ than render without it.
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from guarden import errors
+from guarden import errors, paths
 
 COMPOSE_REL = Path("compose.yaml")
+
+# The pinned artefact's own name, resolved the way `soil packages` installs it.
+#
+# **Not a bare `podlet` from PATH.** Two reasons, and the second is the one that
+# matters: the fetch is pinned and digest-verified, and a lookup that consulted
+# PATH would run *any* executable called `podlet` a unprivileged repository could
+# put on the renderer's PATH, which is exactly the "unverified third-party binary"
+# the pin exists to prevent. `soil packages` installs it at
+# `/usr/lib/guarden/bin/podlet`; this is that path, under `GUARDEN_PREFIX`.
+PODLET = paths.BIN / "podlet"
+
+# The record `soil packages` reads the release, the artefact and its SHA256 out of,
+# plus the row for this host's architecture. Named here rather than typed into the
+# diagnostic, so a message and the file agree.
+PODLET_RECORD = paths.ETC_GUARDEN / "podlet.release"
+
+# The pinned release's translation entry point, verbatim: the subcommand is
+# `compose`, and the output directory is the **global** `--file` option, which
+# has to precede the subcommand. `podlet quadlet --outdir <dir> <file>` was the
+# shape the retired fake modelled and the shape no podlet release has ever had —
+# every release answers `error: unrecognized subcommand 'quadlet'` — so a fill
+# alone would not have made this work.
+PODLET_ARGV = ("--file", "{outdir}", "compose")
+
+# podlet renders its diagnostics through `color_eyre`, so its cause chain arrives
+# with SGR escapes on it. Stripping them is what makes `_detail` able to collapse
+# the chain into the one line spec 1.2 asks for.
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 # The refusal list (spec 6.3), in the vocabulary a Compose file is written in. The
 # value is the predicate, because `privileged: false` and `pid: something-else`
@@ -261,22 +291,56 @@ def convert(path: Path) -> list[Translation]:
     files rather than as finished units precisely so that every field the design
     has an opinion about is still to be overwritten by the caller.
 
-    The call is `podlet quadlet --outdir <dir> <file>`, the pinned release's
+    The call is `podlet --file <dir> compose <file>`, the pinned release's
     translation entry point, and it runs as the unprivileged renderer, which is
     what ADR-0012 is about: who runs the converter, not whether the renderer
     writes the unit itself. A temporary directory is the converter's scratch
     space and is removed as soon as the files are read; nothing rendered is left
     outside `--out`.
+
+    **A host with no converter says so in one line.** The pin ships filled in, so
+    this is the state of a host that has not run `soil packages --apply` yet rather
+    than a state no host could leave — and it is a fact about the host rather than
+    about the repository's document, so exit `1`: not a traceback and not a `2` that
+    would read as "your manifest is wrong" (spec 1.2). The message names the
+    artefact, the path, and the phase that installs it, because those are the three
+    facts somebody needs and none of them is a stack frame.
     """
-    with tempfile.TemporaryDirectory(prefix="loom-podlet.") as scratch:
-        result = subprocess.run(  # noqa: S603 - an argv, never a shell
-            ["podlet", "quadlet", "--outdir", scratch, str(path)],
-            capture_output=True,
-            text=True,
-            check=False,
+    if not _converter_installed():
+        raise errors.GuardenError(
+            f"the pinned podlet is not installed at {PODLET}, so {path} cannot be "
+            f"translated; it is fetched, digest-verified and unpacked by "
+            f"`soil packages --apply` from the release, url and SHA256 in {PODLET_RECORD}",
+            errors.HOST_NOT_AS_ASSUMED,
         )
+    with tempfile.TemporaryDirectory(prefix="loom-podlet.") as scratch:
+        argv = [str(PODLET)]
+        for token in PODLET_ARGV:
+            argv.append(scratch if token == "{outdir}" else token)
+        argv.append(str(path))
+        try:
+            result = subprocess.run(  # noqa: S603 - an argv, never a shell
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as failure:
+            # Executable bit set and still not runnable: a truncated fetch, an
+            # archive installed as though it were a binary, a wrong
+            # architecture. `OSError` from exec is the same class of fact as a
+            # missing file — this host does not have a working pinned converter —
+            # and it belongs in the same one-line diagnostic rather than in a
+            # traceback, which is what a truncated `curl` leaves behind.
+            raise errors.GuardenError(
+                f"the pinned podlet at {PODLET} could not be run: "
+                f"{getattr(failure, 'strerror', failure)}; it is not an executable "
+                f"program, so `soil packages --apply` did not install the pinned "
+                f"release ({PODLET_RECORD} is what it installs from)",
+                errors.HOST_NOT_AS_ASSUMED,
+            ) from None
         if result.returncode != 0:
-            detail = (result.stderr or result.stdout).strip()
+            detail = _detail(result.stderr or result.stdout)
             raise errors.GuardenError(
                 f"podlet exited {result.returncode} translating {path}"
                 + (f": {detail}" if detail else ""),
@@ -293,3 +357,30 @@ def convert(path: Path) -> list[Translation]:
             errors.HOST_NOT_AS_ASSUMED,
         )
     return translations
+
+
+def _converter_installed() -> bool:
+    """Whether the pinned artefact is where `soil packages` put it.
+
+    Existence and the executable bit, and deliberately not the digest: re-verifying
+    the pin on every render would make the renderer depend on `curl`'s network
+    path and on root reading a root-owned record it is not going to re-fetch. The
+    digest is the installer's claim and `soil packages --check` is the verb that
+    asks about it.
+    """
+    return PODLET.is_file() and os.access(PODLET, os.X_OK)
+
+
+def _detail(text: str) -> str:
+    """One diagnostic line out of podlet's.
+
+    podlet is a `color_eyre` program: it prints a numbered cause chain with ANSI
+    colour, a source location and a suggestion, which is four lines and a control
+    character or two. A guarden diagnostic is one line prefixed `error:` and names
+    the thing it is about, so the chain is collapsed and the escapes dropped —
+    the causes are all in there and the reader wanted the first one.
+    """
+    stripped = ANSI.sub("", text)
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    causes = [line for line in lines if not line.startswith(("Location:", "Backtrace"))]
+    return errors.oneline(" ".join(causes))

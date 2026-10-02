@@ -18,7 +18,7 @@ only says so, because the operator who changed it is the one who can put it back
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from guarden import overrides as overrides_mod
 from guarden import paths, registry, snapper
@@ -33,6 +33,11 @@ class Listing:
     services: list[dict]
     warnings: list[str]
     removed: list[tuple[str, str, str]]
+    # The values guarden minted rather than a human planted. Spec 1.2's field set
+    # is closed and has no room for them, and adding one would be a change to that
+    # table; `weedr secret list --json` carries the same fact per key in its
+    # `source`, so the human report is where `list` mentions it.
+    generated: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 def host_invariants() -> list[str]:
@@ -77,11 +82,18 @@ def build() -> Listing:
     """
     invariants = host_invariants()
     services = []
+    generated: dict[str, dict[str, str]] = {}
     for name in registry.names():
         record = registry.load(name)
         if record is not None:
             services.append(_service_object(record, invariants))
-    return Listing(services=services, warnings=invariants, removed=registry.remove_report())
+            generated[record.service] = dict(sorted(record.generated.items()))
+    return Listing(
+        services=services,
+        warnings=invariants,
+        removed=registry.remove_report(),
+        generated=generated,
+    )
 
 
 def _service_object(record, invariants: list[str]) -> dict:
@@ -179,7 +191,7 @@ def as_text(listing: Listing) -> str:
     if not listing.services:
         lines.append("no services")
     for entry in listing.services:
-        lines.append(_service_text(entry))
+        lines.append(_service_text(entry, listing.generated.get(entry["name"], {})))
     if listing.removed:
         lines.append("removed:")
         for service, when, vol in listing.removed:
@@ -189,7 +201,7 @@ def as_text(listing: Listing) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _service_text(entry: dict) -> str:
+def _service_text(entry: dict, generated: dict[str, str]) -> str:
     lines = [
         f"{entry['name']}  workload {entry['workload']}  project {entry['project']}  "
         f"track {entry['environment']}  uid {entry['uid']}  source {entry['source']}"
@@ -223,6 +235,8 @@ def _service_text(entry: dict) -> str:
     if entry["instances"]:
         for instance in entry["instances"]:
             lines.append(f"  instance       {instance['ref']}  seed {instance['seed'] or 'none'}")
+    for key, when in sorted(generated.items()):
+        lines.append(f"  generated      {key}  minted {when}")
     if entry["gate"] is None:
         lines.append("  gate           not evaluated")
     else:

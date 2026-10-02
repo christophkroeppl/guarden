@@ -58,12 +58,72 @@ class Volume:
 
 
 @dataclass
+class Seed:
+    """The snapshot a service was forked from, per its own state volume.
+
+    spec 3.4's example writes `seed = { data = 38 }`, and the value here is a
+    table rather than a number because **the snapshot belongs to the source**:
+    a preview is protected because something was forked from the production
+    snapshot it came from, and a number with no service beside it names nothing
+    that can be marked. §8.5 requires the reconciler to mark "every snapshot
+    named as a `seed` by any service's registry", and a bare number cannot be
+    named by anything.
+    """
+
+    service: str
+    volume: str
+    number: int
+
+    def to_document(self) -> dict[str, Any]:
+        return {"service": self.service, "volume": self.volume, "number": int(self.number)}
+
+    @classmethod
+    def from_document(cls, document: Any) -> Seed:
+        """Three fields or a refusal, because a seed missing two of them is not one.
+
+        The registry is guarden's own file and this is the only place a value in
+        it can be checked against what it has to be, so a hand edit that dropped
+        `service` is caught here rather than becoming a mark on `:@41` — a
+        snapshot id with an empty service in it, which is not a snapshot anything
+        holds.
+        """
+        if not isinstance(document, dict):
+            raise errors.GuardenError(
+                "a seed names the snapshot it was forked from, and a bare number names "
+                "nothing that can be marked; it is a table of service, volume and number",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        missing = [
+            key for key in ("service", "volume", "number") if not document.get(key)
+        ]
+        if missing:
+            raise errors.GuardenError(
+                f"a seed is missing {', '.join(missing)}; a seed names the snapshot it was "
+                f"forked from, and a seed with no service and volume beside it names "
+                f"nothing that can be marked",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        return cls(
+            service=str(document["service"]),
+            volume=str(document["volume"]),
+            number=int(document["number"]),
+        )
+
+
+def _seeds(document: Any) -> dict[str, Seed]:
+    return {
+        name: Seed.from_document(entry)
+        for name, entry in (document or {}).items()
+    }
+
+
+@dataclass
 class Instance:
     ref: str
     escaped_ref: str
     created: str
     publication: dict[str, int] = field(default_factory=dict)
-    seed: dict[str, int] = field(default_factory=dict)
+    seed: dict[str, Seed] = field(default_factory=dict)
 
     def to_document(self) -> dict[str, Any]:
         # `ref` is stored alongside the escaped key, because the escaping is
@@ -76,7 +136,7 @@ class Instance:
         if self.publication:
             document["publication"] = dict(self.publication)
         if self.seed:
-            document["seed"] = dict(self.seed)
+            document["seed"] = {name: seed.to_document() for name, seed in self.seed.items()}
         return document
 
     @classmethod
@@ -86,7 +146,7 @@ class Instance:
             escaped_ref=escaped_ref,
             created=document.get("created", ""),
             publication=dict(document.get("publication", {})),
-            seed=dict(document.get("seed", {})),
+            seed=_seeds(document.get("seed")),
         )
 
 
@@ -108,6 +168,11 @@ class Registry:
     ports_requested: list[int] = field(default_factory=list)
     ports_granted: list[int] = field(default_factory=list)
     volumes: dict[str, Volume] = field(default_factory=dict)
+    # A slot service's own seed, per state volume. An instance's is inside its
+    # own `[instances."<escaped-ref>"]` table, because an instance's volumes are
+    # the instance's and a seed recorded against the service would be ambiguous
+    # between two previews of the same workload.
+    seed: dict[str, Seed] = field(default_factory=dict)
     instances: dict[str, Instance] = field(default_factory=dict)
     # `gate` is `None` when the gate has never been evaluated, and that is **not**
     # the same as `state = "ready"` (spec 3.4): the registry omits the table
@@ -154,6 +219,10 @@ class Registry:
             document["state"] = {name: v.to_document() for name, v in sorted(state.items())}
         if bulk:
             document["bulk"] = {name: v.to_document() for name, v in sorted(bulk.items())}
+        if self.seed:
+            document["seed"] = {
+                name: seed.to_document() for name, seed in sorted(self.seed.items())
+            }
         if self.instances:
             document["instances"] = {
                 key: instance.to_document() for key, instance in sorted(self.instances.items())
@@ -195,6 +264,7 @@ class Registry:
             ports_requested=list(ports.get("requested") or []),
             ports_granted=list(ports.get("granted") or []),
             volumes=volumes,
+            seed=_seeds(document.get("seed")),
             instances=instances,
             gate=document.get("gate"),
             generated=dict(document.get("generated") or {}),

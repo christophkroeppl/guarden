@@ -8,10 +8,10 @@ document a throwaway machine boots. They cannot drift because there is one file.
 Per-family entries are the point rather than decoration. The layout and the six
 phases name no distribution; the *package names* do, and they differ
 (`python3-yaml` on Debian, `python3-pyyaml` on Fedora, `python-yaml` on Arch). So
-each family carries its own install argv, its own query argv, and its own answer
-for "is it installed" -- a separate key because that is where the families differ
-most sharply, and a probe that asks the wrong question reports a package that is
-absent as present.
+each family carries its own install argv, its own update argv, its own query argv,
+and its own answer for "is it installed" -- a separate key because that is where
+the families differ most sharply, and a probe that asks the wrong question reports
+a package that is absent as present.
 
 **Every distribution-specific command here is behind a capability probe with a
 documented fallback**, which is what makes the layout portable even though the
@@ -26,6 +26,11 @@ install path is not:
 - **install it** — the family's own `install` argv from the list. No fallback:
   installing with another family's tool is not a degraded install, it is a
   different one.
+- **refresh the index** — the family's own `update` argv from the list. No
+  fallback and no guess: an install is resolved against the index, so an index
+  nobody refreshed is the reason a converge fails on a version the mirror has
+  moved past. An argv the list does not carry is a row nobody filled in, and the
+  caller says so rather than refreshing nothing and installing anyway.
 
 Neither probe runs a command, so answering "which family is this" cannot have a
 side effect.
@@ -223,3 +228,21 @@ def install_argv(packages: list[str], row: dict | None = None) -> list[str]:
     """The argv that installs these packages on this family, and nothing else."""
     family_row = family() if row is None else row
     return [str(part) for part in family_row.get("install", [])] + list(packages)
+
+
+def update_argv(row: dict | None = None) -> list[str]:
+    """The argv that refreshes this family's package index, and nothing else.
+
+    Read from the list beside `install` and `query`, for the same reason those
+    are: a command written here would be a second place the families differ, and
+    a second place is a second thing to forget. The argv carries no package name,
+    because there is no package to name — it is the whole command.
+
+    **An empty argv is a row nobody filled in, and it is the caller's to say so.**
+    This returns the empty list rather than guessing, because a guess is either a
+    hard-coded `apt-get update` — which runs the wrong tool on two of the three
+    families this list carries — or a silent no-op, and a silent no-op is the
+    defect this function exists to remove.
+    """
+    family_row = family() if row is None else row
+    return [str(part) for part in family_row.get("update", [])]
