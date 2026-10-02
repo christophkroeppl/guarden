@@ -1,0 +1,20 @@
+[Unit]
+Description=materialise every guarden credential blob into its service's podman secret store
+Documentation=file:///usr/share/doc/guarden/
+# The SYSTEM manager, once, as root: a generated unit for a service runs in that
+# service's own user manager, which cannot read a 0600 root system host key and
+# has no business holding it. So the decryption happens here and the generated
+# unit carries no LoadCredentialEncrypted= at all — it only names the secret, and
+# podman resolves it. This pair is the only place a blob is decrypted.
+After=snapperd.service
+Requires=snapperd.service
+
+[Service]
+Type=oneshot
+# No RemainAfterExit: a path unit that triggers a oneshot which then stayed
+# active would refuse to run again, and re-materialising a rotated value is the
+# whole point of the trigger.
+ExecStart=/usr/lib/guarden/bin/weedr secret materialise
+
+[Install]
+WantedBy=multi-user.target

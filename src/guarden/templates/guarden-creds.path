@@ -1,0 +1,14 @@
+[Unit]
+Description=materialise a credential blob as soon as it changes under /etc/guarden/creds
+
+[Path]
+# One path unit for the whole host, and one boot-time oneshot: two units rather
+# than a pair per service, because a unit per service is a unit per service to
+# install, reload and eventually forget to remove. `weedr secret set` also asks
+# the materialiser to run directly, so correctness does not rest on this trigger
+# catching every change in the tree.
+PathChanged=/etc/guarden/creds/
+Unit=guarden-creds-boot.service
+
+[Install]
+WantedBy=multi-user.target
