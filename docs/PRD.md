@@ -94,8 +94,9 @@ The general lesson is in §5: a design tested only against a web application is 
 
 ## 5. What shaped the design
 
-Four constraints, each of which eliminated a plausible-looking option. They are the reason the
-system is as small as it is.
+Five constraints. Four eliminated a plausible-looking option, which is why the system is as
+small as it is; the fifth says which firewall this host runs, which was ambiguous for as long as
+`ufw` was on the package list.
 
 **A distinction that lives in a string is not a distinction.** A prefix on a name, a field
 nobody reads, a convention in a manifest: each has to be checked twice, and a check that is
@@ -121,17 +122,27 @@ No unprivileged process can bind a privileged port, because the kernel forwards 
 ports instead of the whole host being granted the capability. Each of these has a named
 mechanism in the spec and a named limit in `SECURITY.md` (ADR-0003, 0005, 0006).
 
-**A test that cannot fail is worse than no test.** The harness proves behaviour at the command
-line, and the claims that fakes cannot establish — that a rootless container reaches a
-dependency by name, that a non-member cannot connect to a declared port, that a clone of a live
-data volume starts and recovers — are proven on a real machine or not claimed at all
-(spec §11).
+**One firewall engine, installed by displacing the other one.** The host firewall is `ferm` and
+there is no second manager anywhere on the box. `soil packages` installs `ferm` **and** `ufw`,
+and `soil firewall --apply` disables `ufw` — both acts are part of installation, because a
+package list that mentions `ufw` reads either way and only one reading is true. `ufw` survives
+only as the posture the dead-man timer hands back to a locked-out operator (ADR-0013). Every
+service's rules come from the same render whichever way it was deployed, so there is no
+per-service firewall to keep in step with the host's.
+
+**A test that cannot fail is worse than no test.** The harness is a real machine — a throwaway
+LXD VM cut from a golden snapshot, with the real tools and no fakes anywhere (ADR-0014) — and it
+proves behaviour at the command line. The claims that need a machine are proven on one or not
+claimed at all: that a rootless container reaches a dependency by name, that a non-member cannot
+connect to a declared port, that a clone of a live data volume starts and recovers (spec §11).
+A stand-in for the host is not a weaker version of that; it is a different claim, and the
+repository kept paying for the difference.
 
 ## 6. Architecture
 
 | layer | programs | privilege | job |
 |---|---|---|---|
-| host | `soil` | root | packages, btrfs and snapper, sysctl, firewall framework, ingress forwarding, dead-man, install |
+| host | `soil` | root | packages, btrfs and snapper, sysctl, the ferm firewall framework and `ufw` disabled, ingress forwarding, dead-man, install |
 | control | `weedr` | root | the only mutator: identities, service roots, state volumes, units, credentials, ports, snapshots, forks, rollbacks |
 | render | `loom` | unprivileged | manifest plus registry to units, host entries, environment, credential requests |
 | render | `roots` | unprivileged | the edge's route configuration |
@@ -194,7 +205,9 @@ phrase usually attached to it, that is the phrase's fault.
   unprivileged. A poke cannot reach a shell, and cannot name a removal verb that removes a
   service in a gated track.
 - A repository cannot open a host port and cannot choose its own environment: both are
-  root-owned decisions (ADR-0006). It also cannot state a build priority, a snapshot priority, a
+  root-owned decisions (ADR-0006). It also cannot install a firewall rule: a `firewall:` entry
+  is a request with an admin's grant behind it, and the grant is a root verb on no sudoers rule
+  (ADR-0013). It cannot state a build priority, a snapshot priority, a
   data source, a lineage, a resource cap or a weight. Those are spec rules (spec §10, §6.6,
   §8.1, §8.3) and there is no ADR behind them.
 - A service that did not declare an edge cannot *connect* to the provider, enforced by
@@ -258,6 +271,16 @@ fork from outside the operator's own repositories, and that instance can read th
 credentials. This is accepted for v1 and we may revisit it; nothing in the design mitigates it.
 The remedy is one line of configuration: narrow the allowlist for a repository that has outside
 contributors, or make the fork its own service.
+
+**A granted firewall rule is root firewall authority, and the grant is the whole of the
+review.** A service's manifest may ask for a rule; `weedr firewall open` installs it, as root,
+by hand, on no sudoers rule. What an admin agrees to is one rule line, not a service's
+intentions — a rule whose match is broader than its author expected reaches everything the match
+covers — and because a granted rule renders above the default deny, a rule that matches `-o lo`
+and accepts **does** reopen loopback for exactly the match it names. Accepted, because the
+alternative is that a service needing a protocol the edge cannot speak has no way to ask for it,
+and because the request is inert until somebody with root types the verb. Making that daemon a
+service stays the better answer wherever it is possible (ADR-0013).
 
 **Nothing polices what a service binds.** The firewall restricts who may *connect*, not what
 may listen. Two compromised services can talk over any port they both choose, and a service

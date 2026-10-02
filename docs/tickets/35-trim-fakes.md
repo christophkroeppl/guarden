@@ -1,86 +1,74 @@
-# 35: trim the fake set, and stop the fakes escaping the harness
+# 35: delete the fakes, and the fake tier with them
 
-**What to build:** Cut the fixture binaries that earn nothing, and make it
-impossible for a fake to shadow a real tool outside a test run. Not a
-restructuring of the harness — the seam stays the command line and `tests/run.sh`
-still globs `tests/t[0-9]*.sh`. This removes dead weight and a real hazard, and
-changes nothing about what a test may assert.
+**What to build:** Remove `fixtures/` and `tests/run.sh`, take `fixtures/bin` off `PATH` in
+`tests/lib.sh`, and rewrite every call-log assertion as an assertion about state. One harness
+remains: the throwaway LXD VM with the real tools (ADR-0014).
 
-**Blocked by:** 10 (harness and program skeletons), 30 (weedr — identities and
-configuration)
+**Blocked by:** 10 (harness and program skeletons), 30 (weedr — identities and configuration)
 
 **Status:** ready-for-agent
 
-- [ ] **Every remaining fake is referenced by a test.** Four are referenced by
-      none today and go: `dpkg-query`, `findmnt`, `getent`, `ss`. A fake no test
-      names is a fake that only ever runs by accident, via `PATH`.
-- [ ] **The trivial stubs are replaced by one shared call-logger.** Eleven
-      binaries are 77 bytes each (`apt`, `chattr`, `dpkg`, `ferm`, `git`,
-      `iptables`, `podman`, `runuser`, `sudo`, `systemd-creds`, `tar`) and differ
-      only in the name they echo. They collapse to a single logging stub
-      parameterised by argv[0], so adding a command is a line in a list rather
-      than a file. **A fake that only records that it was called asserts nothing**:
-      the call log already shows the invocation, so these cost a file each and
-      prove nothing.
-- [ ] **`snapper` is brought down in size.** At 14.6 kB it is ~40% of all fixture
-      code, and it is the single source of the ticket-20/ticket-30 merge
-      collision — two tickets extending one `case` statement, twice. Whatever the
-      reduction, the existing `tests/t10-snapper-fake.sh` and
-      `tests/t10-snapper-canonical.sh` still pass unchanged.
-- [ ] **A fake cannot shadow a real tool outside a test run.** Tonight,
-      `fixtures/bin/git` was first on `PATH` in a live shell and silently
-      no-opped: `git rev-parse`, `git show-ref` and even `git --version` returned
-      empty with exit 0. Any process inheriting that environment is affected,
-      including agents. The fake directory is entered on `PATH` by `tests/lib.sh`
-      for the duration of a test and removed after, and the tests that assert on
-      the call log keep working.
-- [ ] A regression test fails if a fake reappears on the ambient `PATH`. It must
-      not assert the contents of another repo's environment; it asserts the
-      property that matters, which is that the harness is the only thing that
-      puts a fake on `PATH`.
+- [ ] **`fixtures/` is deleted**, every binary in it with it. Nothing outside a test referenced
+      them and the remaining test files reach the real tools
+- [ ] **`tests/lib.sh` no longer puts `fixtures/bin` on `PATH`.** This is the load-bearing line of
+      the ticket: it was exported unconditionally for every suite in both tiers, and the LXD
+      runner never removed it, so the "real machine" tier was executing against the fakes in 29
+      of the 34 suites of the 2026-10-01 run. A suite that passes in the VM must now be a suite
+      that ran against real tools, and that is checkable rather than assumed
+- [ ] **`tests/run.sh` is deleted** and the `test-fakes` recipe with it, so there is no command
+      that runs a suite outside a machine
+- [ ] **Every call-log assertion is rewritten as a state assertion, or dropped.** 51 of them
+      across seven files (`t70-pins`, `t70-fork`, `t70-snapshot`, `t130-packages`,
+      `t40-untrusted`, `t130-scripts`, `t130-modules`). "The unit exists", "the snapshot carries
+      the mark", "the rule is in `30-services.conf`", "the file was not created". Where a call
+      left no state, the assertion is **dropped rather than ported** — `assert_not_called
+      "apt-get install"` becomes "no package was installed", and where that is not the same
+      claim, the seam was never there and the honest answer is to say so in the ticket rather
+      than to invent a probe
+- [ ] **A regression test fails if a fake ever reappears on the ambient `PATH`.** It asserts the
+      property that matters — the harness is the only thing that could put one there, and now it
+      puts nothing there — and it does not assert the contents of another process's environment
+- [ ] **A suite that needed a staged host gets a real one.** `guarden_prefix` and `scratch_host`
+      stay for the tests that set up a tree, and a test that genuinely needs root says so rather
+      than pretending a prefix is equivalent
+- [ ] `just test` is green, and `just test-one <file>` is how a suite is run while working on it
 
-## Why this is not "just delete some files"
+## Why the fakes go, when the previous version of this ticket argued they should stay
 
-The temptation, given that ticket 140 moves the real proofs into a throwaway
-machine, is to argue the fakes are redundant. They are not, and the ticket
-records why so the question does not get re-argued later:
+The earlier version of this ticket argued for the split on two grounds: the fast suite is 37
+seconds and a VM round trip is minutes, and fakes assert the contract while the VM asserts
+reality. Both were true and neither survives what happened next, which is recorded here so the
+question does not get re-argued a third time.
 
-- **The fast suite is 37 seconds. A golden-VM round trip is minutes.** They
-  answer different questions, and neither substitutes for the other.
-- **Fakes assert the contract**: does `soil storage` write the right keys, exit
-  the right code, report drift rather than silently succeeding.
-- **The VM asserts reality**: ticket 15's claims A, C, F, G and M — the alias is
-  the container's default gateway, the connection arrives with the service uid as
-  socket owner, a non-granted uid fails — came back **not run** precisely
-  because no fake can demonstrate them. Podman 3.4.4 on the development host
-  predates `pasta` by four years; the VM is Ubuntu 26.04 and is not the obstacle.
-- **The VM can never be the only test.** Waiting minutes to discover a typo'd
-  config key is a bad trade for a 37-second suite that catches it immediately.
+**The fast tier was not a second harness. It was shadowing the one true harness.**
+`tests/lib.sh` exported `PATH="$GUARDEN_ROOT/fixtures/bin:$PATH"` unconditionally, `tests/lxc.sh`
+never removed it, and so every suite that did not itself override `PATH` ran against the fakes
+*inside the VM*. Twenty-nine of thirty-four. The tree had one harness, and it was answering in a
+machine whose name says otherwise.
 
-So: fakes for speed, the VM for truth, and each is answerable only by its own
-tier. This ticket trims what is *dead*, and fixes a hazard, and leaves the split
-intact.
+**The eleven failures of that run were all facts about the fake, and none was a fact about
+guarden.** `fixtures/bin/loginctl` knew one subcommand and answered `show-user` with "unknown
+command", a subcommand the real `loginctl` has carried since systemd 249. `/var/lib/guarden` is
+owned `root:root` on the machine where the fake reported `root:guarden`, and a suite had been
+asserting a group ownership no run had ever produced. A drift line the fake never emitted was
+expected. Meanwhile the five suites that override `PATH` and drive the real tools are the green
+ones: the cost of the split was paid by the tier that was supposed to be the evidence.
 
-## The hazard is the real content of this ticket
+**A fake that can reach the real tool is not a test double.** Ticket 35's own first half recorded
+the `git` incident — `fixtures/bin/git` first on `PATH` in a live shell, empty success, and a
+stretch of work thrown away on the belief that the repository was corrupted. The second occasion
+was ticket 60's `runuser` fake, written to genuinely run its command, ending in `exec "$@"` with
+the caller's `PATH` on a machine with real `podman`, `useradd`, `btrfs` and `iptables` in
+`/usr/bin` and `/usr/sbin`. Nothing needed root and nothing was damaged. No test in the suite
+would have caught it; a person reading the code did.
 
-Everything above is housekeeping. The `PATH` escape is not. A fixture that can
-reach outside its harness is a fixture that will eventually make an agent believe
-something false, and it did: for a stretch of work, git commands returned empty
-success, every check built on them was meaningless, and the repository was
-rebuilt from scratch on the belief that it was corrupted. It was not corrupted.
-The commands were lying, and the lie was silent and successful.
+**What this costs, honestly.** Thirty-four suites at one VM cut each is minutes, not seconds, and
+that is paid on every run. Some assertions genuinely lose their seam: an argv that produces no
+observable state cannot be asserted by a harness that observes state, and the count is small
+enough to name. The recovery for the first cost is `just test-one <file>`, not a second model of
+the host. The second cost is a real loss and is not papered over.
 
-That is the same failure this repo already records twice — `ir.module.module`
-licence values that pass a linter and refuse to install, and an Odoo test run
-that reported `0 failed, 0 error(s) of 0 tests` while exiting 0. A tool that
-cannot tell you it did nothing is worse than a tool that fails.
-
-**What to build, concretely:** the four unreferenced fakes deleted, the eleven
-stubs collapsed to one parameterised logger, `snapper` reduced with its two
-existing test files untouched, `fixtures/bin` scoped to the test run, and one
-regression test that fails if a fake is ever again on the ambient `PATH`.
-
-**For the tickets after this one:** anything that adds a new fake adds a line to
-the list in the shared logger instead of a new file, and nothing in `fixtures/`
-may be relied on outside a test run. The golden-VM tier (130, 140) is unaffected
-and remains the only thing that can answer ticket 15's eleven.
+**For the tickets after this one:** there is no fake to add, and wanting one is the signal to
+assert state instead. If a future claim needs a controlled clock, a controlled random source or a
+controlled network, the value is taken as an argument or the claim waits — a dependency injected
+so a fake is unnecessary is the better shape anyway (ADR-0014).

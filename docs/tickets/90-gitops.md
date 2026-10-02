@@ -55,7 +55,7 @@ The box takes the source, maps the ref to an environment from a root-owned allow
 - [ ] A malformed poke — bad sha shape, ref outside `[A-Za-z0-9._/-]` — exits non-zero without
       touching a service
 - [ ] The first poke for `main` creates the production service with an empty database, no fork
-      in the call log, and the service does not start until the operator plants its credentials
+      in the journal, and the service does not start until the operator plants its credentials
 - [ ] **`hose drop <ref>` never removes a service in a track with `gated = true`,**
       refused with exit 1 and the reason unless `/etc/guarden/allow-gated-drop` exists. **The
       refusal is enforced root-side in `weedr service remove`, and `hose` never reads that file**
@@ -85,4 +85,4 @@ The box takes the source, maps the ref to an environment from a root-owned allow
 - [ ] The staged tree is removed after the deploy
 - [ ] The shipped workflow template contains the poke key and nothing else, with
       `concurrency: { group: <project>/<ref>, cancel-in-progress: true }`
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

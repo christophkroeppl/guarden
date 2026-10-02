@@ -25,4 +25,4 @@ repository.
 - [ ] The dashboard service is reachable through the edge by a route, and its card links to the
       project's production and staging hosts and to its repository from `projects.toml`
 - [ ] `twig` runs unprivileged and writes only into the dashboard's configuration directory
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

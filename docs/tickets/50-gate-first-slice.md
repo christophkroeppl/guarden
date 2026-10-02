@@ -64,7 +64,7 @@ ingress, with nothing else in the way.
       instances of one service each get their own publication and none of them contends for one
 - [ ] A route change appears without restarting the edge
 - [ ] A service with no `routes:` produces no route and no error
-- [ ] The call log shows the edge's units installed by `weedr` and rendered by `loom`, with the
+- [ ] The edge's unit files exist, the journal names the program that wrote each one, and the
       edge reading the shared directory read-only in its unit
 - [ ] On the golden VM, a request with the right `Host` header reaches the container through the
       edge, addressed at the edge's **published loopback port** rather than the host's port 80 —

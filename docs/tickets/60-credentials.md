@@ -59,9 +59,9 @@ running.
       must not be blocked on a human planting them
 - [ ] The gate is evaluated before the old container is stopped: a blocked gate exits 1 from
       `weedr service gate` while the **deploy itself exits 0**, and the
-      call log contains no `stop` for the running unit
+      **the running unit was never stopped** — it is still active after the refused start
 - [ ] The varlock schema in `.guarden/.env.schema` is the source of truth for names and types, and
       the only annotations that carry meaning are `@required`, `@sensitive`, `@type` and
       `@example`. Nothing is generated from it into the repository and there is no `.env.example`
       to keep in step with anything
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

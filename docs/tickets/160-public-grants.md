@@ -47,7 +47,8 @@ grant, and the repository still cannot make one.
       container, so the grant had no destination. The manifest asks and the admin decides
 - [ ] The `firewall` render is a union of every grant and every allocation, rewritten atomically
       with the diff printed before installation, so two mutations in a row cannot install out of
-      order and duplicate rules cannot exist
+      order and duplicate rules cannot exist. **A rule two services requested renders once** —
+      deduplication is a property of the set, and ticket 180 adds the next kind of member to it
 - [ ] Removing a grant removes the forwarding rule, and `weedr port list` shows the port closed- [ ] **`30-services.conf` is disjoint from `20-ingress-nat.conf`.** The edge's three forwarding
       rules are written by `soil firewall` from the enabled modules' declared ingress; a service's
       own granted forwarding is written by the mutator. Each file has exactly one writer
@@ -59,4 +60,4 @@ grant, and the repository still cannot make one.
       demonstrate forwarding at all
 - [ ] `docs/notes/repo-ports.md` still describes promotion of pending requests as an
       administrator's option and still says it is not installed
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

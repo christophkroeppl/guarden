@@ -46,9 +46,11 @@ paths is ticket 40, and both are needed before the edge is complete.
       `-o lo -d 127.0.0.0/8` for every service uid, with the per-publication accepts above it.
       The deny does not touch outbound traffic, and pasta's DNS forward is explicitly excluded
       from the loopback mapping, so the earlier justification about name resolution and package
-      updates was false. A container cannot reach `sshd` on 22, and there is no fifth grant table:
-      a service needing a host loopback port which is not a publication needs that daemon to be a
-      service
+      updates was false. A container cannot reach `sshd` on 22, and there is no `[loopback] allow`
+      table: a table whose whole content is a destination is a second way to grant one beside the
+      publication set. A service needing a host loopback port which is not a publication needs
+      that daemon to be a service — the default answer, and ticket 180 is the door for the cases
+      where it is not possible
 - [ ] **Render, diff and install happen under one `firewall` lock.** Two mutations that each
       render would otherwise let the stale render install last, silently dropping the rule the
       other one had just granted
@@ -93,4 +95,4 @@ paths is ticket 40, and both are needed before the edge is complete.
       the port, with and without the rule. Nothing polices what a service *binds*: two
       compromised services can talk over any port they both choose, and the test above is the
       whole of what the firewall guarantees
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

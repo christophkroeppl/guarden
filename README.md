@@ -16,8 +16,8 @@ one over files.
 
 | piece | what it does |
 |---|---|
-| **soil** | Prepares the host: btrfs, snapper, firewall, ingress forwarding, IPv6 off. The only thing with a `--check`. |
-| **weedr** | The one command that creates and removes services, grants ports, plants secrets, and snapshots. The only program that mutates anything as root. |
+| **soil** | Prepares the host: btrfs, snapper, the firewall, ingress forwarding, IPv6 off. The only thing with a `--check`. |
+| **weedr** | The one command that creates and removes services, grants ports and firewall rules, plants secrets, and snapshots. The only program that mutates anything as root. |
 | **loom** | Turns a project's manifest into the units that run it. |
 | **roots** | Writes the edge's routes. |
 | **twig** | Writes the dashboard. |
@@ -86,6 +86,28 @@ There is no PyPI and no wheel on either path. Every package is a distribution pa
 thing fetched from outside a distribution repository is a pinned `podlet` release whose SHA256 is
 recorded in this repository.
 
+### The firewall is `ferm`, and `ufw` is installed so it can be turned off
+
+guarden does not use `ufw`. It installs `ferm` and it **disables** the distribution's own
+firewall manager, and disabling it is as much a part of `soil firewall --apply` as installing
+`ferm` is. No `ufw` rule is ever written, read or reconciled on a guarden host: every rule in
+`/etc/guarden/firewall/` is a ferm stanza, whatever installed the service it belongs to — a
+module's service, a poke's service, or one you created by hand. There is exactly one firewall on
+the box and it is ferm.
+
+`ufw` is on the package list for exactly two reasons, and it is worth knowing both: it is the
+unit guarden displaces, and it is what the dead-man timer hands back if a rule change locks you
+out. `ufw` is therefore the failsafe, never the firewall.
+
+```sh
+systemctl is-enabled ufw      # not enabled -- that is what "guarden does not use ufw" means
+ls /etc/guarden/firewall/     # what guarden intends: three ferm files
+iptables-save                 # what the host is actually running
+```
+
+Ferm compiles to iptables, so the running rules are always inspectable — the rendered files are
+not a private format you need a tool to read.
+
 ---
 
 ## Put a project on the box
@@ -125,6 +147,10 @@ routes:
 widgets:
   - container: web
     file: .guarden/widgets/web.yml
+
+firewall:                       # a firewall rule this service ASKS for; it installs nothing
+  - name: wireguard-peer        # the admin grants it with `weedr firewall open <service> <name>`
+    rule: "-p udp --dport 51820 -j ACCEPT"
 
 schema: .guarden/.env.schema
 ```
@@ -260,6 +286,9 @@ weedr secret list myapp-production
 
 weedr port list                          # requested, granted, pending
 weedr port open myapp-production 8080/tcp
+
+weedr firewall list                      # every rule, installed or pending, and who asked for it
+weedr firewall open myapp-production wireguard-peer
 
 stakes pin myapp-production:pgdata@41 "before the risky change"
 stakes list                              # pin files it owns, and which services name each as a seed
@@ -424,7 +453,9 @@ configuration, and the shipped default keeps eight; the runbook says how to chan
 `soil storage` also owns `EMPTY_PRE_POST_CLEANUP=no` and a `NUMBER_MIN_AGE` on every state
 volume's configuration, and reads back the effective limits with `snapper get-config` rather
 than trusting what it believes it wrote. Reading snapper output means
-`snapper list --machine-readable json`, where `userdata` is an object and `important` is a key.
+`snapper --machine-readable json --config <config> list`, where `userdata` is an object and
+`important` is a key; the option goes before the command, and the document is keyed by the
+configuration's name.
 One snapshot can be made unreapable with `chattr +i`, at the cost that it is a deny rather than a
 keep-N: while it stands, that configuration's cleanups abort. The runbook has it.
 
@@ -480,6 +511,39 @@ No service ever binds a non-loopback address, and there is no such thing as a "p
 that is the only thing it is. A granted port gets the same shape as the edge's — a `PREROUTING`
 DNAT to `127.0.0.1:<publication>` in `30-services.conf`, and nothing else.
 
+### When a service needs a rule of its own
+
+Most traffic goes through the edge, and a service that publishes HTTP declares a `routes:` entry
+and never touches the firewall again. Some cannot: a WireGuard endpoint, a full node's peer port,
+a source range you want to name rather than imply. Those services put the rules they want in
+their manifest, and you decide what happens.
+
+```yaml
+# .guarden/service.yml
+firewall:
+  - name: wireguard-peer         # a stable name; the grant names this
+    rule: "-p udp --dport 51820 -j ACCEPT"
+```
+
+```sh
+weedr firewall list              # every rule, installed or pending, and which services asked
+weedr firewall open wg-production wireguard-peer     # you agree to one
+weedr firewall close wg-production wireguard-peer
+```
+
+The rule installs **nothing** until you run `weedr firewall open`, and that verb is root, made by
+hand, and on no sudoers rule — a poke creates the request and leaves it pending, exactly as it
+leaves a port pending. Requests are additive only: a service can add a rule to the chain guarden
+owns and cannot flush a chain, set a policy, reorder guarden's own rules or reach anything after
+the default deny. `weedr firewall list` is the inventory you actually want at three in the
+morning — every rule on the host, deduplicated, with the services behind each one, so "which
+service opened this" is a command rather than a grep through `overrides.toml` files.
+
+Two services asking for the same rule get **one** rule with both names on it; closing one leaves
+it in force while the other still asks. A granted rule is root firewall authority and it is
+priced like one: you are agreeing to that line, not to what the author intended by it, and a
+rule that matches loopback does reopen loopback for exactly the match it names.
+
 Two consequences worth knowing before a smoke test surprises you: locally generated traffic does
 not traverse PREROUTING, so a request this box makes to its own public host name never reaches
 the forwarding rules. Health checks and smoke tests address the publication directly — read the
@@ -529,9 +593,10 @@ install `hose`.
 soil --check                    # did the host drift?
 weedr service list              # what does guarden think is running?
 weedr port list                 # what is open, and what is still pending
+weedr firewall list             # every firewall rule, and which service asked for it
 systemctl --user -M myapp-production@ status
 journalctl --user -M myapp-production@ -u web
-snapper -c myapp-production-pgdata list --machine-readable json
+snapper --machine-readable json -c myapp-production-pgdata list
 stakes list
 furrow queue list
 ```

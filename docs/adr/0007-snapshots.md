@@ -69,10 +69,12 @@ switching the empty-pair cleaner off costs nothing. How that cleaner treats the 
 the `important` mark is not something this document can establish from the available sources, and
 nothing here depends on the answer.
 
-Snapshot state is read with `snapper list --machine-readable json`. JSON renders `userdata` as
-a real object, so `important` is a key; CSV renders the whole map as one comma-joined quoted
-field, so a CSV consumer ends up matching a substring of a quoted blob. Writes never use
-`--no-dbus`: without the daemon there is no inter-process coordination at all.
+Snapshot state is read with `snapper --machine-readable json --config <config> list` (spec §8.2,
+which carries the three measured facts about the option's position, the document's shape and the
+`0` entry that is not a snapshot). JSON renders `userdata` as a real object, so `important` is a
+key; CSV renders the whole map as one comma-joined quoted field, so a CSV consumer ends up
+matching a substring of a quoted blob. Writes never use `--no-dbus`: without the daemon there is
+no inter-process coordination at all.
 
 ## References are derived, not recorded
 

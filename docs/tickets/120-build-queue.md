@@ -17,14 +17,15 @@ itself **succeeding** — the service is installed and waiting, and `furrow` exi
       between a queue and a running service. The locks that protect it stay in
       `/run/guarden/locks` on tmpfs: a lock that outlived the process that took it would only be
       a stale lock
-- [ ] With one lane, the call log never shows two builds in flight
+- [ ] With one lane, two builds are never in flight at once: at no sample is a second build
+      process running
 - [ ] Two queued production requests run before a queued staging request; staging before
       preview; within one priority the order is FIFO
 - [ ] Priority comes from the `weight` on the track in `guarden.toml`, not from a
       fixed list in the code
 - [ ] A manifest cannot state a priority: there is no key for it, and one is refused by name
 - [ ] N identical requests for one service and sha collapse into one build
-- [ ] The **order is ensure, render, build, gate, stop, install, start**, and the call log shows
+- [ ] The **order is ensure, render, build, gate, stop, install, start**, and the journal shows
       it in that order. Step zero is `weedr service ingest <name> --from poke <project>@<sha>` when
       the registry has no entry — a verb with no grant flag on it, and
       that is how a poke creates a service without being able to open a port
@@ -59,4 +60,4 @@ itself **succeeding** — the service is installed and waiting, and `furrow` exi
 - [ ] A request enqueued while busy is still built after the process that enqueued it exits
 - [ ] `furrow queue list` shows the order and the last failure's message
 - [ ] Manual and gitops deploys enter the same queue and are serialised against each other
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

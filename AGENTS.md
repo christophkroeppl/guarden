@@ -24,7 +24,10 @@ stakes/   the pin registry, unprivileged; the reconciler that marks snapshots is
 tools/    golden-vm, the throwaway-machine harness
 modules/  shipped module definitions: gate, homepage, auth (unimplemented)
 tests/    the one test seam                               created by ticket 10
-fixtures/ fake binaries, PATH-first                       created by ticket 10
+fixtures/ guarden*.toml inputs and project manifests. `fixtures/bin/` and
+           `fixtures/lib/` were deleted with the fakes (ticket 35, ADR-0014) and
+           stay deleted: a stand-in for a system tool is not added without being
+           asked for by name
 docs/     spec, ADRs, PRD, runbook, tickets, notes
 justfile  the task runner: `just test`, `just lint`, `just check`, `just golden-vm`
 ```
@@ -41,7 +44,7 @@ Parts talk over files and paths. There is no internal HTTP API and no socket bet
 
 ## Binding decisions
 
-`docs/adr/0001`–`0012` are binding. `docs/spec.md` is the contract, and where the code and the
+`docs/adr/0001`–`0014` are binding. `docs/spec.md` is the contract, and where the code and the
 spec disagree the code is wrong. Do not re-litigate them in a change; if one is wrong, write
 a new ADR that supersedes it. The short version:
 
@@ -87,24 +90,50 @@ a new ADR that supersedes it. The short version:
   container reaches any host loopback port, `sshd` on 22 included. The deny does not touch
   outbound traffic, and pasta's DNS forward is explicitly excluded from the loopback mapping, so
   the old justification — that a blanket drop "would break name resolution and package updates" —
-  was false and is gone. There is no fifth grant table: a service that needs a host loopback
-  port which is not a publication needs that daemon to be a service. What this does *not* stop
-  is a service *binding* a port of its own choosing.
+  was false and is gone. There is no `[loopback] allow` table: a table whose whole content is a
+  destination is a second way to grant one beside the publication set. What this does *not* stop
+  is a service *binding* a port of its own choosing, and what it no longer forbids is an admin
+  granting a rule that matches `-o lo` (ADR-0013, spec §7.7) — a granted rule renders above the
+  deny, so it is reachable, and making that daemon a service stays the better answer.
 - Ports are **requested** by a manifest and **granted** by the admin in a root-owned
   `overrides.toml`. Every grant is public ingress and every one is address translation to the
   service's loopback publication: no service ever binds a non-loopback address, and there is no
   private-versus-public bind. A poke never grants. The firewall is re-rendered whole, and the diff
   is printed.
+- **A service may ask for a firewall rule of its own, and only an admin may install one.** Most
+  traffic goes through the edge, so most manifests never mention a firewall; the ones that cannot
+  be reached through it — a WireGuard endpoint, a full node's peer port — put the rules they want
+  in a `firewall:` block, and it installs nothing until `weedr firewall open <service> <name>`.
+  Same shape as a port grant for the same reason: repository input naming something the host
+  owns. Four rules make it safe, and all four are load-bearing: the **grant** is a root verb on no
+  sudoers rule, so no deploy path reaches it; a **request is additive only**, so it cannot flush a
+  chain, set a policy, reorder guarden's rules or name a chain guarden does not render; the
+  **position** is guarden's, so a grant always lands above the default deny and the deny stays
+  last; and the rule is **deduplicated by content while the count is by name**, so two services
+  asking for one line get one rule carrying both names and closing one leaves it while the other
+  still asks. `weedr firewall list` is the deduplicated inventory with the services behind each
+  rule, and it is the command for "which service opened this". A granted rule is root firewall
+  authority and is priced like one: the admin agrees to a line, not to a service's intentions.
 - **The kernel owns the public ports.** `soil sysctl` sets
   `net.ipv4.conf.<ingress-if>.route_localnet=1` on the ingress interface and nowhere else.
-  `soil firewall` writes `10-framework.conf` and `20-ingress-nat.conf` — the edge's three
+  `soil firewall`   writes `10-framework.conf` and `20-ingress-nat.conf` — the edge's three
   forwarding rules, from the enabled modules' declared ingress — and the mutator writes
-  `30-services.conf`: the whole uid-matched filter set plus any service's own granted forwarding.
+  `30-services.conf`: the whole uid-matched filter set, any service's own granted forwarding and
+  any service's own granted firewall rules.
   The two files are disjoint and each has exactly one writer. `443/udp` is a different protocol
   from `443/tcp`, so the edge's ingress is three rules, not two. No unprivileged process binds
   anything below 1024 and no program gains a capability. `REDIRECT` does not work here: it
   rewrites the destination to the incoming interface's own address, and the edge listens only on
-  loopback.
+  loopback. **`ferm` is the firewall guarden runs and `ufw` is the one it displaces — guarden does
+  not use `ufw`, and disabling it is as much a part of installation as installing `ferm`:** `ufw`
+  is a declared package for two narrow reasons, it is the unit guarden turns off and the one the
+  dead-man timer re-enables to hand a locked-out operator their shell back, and **no `ufw` rule
+  is ever written, read or reconciled on a guarden host.** Every service's rules come from the
+  same ferm render, whether a module installed it, a poke deployed it or an operator typed the
+  command. "Disabled" means
+  *not enabled* — `ufw.service` can be `static`, and on a host without the package
+  `is-enabled` answers "No such file or directory", so a check demanding one exact state word
+  reports drift forever on a minimal image.
 - **A forwarded port is a `PREROUTING` DNAT and nothing else. There is no masquerade.** An
   earlier revision of these documents required a `nat POSTROUTING` masquerade per forwarded port
   and claimed that without it the forwarding set "delivers exactly nothing while everything on the
@@ -132,8 +161,9 @@ a new ADR that supersedes it. The short version:
 - Resource **weights** are a default baked into generated units from the root-owned environment
   table. Caps are the operator's, in a root-owned drop-in. Neither comes from a manifest.
 - `overrides.toml`, root-owned, is the whole of the admin's grant surface: `[ports] open`,
-  `[retention] keep_last` and `free_limit`, `[groups] add` — supplementary groups for the
-  service user, which is how a hardware-transcoding service reaches `/dev/dri` — and
+  `[firewall] allow` — the names of requested firewall rules the admin agreed to install, never
+  rule text — `[retention] keep_last` and `free_limit`, `[groups] add` — supplementary groups
+  for the service user, which is how a hardware-transcoding service reaches `/dev/dri` — and
   `[mounts] allow`, the only host paths outside the service's own volumes and `/etc/guarden` its
   units may bind-mount. The renderer refuses every other one, and an entry there is a grant in
   the same sense a port is.
@@ -241,11 +271,13 @@ a new ADR that supersedes it. The short version:
   written during a running cleanup is silently lost with no error anywhere. `snapper list` holds
   the configuration lock for its whole duration, so a reconciler that lists in a loop can stall
   cleanup.
-- **Snapshot state is read with `snapper list --machine-readable json`**, because JSON renders
-  `userdata` as an object and `important` is therefore a key; CSV renders the whole map as one
-  comma-joined quoted field. The effective configuration is read with `snapper get-config`, never
-  by parsing `/etc/snapper/configs/<name>`. Writes never pass `--no-dbus`: with no daemon there is
-  no inter-process coordination at all.
+- **Snapshot state is read with `snapper --machine-readable json --config <config> list`** — the
+  option is a **global** one and goes before the command, the document is an object keyed by the
+  configuration's name, and its `number 0` entry is the live subvolume and not a snapshot (spec
+  §8.2 carries all three). JSON renders `userdata` as an object and `important` is therefore a
+  key; CSV renders the whole map as one comma-joined quoted field. The effective configuration is
+  read with `snapper get-config`, never by parsing `/etc/snapper/configs/<name>`. Writes never
+  pass `--no-dbus`: with no daemon there is no inter-process coordination at all.
 - **`chattr +i` on a snapshot's subvolume is an escalation, not a default.** It is a deny, not a
   keep-N, and it is one per-snapshot operator decision: the cleaner deletes candidates in a loop
   with no per-item error handling, so the first candidate it cannot delete aborts that
@@ -297,38 +329,74 @@ address**, not `127.0.0.1`, because `PREROUTING` DNAT rewrites the destination o
 
 ## Test seam
 
-One seam: the command line of every program. Two harnesses:
+**One harness, and it is a real machine: `just test` cuts a throwaway LXD VM from a golden
+snapshot and runs every suite in it with the real tools.** There is no fast tier, no fake, and no
+call log (ADR-0014). `tests/lxc.sh run <pattern>` is the same thing for one file, and that is how
+you run the suite while you work on it.
 
-- **Fast (`just test`, seconds):** `fixtures/bin` is first on `PATH`. Fakes for `useradd`,
-  `usermod`, `userdel`, `loginctl`, `podman`, `podlet`, `runuser`, `systemctl`, `snapper`,
-  `btrfs`, `chattr`, `systemd-creds`, `ferm`, `iptables`, `ip`, `tar`, `sudo`, `git` and the
-  distribution's package tools append to a shared call log. The `snapper` fake answers
-  `list --machine-readable json` and `get-config`, and its `modify` records the userdata it was
-  given. Tests assert exit code, diagnostic lines, files that appeared or vanished, and the call
-  log.
-- **Golden VM (minutes, manual):** a throwaway machine with real tools, proving what fakes
-  cannot — that a rootless container reaches a dependency by the measured alias, that a
-  non-member cannot open the port, that a forwarded port answers from off the box, that nothing
-  unprivileged can bind below 1024, and that a clone of a live snapshot starts and recovers.
+**`fixtures/` is retired. No fake is added, and `fixtures/bin` is never on `PATH`** — not in a
+test, not in a VM run, not in a shell. It existed until 2026-10-01, and it was worse than a
+second opinion: `tests/lib.sh` put it first on `PATH` unconditionally and the LXD runner never
+removed it, so the "real machine" tier was executing against the fakes in 29 of 34 suites. A
+fake that shadows a real tool is a tool that lies, and this repository has already paid for that
+twice — once with `git` returning empty success, and once with a `runuser` fake one careless line
+away from exec'ing the machine's real `podman`. If you find yourself wanting a fake, the answer
+is to assert the **state** the call would have produced: the unit exists, the mark is on the
+snapshot, the rule is in the file, the package was not installed. One command per shell
+invocation. No `&&`, no `|`, no `;`.
 
 Rules that hold for every test:
 
+- **The VM is the only place anything is executed.** Never run a guarden program, a test script,
+  or anything you have written on the machine you are sitting at. No `python3 -m guarden.*` off
+  the VM, no `tests/*.sh` off the VM, no staged `/tmp` host, no `bash -n` on a suite to "check" it.
+  Reading code, `git diff` and reasoning are how you work; running is how you verify, and
+  verification happens in a throwaway machine. A development checkout is not a target: the
+  programs are root-only, the host layout is the host's, and the one thing a local run proves is
+  that something works somewhere nobody will deploy it.
+- **Never download anything to the development machine.** No release archive, no binary, no
+  `curl`/`wget` of anything outside a distribution repository, nothing in `/tmp` and nothing in
+  your home. A fetch is a **phase**, phases run on a machine, and the machine is the VM. The
+  golden VM has a network precisely so that the fetch can be exercised where it is supposed to
+  run. This has already been got wrong on this branch: an agent downloaded the pinned podlet
+  release, extracted it and executed it on the developer's machine, and left eleven megabytes of
+  ELF and a dozen hand-built archives behind. All of it was unnecessary and all of it had to be
+  deleted by hand.
+- **Never add a fixture, and never add a stand-in for a system tool, unless a ticket or the
+  operator asks for that specific file by name.** `fixtures/` holds `guarden*.toml`
+  configuration inputs and `fixtures/projects/*` manifests, and that is the whole of it.
+  `fixtures/bin/` and `fixtures/lib/` were deleted deliberately and stay deleted. A stand-in for
+  `podman`, for `snapper`, for `btrfs`, for a converter, for a payload — one per system binary is
+  madness, and it is the shape this repository has already paid for twice. If a test seems to
+  need one, it needs to use the real tool in the VM; if it needs a payload, it builds one inside
+  the VM from a file the machine already has. Helpers that *read or build machine state* are not
+  fixtures and belong in `tests/` — `tests/pinarchive.py` is one, and is the right shape.
+- **One VM at a time, and do not throw the golden away.** The runner uses a single fixed instance
+  name, so two agents cannot share it — give the VM to one worker at a time. `just provision`,
+  `just deprovision`, `just golden-vm` and `just destroy` rebuild or discard a machine that took
+  an hour to build; do not run them to work around a problem. If a run wedges, report it with the
+  guest's process state rather than hand-driving `lxc`.
 - External behaviour only. No test imports a program's internals. The single exception is the
   manifest and registry parsers, tested directly, because their failures are invisible from
   outside.
 - One command per shell invocation. No `&&`, `|`, or `;`.
-- New tests are new files under `tests/`. Do not restructure `tests/run.sh` or `tests/lib.sh`;
-  append to `lib.sh` only when a helper is genuinely shared.
+- New tests are new files under `tests/`. Do not restructure `tests/lib.sh`; append to it only
+  when a helper is genuinely shared. `tests/run.sh` is the retired fake tier and goes with
+  ticket 35 — do not add to it and do not restore it.
 - A failing test first, then the fix. Several red-green cycles, not one big bang.
-- A green fast harness is evidence about the fast harness. The claims that matter — isolation,
-  name resolution, clone recovery — are proven on the VM or they are not claimed.
+- **A suite that passes in the VM is evidence about a machine.** Isolation, name resolution,
+  clone recovery, an `iptables-save` that shows the rule you rendered — none of them is claimed
+  on the strength of a stand-in, because there are no stand-ins left.
 
 ## Conventions
 
 - Bash for invoking things and sequencing them. Anything with branches that matters is python,
   in its own file, never a heredoc inside a shell script.
 - Runtime dependencies are **distribution packages** installed by `soil`: `python3-yaml`,
-  `python3-jinja2`. No `pip install` at deploy time, no wheels checked in. There is exactly one
+  `python3-jinja2`, and the ones `packages/packages.toml` lists per family — including `ferm`,
+  which is the firewall guarden runs, and `ufw`, which is the one it disables and is declared
+  only so the dead-man timer can hand it back. No `pip install` at deploy time, no wheels
+  checked in. There is exactly one
   fetch from outside a distribution repository, and it is deliberate: the pinned `podlet`
   release, whose version and SHA256 are recorded in this repository and verified on install. It
   is the only third-party binary. This keeps the host installable on a distro we have not tried
@@ -376,9 +444,24 @@ When implementing a ticket:
 ## What not to do
 
 - Do not add a web UI. Do not add a shared podman network.
+- **Do not add a fake.** Not a stand-in for a system tool, not a shim, not a fixture directory,
+  and not a "harmless" call log. `fixtures/` is configuration inputs and manifests; the harness
+  is a real machine; a suite that cannot say what it wants from a real tool has a design problem,
+  not a missing fixture. This has already been got wrong three times on this branch.
+- **Do not run guarden's programs or tests on the development machine, and do not download
+  anything onto it.** Both belong in the throwaway VM, and both are in "Test seam" above for a
+  reason that cost real cleanup time.
+- **Do not add a second firewall manager, and do not write a `ufw` rule — or read or reconcile
+  one — anywhere.** The host firewall is `ferm` and `ufw` is the unit guarden disables. Do not
+  give a service its own firewall tool, and do not put a grant's rule text in a root-owned file
+  the repository can influence: `[firewall] allow` holds names, and the rule behind a name lives
+  in the manifest that asked for it.
+- Do not render a requested firewall rule after the default deny, and do not give a manifest a
+  position field. The deny is last, always; a grant lands above it because position is guarden's.
 - Do not let a manifest state a build priority, a snapshot priority, a data source, a resource
-  cap or weight, a lineage, or a key that *records* a grant. A `ports:` list is a request and is
-  legitimate. Resource *weights* come from the root-owned environment table, never the manifest.
+  cap or weight, a lineage, or a key that *records* a grant. A `ports:` or `firewall:` list is a
+  request and is legitimate. Resource *weights* come from the root-owned environment table, never
+  the manifest.
 - Do not bind a non-loopback address in anything, and do not bring back a `private`/`public`
   grant distinction. Every grant is a translation to a publication.
 - Do not render a forwarded port with a `nat POSTROUTING` masquerade. A DNAT to `127.0.0.1`

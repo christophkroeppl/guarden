@@ -37,4 +37,4 @@ cannot put a login in front of a route cannot run them.
 - [ ] On the golden VM: an unauthenticated request to a protected route is redirected, a bad
       password is rejected, a good one reaches the service, and an unprotected route is
       unaffected
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

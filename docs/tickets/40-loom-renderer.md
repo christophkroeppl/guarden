@@ -101,7 +101,7 @@ It refuses to render anything it cannot fully resolve.
 - [ ] `loom` writes only into `--out` **and the shared slices** the mutator installs into
       `/var/lib/guarden/shared/<name>/` for `roots` and `twig`. It writes nothing else anywhere
 - [ ] The manifest and registry parsers are tested directly, as the one exception to the seam
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM
 
 **What these refusals are.** They are guardrails against accidents: they make the expensive
 mistake unwritable by a manifest and visible in review, and they mean a repository cannot

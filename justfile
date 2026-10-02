@@ -7,9 +7,37 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-# run the fast harness (seconds)
+# run the test suite (minutes) — the harness of record, and the only one
+#
+# This runs the suite inside a throwaway LXD VM against the real tools: real
+# useradd with real /etc/subuid arithmetic, real iptables, real btrfs
+# subvolumes, real snapper, real systemd. Nothing is faked, and `fixtures/bin` is
+# never on PATH: there is no fast tier, because the "fast" tier was on PATH
+# inside this VM for 29 of 34 suites and its failures were facts about the fake
+# rather than about guarden (ADR-0014). See tests/lxc.sh.
+# The first run builds a golden VM, converts its root to btrfs (two reboots)
+# and snapshots it; after that a run is a copy and a boot per test file. A suite
+# you are working on is `just test-one <file>`; the whole run is for the end.
 test:
-    tests/run.sh
+    tests/lxc.sh run
+
+# run one test file in the VM: just test-one t30-create
+test-one pattern:
+    tests/lxc.sh run {{pattern}}
+
+# cut a fresh machine per test file instead of sharing one. Needed as soon as a
+# test writes a real /etc/guarden or a real /var/lib/guarden — which is what
+# dropping GUARDEN_PREFIX means.
+test-fresh:
+    tests/lxc.sh run "" --fresh
+
+# build the golden VM without running anything against it
+provision:
+    tests/lxc.sh provision
+
+# throw away the golden VM
+deprovision:
+    tests/lxc.sh destroy
 
 # check the runtime dependencies `soil` installs, and that no program reaches
 # past the standard library and those two. The interpreter is the checkout's own

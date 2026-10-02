@@ -16,7 +16,8 @@ it.
       second user, home, or image store
 - [ ] The instance is forked from the same workload's service in the track its `fork_from` field
       names (`staging` in the shipped table, read as a field and not as the word), the `seed` is
-      recorded, and the call log shows the clone. Its `bulk` volumes are created as **empty subvolumes**,
+      recorded, and what the fork leaves behind is a clone of the live volume. Its `bulk` volumes are
+      created as **empty subvolumes**,
       never empty directories
 - [ ] Instances get generated credentials, and a missing credential warns rather than blocking
 - [ ] A preview appears at `preview.$DOMAIN/<ref>` — a **path** on one host, from the track's
@@ -37,7 +38,7 @@ it.
       `seed` and frees its publications, and leaves the service and its siblings alone. A ref
       naming no instance is refused
 - [ ] **The cap's eviction and `furrow preview drop` both call that one verb.** A second removal
-      path for the same event is a second thing to get wrong, and the call log shows the same
+      path for the same event is a second thing to get wrong, and the journal shows the same
       verb the operator would type
 - [ ] **`weedr service remove <name>` on an instance track is refused while any instance exists,
       naming them**, so the service and every instance are not destroyed in one command by a typo
@@ -57,4 +58,4 @@ it.
       offline in seconds, needs no guarden installation, and never reaches the network
 - [ ] On the golden VM, two instances forked from one snapshot exist, one is evicted, and the
       snapshot is still protected — verified with `stakes list` and by forking again from it
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

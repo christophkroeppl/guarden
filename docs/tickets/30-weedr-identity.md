@@ -36,7 +36,7 @@ Configuration is read from the root-owned files, and never written by us.
       are read back and a missing range is exit `1` naming the service. The read-back is not
       belt and braces: an unallocated range is a container that starts and then cannot map its
       own root, which is a long way from the cause
-- [ ] The call log shows a **distinct** range per service user. One hardcoded range for every
+- [ ] `/etc/subuid` carries a **distinct** range per service user. One hardcoded range for every
       service is unacceptable, not a fallback: it maps every container's root to the same host
       uid, so the moment two services share a directory the ownership is ambiguous and the
       firewall's uid matching stops meaning what it says
@@ -114,7 +114,7 @@ Configuration is read from the root-owned files, and never written by us.
       volumes are the service's data and purging one would destroy it
 - [ ] A second `ingest` or `add` of a converged service exits 0, prints `converged`, and
       produces no calls in the log
-- [ ] Every state file is written with the spec §3.5 protocol and the call log shows the
+- [ ] Every state file is written with the spec §3.5 protocol, and the journal shows the
       temporary file created in the target directory and renamed
 - [ ] Nothing root-owned exists anywhere under a service's home, and **nothing is ever copied
       from `/etc/guarden` into one**: a home belongs to the service user, and a service user can
@@ -135,4 +135,4 @@ Configuration is read from the root-owned files, and never written by us.
       through the write protocol and touching disjoint keys: `weedr module add` appends to
       `[modules] enabled` and rewrites nothing else, and `soil install` writes the measured
       `ingress.alias` from its probe
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

@@ -1,6 +1,6 @@
 # 140: the golden VM, end to end
 
-**What to build:** One run on a throwaway machine that proves the claims the fast harness cannot:
+**What to build:** One run on a throwaway machine that proves the claims nothing else can:
 name resolution from a rootless container, isolation between services, a clone of a live data
 volume recovering, a rollback, a lock being a file, and an edge answering a request. It ends in
 an evidence tarball.

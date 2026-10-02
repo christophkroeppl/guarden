@@ -190,7 +190,7 @@ Its limits, stated: `EXAMPLE-` and `changeme` are conventions, not a specificati
 whose `@example` does not follow them gets past the gate. It is a seatbelt against the common
 mistake of shipping the example value, not a proof that a credential is correct.
 
-### 2.5 Ports: a repository cannot open one
+### 2.5 Ports and firewall rules: a repository cannot open one, and cannot install one
 
 A manifest may *request* a public port with `ports:`. The request is legitimate and says nothing
 on its own. The grant lives in a root-owned `overrides.toml` that the repository cannot write, in
@@ -207,6 +207,23 @@ The renderer owns the published-port set completely: it strips every `PublishPor
 source — from Compose and from hand-written quadlet alike — and regenerates the set. Without
 that, a Compose `ports:` entry becomes a `PublishPort=` line verbatim and the grant model is
 advisory.
+
+**A `firewall:` entry is the same shape of thing: a request, and an admin's grant behind it.**
+The request is a named rule line, it installs nothing, and the install is `weedr firewall open` —
+root, by hand, and on no sudoers rule, so a poke creates the request and leaves it pending
+exactly as it leaves a port pending. The renderer writes no firewall rule at all: it validates
+the entry's shape, records the request in the registry, and stops there, because a renderer that
+emitted rules would be a second writer on the file the `firewall` lock exists to protect. A
+request is additive only — it may add a rule to a chain guarden owns and may not flush a chain,
+set a policy, reorder guarden's rules or land after the default deny.
+
+**What the grant is worth is exactly the rule, and that is the honest limit.** An admin agrees to
+one line, not to a service's intentions; a rule whose match is broader than its author expected
+reaches everything the match covers. And because a granted rule renders **above** the default
+deny — a grant that could never match would be worse than useless — **a rule matching `-o lo`
+and accepting does reopen loopback for exactly the match it names.** The deny is still the last
+line of the chain and every other part of the loopback posture is unchanged; this is the one
+door in, and it is opened by a person with root on purpose (ADR-0013, spec §7.7).
 
 ### 2.6 What a service can reach
 
@@ -262,9 +279,13 @@ name resolution and package updates"; both were wrong, and the claim survived be
 runbook told the operator that `iptables -S` could not see the firewall because the files were
 ferm source. Ferm compiles to iptables. The live rules are always inspectable.
 
-**There is no fifth grant table.** A service that needs a host loopback port which is not a
-publication needs that daemon to be a service. `overrides.toml`'s four tables are the whole of
-the admin's surface, and a `[loopback] allow` key would be a second way to grant a destination.
+**There is no `[loopback] allow` table.** A table whose whole content is a destination would be a
+second way to grant one beside the publication set, and two ways to grant a thing are two ways
+for it to be wrong. `overrides.toml` is `[ports]`, `[firewall]`, `[retention]`, `[groups]` and
+`[mounts]`, and the `[firewall]` one is different in kind: it holds the **names** of rules a
+manifest asked for, not destinations (§2.5). Making that daemon a service is still the right
+answer for a host loopback port that is not a publication — a granted rule is the door for the
+cases where it is not possible, and it is opened by root on purpose.
 
 What this does **not** do is stop a service *binding* a port of its own choosing. Two
 compromised services can still talk over a port neither declared. What is enforced is that a
@@ -272,11 +293,21 @@ service which did not declare an edge cannot connect to one.
 
 ### 2.7 Ingress without a capability
 
+**The host firewall is `ferm`, and `ufw` is a package guarden disables.** `soil packages`
+installs `ferm` and `ufw`; `soil firewall --apply` turns `ufw` off, and `--check` reports drift if
+it is ever enabled again. No `ufw` rule is written, read or reconciled anywhere in guarden, so
+there is no path by which a service, a module or a poke reaches `ufw` — the one place the word
+appears at runtime is the dead-man timer's effect, which stops `ferm` and re-enables `ufw` so a
+locked-out operator gets their shell back. Every other rule on the host, for every service
+however it was deployed, is in one ferm ruleset, and that ruleset is inspectable with
+`iptables-save` because ferm compiles to iptables (ADR-0013).
+
 No unprivileged process on the host may bind a port below 1024, and no process is granted a
 capability. `soil firewall` writes `20-ingress-nat.conf` with address translation for 80/tcp,
 443/tcp and 443/udp onto the edge's published loopback ports, which requires `route_localnet`
 scoped to the ingress interface and nothing else. The mutator writes any service's own forwarding
-into `30-services.conf`; the two files are disjoint.
+and any service's own granted firewall rules into `30-services.conf`; the two files are
+disjoint.
 
 **There is no masquerade, and this document previously claimed there was one.** The claim was
 that without a `nat POSTROUTING` masquerade the forwarding rules "deliver exactly nothing from

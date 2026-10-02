@@ -11,6 +11,7 @@ required reading before the work; it is the opposite.
 soil --check                    # has the host drifted?
 weedr service list              # what does guarden think is running?
 weedr port list                 # what is open, and what is still pending
+weedr firewall list             # every firewall rule, and which service asked for it
 furrow queue list               # what is waiting, and what failed
 stakes list                     # which snapshots are protected, and by whom
 ```
@@ -201,6 +202,9 @@ it is not — that is the rule, and the fix is to move it.
 [ports]
 open = ["8080/tcp"]              # public ports granted to this service
 
+[firewall]
+allow = ["wireguard-peer"]       # requested firewall rules granted to this service, by name
+
 [retention]
 keep_last = 7                    # the daily bucket's maximum; overrides the track's default
 free_limit = "0.08"              # overrides the track's default
@@ -216,6 +220,9 @@ allow = ["/dev/dri"]             # host paths this service's units may bind-moun
 the service user and the renderer learns nothing about video. `[mounts] allow` is the only way a
 host path outside the service's own volumes and `/etc/guarden` becomes bind-mountable at all —
 the renderer refuses every other one, and an entry here is a grant in exactly the sense a port is.
+`[firewall] allow` holds **names**, never rule text: the rule lives in the manifest that asked
+for it, so the file an operator reviews stays short, and an entry naming a rule no manifest
+requested is refused rather than installed.
 
 Routes, edges, state volumes, the unit source and the credential schema are the repository's,
 and this file does not touch them.
@@ -288,10 +295,10 @@ The rest of the host, and where to look when a path is not what you expected:
 |---|---|
 | `/usr/lib/guarden/` | guarden's own files, root-owned, never written by a deploy |
 | `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Three writers, all under the `modules` lock and all through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else; `soil install` writes the measured `ingress.alias` and seeds `[modules] enabled` from cloud-init. Two share `[modules] enabled`, so a write re-reads the file under the lock rather than trusting what it saw before it |
-| `/etc/guarden/services/<name>/overrides.toml` | admin grants: ports, retention, groups, mounts |
-| `/etc/guarden/firewall/10-framework.conf` | ferm skeleton, dead-man timer, the interface's `route_localnet` — written by `soil firewall` |
+| `/etc/guarden/services/<name>/overrides.toml` | admin grants: ports, firewall rules, retention, groups, mounts |
+| `/etc/guarden/firewall/10-framework.conf` | ferm skeleton, dead-man timer, the interface's `route_localnet` — written by `soil firewall`. No grant reaches this file |
 | `/etc/guarden/firewall/20-ingress-nat.conf` | the edge's three forwarding rules, from the enabled modules' declared ingress — written by `soil firewall`. Each is a `PREROUTING` DNAT and nothing else |
-| `/etc/guarden/firewall/30-services.conf` | the whole uid-matched filter set and any service's own forwarding, same shape — written by the mutator, under the `firewall` lock |
+| `/etc/guarden/firewall/30-services.conf` | the whole uid-matched filter set, any service's own forwarding and any service's own granted firewall rules, same shape — written by the mutator, under the `firewall` lock |
 | `/etc/guarden/creds/<name>/<KEY>.cred` | one systemd-credential blob per key, `0600 root` |
 | `/etc/apt/apt.conf.d/80guarden-snapper` | the `DPkg::Pre-Invoke` hook that snapshots `root` before every package transaction |
 | `/etc/snapper/configs/<service>-<vol>` | written by soil and converged to the fixed value set |
@@ -410,17 +417,33 @@ Queue state lives in `/var/lib/guarden/queue`, on disk. The locks that protect i
 lost because the box rebooted, and a lock that outlives a reboot would only be a stale lock.
 
 Every read verb takes `--json`: `weedr service list`, `weedr service status`, `weedr port list`,
-`weedr module list`, `weedr project list`, `stakes list`, `stakes query`, `furrow queue list`
-and `furrow status`. When you are writing a check, use the JSON.
+`weedr firewall list`, `weedr module list`, `weedr project list`, `stakes list`, `stakes query`,
+`furrow queue list` and `furrow status`. When you are writing a check, use the JSON.
 
 ---
 
 ## Ports and the firewall
 
+**The firewall on this box is `ferm`.** guarden does not use `ufw`: `soil packages` installs both,
+`soil firewall --apply` disables `ufw`, and no `ufw` rule is ever written or reconciled. If you
+find a `ufw` rule, something outside guarden put it there.
+
+```sh
+systemctl is-enabled ufw     # not enabled: that is what "disabled" means on a guarden host
+ferm --version
+```
+
+`ufw` is present only so that the dead-man timer can hand it back to you, and it is what that
+timer restores when it fires. It is the failsafe, never the firewall.
+
 ```sh
 weedr port list
 weedr port open <name> 8080/tcp
 weedr port close <name> 8080/tcp
+
+weedr firewall list                                  # every rule, installed or pending, and who asked
+weedr firewall open <name> <rule-name>               # install one a manifest asked for
+weedr firewall close <name> <rule-name>              # withdraw it
 ```
 
 Everything `weedr` renders is derived from the union of the grants in every
@@ -440,24 +463,26 @@ cat /etc/guarden/firewall/30-services.conf
 
 `soil firewall` writes `10-framework.conf` and `20-ingress-nat.conf`; the mutator writes
 `30-services.conf` and nothing else. The two are disjoint and each has exactly one writer, so a
-rule that appears in both is a defect.
+rule that appears in both is a defect. `30-services.conf` is the only file a firewall grant can
+reach: `10-framework.conf` is the policy baseline and no grant touches it.
 
 To see what the host is *actually running*, read the ruleset. These are ferm files, and ferm
 compiles them to iptables, so the live rules are directly visible — an earlier version of this
 runbook said otherwise and that error is what let a wrong claim about the masquerade survive:
 
 ```sh
-iptables-save                 # filter: the uid-matched accept/drop set
+iptables-save                 # filter: the uid-matched accept/drop set, and any granted rules
 iptables-save -t nat          # nat: the DNAT rules, and nothing that should masquerade
 ```
 
 The two can legitimately differ — an edit to a `.conf` that has not been converged yet, or a
 rule another tool added — and that difference is the thing worth finding. If the live set does
-not match the file, the fix is `soil firewall --apply` or a `weedr port` mutation, not editing
-either by hand.
+not match the file, the fix is `soil firewall --apply` or a `weedr port`/`weedr firewall`
+mutation, not editing either by hand.
 
-`weedr port list` is the human-readable inventory: every service, its requested ports, its
-granted ports, and what is pending.
+`weedr port list` is the human-readable inventory of ports: every service, its requested ports,
+its granted ports, and what is pending. `weedr firewall list` is the same idea for rules, and
+neither one of them replaces the other.
 
 **A grant is never a bind.** No service ever binds a non-loopback address, and there is no such
 thing as a private grant versus a public one. A granted public port becomes a `DNAT` from that
@@ -474,6 +499,58 @@ The firewall's job inside the host is to stop a service *connecting* to a public
 declare an edge for, not to stop a service *listening* on a port of its own choosing — nothing
 polices that at runtime. Public access for HTTP is the edge's job, and it is a grant like any
 other. `soil firewall` owns the rest: ssh, the dead-man timer, fail2ban.
+
+### a service asking for a rule of its own
+
+Most traffic goes through the edge, so most manifests never mention a firewall. Some services
+cannot be reached through it — a WireGuard endpoint, a full node's peer port — and those
+services **ask**:
+
+```yaml
+# .guarden/service.yml
+firewall:
+  - name: wireguard-peer        # a stable name; the grant names this
+    rule: "-p udp --dport 51820 -j ACCEPT"
+```
+
+The ask installs nothing. It is recorded and stays pending until you grant it:
+
+```sh
+weedr firewall list
+weedr firewall open wg-production wireguard-peer
+weedr firewall close wg-production wireguard-peer
+```
+
+`weedr firewall list` is the command you want when something is open and you do not know why:
+
+```
+RULE                                  CHAIN         STATE      SERVICES
+-p udp --dport 51820 -j ACCEPT       guarden-svc   installed  wg-production
+-p tcp --dport 22 -j ACCEPT          guarden-svc   pending    myapp-staging
+```
+
+Every rule is listed **once**, with every service that asked for it behind it, because two
+services asking for the same line get one rule. `weedr firewall close` on one of them leaves
+the rule in force while the other still asks; the rule goes when the last one closes. The grant
+lives in `[firewall] allow` in that service's `overrides.toml`, and it is removed with the
+service.
+
+Three things to know before you grant one:
+
+- **You are agreeing to a line of firewall text, not to a service's intentions.** A rule whose
+  match is broader than its author expected reaches everything the match covers. Read the
+  `rule:` in the manifest; that is the whole of what is being installed.
+- **A granted rule is rendered above the default deny.** That is deliberate — a grant that could
+  never match would be useless — and it means a rule matching `-o lo` and accepting really does
+  reopen loopback for exactly that match. Nothing else about the deny changes, and the deny is
+  still the last line of the chain.
+- **A request can only add.** It may not flush a chain, set a policy, reorder guarden's own
+  rules or name a chain guarden does not render, so a manifest cannot undo the baseline and
+  cannot install its own policy.
+
+A poke leaves these pending exactly as it leaves a port pending, and says so in the push's log
+with the command to run. `weedr firewall open` is root and on no sudoers rule, so no deploy path
+can reach it.
 
 Every rule guarden writes is IPv4 only, because `soil` disables IPv6. There is no ip6tables set
 to go looking for, and if you re-enable IPv6 you are outside what this was designed or tested
@@ -629,8 +706,11 @@ soil firewall --apply             # disarm: converge without arming
   `soil install --apply` before touching a rule, because the lockout drill is the one control
   that gets you back in
 - **Lasts** fifteen minutes. `systemctl list-timers | grep -i deadman` shows what is left.
-- **Does**, when it fires: stops `ferm` and re-enables the distribution firewall, so ssh answers
-  again. Nothing is rolled back; the point is to get a shell back, not to undo the rules.
+- **Does**, when it fires: stops `ferm` and re-enables `ufw`, so ssh answers
+  again. `ufw` is one of the packages `soil packages` installs, so the unit is always there.
+  Nothing is rolled back, and `ufw` does not become guarden's firewall: the point is to get a
+  shell back, not to undo the rules, and the next `soil firewall --apply` takes the box back
+  over
 - **Disarms** by firing (it is one-shot) or by a plain `soil firewall --apply`. Neither leaves it
   armed past the drill, so you cannot forget about it and find it live in three weeks.
 
@@ -750,7 +830,7 @@ snapshot` makes a routine one; a fork makes an on-demand one. There is no flag t
 A state volume's snapshots are listed by snapper, which owns them:
 
 ```sh
-snapper -c myapp-production-pgdata list --machine-readable json
+snapper --machine-readable json -c myapp-production-pgdata list
 snapper -c myapp-production-pgdata diff 40..41
 ```
 
@@ -759,6 +839,15 @@ look up; the CSV output renders the whole map as one comma-joined quoted field, 
 ends up string-matching a blob. The fields that matter are `number`, `cleanup`, `date`, `userdata`
 and `description`. Anything that parses snapper output — a check, a script, a program's own
 `--json` — uses `--machine-readable json` and does not fall back to CSV.
+
+**`--machine-readable` is a global option, so it goes before the command**, as above. Written after
+`list` it is refused with `Unknown option '--machine-readable' for command 'list'`, and if you are
+looking for a snapshot that is very much there, that error is the whole of what you will see. Two
+other things about the document: it is an **object keyed by the configuration's name**, not a list,
+so `jq '.[].number'` reads nothing and `jq '.["myapp-production-pgdata"][].number'` reads the
+snapshots; and its first entry is **`number 0`**, which is the live subvolume rather than a
+snapshot — it is described `current`, has no date and no cleanup tag, and the count you want is
+one less than the length of that array.
 
 A service's home is **not** snapshotted and carries no snapper configuration of its own: it
 holds generated units, the image store, the podman secret database and build staging, none of it
@@ -912,10 +1001,11 @@ stakes list --json            # the pin files, and which services name each as a
 
 Those limits are read back with `snapper get-config` rather than from the configuration guarden
 believes it wrote, and the snapshot lists behind the counts are read with
-`--machine-readable json`, which makes them the input monitoring will consume. The counts come
-from the root read, not from `stakes`, for the reason given under **Pins** above. Alerting on
-disk usage and snapshot counts is backlog, not v1, so on this box nothing will tell you the disk
-is filling until you look.
+`snapper --machine-readable json --config <config> list`, which makes them the input monitoring
+will consume. That is the read **Pins** above spells out, including the `0` entry that is not a
+snapshot. The counts come from the root read, not from `stakes`, for the reason given under **Pins**
+above. Alerting on disk usage and snapshot counts is backlog, not v1, so on this box nothing will
+tell you the disk is filling until you look.
 
 ### one snapshot that cannot be reaped
 
@@ -970,7 +1060,7 @@ sits there being a lie you read at three in the morning.
 Check it against snapper, which is the thing that knows:
 
 ```sh
-snapper -c myapp-production-pgdata list --machine-readable json
+snapper --machine-readable json -c myapp-production-pgdata list
 ```
 
 No entry whose `number` is 41 means the id is stale. The fix is to unpin it:

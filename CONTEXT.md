@@ -71,6 +71,31 @@ connection tracking unwinds the translation on the reply. Publications and grant
 deduplicated into one firewall render.
 _Avoid_: ingress, opening, endpoint
 
+**ferm**:
+The firewall guarden runs, and the only one on the host. Every rule in `/etc/guarden/firewall/`
+is a ferm stanza, for every service however it was deployed, and `iptables-save` reads what ferm
+compiled them into. `ufw` is a declared package for exactly two reasons: it is the unit
+`soil firewall` disables, and it is the one the dead-man timer hands back to a locked-out
+operator. **guarden never writes, reads or reconciles a `ufw` rule.**
+_Avoid_: ufw, netfilter, nftables (as a second engine), iptables (it is the target, not the
+engine)
+
+**firewall rule**:
+One iptables-shaped rule line a manifest **asks** for, under `firewall:`, by a name. A request
+installs nothing: it is recorded in the registry and stays pending until an admin acts. Purely
+additive — a request may add a rule to a chain guarden owns and may not open, close, flush,
+rename or set a policy on anything. Most services never need one, because most traffic goes
+through the edge; the ones that do are speaking a protocol the edge cannot.
+_Avoid_: grant, port, policy, snippet
+
+**rule grant**:
+The root-owned decision that one service's requested firewall rule is installed. Recorded by
+**name** in `overrides.toml`'s `[firewall] allow` and applied by `weedr firewall open`. Counted
+by name and **deduplicated by content**: two services asking for the same rule text get one rule
+with both names on it, and closing one leaves it while the other still asks. It is the same
+authority class as a port grant — root, made by hand, on no sudoers rule.
+_Avoid_: firewall rule (for the decision), port, override, ufw rule
+
 **gate**:
 The credential check on a track with `gated = true`: every key the schema requires must exist in
 the service's own podman secret store with a real value, and one that is still an example does not
@@ -169,9 +194,10 @@ _Avoid_: base, bootstrap
 
 **weedr**:
 The privileged mutator and the only one. Identities, service roots, state volumes, unit
-installation, credentials, ports, snapshots, forks, rollbacks, image builds, status. The build is
-here because an unprivileged program cannot become the service user, and the subuid range is the
-service user's alone.
+installation, credentials, ports, firewall rule grants, snapshots, forks, rollbacks, image
+builds, status. The build is
+here because an unprivileged program cannot become the service user, and the subuid range is
+the service user's alone.
 _Avoid_: admin
 
 **loom**:

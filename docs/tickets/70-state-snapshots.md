@@ -99,10 +99,14 @@ snapshots that must survive and runs no delete loop.
       `important` is read only by the `number` cleaner, and a snapshot is a candidate for that
       cleaner only when its cleanup tag is `number`. Its inputs are the service registries' `seed`
       values and the pin files, both read without a lock
-- [ ] **Snapshot state is read with `snapper list --machine-readable json`, using the `number`,
-      `cleanup`, `date`, `userdata` and `description` fields.** JSON renders `userdata` as a real
-      object, so `important` is a key; CSV renders the whole map as one comma-joined quoted
-      field, so a CSV consumer ends up string-matching. Nothing in guarden parses CSV
+- [ ] **Snapshot state is read with `snapper --machine-readable json --config <config> list`, using
+      the `number`, `cleanup`, `date`, `userdata` and `description` fields**, with the three
+      measured facts of spec §8.2: the option is a global one and precedes the command, the
+      document is an object keyed by the configuration's name rather than a list, and its `number 0`
+      entry is the live subvolume and not a snapshot, so every count and every number excludes it.
+      JSON renders `userdata` as a real object, so `important` is a key; CSV renders the whole map
+      as one comma-joined quoted field, so a CSV consumer ends up string-matching. Nothing in
+      guarden parses CSV
 - [ ] **No write passes `--no-dbus`.** Without the snapperd daemon there is no inter-process
       coordination at all, so a mark written that way can be lost with no error anywhere
 - [ ] The reconciler **adds before it removes**, and **stops rather than clearing anything when
@@ -153,7 +157,9 @@ snapshots that must survive and runs no delete loop.
       configuration guarden believes it wrote. This is a root read and it is the command
       monitoring polls; the division is deliberate and is stated in the runbook and the spec so
       an unprivileged job does not get an empty result and conclude the disk is fine
-- [ ] Every snapshot list behind those counts is read with `--machine-readable json`, and
-      `important` is read as a key in the `userdata` object
+- [ ] Every snapshot list behind those counts is read with
+      `snapper --machine-readable json --config <config> list`, and `important` is read as a key in
+      the `userdata` object, with the configuration's `number 0` entry excluded because it is the
+      live subvolume and not a snapshot
 - [ ] On the golden VM, a clone of a live database starts, recovers, and the data is present
-- [ ] Verified at the CLI seam with the fast harness
+- [ ] Verified at the CLI seam, in the VM

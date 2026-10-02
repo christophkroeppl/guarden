@@ -98,6 +98,19 @@ key, and the later one does not silently drop the earlier one.
 Working in this repo, a sourced `tests/lib.sh` puts `fixtures/bin/git` first on
 `PATH`. That fake silently no-ops on `git status`, `git rev-parse` and even
 `git --version` — empty output, exit 0. It reads exactly like a corrupted
-repository. It is ticket 35's subject, and it has now cost real time twice.
+repository. It is ticket 35's subject, and it has now cost real time twice. It is also the second half of
+why the fakes are gone rather than trimmed: a fake that can reach the ambient `PATH` is a tool
+that lies, and on 2026-10-01 the fakes were on `PATH` in 29 of the 34 suites of the *real
+machine* run, which is not a fast tier at all but a shadow of one (ADR-0014).
 **Pin `PATH=/usr/bin:/bin` in any shell not deliberately running a guarden
 test.**
+
+## The stale index, closed
+
+The `libidn12` failure recorded above was not a bad package: `packages/packages.toml` declared an
+`update` argv per family and **no program read it**, so nothing ever refreshed the index and every
+install was resolved against whatever the mirror had last published. `soil packages` now runs the
+family's refresh once before its first install, as a **step** rather than an item, so `--check` has
+no drift to report about a thing no file of guarden's describes (spec §6.1). A refresh that fails
+is exit `1` — the host cannot reach its own mirror — and a family row with no `update` is exit
+`2`, because a list nobody filled in is input.

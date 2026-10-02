@@ -84,3 +84,9 @@ scrapeable, and indefensible for anything a human should see first.
 The honest summary: guarden keeps the port grant with the human because that is the only place
 in the system where a human is strictly better than automation, and the cost of that choice is
 one command.
+
+**This note is about ports, and the same argument is stronger for firewall rules.** A
+`firewall:` request (spec §7.7) is the same shape of thing — a repository asks, `weedr firewall
+open` installs — and promoting those automatically would be strictly worse than promoting ports,
+because a port grant is a translation to a publication guarden already allocated while a rule
+grant is root firewall text. The recommendation there is the same and stronger: do not.

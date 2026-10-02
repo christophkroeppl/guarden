@@ -45,6 +45,7 @@ filesystem, the installed services and the remote are the host. So:
 | a volume named in `state:` or `bulk:` that the unit source does not mount, or a name in both | `2` — both are input |
 | a `needs:` entry whose provider does not exist, or exists and does not offer the `as:` kind | `1` — the answer came from the host, read from the provider's registry |
 | a requested port already held by another service | `1` |
+| `weedr firewall open` for a rule the manifest did not request, or a `firewall:` entry outside the closed rule shape of §7.7 | `2` |
 | a snapshot that is gone, or absent from one of the volumes a fork needs | `1` |
 | `weedr service gate` on a gated track whose gate is blocked | `1`, naming the key. It changed nothing, so the code is the answer rather than a failure |
 | `weedr service gate` on a track with `gated = false` | `0`, and it records `not-required` |
@@ -54,10 +55,20 @@ filesystem, the installed services and the remote are the host. So:
 Nothing else writes `2`. A diagnostic names the thing it is about: the service, the key, the
 port, the file, the line. A deploy that succeeds with warnings exits `0`.
 
+**A drift line carries the requirement and the fact, in that order.** An item describes the
+state that holds once the phase has converged — `the ferm package is installed`, and also
+`the dead-man timer is not armed`, whose converged state is itself a negative — so
+`error: drift: <that sentence>` reads as a claim about the present, and an operator cannot
+tell from it whether the thing is fine or missing. The line is one line, prefixed, carries the
+word `drift`, quotes the requirement whole and says the host does not meet it. The requirement
+is the informative half and the clause is what makes it actionable; there is one producer of
+the line and both `--check` and `--apply` go through it, so the two modes cannot differ.
+
 `--json` is available on exactly these verbs, and on no other: `weedr service list`, `weedr
-service status`, `weedr secret list`, `weedr port list`, `weedr module list`, `weedr project
-list`, `weedr project keys`, `stakes list`, `stakes query`, `furrow queue list`, `furrow
-status`. `--json` on a write verb, and `--json` on a verb not in this list, is exit `2`.
+service status`, `weedr secret list`, `weedr port list`, `weedr firewall list`, `weedr module
+list`, `weedr project list`, `weedr project keys`, `stakes list`, `stakes query`, `furrow queue
+list`, `furrow status`. `--json` on a write verb, and `--json` on a verb not in this list, is
+exit `2`.
 
 **Each `--json` output has a named field set, and an unknown field is never emitted and never
 read.** The fields below are the whole of each object's shape, so adding one to a program is a
@@ -69,6 +80,7 @@ change to this table and not a compatible addition.
 | `weedr service status` | one object: `name`, `ref` (null on a slot track), `unit_state`, `active_state`, `sub_state`, `publications`, `edges`, `snapshots`, `instances`, `gate`, `warnings` |
 | `weedr secret list` | `secrets` — one object per key, each with `name`, `set` (bool), `source` (`planted` \| `generated`), `example` (bool). **Never a value** |
 | `weedr port list` | `services` — one object per service, each with `name`, `requested`, `granted`, `pending` |
+| `weedr firewall list` | `rules` — one object per **rule text after deduplication**, each with `rule`, `chain`, `file`, `granted` (bool), `requested_by` (a list of `{ service, name }`). One object per rule rather than one per service is the whole shape: deduplication is a property of the set (§7.7), and a per-service list would report the same line twice and imply two rules |
 | `weedr module list` | `enabled`, `available` — each a list of module names |
 | `weedr project list` | `projects` — one object per project, each with `name`, `repository`, `environments` |
 | `weedr project keys` | `project`, `keys` — one object per key with `type`, `fingerprint`, `added` |
@@ -87,10 +99,10 @@ survived the number cleaner, and the field set says so rather than implying othe
 `marked` is a statement about **what `weedr pin sync` will write**, not about the filesystem: a
 pin is a priority with a budget and not a promise (§8.5), and under real disk pressure a marked
 snapshot can be reaped. A caller wanting the truth about the filesystem asks root, and the
-read that gets it — `snapper list --machine-readable json`, where `userdata` renders as an
-object and `important` is therefore a key rather than part of a comma-joined CSV string — is
-`weedr service status --json`'s `snapshots` field (§6.2), which runs as root. §8.2 is about
-that read, not about `stakes`.
+read that gets it — `snapper --machine-readable json --config <config> list`, which is §8.2's
+read in full, where `userdata` renders as an object and `important` is therefore a key rather
+than part of a comma-joined CSV string — is `weedr service status --json`'s `snapshots` field
+(§6.2), which runs as root. §8.2 is about that read, not about `stakes`.
 
 ### 1.3 Verb aliases
 
@@ -124,15 +136,18 @@ to it.
   guarden.toml                         host configuration, including the environment table
   projects.toml                        project -> repository, ref -> allowed environments
   projects.d/<project>.toml            a per-project copy, which wins over the file above
-  services/<name>/overrides.toml       admin grants: ports, retention, groups, mounts
+  services/<name>/overrides.toml       admin grants: ports, firewall rules, retention, groups, mounts
   edge/auth-provider                   the auth module's marker, read by roots
   firewall/10-framework.conf           ferm skeleton, dead-man timer, the interface's
-                                       route_localnet. Written by soil.
+                                       route_localnet. Written by soil. The policy baseline:
+                                       no grant reaches this file and nothing in it is ever a
+                                       service's
   firewall/20-ingress-nat.conf         the edge's three forwarding rules. Written by soil,
                                        and by nothing else -- a module change converges it by
                                        calling `soil firewall --apply`, not by writing it
-  firewall/30-services.conf            the whole uid-matched filter set, and any service's own
-                                       forwarding rules. Written by the mutator.
+  firewall/30-services.conf            the whole uid-matched filter set, any service's own
+                                       forwarding rules, and any service's own granted firewall
+                                       rules (§7.7). Written by the mutator.
   creds/<name>/<KEY>.cred              systemd-credential blobs, mode 0600
   allow-gated-drop                     present only if a poke may drop a service in a
                                        gated track
@@ -424,6 +439,13 @@ open = [ "8080/tcp" ]            # public ports the admin grants this service. A
                                 # a port the registry cannot resolve is refused, not
                                 # half-rendered
 
+[firewall]
+allow = ["wireguard-peer"]       # requested `firewall:` rule names this service asked for and
+                                # the admin agreed to install (§7.7). Names, never rule text:
+                                # the rule lives in the manifest that asked for it, and the
+                                # file an operator reviews stays readable. A name no manifest
+                                # requested is refused, not installed
+
 [retention]
 keep_last = 7                    # the DAILY bucket's maximum; overrides the track's default
 free_limit = 0.08                # a percentage of free space; overrides the track's default
@@ -443,6 +465,8 @@ user supplementary groups, which is how a hardware-transcoding service reaches `
 without the renderer having to know anything about video. `mounts.allow` is the only way a
 host path outside the service's own volumes and `/etc/guarden` becomes bind-mountable: the
 renderer refuses every other one, and an entry here is a grant in the same sense a port is.
+`firewall.allow` is the same shape of grant in the same file and for the same reason: the
+manifest asks, the admin decides, and the repository cannot widen it (§7.7).
 
 Nothing else is overridable. Routes, edges, state volumes, the unit source and the credential
 schema are the repository's, and this file does not touch them.
@@ -491,6 +515,16 @@ web = "web.myapp.com"            # manifest label -> the full name, prefix appli
 [ports]
 requested = ["8080/tcp"]         # what the manifest asked for, in manifest order
 granted   = ["8080/tcp"]         # what an admin has granted; a subset of requested
+
+[firewall]                        # the manifest's `firewall:` entries (§7.7), written by the
+                                  # mutator at creation exactly as [ports] is, and for the same
+                                  # reason: the renderer has no business writing them and the
+                                  # admin's decision needs somewhere to be read from
+requested = [ { name = "wireguard-peer", chain = "guarden-svc",
+                rule = "-p udp --dport 51820 -j ACCEPT" } ]
+granted   = ["wireguard-peer"]    # a name an admin has agreed to install. overrides.toml is the
+                                  # authority and this is its mirror, so a rule survives its
+                                  # service's manifest until the admin closes it
 
 [state.data]                     # one table per declared volume, state and bulk alike
 config    = "myapp-production-data"   # absent for a bulk volume
@@ -669,6 +703,11 @@ routes:                           # published to the edge
                                  # name outside host.domain
     auth: true
 
+firewall:                         # firewall rules this service ASKS for (§7.7). A request and
+  - name: wireguard-peer          # nothing else: none is installed until an admin grants it
+    chain: guarden-svc            # one of guarden's own chains; today the only value
+    rule: "-p udp --dport 51820 -j ACCEPT"
+
 widgets:
   - container: web
     file: .guarden/widgets/web.yml
@@ -695,7 +734,9 @@ Validation rules:
 
 - Unknown top-level keys are refused, and so are unknown keys **inside** a known one. Each
   block has a closed key set: a `needs` entry takes `service`, `as`, `port` and `auth` and
-  nothing else; a `routes` or `ports` entry takes `container` and `port`; a `widgets` entry
+  nothing else; a `routes` or `ports` entry takes `container` and `port`; a `firewall` entry
+  takes `name`, `chain` and `rule` and nothing else; a
+  `widgets` entry
   takes `container` and `file`; a `provides` entry is a **single string naming a kind** — `db`,
   `secret` — and nothing else, because a `provides` entry carries no value and no structure; a
   `state`/`bulk` entry is a string. An unknown key inside one
@@ -766,6 +807,16 @@ Validation rules:
   container's port is also how its publication is found, so a container named only in `ports:`
   gets a publication like any other (§7.4). This is the case the whole grant model rests on: a
   peer-to-peer service with no route and no dependency exposes a public port and nothing else.
+- A **`firewall:` entry is a request and installs nothing** (§7.7). `name` must match
+  `^[a-z0-9][a-z0-9._-]*$` and be unique within the manifest, because it is what a grant names
+  and two entries sharing a name would make that grant ambiguous. `chain` may be omitted and
+  defaults to `guarden-svc`; naming a chain guarden does not render is exit `2` naming the chain
+  and the rule. `rule` is one iptables-shaped line matching `^-` followed by option tokens and
+  exactly one `-j` or `-g` target, and it may **not** open, close, rename, flush or set a policy
+  on a chain or a table, nor jump to a chain guarden does not render — each is exit `2` naming
+  the rule and the key. There is no position, priority or comment field, so nothing in a
+  manifest says where in the chain a rule goes: that is guarden's, and it is why a grant cannot
+  be rendered somewhere the default deny has already matched.
 - `widgets` must name a container the unit source defines, and the file must exist.
 - `as` must be unique within the manifest, because it is the prefix of generated variables.
 - A self-edge is refused.
@@ -774,6 +825,8 @@ Validation rules:
 - The manifest may not contain a key that **records** a grant, nor one expressing a build
   priority, a snapshot priority, a resource cap or weight, or a data source. Each is refused by
   name. `ports:` is a request and is legitimate; a key that records an open host port is not.
+  `firewall:` is the same shape of thing and for the same reason: it records nothing that is in
+  force, and the only file that does is the root-owned `overrides.toml` (§7.7).
 - **There is no range form** for a port, in a manifest or in a grant: a service that wants a
   block of ports lists them. A range would make the manifest harder to read than the firewall it
   produces, and a service needing a hundred ports is a signal that it should be reached over an
@@ -870,6 +923,7 @@ flag therefore do not have one, and each capability is a separate verb instead:
 | create a service from another service's tree | `weedr service add` | **no** |
 | fork, with a chosen source | `weedr service fork` | **no** |
 | grant a public port | `weedr port open` | **no** |
+| install a requested firewall rule | `weedr firewall open` | **no** |
 | destroy a service's volumes | `weedr service purge` | **no** |
 | roll a service back to a snapshot | `weedr service rollback` | **no** |
 
@@ -981,7 +1035,10 @@ In order:
    here because a grant is a translation to a publication: without this a peer-to-peer service
    with no route and no dependency would be grantable in the manifest and unrenderable in the
    firewall.
-7. A firewall accept rule per edge, and the drop rules for every publication (§7.6).
+7. A firewall accept rule per edge, and the drop rules for every publication (§7.6). Any
+   `firewall:` entry the manifest declared is **recorded in the registry and left pending**
+   (§7.7): creation records the request and installs none of it, which is the same answer a
+   requested port gets.
 8. A forwarded public port for every granted entry in `overrides.toml` (§7.5).
 9. For a track with `gated = false`, a generated value for every `@sensitive` key the schema
    declares and no value has been planted for — minted once, stable until the service is
@@ -1007,7 +1064,9 @@ converged, and changes nothing.
 
 `weedr service remove <name>` removes a whole service: it reverses all of it, moves each state
 and bulk subvolume to `/var/lib/guarden/removed/<service>/<time>/<vol>/` rather than deleting
-it, and leaves the repository and the operator's offline copy of credentials alone. It is
+it, and leaves the repository and the operator's offline copy of credentials alone. Its
+`overrides.toml` goes with it, so every port grant and every firewall rule grant it held is
+released and the firewall is re-rendered (§7.7). It is
 **refused outright on a track with `gated = true`**, and refused while any instance of an
 instance track still exists, with the instance names named — remove those first.
 
@@ -1049,11 +1108,50 @@ the only program with two modes and the only other one with a `--check`. It **mu
 create a service user, a service directory, or any identity belonging to a service. There is
 no `soil users` phase: the two program users are created by `install`.
 
-- `packages` installs the distribution packages: btrfs-progs, snapper, ferm, fail2ban,
-  podman, and `python3-yaml` and `python3-jinja2`. It also fetches **one** artefact from
-  outside a distribution repository: the pinned `podlet` release, whose version and SHA256 are
-  recorded in this repository and verified on install. That is the only exception to
+**One phase has one step that is not an item.** The `packages` phase runs the family's index
+refresh **once, before the first install**, and never per install, because one refresh serves
+every install in the run. It is a step rather than an item because the index is not a declared
+piece of state — no file of guarden's says how fresh it is — so there is nothing for `--check`
+to ask it and nothing for it to converge against. **`--check` does not refresh the index and
+does not report it as drift**, and `--apply` asks every item to make itself hold and runs the
+one step the phase has before it.
+
+The refresh **exits `1`** when it runs and fails, because a host that cannot reach its own
+mirror is the host and not the request (§1.2), and **`2`** when `packages.toml` carries no
+`update` argv for the family, because a list nobody filled in is input. A failed refresh stops
+that phase's installs and the run reports the packages it could not install; the other phases
+still converge and the run still exits `1`.
+
+- `packages` **disables the distribution's own apt timers — `apt-daily`,
+  `apt-daily-upgrade` and `dpkg-db-backup` — then refreshes the package index from
+  the family's own `update` argv in
+  `packages/packages.toml`, then** installs the distribution packages: btrfs-progs, snapper,
+  ferm, ufw, fail2ban, podman, and `python3-yaml` and `python3-jinja2`. `ufw` is a dependency and
+  not an optional extra: guarden installs `ferm` and takes the box's firewall over from `ufw`, so
+  `ufw` is both the unit it disables and the one the dead-man timer re-enables. A failsafe that
+  names a package the host does not have is not a failsafe. It also fetches **one** artefact
+  from outside a distribution repository: the pinned `podlet` release, whose version and SHA256
+  are recorded in this repository and verified on install. That is the only exception to
   "distribution packages only", it is deliberate, and it is the only third-party binary.
+
+  **The timers are disabled for the same reason `storage` disables the packaged
+  snapper cleanup timer, and it is the same overlap by another name**: a packaging
+  timer running on its own schedule is another writer of the state this phase converges.
+  Waiting for the lock instead is not available, because `apt-get` does not do it — two
+  concurrent `apt-get update` runs give one exit `0` and one exit `100` with
+  `E: Could not get lock`, both inside five seconds — so a refresh that met a timer
+  would fail the run rather than queue behind it. `storage` installs a replacement oneshot
+  because it has daily work of its own to schedule; `packages` installs nothing, because
+  nothing in guarden installs packages on a schedule. "Disabled" means *not enabled*, for the
+  reason and with the same answer `storage` uses: the `.service` names are `static`.
+  **`unattended-upgrades.service` is deliberately not disabled** — it installs security
+  updates unattended and switching it off is an operator's decision, not this phase's; the
+  timer this removes is what triggers it on a schedule. Anything that starts that service
+  deliberately can still meet a `packages` run, and the run reports it rather than retrying.
+  The disable is this phase's **first item** and the refresh is its one step that runs before
+  the items, so the *first* `packages` run on a host whose timers are still armed can still meet
+  one during that refresh. Closing that would need the disable inside the step, and there is one
+  step per phase and it is the refresh.
 - `storage` verifies btrfs with `@` and `@var` subvolumes, installs
   `/etc/apt/apt.conf.d/80guarden-snapper` with a `DPkg::Pre-Invoke` that snapshots `root`
   before every package transaction, converges the canonical value set into every snapper
@@ -1069,18 +1167,35 @@ no `soil users` phase: the two program users are created by `install`.
   default establishes the invariant, and lowering it is the thing that is refused. It also
   checks, in `--check`, that
   `ingress.alias` still matches the address the default route resolves to (§6.1).
-- `firewall` disables the distribution's own firewall, installs ferm and fail2ban and
+- `firewall` disables `ufw`, installs ferm and fail2ban and
   `guarden-firewall.service`, installs the dead-man timer with its arm, duration, effect and
   disarm, writes `10-framework.conf`, and writes `20-ingress-nat.conf` from the enabled
   modules' declared ingress. It owns the framework and the edge's forwarding; the mutator owns
-  `30-services.conf` and any service's own forwarding. The two files are disjoint, and each is
-  written by exactly one program.
+  `30-services.conf`, any service's own forwarding and any service's own granted firewall rules
+  (§7.7). The two files are disjoint, and each is written by exactly one program.
+
+  **`ferm` is the firewall guarden runs and `ufw` is the one it displaces, and that sentence is
+  the whole of the relationship.** "Installs a firewall" and "disables the distribution's one"
+  are two separate acts and both belong here: guarden installs `ferm` and turns `ufw` off, and
+  **no `ufw` rule is ever written, read or reconciled on this host** — `ufw` is present so that
+  it can be turned off, and because the dead-man timer below hands it back. Every service's rules
+  come from the same render, whichever way it was deployed: a module's service, a poked service
+  and a service an operator created by hand are indistinguishable to the firewall, because there
+  is one engine and one render.
+
+  "Disabled" means *not enabled*, not the literal word
+  `disabled`: `ufw.service` is a `static` unit on some builds, and on a host where the package is
+  absent `systemctl is-enabled` answers "No such file or directory", and a check that demands one
+  exact word reports drift forever on precisely the minimal images this is written for. The same
+  rule applies to every unit guarden expects not to be running.
 
   **The dead-man timer is armed only by `--deadman`, and a plain `--apply` never arms it.** It
-  is fifteen minutes after which **`ferm` is stopped and the distribution's own firewall is
-  re-enabled** — the state the box was in before guarden touched it, which is the only posture
+  is fifteen minutes after which **`ferm` is stopped and `ufw` is re-enabled** — the state the
+  box was in before guarden touched it, which is the only posture
   that is reliably "you can ssh back in" — and it exists so that an operator
-  who has just locked themselves out can get back in. The flag is named here because the runbook
+  who has just locked themselves out can get back in. It names `ufw` precisely because
+  `packages` installed it, so the failsafe cannot depend on a package that might be missing. The
+  flag is named here because the runbook
   told operators to use it while the interface did not define it, and a `soil` written to this
   spec would have rejected the one command that gets someone back in. Arming it is also the
   operator saying "I have another way in": the effect of the timer is to open the firewall, so
@@ -1147,6 +1262,14 @@ weedr secret list <name> [--json]
 weedr port list [--json]
 weedr port open <name> <public-port>     # must match a ports: entry in the manifest
 weedr port close <name> <public-port>
+
+weedr firewall list [--json]             # every rule, installed or pending, and which services
+                                       # asked for it; deduplicated, so a rule two services
+                                       # asked for appears once with both names
+weedr firewall open <name> <rule-name>   # install one requested firewall rule; must match a
+                                         # firewall: entry in the manifest
+weedr firewall close <name> <rule-name>  # withdraw it; another service still asking for the same
+                                         # rule keeps it in force
 
 A `ports:` entry carries `container:` and `port:`, and **that `port:` is both the container's own
 port and the public port requested for it** — one number, two meanings, because a grant is a
@@ -1227,6 +1350,13 @@ repository's `ports:` list, which is the request, and then running this. That is
 direction of travel as every other grant in the system: the manifest asks, the admin decides,
 and neither can do the other's job.
 
+`weedr firewall open` is the same shape of act for the same reason, and §7.7 is its contract: it
+installs a rule the manifest asked for by name, renders `30-services.conf` whole, prints the
+diff and installs, all under the `firewall` lock, and refuses with exit `2` anything the
+manifest did not ask for. Two services asking for one rule is not a conflict — deduplication is
+a property of the set (§7.7) — so there is no holder to name and no exit `1` case here. What
+`weedr firewall list` reports, and its field set, is in §1.2 and §7.7.
+
 There is no prune verb, by decision. Container and image reclamation is podman's own storage
 management, run as the service user (`podman system prune`), and putting a destructive verb
 behind the mutator would be a second way to delete something without the confirmation the
@@ -1263,12 +1393,14 @@ root-owned. The two steps that touch the module list and the ingress therefore d
 `modules` lock is released before the `firewall` lock is taken, and `soil firewall` re-reads
 `guarden.toml` under that lock rather than trusting what `weedr module add` saw.
 
-**A module grants no port and no mount.** `module.toml` (§3.6) declares `name`, `requires`,
+**A module grants no port, no firewall rule and no mount.** `module.toml` (§3.6) declares
+`name`, `requires`,
 `[[services]]` with `service`/`ingress`/`api`, and `[[switches]]` with `program` — there is no
-port key and no mount key, and an earlier revision of this paragraph said a module "grants the
-ports and mounts the module declares", which named two things the schema does not have. A module
-ships services, and a service's ports come from its manifest and an admin's `overrides.toml`
-like any other service's. The `ingress` a module declares is the module's **own** contribution
+port key, no rule key and no mount key, and an earlier revision of this paragraph said a module
+"grants the ports and mounts the module declares", which named two things the schema does not
+have. A module ships services, and a service's ports and firewall rules come from its manifest
+and an admin's `overrides.toml` like any other service's (§7.7). The
+`ingress` a module declares is the module's **own** contribution
 to the forwarded set, which is configuration rather than a grant, and it is the one ingress list
 the design has: `[ingress] forwarded` in `guarden.toml` is not read by anything and is not in the
 shipped table.
@@ -1345,6 +1477,12 @@ The renderer refuses, with the directive named: `PodmanArgs=`, `--privileged`, `
 `cap_drop`, `devices`, `network_mode: host`, `pid: host`, `userns_mode`,
 `network_mode: container:`, and any host-path bind outside the service's own volumes,
 `/etc/guarden`, and the paths the admin listed in `mounts.allow`.
+
+**A `firewall:` entry is validated here and installed nowhere.** The renderer checks the closed
+shape of §4 and refuses the same malformed input it refuses everywhere else, and it writes the
+entry into the registry as a *request* for the mutator to read — it renders no firewall rule,
+because a renderer that emitted rules would be a second writer on `30-services.conf` with no
+`firewall` lock, which is the precise failure §3.5's lock exists to prevent.
 
 **These refusals are guardrails against accidents, not a security boundary.** A unit source is
 arbitrary configuration and a text check cannot be a boundary. The isolation boundary is the
@@ -1515,11 +1653,17 @@ guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service ingest, \
     /usr/lib/guarden/bin/weedr service snapshot, \
     /usr/lib/guarden/bin/weedr service build, \
     /usr/lib/guarden/bin/weedr secret list, /usr/lib/guarden/bin/weedr port list, \
+    /usr/lib/guarden/bin/weedr firewall list, \
     /usr/lib/guarden/bin/weedr service list, /usr/lib/guarden/bin/weedr service status, \
     /usr/lib/guarden/bin/weedr module list
 ```
 
-Note the `(root)`: `furrow` runs as `guarden` and the mutator runs as root.
+Note the `(root)`: `furrow` runs as `guarden` and the mutator runs as root. `weedr firewall
+list` is here rather than absent because it reads the registries and the overrides, both
+`root:guarden`, and needs nothing a `guarden` program cannot read — so a deploy can report a
+pending rule request in the push's log the way it reports a pending port. The **writes** are
+not here and never will be: `weedr firewall open` installs root firewall text, which is the same
+authority class as `weedr port open` (§7.7), and neither is named.
 
 **Every verb on that rule is granted whole, with no exceptions for particular arguments, and
 that is the property the whole grants design rests on.** A sudoers command with no argument
@@ -1561,9 +1705,10 @@ each capability its own verb:
   subvolume operations.** An indirection there would be a liability, not a convenience.
 
 The verbs it may name are exactly the ones in the block. Never `weedr port open`, `weedr port
-close`, `weedr service purge`, `weedr service rollback`, `weedr module add`, `weedr project
-add`, `weedr project grant`, `weedr project revoke`. The rules name the long form of each verb,
-because a rule naming `weedr service rm` would not match it.
+close`, `weedr firewall open`, `weedr firewall close`, `weedr service purge`, `weedr service
+rollback`, `weedr module add`, `weedr project add`, `weedr project grant`, `weedr project
+revoke`. The rules name the long form of each verb, because a rule naming `weedr service rm`
+would not match it.
 
 ### 6.7 `hose` — the gitops receiver
 
@@ -1594,9 +1739,10 @@ The only network-facing program, holding no privilege beyond a sudoers rule nami
 `furrow deploy`, `furrow preview drop`, `furrow queue list`, `furrow status`, `weedr project
 list`.
 
-**It cannot drop a service, cannot grant or revoke a port, and cannot read a service's status at
-all.** `weedr port open`, `weedr port close` and `weedr service remove` are the verbs that could
-change something and none is named.
+**It cannot drop a service, cannot grant or revoke a port or a firewall rule, and cannot read a
+service's status at all.** `weedr port open`, `weedr port close`, `weedr firewall open`,
+`weedr firewall close` and `weedr service remove` are the verbs that could change something and
+none is named.
 
 `weedr service list` **was** on this rule, and it had to come off: this rule's runas target is
 `(guarden)`, not root, so `weedr service list` invoked here ran with no read on a service's
@@ -1742,6 +1888,15 @@ graph, not a sequence. ADR-0011 is the binding decision.
 ---
 
 ## 7. Connectivity, ports and ingress
+
+**The host firewall is `ferm`, and the whole of it is `ferm`** (§6.1): no `ufw` rule, no firewalld
+zone, no nftables table written by hand and kept in step, and nothing anywhere in this system
+that writes, reads or reconciles a `ufw` rule. That has one consequence for this whole section,
+which is worth stating once: **every service's rules come from the same render**, whether a module
+installed it, a poke deployed it or an operator typed the command, so there is no per-service
+firewall to keep in step with the host's. The rules are ferm stanzas in
+`/etc/guarden/firewall/`, and ferm compiles them to iptables, so `iptables-save` reads the
+running set and always has.
 
 ### 7.1 What pasta actually gives a container, and what the host firewall actually sees
 
@@ -1925,22 +2080,138 @@ resolution and package updates". Both were wrong, and the claim survived because
 `iptables -S`; `docs/sysadmin.md` used to say the firewall files were ferm source and that
 `iptables -S` "shows you nothing", which is not true.
 
-**There is no fifth grant table.** A service that needs a host loopback port which is not a
-publication needs that daemon to be a service, because everything deployed is a service and
-`overrides.toml`'s four tables are the whole of the admin's surface (§3.3). Adding a
-`[loopback] allow` key would be a second way to grant a destination and would defeat the point of
-the rule.
+**There is no `[loopback] allow` table, and the reason is the rule, not the name.** A key whose
+whole content is "this destination" is a second way to grant a destination beside the publication
+set, and two ways to grant one thing are two ways for it to be wrong. §7.7's `[firewall] allow`
+is not that: it names rules a repository asked for by name and carries no destination of its own,
+so it cannot become a way to reach a loopback port without somebody typing that rule in full.
+
+**A service that needs a host loopback port which is not a publication should make that daemon a
+service**, and that stays the default answer. It is a default rather than a prohibition now,
+because §7.7 exists: an admin may grant a service the rule text that opens one, and the rule it
+grants is a grant of the same authority class as `weedr port open` — root, made by hand, on no
+sudoers rule. The honest cost is one line, and it belongs here rather than in a footnote: a
+granted rule is rendered above the default deny, so a rule that matches `-o lo` and accepts
+**does** reopen loopback for exactly the match it names, and the default deny stays last rather
+than stopping it. Nothing else about the loopback posture changes — the deny is still the last
+line of the chain, the accepts are still the ones guarden renders from the registries, and the
+renderer still owns all of them.
 
 The owner match is **not** used in `INPUT`. A forwarded packet has no socket, so an owner
 match there is unreliable and the edge's traffic would be dropped. `INPUT` accepts the
 published ports plainly; the uid restriction happens in `OUTPUT`, where it works.
 
-The rules are rendered in full from the union of all grants and allocations, written
-atomically, and the diff against the installed set is printed before installation, all under
-the `firewall` lock. Deduplication is a property of the set, so it needs no mechanism.
+The rules are rendered in full from the union of all grants, all allocations and every granted
+firewall rule (§7.7) — one set, so deduplication is a property of it and needs no mechanism —
+written atomically, and the diff against the installed set is printed before installation, all
+under the `firewall` lock.
 
 Every rule is IPv4, because `soil` disables IPv6. An operator who re-enables it is outside the
 design, and `weedr service list` says so.
+
+### 7.7 A service may ask for a firewall rule, and only an admin may install one
+
+Almost everything a service needs is the edge: `routes:` publish it over HTTPS and the kernel
+forwards 80/tcp, 443/tcp and 443/udp to the edge, and a service whose whole outside life is HTTP
+never touches this section. What is left is the service the edge cannot speak for — a WireGuard
+endpoint, a full node's peer port, a protocol from a source range the operator wants to name
+rather than imply. A manifest may **ask** for those rules and an admin may **install** them, and
+that is the whole of the model: the request is repository input and has no effect at all, and the
+grant is a root-owned verb on no sudoers rule.
+
+**A request.** A `firewall:` block in the manifest (§4), one entry per rule, each with a `name`
+that is unique within the manifest, a `chain`, and the `rule` line itself:
+
+```yaml
+firewall:                            # firewall rules this service asks for; none is installed
+  - name: wireguard-peer             # the grant names this, and it must be stable in the repo
+    chain: guarden-svc               # one of guarden's own chains; the default, and today the only
+    rule: "-p udp --dport 51820 -j ACCEPT"
+```
+
+The `rule` is **one iptables-shaped rule line**, which is the dialect ferm emits and the dialect
+`iptables-save` prints back, so a request can be read against the running ruleset without knowing
+ferm's stanza syntax. It matches `^-` followed by option tokens and exactly one `-j` or `-g`
+target; the pattern is **closed** rather than a list of prohibitions, for the same reason
+`host:` is (§4): an open rule shape is an open grant shape.
+
+A request is **purely additive, and that is enforced by the shape and not by a rule that checks
+for badness.** A request may add a rule to a chain guarden owns. It may not open, close, rename
+or flush a chain or a table, may not set a policy on one, and may not jump to a chain guarden does
+not render. Anything of that shape is exit `2` naming the rule and the key. The chains that may
+be named are a **closed set** — `guarden-svc` today, the chain guarden owns and jumps to from
+`filter OUTPUT` — and growing that set is a change to this spec rather than a configuration
+change. So a repository can widen the rule set by one line and only by one line, and it can never
+remove a rule guarden rendered, reorder one, or take the policy of a chain away from guarden.
+
+**A grant.** `weedr firewall open <name> <rule-name>` adds the rule's name to
+`/etc/guarden/services/<name>/overrides.toml`:
+
+```toml
+[firewall]
+allow = ["wireguard-peer"]           # requested rule names the admin has agreed to install
+```
+
+and renders `30-services.conf` whole, prints the diff, and installs it, all under the `firewall`
+lock, exactly as `weedr port open` does. `weedr firewall close <name> <rule-name>` removes it and
+re-renders the same way. A rule no manifest requested **may not be granted at all** — exit `2`
+naming the `firewall:` entry it would have to be — because the manifest asks and the admin
+decides, and a grant with no request behind it is an admin typing firewall text into a file
+nobody will later find the counterpart of.
+
+**A granted rule is a grant of root firewall authority, and it is priced like one.** It is not on
+any sudoers rule, it is not a flag on a verb that is, and `weedr service ingest` cannot reach it,
+so a poke leaves every requested rule pending and says so in the push's log the way it says so for
+a pending port. What an admin is agreeing to is one rule line, not a service's intentions: the
+grant is the rule, and a rule that matches more than its author expected matches more than they
+expected. That is the honest limit and it is stated in `SECURITY.md` §2.5 and ADR-0013 rather
+than discovered.
+
+**Where it lands.** guarden's own accepts first, then the granted rules, then the single default
+deny — **last**, always. Position is guarden's and not the request's: a request carries no
+position field, so a grant can never be rendered into a part of the chain where the default deny
+has already matched, and the invariant that every accept precedes the single deny survives a
+grant.
+
+**Deduplication is by content, and the count is by name.** Two services whose manifests ask for
+the same rule line produce **one** rule in `30-services.conf`, carrying the names of both, because
+the render is a pure function of a set (§7.6) and a set has no duplicates. The two grants are
+independent: `weedr firewall close` on one service leaves the rule while the other service still
+asks for it, and the rule disappears when the last one closes. That is the same reference count
+`[[switches]]` gets by module name (§6.2), and it is why `weedr firewall list` reports a rule
+once with every service behind it rather than once per service.
+
+**`weedr firewall list` is the inventory, and it answers two questions at once.**
+
+```sh
+weedr firewall list                 # every rule, installed or pending, and who asked for it
+weedr firewall list --json
+```
+
+```
+RULE                                  CHAIN         STATE      SERVICES
+-p udp --dport 51820 -j ACCEPT       guarden-svc   installed  wireguard-staging, wireguard-production
+-p tcp --dport 22 -j ACCEPT          guarden-svc   pending    myapp-staging
+```
+
+`--json` reports `rules` — one object per **rule text after deduplication**, each with `rule`,
+`chain`, `file` (the ferm file it is installed in), `granted` (bool), and `requested_by`, a list
+of `{ service, name }`. It is a read of the registries and the overrides, both `root:guarden`, so
+it needs no privilege a `guarden` program lacks and it **is** on the `guarden` sudoers rule
+(§6.6) beside `weedr port list`; a deploy can therefore report a pending rule request the same way
+it reports a pending port. It is not on `hose`'s rule, for the reason `weedr service list` is not:
+a poke learns which projects exist and nothing about the host's rule set.
+
+**Removal.** `weedr service remove <name>` drops that service's grants with its
+`overrides.toml` and re-renders, so a rule it alone was holding leaves the ruleset. A removed
+service's rule is neither orphaned nor silently kept: the grant file goes with the service
+(§5.3), and the mutator is the only writer of the `[firewall]` table in it.
+
+**A module grants nothing here either.** `module.toml` (§3.6) declares no rule, and `weedr
+module add` installs a module's services with their requests **pending**, exactly as a poke's
+services are. A module's service may ask for a rule in its shipped manifest; an admin installs it
+with `weedr firewall open` like any other, and removing the module leaves nothing granted to
+remove.
 
 ---
 
@@ -2073,11 +2344,30 @@ volumes are individually consistent and may be microseconds apart. That is a cos
 particular service must judge: a configuration volume beside a bulk media library does not
 care, two volumes that must agree byte for byte should not be snapshotted together.
 
-Snapshot state is read with `snapper list --machine-readable json`, because JSON renders a
-snapshot's `userdata` as an object while CSV renders the whole map as one quoted blob. The
-effective configuration is read back with `snapper get-config`, never by parsing the file in
-`/etc/snapper/configs/`. Writes never use `--no-dbus`, because without the daemon there is no
-inter-process coordination at all.
+Snapshot state is read with `snapper --machine-readable json --config <config> list`, because
+JSON renders a snapshot's `userdata` as an object while CSV renders the whole map as one quoted
+blob. The effective configuration is read back with `snapper get-config`, never by parsing the
+file in `/etc/snapper/configs/`. Writes never use `--no-dbus`, because without the daemon there is
+no inter-process coordination at all.
+
+**Three facts about that read are normative, and all three are measured on snapper 0.10.6, the
+version `soil packages` installs.** They are here because an earlier revision of this section
+wrote the option after the command and expected a list, and every reader written from it read
+nothing:
+
+- **`--machine-readable` is a global option and precedes the command.** Written after `list` it
+  is not an option of `list` at all, and the tool answers `Unknown option '--machine-readable'
+  for command 'list'` and exits `1`. That is the shape behind a snapshot that was taken and
+  cannot be read back, and nothing in the answer says which option was wrong.
+- **The document is an object keyed by the configuration's name** — `{ "<config>": [ … ] }` — and
+  not a list. A reader that expects a list has to treat the mismatch as a **failed** read rather
+  than as an empty configuration, because §8.5 makes the two mean opposite things.
+- **The first entry is `number 0`, and it is not a snapshot.** It is the live subvolume, described
+  `current`, with an empty `date` and no `cleanup` tag; snapper issues snapshot numbers from `1`
+  and its cleaners never consider `0`. Every figure computed from this read — total, marked,
+  oldest, newest, the newest number, and every number a fork or a rollback addresses — is a figure
+  about snapshots, so entry `0` is excluded. Counting it would report a configuration that has
+  never been snapshotted as holding one, and one that holds one as holding two.
 
 ### 8.3 Lineage
 
@@ -2244,9 +2534,10 @@ per-ref DNS and no per-ref public port.
 Exactly one rule, applied in this order, and nothing else overrides anything:
 
 1. The manifest declares what a service is made of: its containers, its volumes, its edges, the
-   public ports it *asks* for, its routes, its widgets, the shape of its secrets.
-2. `overrides.toml`, root-owned, grants public ports, sets retention, adds supplementary
-   groups, and lists the host paths its units may mount.
+   public ports it *asks* for, the firewall rules it *asks* for, its routes, its widgets, the
+   shape of its secrets.
+2. `overrides.toml`, root-owned, grants public ports, installs requested firewall rules, sets
+   retention, adds supplementary groups, and lists the host paths its units may mount.
 3. `guarden.toml`, root-owned, decides the environment set and the host's policy: route host
    prefixes, the credential gate, resource weights, retention defaults, ingress, the module
    set, the admin user.
@@ -2269,25 +2560,30 @@ else. Bash remains for scripts that only invoke and sequence.
 
 
 Every test drives a command line and asserts on the exit code, the diagnostic lines, the files
-that appeared or vanished, and the calls made to external tools. No test imports a program's
+that appeared or vanished, and the state the program left behind. No test imports a program's
 internals. The one exception is the manifest and registry parsers, which are tested directly,
 because their failure is invisible from outside until it silently drops a service's
 configuration.
 
-Two harnesses:
+**One harness, and it is a real machine** (ADR-0014). `just test` cuts a throwaway LXD VM from a
+golden snapshot and runs every suite in it with the real tools; `tests/lxc.sh run <pattern>` is
+the same for one file. There is no second tier.
 
-- **Fast.** `fixtures/bin` first on `PATH`, with fakes for `useradd`, `usermod`, `userdel`,
-  `loginctl`, `podman`, `podlet`, `runuser`, `systemctl`, `snapper`, `btrfs`, `chattr`,
-  `systemd-creds`, `ferm`, `iptables`, `ip`, `tar`, `sudo`, `git` and the distribution's package
-  tools. Each fake appends to a shared call log. The `snapper` fake answers
-  `list --machine-readable json` and `get-config`, and its `modify` records the userdata it was
-  given, because a pin test that does not inspect the mark tests nothing. Seconds.
-- **Golden VM.** A throwaway machine with real tools, proving what fakes cannot: that a rootless
-  container reaches a dependency **by the alias the probe measured**, and that the connection
-  arrives on the host with the consumer's uid as the socket owner; that a non-member cannot
-  connect to a declared port; that a clone of a live data volume starts and recovers; that
-  **a forwarded port answers from a second machine**; that nothing unprivileged can bind below
-  1024; and that a lock is a file and a rename is a rename. Minutes, manual or nightly.
+- **No fake exists, and `fixtures/bin` is never on `PATH`** — not in a test, not in a VM run, not
+  in a developer's shell. The directory is retired. It was not a second opinion: `tests/lib.sh`
+  put it first on `PATH` unconditionally and the VM runner never removed it, so the "real
+  machine" tier executed against the fakes in 29 of 34 suites, and the failures that run produced
+  were facts about the fake — an invented `loginctl show-user`, a group ownership no run had ever
+  produced, a drift line the fake never emitted.
+- **No test asserts on a call log.** A test asserts the state a call would have produced: the
+  unit exists, the snapshot carries the mark, the rule is in the file, the package was not
+  installed. An assertion about an argv that left no state is dropped rather than ported.
+- **What the VM proves that nothing else could:** that a rootless container reaches a dependency
+  **by the alias the probe measured**, and that the connection arrives on the host with the
+  consumer's uid as the socket owner; that a non-member cannot connect to a declared port; that a
+  clone of a live data volume starts and recovers; that **a forwarded port answers from a second
+  machine**; that nothing unprivileged can bind below 1024; and that a lock is a file and a rename
+  is a rename.
 
   The forwarded-port criterion is a test and not a proof. "A forwarded port answers from off the
   box" distinguishes one working forwarding path from none; it cannot distinguish a
@@ -2298,5 +2594,6 @@ Two harnesses:
   such a rule matches no packet in either direction (§7.5) and its presence would mean the
   render carries a claim it cannot keep.
 
-`just test` runs the fast harness, which is `tests/run.sh` with `tests/lib.sh` beside it, and
-exits `0`.
+`just test` runs the whole suite in a throwaway VM and exits `0`; `just test-one <file>` runs one
+suite in one VM, and that is the command for work in progress. There is no suite that runs
+outside a machine (ADR-0014).
