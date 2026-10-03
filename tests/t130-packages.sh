@@ -105,8 +105,8 @@ assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "index-url"
 # substrate is cut out of the document and the comparison is between the two
 # halves that are supposed to be one.
 grep -vE '^(family|install|query) ' "$GUARDEN_FIXTURES/list-stdout" | sort >"$GUARDEN_FIXTURES/list-packages"
-sed -n '/^  # harness:/,$d; s/^  - //p' "$GUARDEN_FIXTURES/user-data.yaml" \
-    | sort >"$GUARDEN_FIXTURES/rendered-packages"
+sed -n '/^  # harness:/,$d; s/^  - //p' "$GUARDEN_FIXTURES/user-data.yaml" |
+    sort >"$GUARDEN_FIXTURES/rendered-packages"
 comm -23 "$GUARDEN_FIXTURES/list-packages" "$GUARDEN_FIXTURES/rendered-packages" \
     >"$GUARDEN_FIXTURES/only-in-the-list"
 [ ! -s "$GUARDEN_FIXTURES/only-in-the-list" ] || _fail "converged but not rendered: $(tr '\n' ' ' <"$GUARDEN_FIXTURES/only-in-the-list")"
@@ -130,11 +130,19 @@ run env -u PYTHONPATH PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 assert_exit 0
 assert_stdout_has "the host carries both"
 
-# The rest of the list is not on a fresh golden, so this is the real drift and the
-# real converge. Which of them are missing is the golden's business rather than this
-# file's, so each absence is asked of the machine and the converge is checked by
-# asking again: a `--check` that found nothing would be silent about them, and the
-# point is that it is not.
+# **The image now ships the whole list, so the absence is created here rather than
+# inherited.** The golden is provisioned at build time (ticket 200), which is what
+# finally put a container runtime on this machine, and it makes the old claim —
+# that a fresh cut has no `ferm`, `fail2ban` or `podman` — a claim about an image
+# that no longer exists. Asserting they are absent now is a claim about `apt-get`,
+# which is the only thing the three drift lines below can be about, and it is
+# re-derived from the machine rather than remembered from a list.
+#
+# The removal is real dpkg work and the install below puts every package back, so
+# the same three are asked of the machine in both directions in one file. What this
+# does **not** do is leave the machine as it found it: the re-install is the apply's
+# job and is asserted at the end.
+apt-get remove -y ferm fail2ban podman
 assert_no_dpkg ferm
 assert_no_dpkg fail2ban
 assert_no_dpkg podman
@@ -143,10 +151,9 @@ assert_no_dpkg podman
 # so it is what decides this suite's exit codes rather than the packages. Two facts
 # about this machine make the sequence below deterministic rather than incidental.
 # `soil install` is what seeds the record from the template and this suite ran no
-# `install`, so on a golden the rest of the suite also expects to be fresh — the
-# three absences above are the same freshness claim — and the record is absent
-# rather than half-filled. And being last, everything before it converges first,
-# which is what the `dpkg-query` answers after the apply record.
+# `install`, so the record is absent rather than half-filled. And being last,
+# everything before it converges first, which is what the `dpkg-query` answers
+# after the apply record.
 assert_file_missing /etc/guarden/podlet.release
 assert_file_missing /usr/lib/guarden/bin/podlet
 run soil packages --check
@@ -243,3 +250,12 @@ assert_dpkg ufw
 # the absences above different absences.
 assert_dpkg btrfs-progs
 assert_dpkg snapper
+
+# **And the image's own new fact, which is what the removals above replaced.** A
+# golden that ships its substrate is a different machine from one that did not, and
+# the record of which is a fact about the image rather than about this phase. The
+# four `dpkg-query` answers above already ask it — the phase re-installed all of
+# them — so what is added here is the package whose absence is why the suite could
+# not reach a container before, and which no phase in this file installs.
+run pasta --version
+assert_exit 0

@@ -30,6 +30,7 @@
 #   tests/lxc.sh provision   build the golden, convert it to btrfs, snapshot it
 #   tests/lxc.sh run [pat]   cut a fresh VM per test file and run it there
 #   tests/lxc.sh shell       a fresh VM you can poke at
+#   tests/lxc.sh prove       a fresh VM, and what its boot cost
 #   tests/lxc.sh destroy     remove the golden
 #
 # lxc is the LXD snap. It is not on PATH for a non-interactive shell, so it is
@@ -84,9 +85,9 @@ _exists() { $LXC info "$1" >/dev/null 2>&1; }
 # no pool at all — which sent provision down the rebuild path every run. The
 # value is in `config show`, under the root device.
 _pool_of() {
-    $LXC config show "$1" 2>/dev/null \
-        | sed -n '/^  root:/,/^[a-z]/p' \
-        | awk '/^[[:space:]]+pool:/ {print $2; exit}'
+    $LXC config show "$1" 2>/dev/null |
+        sed -n '/^  root:/,/^[a-z]/p' |
+        awk '/^[[:space:]]+pool:/ {print $2; exit}'
 }
 
 # This LXD build has no `lxc snapshot list`: `lxc snapshot` only creates, and
@@ -147,11 +148,17 @@ _wait_cloud_init() {
     # An image with no cloud-init answer is not a failure, only something that
     # cannot be waited on. Fall back to asking whether apt is still busy.
     #
-    # **Both of apt's locks, and the lists one first.** `package_update` holds
-    # `/var/lib/apt/lists/lock` on its own and the `packages:` install holds
-    # `lock-frontend` afterwards, and the lock that lost a `soil packages` refresh
-    # on the golden VM was the lists one — so a fallback that asked only about the
-    # frontend lock would return while the refresh was still the thing running.
+    # **Both of apt's locks, and the lists one first.** The boot document used to
+    # carry `package_update: true`, which holds `/var/lib/apt/lists/lock` on its own
+    # and a `packages:` install holds `lock-frontend` afterwards, and the lock that
+    # lost a `soil packages` refresh on the golden VM was the lists one — so a
+    # fallback that asked only about the frontend lock would return while the
+    # refresh was still the thing running.
+    #
+    # The document installs nothing now, so cloud-init answers almost at once and
+    # this is what is left to wait for. That is the ticket's win and it is also the
+    # claim: a machine whose cloud-init returns promptly and whose locks are free is
+    # a machine that ran no package transaction during boot.
     local i
     for ((i = 0; i < 60; i++)); do
         if ! $LXC exec -T "$instance" -- sh -c \
@@ -193,33 +200,98 @@ _push() {
     tar -C "$src" -cf - . | vm_exec_t "$instance" \
         "sudo mkdir -p '$dst' && sudo tar -C '$dst' -xf - && sudo chown -R root:root '$dst'"
 }
-# The package list is the harness's, not guarden's: `soil packages` converges
-# packages/packages.toml on a host, and the harness must not test its own list
-# against itself. Everything here stands in for something a fake used to.
+
+# What the image carries, and this is the only place in this file that names a
+# package.
+#
+# **The image is provisioned at build time, so a cut machine runs no package
+# transaction.** A copy of the golden is a new instance to cloud-init, and the
+# document below used to be `package_update: true` and nineteen packages: every
+# suite paid for an `apt-get update` and an `apt-get install` holding apt's locks,
+# measured on a cut machine at 12.5 s to 23.5 s of uptime. `cmd_provision` now
+# installs everything here once, before the snapshot, and leaves the document
+# saying so. That is not only a clock question — `apt-daily-upgrade.service` runs
+# `unattended-upgrade`, whose post-invoke hook answers this machine's
+# `/etc/ufw/ufw.conf` by running `systemctl enable ufw`, so a boot that runs a
+# package transaction can re-enable the distribution's firewall underneath a suite
+# that has already disabled it. `t20-firewall.sh` failed on exactly that on
+# 2026-10-03, and seven suites lost the same apt-lock race on 2026-10-01.
+#
+# Two halves, and they are different in kind. The first is guarden's own
+# dependency **and the harness's**, read out of `packages/packages.toml` through
+# the same renderer that writes a host's cloud-init document — so the golden ships
+# exactly what that document would have installed, and a package added to the list
+# reaches the machine without anyone editing this file. The second is the
+# machinery that builds *this machine*: what `lxc-btrfs-convert` needs, and the
+# base-image packages this harness invokes by name. Those are named here because
+# they are the harness's and no guarden host wants them, which is the same reason
+# `packages.toml` keeps its `harness` role in a table of its own.
+#
+# **It is apt only, and it must stay apt only.** `soil packages --apply` is not
+# this function's caller and must not become one: it fetches the pinned podlet
+# release, and `t20-podlet.sh` asserts that binary is absent on a machine
+# `soil install` has not run. A golden that ran the phase would quietly answer
+# both of those suites' questions for them.
+_image_packages() {
+    local rendered
+    rendered=$(mktemp)
+    if ! PYTHONPATH="$REPO/src" python3 -m guarden.soil packages \
+        --render-user-data "$rendered" >/dev/null 2>&1; then
+        rm -f "$rendered"
+        die "the image's package list could not be rendered from packages/packages.toml"
+    fi
+    sed -n 's/^  - //p' "$rendered"
+    rm -f "$rendered"
+}
+
+_build_tools() {
+    cat <<'TOOLS'
+btrfs-convert
+cloud-guest-utils
+dracut-core
+kmod
+passwd
+procps
+sudo
+uidmap
+util-linux
+TOOLS
+}
+
+# The document a cut machine boots from. It installs nothing, and it says so: a
+# machine whose boot document is empty is indistinguishable from one whose
+# cloud-init silently did not run, and telling those two apart is the whole
+# measurement this change claims. The per-boot marker is written on every boot,
+# so its presence is the proof that cloud-init ran and found nothing to do.
+#
+# `#cloud-config` must be the first line or the document is ignored in silence,
+# which is why readiness has always been proven by asking the machine rather than
+# by reading its state.
 _user_data() {
     cat <<'CLOUD'
 #cloud-config
-package_update: true
-packages:
-  - python3
-  - python3-yaml
-  - python3-jinja2
-  - iproute2
-  - iptables
-  - btrfs-progs
-  - snapper
-  - passwd
-  - uidmap
-  - curl
-  - ca-certificates
-  - sudo
-  - util-linux
-  - kmod
-  - procps
-  - git
-  - rsync
-  - btrfs-convert
-  - dracut-core
+#
+# This image is already provisioned. Its packages were installed at build time by
+# `tests/lxc.sh provision`, from packages/packages.toml, before the snapshot was
+# taken — so there is nothing to update and nothing to install here, and
+# cloud-init reaching `done` on a cut machine is the evidence that no package
+# transaction ran during boot.
+#
+# `soil packages --apply` still installs everything on a real host. This is the
+# machine the harness cuts, not a host, and the difference is that its packages
+# are already on the image.
+write_files:
+  - path: /var/lib/guarden-harness
+    permissions: "0755"
+
+runcmd:
+  # `write_files` content is not templated, so the uptime is read here rather than
+  # written as a literal `$UPTIME`. This runs on every boot of every cut machine,
+  # which is what makes its presence the proof that cloud-init ran and found
+  # nothing to install.
+  - printf 'provisioned at build time; this boot installed nothing; uptime %ss\n' "$(cut -d. -f1 /proc/uptime)" >/var/lib/guarden-harness/BOOT
+
+final_message: "guarden harness image already provisioned, nothing installed, $UPTIME seconds"
 CLOUD
 }
 
@@ -228,8 +300,8 @@ _ensure_pool() {
         return 0
     fi
     mkdir -p "$POOL_SOURCE" || die "cannot create $POOL_SOURCE"
-    $LXC storage create "$POOL" btrfs source="$POOL_SOURCE" >/dev/null \
-        || die "cannot create the btrfs pool $POOL; a dir pool makes a restore take 101s"
+    $LXC storage create "$POOL" btrfs source="$POOL_SOURCE" >/dev/null ||
+        die "cannot create the btrfs pool $POOL; a dir pool makes a restore take 101s"
 }
 
 # _convert <instance>: drive the three-stage conversion to convergence.
@@ -274,17 +346,45 @@ _convert() {
 # than surfacing later as a guarden defect.
 _prove() {
     local instance=$1
-    vm_exec_t "$instance" 'python3 -c "import yaml, jinja2"' \
-        || die "$instance lacks python3-yaml or python3-jinja2"
-    vm_exec_t "$instance" 'btrfs subvolume show / >/dev/null && btrfs subvolume list / | grep -q "@var"' \
-        || die "$instance has no btrfs root with @ and @var; soil storage will never converge on it"
+    vm_exec_t "$instance" 'python3 -c "import yaml, jinja2"' ||
+        die "$instance lacks python3-yaml or python3-jinja2"
+    vm_exec_t "$instance" 'btrfs subvolume show / >/dev/null && btrfs subvolume list / | grep -q "@var"' ||
+        die "$instance has no btrfs root with @ and @var; soil storage will never converge on it"
     vm_exec_t "$instance" 'btrfs subvolume create /var/lib/guarden/.probe >/dev/null 2>&1 &&
-        btrfs subvolume delete /var/lib/guarden/.probe >/dev/null 2>&1' \
-        || die "$instance cannot create a btrfs subvolume under /var/lib/guarden"
-    vm_exec_t "$instance" 'getent passwd nobody >/dev/null' \
-        || die "$instance has no real user database"
-    vm_exec_t "$instance" 'command -v iptables >/dev/null && command -v snapper >/dev/null' \
-        || die "$instance lacks iptables or snapper"
+        btrfs subvolume delete /var/lib/guarden/.probe >/dev/null 2>&1' ||
+        die "$instance cannot create a btrfs subvolume under /var/lib/guarden"
+    vm_exec_t "$instance" 'getent passwd nobody >/dev/null' ||
+        die "$instance has no real user database"
+    vm_exec_t "$instance" 'command -v iptables >/dev/null && command -v snapper >/dev/null' ||
+        die "$instance lacks iptables or snapper"
+}
+
+# _prove_inventory <instance>: every package the image is supposed to carry, asked
+# of dpkg in one call.
+#
+# This is the answer ticket 200 asks to be re-derived rather than remembered. It
+# used to be two suites asserting `ferm`, `fail2ban` and `podman` are **absent** on
+# a fresh cut, which was a fact about an image that installed nineteen packages
+# and no more. The image now carries the whole list, so an absence assertion can
+# no longer distinguish "the image does not ship it" from "the phase did not
+# install it", and the presence of the image's own inventory is the check that
+# replaced it.
+#
+# `podman` is reported on its own line because it is the package the image was
+# missing on 2026-10-03, and its absence is what made `t70-fork.sh` unable to
+# reach a single one of its data-movement success paths.
+_prove_inventory() {
+    local instance=$1 wanted present missing
+    wanted=$(_image_packages | sort)
+    present=$(vm_exec_t "$instance" "dpkg-query -W -f='\${db:Status-Status} \${Package}\n' 2>/dev/null \
+        | awk '\$1 == \"installed\" {print \$2}' | sort")
+    missing=$(comm -23 <(printf '%s\n' "$wanted") <(printf '%s\n' "$present"))
+    [ -z "$missing" ] ||
+        die "$instance is not provisioned; these are not installed: $(printf '%s' "$missing" | tr '\n' ' ')"
+    printf '  image inventory proven: %s packages, podman %s, pasta %s\n' \
+        "$(printf '%s\n' "$wanted" | wc -l)" \
+        "$(vm_exec_t "$instance" 'podman --version' 2>/dev/null || echo MISSING)" \
+        "$(vm_exec_t "$instance" 'pasta --version 2>&1 | head -1' 2>/dev/null || echo MISSING)"
 }
 
 cmd_provision() {
@@ -300,8 +400,8 @@ cmd_provision() {
         if [ "$pool" != "$POOL" ]; then
             printf 'replacing %s: it is on pool %s, not %s\n' "$GOLDEN" "$pool" "$POOL"
             $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
-            $LXC delete "$GOLDEN" --force >/dev/null 2>&1 \
-                || die "cannot delete $GOLDEN; remove it by hand"
+            $LXC delete "$GOLDEN" --force >/dev/null 2>&1 ||
+                die "cannot delete $GOLDEN; remove it by hand"
         elif _has_snapshot "$GOLDEN"; then
             # Nothing to do, and nothing needs the machine booted to say so:
             # `lxc info` lists a stopped instance's snapshots. Booting it just to
@@ -311,8 +411,8 @@ cmd_provision() {
     fi
 
     if ! _exists "$GOLDEN"; then
-        $LXC init "$IMAGE" "$GOLDEN" --vm --storage "$POOL" >/dev/null \
-            || die "cannot create $GOLDEN from $IMAGE on pool $POOL"
+        $LXC init "$IMAGE" "$GOLDEN" --vm --storage "$POOL" >/dev/null ||
+            die "cannot create $GOLDEN from $IMAGE on pool $POOL"
         $LXC config set "$GOLDEN" limits.cpu 4
         $LXC config set "$GOLDEN" limits.memory 8GiB
         $LXC config set "$GOLDEN" boot.autostart false
@@ -328,38 +428,61 @@ cmd_provision() {
     [ "$(_state "$GOLDEN")" = RUNNING ] || $LXC start "$GOLDEN" >/dev/null
     _wait_ready "$GOLDEN" || die "$GOLDEN did not become ready"
 
-    # cloud-init installs the package list, and it answers before it has
-    # finished. Asking anything of apt while it runs loses the dpkg lock, which
-    # is how snapper went missing from a golden — the capability gate caught it,
-    # but the honest wait is cloud-init's own.
+    # cloud-init on a machine cut from this image installs nothing, so this returns
+    # as soon as cloud-init has finished saying so. It stays because it is the only
+    # thing that knows when apt is no longer holding the dpkg lock, and it is the
+    # instrument ticket 200's claim is measured with.
     _wait_cloud_init "$GOLDEN"
 
     if [ "${_needs_build:-0}" = 0 ] && [ "$(_conversion_state "$GOLDEN")" != done ]; then
         printf 'replacing %s: no snapshot and its conversion state is not done\n' "$GOLDEN"
         $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
-        $LXC delete "$GOLDEN" --force >/dev/null 2>&1 \
-            || die "cannot delete $GOLDEN; remove it by hand"
+        $LXC delete "$GOLDEN" --force >/dev/null 2>&1 ||
+            die "cannot delete $GOLDEN; remove it by hand"
         cmd_provision
         return 0
     fi
 
-    local i
-    for ((i = 0; i < 120; i++)); do
-        vm_exec_t "$GOLDEN" 'python3 -c "import yaml, jinja2"' >/dev/null 2>&1 && break
-        sleep 5
-    done
-    vm_exec_t "$GOLDEN" 'python3 -c "import yaml, jinja2"' \
-        || die "$GOLDEN never finished installing python3-yaml and python3-jinja2"
-
-    # cloud-init installs the list, and it silently skips a package whose
-    # install fails — snapper was missing from one golden this way, and the
-    # capability gate below is what caught it. Re-assert the list rather than
-    # trust that it landed.
-    vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
+    # **The image is provisioned here, once, and never again.** A cut machine is a
+    # new instance to cloud-init, so a package list in the boot document is a list
+    # installed once per suite; installing it before the snapshot is the whole of
+    # this change, and it is also what puts `podman` and `pasta` on the image.
+    #
+    # `--no-install-recommends` because Recommends on `podman` is where hundreds of
+    # megabytes would otherwise appear, and `pasta` must not be left to a
+    # Recommends change — the same reason `src/guarden/userdata.py` names it
+    # explicitly.
+    #
+    # **Fatal on failure, and there is no second attempt.** The old code re-asserted
+    # eight packages with `|| true` because cloud-init silently skips a package whose
+    # install fails — snapper was missing from one golden that way, and a capability
+    # gate downstream caught it. A gate is the wrong place to find out, and the
+    # whole list is asked at once.
+    local list install
+    list=$(mktemp)
+    _image_packages "$list"
+    install=$(tr '\n' ' ' <"$list")
+    printf 'provisioning %s with %s packages\n' "$GOLDEN" "$(wc -l <"$list")"
+    vm_exec_t "$GOLDEN" "export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
-        apt-get install -y -qq --no-install-recommends
-            snapper btrfs-progs iptables iproute2 passwd uidmap curl ca-certificates || true' \
-        >/dev/null 2>&1 || true
+        apt-get install -y -qq --no-install-recommends $install" ||
+        die "$GOLDEN could not be provisioned from packages/packages.toml"
+    rm -f "$list"
+    _prove_inventory "$GOLDEN"
+
+    # LXD grows the block device; the guest has to grow the partition and the
+    # filesystem. Left undone, btrfs-convert refuses for want of headroom and
+    # the refusal reads as a conversion problem rather than a disk-size one.
+    #
+    # This runs **after** the install above because `growpart` is
+    # `cloud-guest-utils` and that is one of the packages being installed, and the
+    # install costs a few hundred megabytes of a filesystem that is only about 9 GiB
+    # to begin with — so the headroom the conversion needs is measured after both.
+    vm_exec_t "$GOLDEN" 'growpart /dev/sda 1 >/dev/null 2>&1 || true
+        resize2fs /dev/sda1 >/dev/null 2>&1 || true
+        partprobe /dev/sda 2>/dev/null || true' >/dev/null 2>&1 || true
+    printf 'image %s\n' \
+        "$(vm_exec_t "$GOLDEN" 'df -h / | awk "NR==2 {print \$2\" total, \"\$4\" free\"}"')"
 
     # Preconditions the real-host tests plant for themselves today. They are
     # planted here instead so a green run does not depend on one test having run
@@ -372,15 +495,13 @@ cmd_provision() {
     # LXD grows the block device; the guest has to grow the partition and the
     # filesystem. Left undone, btrfs-convert refuses for want of headroom and
     # the refusal reads as a conversion problem rather than a disk-size one.
-    vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y -qq cloud-guest-utils >/dev/null 2>&1 || true
-        growpart /dev/sda 1 >/dev/null 2>&1 || true
+    vm_exec_t "$GOLDEN" 'growpart /dev/sda 1 >/dev/null 2>&1 || true
         resize2fs /dev/sda1 >/dev/null 2>&1 || true
         partprobe /dev/sda 2>/dev/null || true' >/dev/null 2>&1 || true
     vm_exec_t "$GOLDEN" 'avail=$(df -Pk / | awk "NR==2 {print \$4}")
         [ "${avail:-0}" -ge 4194304 ] || {
-            echo "only ${avail}KB free on /; refusing to convert" >&2; exit 1; }' \
-        || die "$GOLDEN has less than 4GiB free on /; btrfs-convert needs headroom"
+            echo "only ${avail}KB free on /; refusing to convert" >&2; exit 1; }' ||
+        die "$GOLDEN has less than 4GiB free on /; btrfs-convert needs headroom"
 
     printf 'converting the golden root to btrfs (this reboots it twice)...\n'
     _convert "$GOLDEN"
@@ -390,8 +511,8 @@ cmd_provision() {
         $LXC delete "$GOLDEN/$SNAPSHOT" >/dev/null 2>&1 || true
     fi
     $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
-    $LXC snapshot "$GOLDEN" "$SNAPSHOT" >/dev/null \
-        || die "cannot snapshot $GOLDEN"
+    $LXC snapshot "$GOLDEN" "$SNAPSHOT" >/dev/null ||
+        die "cannot snapshot $GOLDEN"
 
     printf 'provisioned %s on pool %s (snapshot %s)\n' "$GOLDEN" "$POOL" "$SNAPSHOT"
 }
@@ -414,22 +535,31 @@ _reset() {
     _wait_ready "$RUNNER" || return 1
     # **cloud-init, before the suite.** A machine cut from the golden is a new
     # instance to cloud-init, so it re-runs this harness's own user-data on every
-    # boot: `package_update: true` and nineteen packages, which is an
-    # `apt-get update` followed by an `apt-get install` holding apt's locks.
+    # boot.
     #
-    # Measured on a cut machine: the lists lock is held from 12.5 s of uptime to
-    # 23.5 s, and `_wait_ready` above has already returned by 12 s, so a suite
-    # that calls `soil packages --apply` in its first seconds loses the race and
-    # gets `E: Could not get lock /var/lib/apt/lists/lock. It is held by process
-    # N (apt-get)`. `apt-get` does not wait: two concurrent real `apt-get update`
-    # runs on this machine, one exit 0 and one exit 100 with that diagnostic,
-    # both inside five seconds.
+    # That document used to be `package_update: true` and nineteen packages, so
+    # every cut paid for an `apt-get update` followed by an `apt-get install`
+    # holding apt's locks. Measured on a cut machine: the lists lock was held from
+    # 12.5 s of uptime to 23.5 s, and `_wait_ready` above has already returned by
+    # 12 s, so a suite that calls `soil packages --apply` in its first seconds lost
+    # the race and got `E: Could not get lock /var/lib/apt/lists/lock. It is held by
+    # process N (apt-get)`. `apt-get` does not wait: two concurrent real
+    # `apt-get update` runs on this machine, one exit 0 and one exit 100 with that
+    # diagnostic, both inside five seconds.
     #
-    # **This is the harness's claim and not the product's.** The writer is this
-    # file's own user-data, so no change to `soil` can remove the race — which is
-    # exactly why `soil packages` also disables the distribution's own apt timers
-    # and why that change fixes no suite here: no timer in the list is the thing
-    # holding the lock at 12 s.
+    # It also re-enabled the distribution's firewall underneath a suite that had
+    # already disabled it: `apt-daily-upgrade.service` runs `unattended-upgrade`,
+    # whose post-invoke hook answers this machine's `/etc/ufw/ufw.conf` by running
+    # `systemctl enable ufw`, at 31.7 s of uptime. That is how `t20-firewall.sh`
+    # failed on 2026-10-03, and it was the same cause as the seven suites that lost
+    # the apt-lock race on 2026-10-01.
+    #
+    # **None of that is the product's and none of it is the harness's any more.**
+    # The packages are on the image and the document installs nothing, so the wait
+    # below returns as soon as cloud-init has finished saying so. It stays because a
+    # cut that starts a suite before cloud-init is finished is a cut whose boot
+    # state a suite cannot reason about, and because it is what
+    # `tests/lxc.sh prove` measures the claim with.
     _wait_cloud_init "$RUNNER"
     _push "$RUNNER" "$REPO" "$VM_REPO"
 }
@@ -519,6 +649,46 @@ cmd_shell() {
     exec $LXC exec "$RUNNER" --cwd / -- bash
 }
 
+# cmd_prove: the measurement ticket 200's claim is made with, and no suite can
+# make it. A suite runs after `_reset` has already waited for cloud-init, so by the
+# time a suite could ask whether apt was busy during boot the answer has been
+# waited out — the question is unanswerable from inside a suite and only from
+# here, where the cut is timed.
+#
+# It cuts a machine, records how long the cut took, and asks four things: was
+# cloud-init reached, did it install anything, are apt's locks free, and is any
+# `apt-get` still running. The per-boot marker the document writes is the fourth
+# answer from the machine's own side, so "nothing was installed" is not only this
+# script's opinion.
+cmd_prove() {
+    cmd_provision || exit 1
+    trap '_teardown_runner' EXIT INT TERM
+
+    local started elapsed
+    started=$(date +%s)
+    _reset || die "cannot cut a clean $RUNNER"
+    elapsed=$(($(date +%s) - started))
+    printf 'cut and ready in %ss\n' "$elapsed"
+
+    printf 'cloud-init   %s\n' \
+        "$(vm_exec_t "$RUNNER" 'cloud-init status --long 2>&1 | tr "\n" ";"')"
+    printf 'boot marker  %s\n' \
+        "$(vm_exec_t "$RUNNER" 'cat /var/lib/guarden-harness/BOOT 2>/dev/null || echo ABSENT')"
+    printf 'apt running  %s\n' \
+        "$(vm_exec_t "$RUNNER" 'pgrep -a apt-get 2>/dev/null || echo none')"
+    printf 'dpkg log     %s\n' \
+        "$(vm_exec_t "$RUNNER" 'tail -1 /var/log/dpkg.log 2>/dev/null || echo none')"
+    printf 'inventory    %s\n' \
+        "$(vm_exec_t "$RUNNER" 'dpkg-query -W 2>/dev/null | wc -l') packages installed"
+
+    # `_reset` already waited for cloud-init, so both locks being free here is the
+    # end of the wait rather than the whole of it. The cut's own clock is what says
+    # nothing happened during boot: 39 cuts at the old 25 s of apt is minutes, and
+    # the same 39 cuts now is what the wall clock above is for.
+    vm_exec_t "$RUNNER" 'fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock \
+        >/dev/null 2>&1 && echo "HELD" || echo free'
+}
+
 _teardown_runner() {
     if _exists "$RUNNER"; then
         $LXC stop "$RUNNER" --force >/dev/null 2>&1 || true
@@ -534,12 +704,12 @@ cmd_clean() {
     _teardown_runner
     if _exists "$GOLDEN"; then
         $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
-        $LXC delete "$GOLDEN" --force >/dev/null 2>&1 \
-            && printf 'deleted %s\n' "$GOLDEN"
+        $LXC delete "$GOLDEN" --force >/dev/null 2>&1 &&
+            printf 'deleted %s\n' "$GOLDEN"
     fi
     if $LXC storage show "$POOL" >/dev/null 2>&1; then
-        $LXC storage delete "$POOL" >/dev/null 2>&1 \
-            && printf 'deleted pool %s (%s)\n' "$POOL" "$POOL_SOURCE"
+        $LXC storage delete "$POOL" >/dev/null 2>&1 &&
+            printf 'deleted pool %s (%s)\n' "$POOL" "$POOL_SOURCE"
     fi
     printf 'clean. still present, not mine:\n'
     $LXC list 2>&1 | tail -n +2
@@ -555,10 +725,32 @@ cmd_destroy() {
 }
 
 case "${1:-run}" in
-    provision) shift; cmd_provision "$@" ;;
-    run) shift; cmd_run "$@" ;;
-    shell) shift; cmd_shell "$@" ;;
-    destroy) shift; cmd_destroy "$@" ;;
-    clean) shift; cmd_clean "$@" ;;
-    *) printf 'usage: %s {provision|run|shell|destroy|clean}\n' "$0" >&2; exit 2 ;;
+provision)
+    shift
+    cmd_provision "$@"
+    ;;
+run)
+    shift
+    cmd_run "$@"
+    ;;
+shell)
+    shift
+    cmd_shell "$@"
+    ;;
+prove)
+    shift
+    cmd_prove "$@"
+    ;;
+destroy)
+    shift
+    cmd_destroy "$@"
+    ;;
+clean)
+    shift
+    cmd_clean "$@"
+    ;;
+*)
+    printf 'usage: %s {provision|run|shell|prove|destroy|clean}\n' "$0" >&2
+    exit 2
+    ;;
 esac
