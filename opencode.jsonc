@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "varlock": {
+      "type": "local",
+      "command": ["varlock", "mcp"],
+      "enabled": true
+    }
+  }
+}

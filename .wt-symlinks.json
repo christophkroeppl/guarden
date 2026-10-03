@@ -2,6 +2,7 @@
   "$schema": "./.wt-symlinks.schema.json",
   "links": [
     { "from": "AGENTS.md" },
-    { "from": "AGENTS.md", "to": "CLAUDE.md" }
+    { "from": "AGENTS.md", "to": "CLAUDE.md" },
+    { "from": "opencode.jsonc" }
   ]
 }
