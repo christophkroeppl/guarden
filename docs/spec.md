@@ -1,6 +1,6 @@
 # guarden v1 — normative spec
 
-Status: ready-for-agent. Branch: `service-based`.
+Status: ready-for-agent. Branch: `develop`.
 
 Companion documents: [`CONTEXT.md`](../CONTEXT.md) is the vocabulary and is not negotiable.
 Decisions that were hard to reverse are in [`docs/adr/`](./adr/). Why the system is shaped

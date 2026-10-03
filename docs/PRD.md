@@ -1,6 +1,6 @@
 # guarden — PRD
 
-Status: draft, 2026-09-29. Product name **guarden**. Branch: `service-based`.
+Status: draft, 2026-09-29. Product name **guarden**. Branch: `develop`.
 
 Companions: [`CONTEXT.md`](../CONTEXT.md) is the vocabulary and the source of truth for
 names. [`docs/spec.md`](./spec.md) is the contract. [`docs/adr/`](./adr/) holds the decisions
