@@ -12,6 +12,6 @@ needs:
     port: 5432
     auth: database
   - service: pgprov-staging
-    as: vault
+    as: secret
     port: 8200
     auth: secret

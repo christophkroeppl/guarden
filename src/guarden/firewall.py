@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from guarden import (
     conf,
+    edges,
     errors,
     hosttool,
     paths,
@@ -263,7 +264,8 @@ def consumer_uids(everything) -> dict[str, dict[int, set[int]]]:
             numbers = [n for n in (entry.get("publications") or []) if isinstance(n, int)]
             if not numbers:
                 continue
-            found.setdefault(provider, {}).setdefault(min(numbers), set()).add(record.uid)
+            name = edges.provider_of(provider)
+            found.setdefault(name, {}).setdefault(min(numbers), set()).add(record.uid)
     return found
 
 

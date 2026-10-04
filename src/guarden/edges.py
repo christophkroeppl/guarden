@@ -58,6 +58,22 @@ def check(consumer: str, document: manifest_mod.Manifest) -> None:
         _offered(consumer, edge, provider)
 
 
+def edge_key(provider: str, port: int) -> str:
+    """The key one `needs:` entry is recorded under.
+
+    Two entries may name ONE provider on two ports — a provider with a database
+    and a vault container offers two publications — and keyed by the provider
+    alone the second silently replaced the first. The provider name and the port
+    together are unique per entry, and both are in every caller's hands.
+    """
+    return f"{provider}:{port}"
+
+
+def provider_of(key: str) -> str:
+    """The provider name inside an edge key."""
+    return key.rsplit(":", 1)[0]
+
+
 def _offered(consumer: str, edge, provider) -> None:
     """Raise unless the provider's `provides:` lists the kind the consumer wants."""
     if edge.prefix in provider.provides:
@@ -99,7 +115,7 @@ def install(entry: registry.Registry, document: manifest_mod.Manifest) -> list[s
             warnings += said
             if publication is not None:
                 warnings += _credential(entry, edge, provider, container, publication)
-        entry.edges[edge.service] = {
+        entry.edges[edge_key(edge.service, edge.port)] = {
             "port": edge.port,
             "as": edge.prefix,
             "auth": edge.auth,

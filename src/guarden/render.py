@@ -551,7 +551,9 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
     """
     out: list[tuple[str, int]] = []
     for edge in document.needs:
-        stored = (context.record.edges.get(edge.service) or {}).get("publications") or []
+        stored = (context.record.edges.get(edges.edge_key(edge.service, edge.port)) or {}).get(
+            "publications"
+        ) or []
         numbers = [
             value for value in stored if isinstance(value, int) and not isinstance(value, bool)
         ]

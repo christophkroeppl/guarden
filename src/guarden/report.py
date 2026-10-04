@@ -20,8 +20,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from guarden import edges, paths, registry, snapper
 from guarden import overrides as overrides_mod
-from guarden import paths, registry, snapper
 
 IPV6 = "net/ipv6/conf/all/disable_ipv6"
 IP_UNPRIVILEGED_PORT_START = "net/ipv4/ip_unprivileged_port_start"
@@ -121,7 +121,7 @@ def _service_object(record, invariants: list[str]) -> dict:
         },
         "edges": [
             {
-                "service": provider,
+                "service": edges.provider_of(provider),
                 "port": edge.get("port"),
                 "as": edge.get("as"),
                 "auth": edge.get("auth"),
