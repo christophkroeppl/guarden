@@ -299,7 +299,7 @@ seed "$nowhere/.guarden/service.yml" "project: nowhere" "units: .guarden/quadlet
 seed "$nowhere/.guarden/quadlet/web.container" "[Container]" \
     "Image=docker.io/library/nginx:1.27"
 run weedr service ingest nowhere-staging --from poke nowhere@9f2c1ab
-assert_exit 0
+assert_exit 1
 assert_stderr_has "nowhere-staging"
 assert_file_has "$registry/nowhere-staging.toml" 'publications = []'
 assert_file_missing "$creds/nowhere-staging/DB_PASSWORD_5432.cred"
