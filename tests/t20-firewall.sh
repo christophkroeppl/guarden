@@ -100,7 +100,9 @@ assert_file_has /etc/guarden/firewall/10-framework.conf "30-services.conf"
 
 # A host with no edge installed has no ingress: a module that has not been added
 # contributes nothing and no publication is invented.
-assert_no_firewall_rule /etc/guarden/firewall/20-ingress-nat.conf
+# Counted as rules: the old `^\[ ` probe matched nothing ferm emits, so it passed always.
+[ "$(grep -vE '^[[:space:]]*(#|$)' /etc/guarden/firewall/20-ingress-nat.conf | grep -cE '^[[:space:]]+(jump|proto|mod|ip|if|daddr|iif) ' || true)" = 0 ] \
+    || _fail "a host with no edge installed renders an ingress rule"
 
 # The three rules, once the gate module is enabled and the edge's publications
 # exist. Each publication is read from the registry and never assumed, because
@@ -121,29 +123,32 @@ seed /var/lib/guarden/registry/traefik-production.toml \
 run soil firewall --apply
 assert_exit 0
 assert_file_has /etc/guarden/firewall/20-ingress-nat.conf \
-    "[ 'i $interface' 'p tcp' '--dport 80' ] -j DNAT --to-destination 127.0.0.1:20000"
+    "if $interface proto tcp dport 80 DNAT to 127.0.0.1:20000"
 assert_file_has /etc/guarden/firewall/20-ingress-nat.conf \
-    "[ 'i $interface' 'p tcp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20001"
+    "if $interface proto tcp dport 443 DNAT to 127.0.0.1:20001"
 
 # 443/udp is HTTP/3, and it is a different protocol and a different nat rule:
 # three forwarding rules, not two. It is served from the same TLS entrypoint, so
 # it lands on that entrypoint's publication.
 assert_file_has /etc/guarden/firewall/20-ingress-nat.conf \
-    "[ 'i $interface' 'p udp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20001"
+    "if $interface proto udp dport 443 DNAT to 127.0.0.1:20001"
 
-# No masquerade, in any form a rule could take.
-assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "-j MASQUERADE"
-assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "chain POSTROUTING"
-assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "--to-source"
+# Bare target words: the `-j` spelling ferm never emits asserted nothing.
+assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "MASQUERADE"
+assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "POSTROUTING"
+assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "REDIRECT"
+assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "SNAT"
+# `jump DNAT to` is a ferm parse error that takes the whole firewall down.
+assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "jump DNAT"
 
 # Every rule lands on the host's loopback and nowhere else, which is the alias
 # claim stated as a fact about the file: pasta maps the gateway, so a connection
 # is addressed to 127.0.0.1 by the time the kernel's packet path sees it, and a
 # rule matching the alias would match nothing. Asking it of the rendered rules
 # rather than of one recorded address is what makes it hold on a host whose
-# alias has never been measured.
-assert_file_lacks /etc/guarden/firewall/10-framework.conf "--to-destination"
-[ "$(grep -c -- '--to-destination' /etc/guarden/firewall/20-ingress-nat.conf)" = 3 ] \
+assert_file_lacks /etc/guarden/firewall/10-framework.conf "DNAT"
+[ "$(grep -vE '^[[:space:]]*(#|$)' /etc/guarden/firewall/20-ingress-nat.conf \
+    | grep -cE '^[[:space:]]+if .* DNAT to 127\.0\.0\.1:[0-9]+;$' || true)" = 3 ] \
     || _fail "a rule in 20-ingress-nat.conf translates somewhere other than the three loopback publications"
 
 # The edge's API is a control surface, not ingress: it is restricted to

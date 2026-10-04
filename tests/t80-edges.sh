@@ -153,29 +153,42 @@ assert_exit 0
 # The firewall. The consumer's uid reaches the publications it declared, and the
 # provider reaches its own so it can answer on its own listener.
 assert_file_has "$conf" \
-    "--dport $db_pub' ] -m owner --uid-owner $provider_uid -j ACCEPT"
+    "mod owner uid-owner $provider_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"
 assert_file_has "$conf" \
-    "--dport $vault_pub' ] -m owner --uid-owner $provider_uid -j ACCEPT"
+    "mod owner uid-owner $provider_uid daddr 127.0.0.1 proto tcp dport $vault_pub jump ACCEPT;"
 assert_file_has "$conf" \
-    "--dport $db_pub' ] -m owner --uid-owner $needful_uid -j ACCEPT"
+    "mod owner uid-owner $needful_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"
 assert_file_has "$conf" \
-    "--dport $vault_pub' ] -m owner --uid-owner $needful_uid -j ACCEPT"
+    "mod owner uid-owner $needful_uid daddr 127.0.0.1 proto tcp dport $vault_pub jump ACCEPT;"
 
 # The loopback is closed by default: one deny, last, carrying no owner match, over
 # the whole of loopback rather than 127.0.0.1 alone.
 assert_file_has "$conf" "chain guarden-svc"
-assert_file_has "$conf" "[ 'o lo' 'd 127.0.0.0/8' ] -j DROP"
-[ "$(grep -c -- "'d 127.0.0.0/8' ] -j DROP" "$conf")" = 1 ] \
+assert_file_has "$conf" "daddr 127.0.0.0/8 jump DROP;"
+# Rule lines only, so the provenance comments cannot answer for it.
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE '^[[:space:]]+daddr 127\.0\.0\.0/8 jump DROP;$' || true)" = 1 ] \
     || _fail "the loopback deny is not a single rule"
-assert_file_lacks "$conf" "127.0.0.0/8' ] -m owner"
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE 'uid-owner [0-9]+ daddr 127\.0\.0\.0/8' || true)" = 0 ] \
+    || _fail "the loopback deny names a uid and is therefore not a default deny"
 # Every destination is 127.0.0.1 and never ingress.alias: pasta maps the gateway onto
 # the host's loopback in userspace before the kernel's packet path, so a rule naming
 # the alias matches no packet in either direction.
-assert_file_has "$conf" "[ 'o lo' 'd 127.0.0.1' '--dport $db_pub' ]"
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner $provider_uid daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;\$" || true)" = 1 ] \
+    || _fail "no accept rule gives the provider the db publication on the loopback address"
 assert_file_lacks "$conf" "192.0.2.1"
+# KNOWN DIVERGENCE, asserted not deleted: spec 7.6 puts `-o lo` on every accept;
+# firewall.py emits no interface match at all. Fails until reconciled.
+if grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -q 'mod owner'; then
+    grep -vE '^[[:space:]]*(#|$)' "$conf" | grep 'mod owner' \
+        | grep -qE '(if lo|-o lo)' \
+        || _fail "30-services.conf's accepts carry no interface match; spec 7.6 shows -o lo and firewall.py emits none"
+fi
 # A poke granted nothing: `weedr service ingest` has no flag that can, so the
 # provider's two requested ports stay pending and the file carries no DNAT at all.
-assert_file_lacks "$conf" "-j DNAT"
+assert_file_lacks "$conf" "DNAT"
 run weedr port list --json
 assert_exit 0
 assert_stdout_has "5432"
@@ -198,11 +211,16 @@ assert_exit 0
 # provider rather than per publication would reach a port it never asked for, and
 # this is the only assertion that tells the two designs apart.
 assert_file_has "$conf" \
-    "--dport $db_pub' ] -m owner --uid-owner $needy_uid -j ACCEPT"
-[ "$(grep -c -- "--dport $db_pub' ]" "$conf")" = 3 ] \
+    "mod owner uid-owner $needy_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;\$" || true)" = 3 ] \
     || _fail "the db publication's accept set is not the provider and its two consumers"
-assert_file_lacks "$conf" "--dport $vault_pub' ] -m owner --uid-owner $needy_uid"
-[ "$(grep -c -- "--dport $vault_pub' ]" "$conf")" = 2 ] \
+# Anchored on the whole match: a bare dport would match another publication.
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner $needy_uid daddr 127\.0\.0\.1 proto tcp dport $vault_pub jump ACCEPT;\$" || true)" = 0 ] \
+    || _fail "the vault publication's accept set gained a consumer that declared no such edge"
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $vault_pub jump ACCEPT;\$" || true)" = 2 ] \
     || _fail "the vault publication's accept set gained a consumer that declared no such edge"
 
 # The rendered consumer. `AddHost=` into **every** unit, the two generated variables

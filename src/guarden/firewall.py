@@ -280,7 +280,7 @@ def render(config, grants: list[Grant]) -> str:
     for grant in grants:
         lines.append(
             f"    if {interface} proto {grant.protocol} dport {grant.port} "
-            f"jump DNAT to 127.0.0.1:{grant.publication};"
+            f"DNAT to 127.0.0.1:{grant.publication};"
         )
     lines += [
         "}",

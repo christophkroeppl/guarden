@@ -79,11 +79,13 @@ assert_file_has "$edge_unit" "AddHost=routed-staging:192.0.2.1"
 # owner, the edge, and the declared consumers — and this service declared none.
 services=/etc/guarden/firewall/30-services.conf
 assert_file_has "$services" \
-    "--dport $publication' ] -m owner --uid-owner $edge_uid -j ACCEPT"
+    "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $publication jump ACCEPT;"
 assert_file_has "$services" \
-    "--dport $publication' ] -m owner --uid-owner $routed_uid -j ACCEPT"
+    "mod owner uid-owner $routed_uid daddr 127.0.0.1 proto tcp dport $publication jump ACCEPT;"
 # One rule per uid on this publication, so nothing else reaches it.
-[ "$(grep -c -- "--dport $publication' ]" "$services")" = 2 ] \
+# Anchored on the whole match: a bare dport would count another publication's rule.
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$services" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $publication jump ACCEPT;\$" || true)" = 2 ] \
     || _fail "the route publication's accept set is not the owner and the edge and nobody else"
 
 # `roots sync` turns the installed slices into the edge's file-provider
