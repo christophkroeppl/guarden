@@ -1,0 +1,42 @@
+name: deploy
+
+# The only secret this workflow holds is the poke key, and the only thing it
+# sends is the source tree. The box keeps no clone, no forge token and no
+# deploy key; this file is the whole of CI's authority.
+
+on:
+  push:
+
+concurrency:
+  group: myapp/${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  poke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: poke
+        env:
+          HOSE_KEY: ${{ secrets.HOSE_POKE_KEY }}
+        run: |
+          printf '%s\n' "$HOSE_KEY" > "$RUNNER_TEMP/poke_key"
+          chmod 600 "$RUNNER_TEMP/poke_key"
+          git archive --format=tar HEAD | \
+            ssh -i "$RUNNER_TEMP/poke_key" \
+                -o StrictHostKeyChecking=accept-new \
+                -p 2222 \
+                "hose@box.example.com" "hose poke ${{ github.ref_name }} $(git rev-parse HEAD)"
+
+      - name: drop
+        if: ${{ github.event_name == 'delete' }}
+        env:
+          HOSE_KEY: ${{ secrets.HOSE_POKE_KEY }}
+        run: |
+          printf '%s\n' "$HOSE_KEY" > "$RUNNER_TEMP/poke_key"
+          chmod 600 "$RUNNER_TEMP/poke_key"
+          ssh -i "$RUNNER_TEMP/poke_key" \
+              -o StrictHostKeyChecking=accept-new \
+              -p 2222 \
+              "hose@box.example.com" "hose drop ${{ github.event.ref }}"

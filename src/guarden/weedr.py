@@ -29,6 +29,7 @@ from guarden import (
     names,
     paths,
     ports,
+    projects,
     reconcile,
     registry,
     report,
@@ -810,6 +811,12 @@ def _firewall_list(args) -> int:
 
 
 HANDLERS = {
+    "weedr project list": projects.list_json,
+    "weedr project add": projects.do_add,
+    "weedr project remove": projects.do_remove,
+    "weedr project keys": projects.list_keys,
+    "weedr project grant": projects.do_grant,
+    "weedr project revoke": projects.do_revoke,
     "weedr service ingest": _ingest,
     "weedr service add": _add,
     "weedr service remove": _remove,

@@ -758,7 +758,13 @@ HANDLERS = {
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    call = cli.invocation("furrow", args.group, args.verb)
+    # A LEAF group records its own name in `verb`, so args.verb there is the group
+    # repeated and every lookup missed: "furrow deploy deploy is not implemented"
+    # for a verb that is implemented. A NESTED verb (`preview drop`, `queue list`)
+    # puts the real verb there, and passing None for those lost it — "furrow
+    # preview is not implemented". So: the verb, unless it merely repeats the group.
+    verb = args.verb if args.verb and args.verb != args.group else None
+    call = cli.invocation("furrow", args.group, verb)
     handler = HANDLERS.get(call)
     if handler is None:
         return cli.pending(call)
