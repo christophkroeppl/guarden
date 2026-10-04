@@ -41,6 +41,12 @@ id -u operator >/dev/null 2>&1 || {
 }
 mkdir -p /etc/guarden
 stage_config guarden-nomodules.toml
+# The pinned podlet record must exist before `packages` runs: the verb resolves it
+# and refuses with exit 2 when it is absent. `soil install` is what seeds it, and
+# install runs AFTER packages here, so the seed is this suite's job — the same
+# copy tests/lib.sh's install_pinned_converter makes.
+install -D -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" \
+    "$GUARDEN_PREFIX/etc/guarden/podlet.release"
 run soil packages --apply
 assert_not_rejected
 run soil install --apply
