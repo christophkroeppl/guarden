@@ -119,7 +119,8 @@ provider_uid=$(getent passwd pgprov-staging | cut -d: -f3)
 
 # The edge's publication is the provider's own number, copied — not allocated again.
 consumer_registry=$registry/needful-staging.toml
-assert_file_has "$consumer_registry" '[edges."pgprov-staging"]'
+assert_file_has "$consumer_registry" '[edges."pgprov-staging:5432"]'
+assert_file_has "$consumer_registry" '[edges."pgprov-staging:8200"]'
 assert_file_has "$consumer_registry" 'as = "db"'
 assert_file_has "$consumer_registry" 'auth = "database"'
 assert_file_has "$consumer_registry" 'port = 5432'
