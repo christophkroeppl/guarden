@@ -59,13 +59,24 @@ id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden
 # `host.admin_user` names the uid the whole OUTPUT accept set admits and the
 # firewall refuses to render without it. `soil install` records the invoking user
 # there, so the account is this fixture's own claim and it has to exist.
-id -u operator >/dev/null 2>&1 || useradd --create-home --shell /bin/bash operator
+getent group operator >/dev/null 2>&1 || groupadd --system operator
+id -u operator >/dev/null 2>&1 ||
+    useradd --create-home --gid operator --shell /bin/bash operator
 mkdir -p /etc/guarden
 stage_config guarden-measured.toml
 stage_poke pgprov 9f2c1ab
 stage_poke needful 9f2c1ab
 stage_poke needy 9f2c1ab
 stage_poke unpublished 9f2c1ab
+
+# `soil install --apply` is a precondition, not the subject: ingest renders through
+# `loom`, and the programs are not on this host until install has run. The note
+# below about the firewall unit is still true — install installs the unit but this
+# file does not converge the rendered set, which is t20-firewall's business.
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_exit 0
 
 # The provider first: it is what a consumer dials, and a consumer whose provider does
 # not exist is a separate case, asserted below.
