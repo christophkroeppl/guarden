@@ -25,6 +25,7 @@
 # machine: fresh
 
 . "$(dirname "$0")/lib.sh"
+trap 'echo "SUITE DIED at line $LINENO" >&2' ERR
 
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GUARDEN_PREFIX=/
@@ -140,15 +141,15 @@ vault_dialed=$(dialed_publication "$consumer_registry" 8200)
 # The credential. `auth: database` plants one blob in the **consumer's** store and
 # nothing in the provider's (spec 5.3 step 10): the provider's half of a database
 # edge is the role, not a copy of the password.
-db_blob=$creds/needful-staging/DB_PASSWORD.cred
+db_blob=$creds/needful-staging/DB_PASSWORD_5432.cred
 assert_file_exists "$db_blob"
 assert_mode "$db_blob" 600
 assert_mode "$creds/needful-staging" 700
-assert_file_missing "$creds/pgprov-staging/DB_PASSWORD.cred"
+assert_file_missing "$creds/pgprov-staging/DB_PASSWORD_5432.cred"
 # `auth: secret` is planted in **both**, because the provider has to be able to
 # verify it, and the two hold the same value — that is what makes it verifiable.
-assert_file_exists "$creds/needful-staging/SECRET_SECRET.cred"
-assert_file_exists "$creds/pgprov-staging/SECRET_SECRET.cred"
+assert_file_exists "$creds/needful-staging/SECRET_SECRET_8200.cred"
+assert_file_exists "$creds/pgprov-staging/SECRET_SECRET_8200.cred"
 
 # The blob decrypts under this machine's host key, which is the fact rather than a
 # record of an intent: the value came back, so the key is one this host holds.
@@ -156,10 +157,10 @@ run systemd-creds decrypt --with-key=host "$db_blob"
 assert_exit 0
 db_value=$GUARDEN_STDOUT
 assert_file_lacks "$db_blob" "$db_value"
-run systemd-creds decrypt --with-key=host "$creds/needful-staging/SECRET_SECRET.cred"
+run systemd-creds decrypt --with-key=host "$creds/needful-staging/SECRET_SECRET_8200.cred"
 assert_exit 0
 vault_own=$GUARDEN_STDOUT
-run systemd-creds decrypt --with-key=host "$creds/pgprov-staging/SECRET_SECRET.cred"
+run systemd-creds decrypt --with-key=host "$creds/pgprov-staging/SECRET_SECRET_8200.cred"
 assert_exit 0
 [ "$vault_own" = "$GUARDEN_STDOUT" ] \
     || _fail "a secret edge's two stores hold different values, so the provider cannot verify it"
@@ -218,7 +219,7 @@ needy_uid=$(getent passwd needy-staging | cut -d: -f3)
 needy_dialed=$(dialed_publication "$registry/needy-staging.toml" 5432)
 [ "$needy_dialed" = "$db_pub" ] \
     || _fail "the second consumer dials $needy_dialed and the provider binds $db_pub"
-run systemd-creds decrypt --with-key=host "$creds/needy-staging/DB_PASSWORD.cred"
+run systemd-creds decrypt --with-key=host "$creds/needy-staging/DB_PASSWORD_5432.cred"
 assert_exit 0
 [ "$GUARDEN_STDOUT" != "$db_value" ] \
     || _fail "two consumers of one provider share one database password"
@@ -297,7 +298,7 @@ run weedr service ingest nowhere-staging --from poke nowhere@9f2c1ab
 assert_exit 0
 assert_stderr_has "nowhere-staging"
 assert_file_has "$registry/nowhere-staging.toml" 'publications = []'
-assert_file_missing "$creds/nowhere-staging/DB_PASSWORD.cred"
+assert_file_missing "$creds/nowhere-staging/DB_PASSWORD_5432.cred"
 purge nowhere-staging
 
 # A provider that exists and does not offer the kind. Both services and both kinds
@@ -329,9 +330,9 @@ assert_stderr_has "cache"
 assert_no_passwd ghost-staging
 assert_file_missing "$registry/ghost-staging.toml"
 assert_file_missing "/var/lib/guarden/services/ghost-staging"
-assert_file_missing "$creds/ghost-staging/DB_PASSWORD.cred"
+assert_file_missing "$creds/ghost-staging/DB_PASSWORD_5432.cred"
 
 # And the credential the database edge planted is still there after everything
 # above, encrypted and unreadable at rest.
-assert_file_exists "$creds/needful-staging/DB_PASSWORD.cred"
-assert_mode "$creds/needful-staging/DB_PASSWORD.cred" 600
+assert_file_exists "$creds/needful-staging/DB_PASSWORD_5432.cred"
+assert_mode "$creds/needful-staging/DB_PASSWORD_5432.cred" 600

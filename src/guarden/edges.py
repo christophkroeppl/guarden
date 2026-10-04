@@ -29,8 +29,15 @@ VALUE_ALPHABET = "-_"
 
 
 def credential_key(kind: str, edge: manifest_mod.Edge) -> str:
-    """`<AS>_SECRET` for a secret edge, `<AS>_PASSWORD` for a database one."""
-    return f"{edge.variable}_{'SECRET' if kind == AUTH_SECRET else 'PASSWORD'}"
+    """`<AS>_SECRET` for a secret edge, `<AS>_PASSWORD` for a database one.
+
+    Keyed on the prefix alone, two edges of one service that share a prefix
+    shared one credential VALUE — which `_credential`'s docstring names as
+    unresolved. The port is what tells two edges of one provider apart, so it is
+    part of the name, and the two are the same key rule applied once more.
+    """
+    suffix = "SECRET" if kind == AUTH_SECRET else "PASSWORD"
+    return f"{edge.variable}_{suffix}_{edge.port}"
 
 
 def check(consumer: str, document: manifest_mod.Manifest) -> None:
