@@ -161,7 +161,7 @@ assert_exit 0
 vault_own=$(cat "$GUARDEN_STDOUT")
 run systemd-creds decrypt --with-key=host "$creds/pgprov-staging/SECRET_SECRET_8200.cred"
 assert_exit 0
-[ "$vault_own" = "$GUARDEN_STDOUT" ] \
+[ "$vault_own" = "$(cat "$GUARDEN_STDOUT")" ] \
     || _fail "a secret edge's two stores hold different values, so the provider cannot verify it"
 # Distinct per edge, so no two edges of one service share a credential.
 [ "$vault_own" != "$db_value" ] \
