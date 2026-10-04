@@ -174,15 +174,6 @@ assert_file_exists /etc/systemd/system/guarden-order.target
 nat=/etc/guarden/firewall/20-ingress-nat.conf
 run soil firewall --apply
 assert_not_rejected
-# spec 7.6's loopback deny is `daddr 127.0.0.0/8 jump DROP;` and carries NO
-# interface match: `ip route get 127.0.0.1` answers `local 127.0.0.1 dev lo`, so
-# the destination already scopes the interface. `-o lo` was removed from the spec
-# as redundant; it was never emitted.
-grep -q 'daddr 127.0.0.0/8 jump DROP;' "$nat_services" ||
-    _fail "the loopback deny is not daddr-scoped in $nat_services"
-if grep -qE 'jump DROP' "$nat_services" && grep -E 'jump DROP' "$nat_services" | grep -q 'lo'; then
-    _fail "the loopback deny names an interface; spec 7.6 has none"
-fi
 assert_file_has "$nat" \
     "proto tcp dport 80 DNAT to 127.0.0.1:$web_publication"
 assert_file_has "$nat" \
@@ -199,6 +190,14 @@ assert_file_lacks "$nat" "jump DNAT"
 
 # The intra-host rule set: accepts above one drop, and the drop carries no uid.
 services=/etc/guarden/firewall/30-services.conf
+# spec 7.6's loopback deny is `daddr 127.0.0.0/8 jump DROP;` and carries NO
+# interface match: `ip route get 127.0.0.1` answers `local 127.0.0.1 dev lo`, so
+# the destination already scopes the interface. `-o lo` was removed from the
+# spec as redundant; git log -S 'o lo' -- src/guarden/firewall.py returns nothing.
+assert_file_has "$services" "daddr 127.0.0.0/8 jump DROP;"
+if grep -E 'jump DROP' "$services" | grep -q 'lo'; then
+    _fail "the loopback deny names an interface; spec 7.6 has none and the kernel routes 127.0.0.0/8 over lo"
+fi
 assert_file_exists "$services"
 assert_file_has "$services" "chain guarden-svc"
 assert_file_has "$services" \
