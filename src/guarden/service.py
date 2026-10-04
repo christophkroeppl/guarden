@@ -169,6 +169,11 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # against this and against nothing else, so `weedr port open` can refuse a port
     # no repository asked for.
     record.ports_requested = [entry.port for entry in manifest.ports]
+    # spec 5.3 step 7: requests only, so re-ingesting must not withdraw a grant.
+    record.firewall_requested = [
+        registry.RuleEntry(name=entry.name, chain=entry.chain, rule=entry.rule)
+        for entry in manifest.firewall
+    ]
     if source.kind == "module":
         record.installed_by = str(source.module)
     _ensure_admin_units(identity.uid)

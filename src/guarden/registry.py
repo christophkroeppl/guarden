@@ -151,6 +151,54 @@ class Instance:
 
 
 @dataclass
+class RuleEntry:
+    """One requested `firewall:` rule: the name a grant names, the chain, the text.
+
+    The name is a request's stable identity and the text is its content, because
+    deduplication is by content and the count of grants is by name (spec 7.7).
+    A grant is `overrides.toml`'s answer and never enters here as text: this is
+    what the manifest asked for, in manifest order, and it installs nothing.
+    """
+
+    name: str
+    chain: str
+    rule: str
+
+    def to_document(self) -> dict[str, str]:
+        return {"name": self.name, "chain": self.chain, "rule": self.rule}
+
+    @classmethod
+    def from_document(cls, document: Any) -> RuleEntry:
+        """Three fields or a refusal, for the reason `Seed.from_document` gives.
+
+        A request missing its `rule` is not a request, and a grant naming it
+        would resolve to nothing to install.
+        """
+        if not isinstance(document, dict):
+            raise errors.GuardenError(
+                "a requested firewall rule names the rule it wants installed, and a bare "
+                "value names no rule; it is a table of name, chain and rule",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        missing = [key for key in ("name", "chain", "rule") if not document.get(key)]
+        if missing:
+            raise errors.GuardenError(
+                f"a requested firewall rule is missing {', '.join(missing)}; a request names "
+                f"what it wants installed, and one with no rule behind it is nothing to grant",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        return cls(
+            name=str(document["name"]),
+            chain=str(document["chain"]),
+            rule=str(document["rule"]),
+        )
+
+
+def _rule_entries(value: Any) -> list[RuleEntry]:
+    return [RuleEntry.from_document(entry) for entry in (value or [])]
+
+
+@dataclass
 class Registry:
     service: str
     workload: str
@@ -167,6 +215,9 @@ class Registry:
     route_hosts: dict[str, str] = field(default_factory=dict)
     ports_requested: list[int] = field(default_factory=list)
     ports_granted: list[int] = field(default_factory=list)
+    firewall_requested: list[RuleEntry] = field(default_factory=list)
+    # Never read when rendering: `overrides.toml` is the authority (spec 7.7).
+    firewall_granted: list[str] = field(default_factory=list)
     volumes: dict[str, Volume] = field(default_factory=dict)
     # A slot service's own seed, per state volume. An instance's is inside its
     # own `[instances."<escaped-ref>"]` table, because an instance's volumes are
@@ -213,6 +264,13 @@ class Registry:
                 "requested": list(self.ports_requested),
                 "granted": list(self.ports_granted),
             }
+        if self.firewall_requested or self.firewall_granted:
+            firewall: dict[str, Any] = {
+                "requested": [entry.to_document() for entry in self.firewall_requested]
+            }
+            if self.firewall_granted:
+                firewall["granted"] = list(self.firewall_granted)
+            document["firewall"] = firewall
         state = {v.name: v for v in self.volumes.values() if v.kind == "state"}
         bulk = {v.name: v for v in self.volumes.values() if v.kind == "bulk"}
         if state:
@@ -246,6 +304,7 @@ class Registry:
             for key, entry in (document.get("instances") or {}).items()
         }
         ports = document.get("ports") or {}
+        firewall = document.get("firewall") or {}
         provides = (document.get("provides") or {}).get("kinds") or []
         return cls(
             service=document["service"],
@@ -263,6 +322,8 @@ class Registry:
             route_hosts=dict(document.get("route_hosts") or {}),
             ports_requested=list(ports.get("requested") or []),
             ports_granted=list(ports.get("granted") or []),
+            firewall_requested=_rule_entries(firewall.get("requested")),
+            firewall_granted=[str(name) for name in (firewall.get("granted") or [])],
             volumes=volumes,
             seed=_seeds(document.get("seed")),
             instances=instances,

@@ -87,6 +87,17 @@ assert_file_has "$registry/tunnel-staging.toml" 'name = "peer-range"'
 assert_file_has "$registry/tunnel-staging.toml" '"-p udp --dport 51820 -j ACCEPT"'
 # `chain` is defaulted to guarden's own chain rather than refused as absent.
 assert_file_has "$registry/tunnel-staging.toml" 'chain = "guarden-svc"'
+# **And the default belongs to the entry that omitted it.** `wireguard-peer`
+# writes `chain:` in the manifest and `peer-range` does not, so the assertion
+# above is satisfied by either entry alone: a parser that recorded only the
+# explicit chain and dropped the omitted one would still pass it. This is the
+# entry with no `chain:` key at all, recorded rather than refused, carrying the
+# default — which is what §4 means by a key that may be omitted.
+assert_file_has "$registry/tunnel-staging.toml" 'requested = [{ name = "peer-range", chain = "guarden-svc"'
+# **A request installs nothing, and it grants nothing either.** The registry's
+# `granted` mirror is absent after an ingest, because the only thing that writes
+# it is `weedr firewall open` and a poke cannot reach that.
+assert_file_lacks "$registry/tunnel-staging.toml" "granted = ["
 # **No rule was installed, and no firewall grant was recorded.** A request is a
 # request: the whole of what the ingest did about the firewall is write those
 # registry lines.
