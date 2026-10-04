@@ -743,7 +743,10 @@ def _edge_directory(module: modules.Module) -> None:
     path.mkdir(parents=True, exist_ok=True)
     conf.set_owner(
         path,
-        (users.group_id(units.GUARDEN_GROUP), users.group_id(EDGE_GROUP)),
+        (
+            users.passwd_entries()[units.GUARDEN_USER][0],
+            users.group_id(EDGE_GROUP),
+        ),
     )
     os.chmod(path, EDGE_MODE)
     sys.stdout.write(f"{path} is guarden:{EDGE_GROUP} {EDGE_MODE:04o}\n")
