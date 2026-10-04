@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
 import time
 
@@ -18,20 +20,33 @@ from guarden import (
     cli,
     conf,
     credentials,
+    edgeconf,
     errors,
+    firewall,
     gate,
     lineage,
+    modules,
     names,
     paths,
+    ports,
     reconcile,
     registry,
     report,
     service,
     snapper,
     snapshotid,
+    tool,
+    units,
     users,
 )
 from guarden import config as config_mod
+from guarden import hosttool as h
+
+EDGE_GROUP = "edge"
+EDGE_MODE = 0o2750
+
+DASHBOARD_MODE = 0o755
+DASHBOARD_MODULE = "homepage"
 
 SERVICE = (
     ("ingest", "create or reconcile a service from a poke's staged tree"),
@@ -253,6 +268,8 @@ def _emit(outcome: service.Outcome, verb: str) -> int:
         return 0
     if outcome.resolved.defaulted:
         sys.stdout.write(f"{outcome.resolved.name}\n")
+    for note in outcome.notes:
+        sys.stdout.write(f"{note}\n")
     for message in outcome.warnings:
         sys.stderr.write(f"{errors.warn(message)}\n")
     sys.stdout.write(f"{verb} {outcome.resolved.name} uid {outcome.uid}\n")
@@ -263,8 +280,55 @@ def _create(args, allow_default: bool) -> int:
     config = config_mod.load()
     source = service.parse_from(args.source)
     resolved = names.resolve(args.name, list(config.tracks), allow_default)
-    outcome = service.create(resolved, source, config, _now())
+    now = _now()
+    outcome = service.create(resolved, source, config, now)
+    if outcome.fresh_instance:
+        outcome.notes += lineage.seed_instance(resolved, now)
+    _filter_set(resolved.name)
+    _edge_units(resolved.name)
+    _sync_dashboard()
     return _emit(outcome, "created" if not outcome.converged else "converged")
+
+
+def _edge_units(name: str) -> None:
+    """Re-render the edge's own units when this service gave it something to name.
+
+    A route target is `<service>:<publication>`, so a service that gains a route
+    is a new name the edge has to resolve — an `AddHost=` line in the edge's
+    units. Nothing else re-renders it: the deploy path renders the service
+    being deployed, and this is the one file that changes because of another
+    service.
+    """
+    record = registry.load(name)
+    if record is None or not record.route_hosts:
+        return
+    config = config_mod.load()
+    for module in config.modules:
+        try:
+            entry = modules.read(module).edge()
+        except errors.GuardenError:
+            continue
+        if entry is None:
+            continue
+        units.report(units.install(modules.source_of(module, entry.name), entry.name))
+        return
+
+
+def _filter_set(name: str) -> None:
+    """Re-render the uid-matched filter set when the service gained a publication
+    or an edge.
+
+    A service with neither contributes no line to it, so a service that asks for
+    neither — a database, a queue — leaves the set alone and no firewall write
+    happens on its account. An edge counts even though the publication it dials
+    belongs to the provider: the consumer's **uid** joins that publication's
+    accept set, so a consumer with no publication of its own still changes the
+    rendered set and still has to cause it to be re-rendered.
+    """
+    record = registry.load(name)
+    if record is None or not (record.publication or record.edges):
+        return
+    firewall.print_diff(firewall.install(config_mod.load()))
 
 
 def _ingest(args) -> int:
@@ -282,6 +346,7 @@ def _remove(args) -> int:
     resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
     for line in service.remove(resolved, config, _now()):
         sys.stdout.write(f"{line}\n")
+    _sync_dashboard()
     return 0
 
 
@@ -401,6 +466,20 @@ def _start(args) -> int:
     return 0
 
 
+def _stop(args) -> int:
+    """Stop a service's units, and say what it was asked to stop.
+
+    The deploy order stops between the gate and the install (ADR-0011), so this
+    is the verb that half of it calls; `service.remove` and the fork reach the
+    same function rather than a second stop path.
+    """
+    config = config_mod.load()
+    resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
+    service.stop_units(resolved.name, resolved.escaped_ref)
+    sys.stdout.write(f"stopped {resolved.name}\n")
+    return 0
+
+
 def _secret_set(args) -> int:
     key = credentials.validate_key(args.key)
     names.validate(args.name)
@@ -468,6 +547,18 @@ def _secret_materialise(args) -> int:
     return 0
 
 
+def _port_open(args) -> int:
+    return ports.open_port(args.name, args.public_port)
+
+
+def _port_close(args) -> int:
+    return ports.close_port(args.name, args.public_port)
+
+
+def _port_list(args) -> int:
+    return ports.list_ports(args.json)
+
+
 def _snapshot(args) -> int:
     now = _now()
     if args.all and args.name:
@@ -511,6 +602,7 @@ def _fork(args) -> int:
         source = lineage.lineage_of(resolved)
     for line in lineage.fork(resolved, source, _now()):
         sys.stdout.write(f"{line}\n")
+    _sync_dashboard()
     return 0
 
 
@@ -526,6 +618,7 @@ def _rollback(args) -> int:
         )
     for line in lineage.rollback(resolved, when, _now()):
         sys.stdout.write(f"{line}\n")
+    _sync_dashboard()
     return 0
 
 
@@ -552,6 +645,318 @@ def _pin_sync(args) -> int:
     return 0
 
 
+def _module_list(args) -> int:
+    config = config_mod.load()
+    listing = modules.listing(config)
+    if args.json:
+        sys.stdout.write(json.dumps(listing, separators=(",", ":")) + "\n")
+        return 0
+    sys.stdout.write(f"enabled   {', '.join(listing['enabled']) or 'none'}\n")
+    sys.stdout.write(f"available {', '.join(listing['available']) or 'none'}\n")
+    return 0
+
+
+def _module_add(args) -> int:
+    config = config_mod.load()
+    module = modules.read(args.name)
+    _requirements(module, config)
+    with conf.lock("modules"):
+        merged = list(dict.fromkeys([*config.modules, module.name]))
+        if merged != list(config.modules):
+            conf.write_file(
+                paths.GUARDEN_TOML,
+                h.set_string_list(paths.GUARDEN_TOML.read_text(encoding="utf-8"), "modules",
+                                  "enabled", merged),
+                0o644,
+            )
+        # Re-read under the lock: `soil install` writes this file too, and a
+        # merge from a copy read before the lock was taken would drop whatever
+        # it appended in the meantime.
+        config = config_mod.load()
+        if module.name not in config.modules:
+            raise errors.GuardenError(
+                f"{paths.GUARDEN_TOML} does not record the module {module.name!r} after the "
+                f"write, so the module's services would exist with nothing forwarding them",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+    return _install_module(module, config)
+
+
+def _requirements(module: modules.Module, config) -> None:
+    missing = [name for name in module.requires if name not in config.modules]
+    if missing:
+        raise errors.GuardenError(
+            f"the module {module.name!r} requires {', '.join(repr(name) for name in missing)}, "
+            f"which is not enabled; `weedr module add {' '.join(missing)}` first",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+
+
+def _install_module(module: modules.Module, config) -> int:
+    found: dict[str, dict] = {}
+    for entry in module.services:
+        source = modules.source_of(module.name, entry.name)
+        # Only the service that declares ingress has traefik entrypoints to check:
+        # a module that ships a service which is not the edge must not have to
+        # declare one for `module add` to succeed.
+        if entry.ingress:
+            found[entry.name] = edgeconf.of_source(source, entry.name)
+            modules.check_entrypoints(module, entry.name, found[entry.name])
+        resolved = names.resolve(entry.name, list(config.tracks), allow_default=False)
+        outcome = service.create(
+            resolved,
+            service.Source(kind="module", module=module.name, service=entry.name),
+            config,
+            _now(),
+        )
+        sys.stdout.write(f"{entry.name} uid {outcome.uid}\n")
+        for allowed in units.allow_mounts(source, entry.name):
+            sys.stdout.write(f"{entry.name} may bind {allowed}\n")
+        units.report(units.install(source, entry.name))
+    _edge_group(module)
+    firewall.print_diff(firewall.install(config))
+    firewall.load_set()
+    _edge_directory(module)
+    _dashboard_directory(module)
+    _converge_ingress()
+    _sync_routes()
+    _sync_dashboard()
+    return 0
+
+
+def _dashboard_directory(module: modules.Module) -> None:
+    """`/var/lib/guarden/shared/dashboard`, `guarden:guarden 0755`.
+
+    The one directory `twig` may write, and this verb is what creates it: the
+    shared directory is root-owned and read-only to `guarden`, so before this
+    existed `twig sync` could not run at all. Only the `homepage` module's add
+    creates it, and only that module's remove takes it away, so a host with no
+    dashboard module has no dashboard directory either.
+    """
+    if module.name != DASHBOARD_MODULE:
+        return
+    path = paths.DASHBOARD
+    path.mkdir(parents=True, exist_ok=True)
+    gid = users.group_id(units.GUARDEN_GROUP)
+    conf.set_owner(path, (users.passwd_entries()[units.GUARDEN_USER][0], gid))
+    os.chmod(path, DASHBOARD_MODE)
+    sys.stdout.write(f"{path} is guarden:guarden {DASHBOARD_MODE:04o}\n")
+
+
+def _edge_group(module: modules.Module) -> None:
+    """The `edge` group, and the edge's own user in it.
+
+    Created here and not by `soil install`, which creates the `guarden` group
+    and no other: a host with no edge module has no `edge` group, because
+    nothing on it has anything to read.
+    """
+    if not tool.check(["getent", "group", EDGE_GROUP]):
+        tool.run(["groupadd", "--system", EDGE_GROUP])
+        sys.stdout.write(f"created the {EDGE_GROUP} group\n")
+    for entry in module.services:
+        # Only the service that declares ingress is the edge. A module may ship
+        # services that are ordinary services — `homepage` is — and adding those
+        # to `edge` would hand them a read on /var/lib/guarden/edge/dynamic.
+        if not entry.ingress:
+            continue
+        if registry.load(entry.name) is None:
+            continue
+        tool.run(["usermod", "--append", "--groups", EDGE_GROUP, entry.name])
+        sys.stdout.write(f"added {entry.name} to the {EDGE_GROUP} group\n")
+
+
+def _edge_directory(module: modules.Module) -> None:
+    """`/var/lib/guarden/edge/dynamic`, `guarden:edge 2750`.
+
+    `roots` runs as `guarden` and writes it; the edge's user is in `edge` and
+    reads it. Neither can write where the other writes, which is the whole of
+    the writer/reader split this directory draws.
+
+    The owner is the `guarden` **user**, so the owner bits carry the write:
+    `roots` writes through §3.5's protocol, which makes its temporary file in
+    this directory, and a setgid directory the owner cannot write is one whose
+    temp file cannot be created.
+    """
+    del module
+    path = paths.EDGE_DYNAMIC
+    path.mkdir(parents=True, exist_ok=True)
+    uid = users.passwd_entries()[units.GUARDEN_USER][0]
+    conf.set_owner(path, (uid, users.group_id(EDGE_GROUP)))
+    os.chmod(path, EDGE_MODE)
+    sys.stdout.write(f"{path} is guarden:{EDGE_GROUP} {EDGE_MODE:04o}\n")
+
+
+def _converge_ingress() -> None:
+    """`soil firewall --apply`, because `soil` is the only writer of the nat file.
+
+    The mutator never writes `20-ingress-nat.conf`: the module change is what
+    makes the rules stale, and `soil` re-reads `guarden.toml` and the module
+    directory itself rather than trusting what this verb saw.
+    """
+    result = tool.call([str(paths.BIN / "soil"), "firewall", "--apply"])
+    if not result.ok:
+        detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
+        sys.stderr.write(
+            errors.warn(
+                f"soil firewall --apply exited {result.returncode} and the edge's forwarding "
+                f"rules are stale: {detail}"
+            ) + "\n"
+        )
+
+
+def _sync_routes() -> None:
+    """`roots sync`, as `guarden`: a route change the edge reads without a restart."""
+    result = tool.call(["runuser", "-u", units.GUARDEN_USER, "--",
+                        str(paths.BIN / "roots"), "sync"])
+    if not result.ok:
+        detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
+        sys.stderr.write(
+            errors.warn(f"roots sync exited {result.returncode}: {detail}") + "\n"
+        )
+
+
+def _sync_dashboard() -> None:
+    """`twig sync`, as `guarden`, and only when the dashboard module is on.
+
+    A card appears and disappears with its service with no manual step and no
+    restart of the dashboard (spec 6.9), so this runs at the end of every verb
+    that changes which services exist. On a host with no dashboard module there
+    is no directory to write and nothing to warn about.
+    """
+    config = config_mod.load()
+    if DASHBOARD_MODULE not in config.modules or not paths.DASHBOARD.is_dir():
+        return
+    result = tool.call(["runuser", "-u", units.GUARDEN_USER, "--",
+                        str(paths.BIN / "twig"), "sync"])
+    if not result.ok:
+        detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
+        sys.stderr.write(
+            errors.warn(f"twig sync exited {result.returncode}: {detail}") + "\n"
+        )
+
+
+def _remove_module(config, module: modules.Module) -> None:
+    """Take the module out of `[modules] enabled`, through the protocol.
+
+    The `modules` lock is released before `soil firewall --apply` takes the
+    `firewall` lock: two locks in sequence and never nested (spec 6.2).
+    """
+    remaining = [name for name in config.modules if name != module.name]
+    with conf.lock("modules"):
+        conf.write_file(
+            paths.GUARDEN_TOML,
+            h.set_string_list(paths.GUARDEN_TOML.read_text(encoding="utf-8"), "modules",
+                              "enabled", remaining),
+            0o644,
+        )
+    if module.name in config_mod.load().modules:
+        raise errors.GuardenError(
+            f"{paths.GUARDEN_TOML} still records the module {module.name!r} after the write, so "
+            f"the module would be removed with its ingress and its switches still on",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+
+
+def _owned_by(module: modules.Module) -> list[modules.Service]:
+    """The module's services, and a refusal naming one that is not its own.
+
+    spec 6.2 step 1: a module never removes a service it did not create, and
+    `installed_by` is the record of what did.
+    """
+    out: list[modules.Service] = []
+    for entry in module.services:
+        record = registry.load(entry.name)
+        if record is None:
+            continue
+        if record.installed_by != module.name:
+            raise errors.GuardenError(
+                f"the module {module.name!r} declares the service {entry.name!r}, and its "
+                f"registry says installed_by = {record.installed_by!r}; a module removes "
+                f"exactly the services it installed",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        out.append(entry)
+    return out
+
+
+def _module_remove(args) -> int:
+    config = config_mod.load()
+    module = modules.read(args.name)
+    if module.name not in config.modules:
+        sys.stdout.write(f"{module.name} is not enabled; nothing to remove\n")
+        return 0
+    removed = _owned_by(module)
+    now = _now()
+    for entry in removed:
+        resolved = names.resolve(entry.name, list(config.tracks), allow_default=False)
+        try:
+            for line in service.remove(resolved, config, now):
+                sys.stdout.write(f"{line}\n")
+            if resolved.track.gated:
+                sys.stdout.write(
+                    f"{entry.name} was on the gated track {resolved.track.name!r} and was "
+                    f"removed because the module that installed it is being removed\n"
+                )
+        except errors.GuardenError as failure:
+            sys.stderr.write(failure.report("weedr") + "\n")
+            return failure.code
+    _remove_module(config, module)
+    remaining = config_mod.load()
+    firewall.print_diff(firewall.install(remaining))
+    firewall.load_set()
+    _converge_ingress()
+    _sync_routes()
+    if module.name == DASHBOARD_MODULE:
+        _drop_dashboard()
+    _sync_dashboard()
+    _switches(module, remaining)
+    sys.stdout.write(f"removed the module {module.name}\n")
+    return 0
+
+
+def _drop_dashboard() -> None:
+    """The dashboard's configuration directory, and nothing outside it.
+
+    It is guarden's own and `twig` regenerates every byte of it from the
+    installed tree, so removing it removes no card that a later `twig sync`
+    would not write again.
+    """
+    if paths.DASHBOARD.is_dir():
+        shutil.rmtree(paths.DASHBOARD)
+        sys.stdout.write(f"removed {paths.DASHBOARD}\n")
+
+
+def _switches(module: modules.Module, config) -> None:
+    """Reference-count `[[switches]]` by module name (spec 6.2 step 7).
+
+    Two modules may switch the same program on — `gate` and `auth` both switch
+    on `roots` — so removing one must not switch it off under the other. A
+    program another enabled module still names stays, with a `warning:` naming
+    the module that still wants it.
+    """
+    if not module.switches:
+        return
+    wanted: dict[str, list[str]] = {}
+    for name in config.modules:
+        if name == module.name:
+            continue
+        try:
+            other = modules.read(name)
+        except errors.GuardenError:
+            continue
+        for program in other.switches:
+            wanted.setdefault(program, []).append(name)
+    for program in module.switches:
+        holders = wanted.get(program, [])
+        if holders:
+            sys.stderr.write(
+                errors.warn(
+                    f"the program {program} stays switched on: "
+                    f"{', '.join(repr(name) for name in holders)} still names it"
+                ) + "\n"
+            )
+
+
 HANDLERS = {
     "weedr service ingest": _ingest,
     "weedr service add": _add,
@@ -559,6 +964,7 @@ HANDLERS = {
     "weedr service purge": _purge,
     "weedr service gate": _gate,
     "weedr service start": _start,
+    "weedr service stop": _stop,
     "weedr service list": _list,
     "weedr service snapshot": _snapshot,
     "weedr service fork": _fork,
@@ -568,6 +974,12 @@ HANDLERS = {
     "weedr secret set": _secret_set,
     "weedr secret list": _secret_list,
     "weedr secret materialise": _secret_materialise,
+    "weedr port list": _port_list,
+    "weedr port open": _port_open,
+    "weedr port close": _port_close,
+    "weedr module list": _module_list,
+    "weedr module add": _module_add,
+    "weedr module remove": _module_remove,
     "weedr pin sync": _pin_sync,
 }
 

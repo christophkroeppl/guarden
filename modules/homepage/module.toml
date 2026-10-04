@@ -1,0 +1,26 @@
+# The homepage module: the dashboard and the program that writes its
+# configuration (spec 3.6).
+#
+# `requires` is empty and the module is in the shipped `[modules] enabled`
+# list, because `weedr module add homepage` is a whole operation and a module
+# nothing else needs is not a dependency anything has to be checked against.
+# It does **not** require `gate`: the dashboard is an ordinary service and it
+# is reachable through the edge by an ordinary `routes:` entry in its own
+# shipped manifest, so a host with the dashboard and no edge is a host whose
+# dashboard simply has no route yet.
+name = "homepage"
+requires = []
+
+[[services]]
+# The dashboard is a service like any other: its own user, its own home, its
+# own quadlet unit directory. No ingress — it declares no forwarded port of its
+# own, because it is reached through the edge by a route rather than by the
+# kernel forwarding 80 or 443 at it, and `api = false` because the dashboard is
+# not a control surface on a loopback publication of its own.
+service = "homepage-production"
+
+[[switches]]
+# The shared program this module switches on. `twig` writes the dashboard's
+# configuration into `/var/lib/guarden/shared/dashboard/`, the one directory it
+# may write, which `weedr module add homepage` creates `guarden:guarden`.
+program = "twig"
