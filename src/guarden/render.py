@@ -559,9 +559,10 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
         ]
         if not numbers:
             raise errors.GuardenError(
-                f"{context.service} needs {edge.service!r} and its registry entry names no "
-                f"allocated publication for the edge; the mutator allocates one when it "
-                f"installs the edge, and the renderer does not guess a loopback port",
+                f"{context.service} needs {edge.service!r} on port {edge.port} and its "
+                f"registry entry names no allocated publication for that edge; the mutator "
+                f"allocates one when it installs the edge, and the renderer does not guess "
+                f"a loopback port",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         out.append((edge.service, min(numbers)))

@@ -271,7 +271,7 @@ assert_file_lacks "$render/system/guarden-order.target" "Requires="
 # empty list and the mutator says which container is missing. The render is what
 # refuses it, because the manifest was fine and the answer came from the host.
 run weedr service ingest unpublished-staging --from poke unpublished@9f2c1ab
-assert_exit 0
+assert_exit 1
 assert_stderr_has "9999"
 assert_stderr_has "pgprov-staging"
 assert_file_has "$registry/unpublished-staging.toml" 'publications = []'
