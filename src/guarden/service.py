@@ -33,6 +33,7 @@ from guarden import (
     gate,
     names,
     paths,
+    previews,
     publications,
     registry,
     tool,
@@ -134,7 +135,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
         existing is None or resolved.escaped_ref not in existing.instances
     )
     if fresh and existing is not None:
-        outcome.notes += _admit_instance(resolved, existing, now)
+        outcome.notes += previews.admit(resolved, existing, now)
     outcome.fresh_instance = fresh
 
     identity = users.ensure(resolved.name, paths.service_home(resolved.name))
@@ -179,14 +180,12 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     _ensure_admin_units(identity.uid)
 
     if resolved.escaped_ref and resolved.escaped_ref not in record.instances:
-        # The instance is recorded at creation, because an instance that is not in
-        # the registry cannot be counted against the cap or reported by `list`,
-        # and a second ingest of the same ref has to be able to tell that from a
-        # ref that has not been created yet. `seed` stays empty: no fork has taken
-        # place. Its publications are allocated below, once the instance exists.
-        record.instances[resolved.escaped_ref] = registry.Instance(
-            ref=str(resolved.ref), escaped_ref=resolved.escaped_ref, created=now
-        )
+        # Recorded before the volumes exist, not after: an instance that is not in
+        # the registry cannot be counted against the cap, reported by `list`, or
+        # have a seed written against it by the fork in spec 5.3 step 12. `seed`
+        # stays empty here — no fork has taken yet — and the instance's
+        # publications are allocated below, once it exists.
+        previews.register(resolved, record, now)
 
     _allocate(resolved, record, manifest, config, source)
 
@@ -227,43 +226,6 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     if source.kind != "module":
         outcome.warnings += units.install(directory, resolved.name)
     return outcome
-
-
-def _admit_instance(resolved, record, now: str) -> list[str]:
-    """spec 9: the cap on this track, per service, evicting the oldest first.
-
-    `registry` is taken before `preview-cap` because that is the order, and both
-    are held across the counting, the eviction and the new instance's own
-    registry entry, so the count is never observable mid-flight.
-    """
-    cap = resolved.track.cap
-    if cap is None or cap < 1:
-        raise errors.GuardenError(
-            f"the {resolved.track.name!r} track carries cap={cap}, and a cap below one "
-            f"bounds nothing",
-            errors.HOST_NOT_AS_ASSUMED,
-        )
-    with conf.lock("registry", "preview-cap"):
-        printed: list[str] = []
-        while len(record.instances) + 1 > cap:
-            oldest = min(
-                record.instances.values(), key=lambda item: (item.created, item.escaped_ref)
-            )
-            printed += _forget_instance(
-                names.Resolved(
-                    name=resolved.name,
-                    track=resolved.track,
-                    ref=oldest.ref,
-                    escaped_ref=oldest.escaped_ref,
-                    defaulted=resolved.defaulted,
-                ),
-                record,
-            )
-        record.instances[str(resolved.escaped_ref)] = registry.Instance(
-            ref=str(resolved.ref), escaped_ref=str(resolved.escaped_ref), created=now
-        )
-        registry.save(record, (0, users.group_id(GUARDEN_GROUP)))
-    return printed
 
 
 def _record(record, vol: str, kind: str, config_name: str | None) -> None:
@@ -588,50 +550,9 @@ def _remove_service(resolved, record, now: str) -> list[str]:
 
 
 def _remove_instance(resolved, record) -> list[str]:
-    _instance_of(resolved, record)
-    printed = _forget_instance(resolved, record)
+    printed = previews.forget(resolved, record)
     with conf.lock("registry"):
         registry.save(record, (0, users.group_id(GUARDEN_GROUP)))
-    return printed
-
-
-def _instance_of(resolved, record):
-    if resolved.track.kind != "instance":
-        raise errors.GuardenError(
-            f"{resolved.name} is on track {resolved.track.name!r}, which is kind "
-            f'"{resolved.track.kind}", so it has no instances'
-        )
-    escaped = str(resolved.escaped_ref)
-    instance = record.instances.get(escaped)
-    if instance is None:
-        raise errors.GuardenError(
-            f"{resolved.name} has no instance {resolved.ref!r}", errors.HOST_NOT_AS_ASSUMED
-        )
-    return instance
-
-
-def _forget_instance(resolved, record) -> list[str]:
-    """spec 5.3: what one instance's removal does, and the lines that say so.
-
-    The cap's eviction and `weedr service remove <name>/<ref>` both come through
-    here, so a ref removed by the cap is removed by the verb.
-    """
-    instance = _instance_of(resolved, record)
-    escaped = str(resolved.escaped_ref)
-
-    printed = [f"removed the instance {resolved.ref} of {resolved.name}"]
-    stop_units(resolved.name, escaped)
-    _drop(paths.instance_tree(resolved.name, escaped))
-    _drop(paths.instance_home(resolved.name, escaped))
-    del record.instances[escaped]
-
-    released = ", ".join(f"{key}={port}" for key, port in sorted(instance.publication.items()))
-    printed.append(f"released the instance's publications ({released or 'none'})")
-    seeds = ", ".join(
-        f"{volume}={seed.service}:{seed.volume}@{seed.number}"
-        for volume, seed in sorted(instance.seed.items())
-    )
-    printed.append(f"released the seed ({seeds or 'none'})")
     return printed
 
 

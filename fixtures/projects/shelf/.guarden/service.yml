@@ -1,0 +1,10 @@
+project: shelf
+units: compose.yaml
+state:
+  - data
+bulk:
+  - cache
+routes:
+  - container: web
+    port: 80
+    host: shelf

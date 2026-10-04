@@ -138,6 +138,13 @@ for ref in feature-z feature-a feature-m; do
     assert_exit 0
     assert_stdout_lacks "removed the instance"
 done
+# The count is read from the registry rather than counted off stdout, because the
+# cap is a claim about what the service holds and stdout is a claim about one run.
+run weedr service list --json
+assert_exit 0
+cp "$GUARDEN_STDOUT" "$GUARDEN_FIXTURES/twovol.json"
+held=$(ls -1 /var/lib/guarden/services/twovol-preview/instances | wc -l)
+[ "$held" = 3 ] || _fail "twovol-preview holds $held instances after three creates, expected 3"
 assert_file_exists /var/lib/guarden/services/twovol-preview/instances/feature\\x2dz
 assert_file_exists /var/lib/guarden/services/twovol-preview/instances/feature\\x2da
 assert_file_exists /var/lib/guarden/services/twovol-preview/instances/feature\\x2dm
@@ -148,6 +155,7 @@ assert_file_exists /var/lib/guarden/services/twovol-preview/instances/feature\\x
 # creation, and re-ingesting is not a way to make an instance newer.
 run weedr service ingest twovol-preview/feature-a --from poke twovol@7c4e8b1
 assert_exit 0
+assert_stdout_lacks "removed the instance"
 run weedr service ingest twovol-preview/feature-q --from poke twovol@7c4e8b1
 assert_exit 0
 assert_stdout_has "removed the instance feature-z of twovol-preview"
@@ -218,3 +226,80 @@ assert_file_exists /var/lib/guarden/registry/myapp-preview.toml
 run weedr service remove myapp-preview
 assert_exit 0
 assert_stdout_has "removed myapp-preview"
+
+# --- one service per workload, one host, one credential ----------------------
+
+# A second ref of a service that already exists creates an instance and nothing
+# else: no second user, no second home, no second image store. The uid is the
+# fact, because "one user per workload" is a claim about a number and a second
+# creation would change it.
+stage_poke shelf 3ab91d7
+run weedr service ingest shelf-staging --from poke shelf@3ab91d7
+assert_exit 0
+assert_stderr_empty
+run weedr service ingest shelf-preview/one --from poke shelf@3ab91d7
+assert_exit 0
+assert_stderr_empty
+uid_one=$(id -u shelf-preview)
+home_one=$(stat -c %i /var/lib/guarden/services/shelf-preview/home)
+
+# The second ref of a service that already exists. Nothing about it may change:
+# the uid is the same number and the home is the same inode, which is what "no
+# second user, home or image store" is made of.
+run weedr service ingest shelf-preview/two --from poke shelf@3ab91d7
+assert_exit 0
+assert_file_exists /var/lib/guarden/services/shelf-preview/home
+assert_passwd_field shelf-preview "$uid_one" uid
+[ "$home_one" = "$(stat -c %i /var/lib/guarden/services/shelf-preview/home)" ] \
+    || _fail "the second ref replaced the service's home, so it made a second one"
+
+# A generated credential is minted once for the service. The preview track is
+# ungated, so a `@sensitive` key gets a value rather than blocking the create, and
+# both instances read that one file: a per-instance secret is a second secret for
+# one workload.
+assert_file_exists /etc/guarden/creds/shelf-preview/SESSION_SIGNING_KEY.cred
+assert_file_exists /var/lib/guarden/services/shelf-preview/instances/one
+assert_file_exists /var/lib/guarden/services/shelf-preview/instances/two
+
+# The route host is the track's own `host_prefix` on **one** host. An instance
+# gets no host of its own, because the ref is a path segment and not a host name,
+# and there is therefore nothing to put in a wildcard certificate.
+run weedr service list --json
+assert_exit 0
+cp "$GUARDEN_STDOUT" "$GUARDEN_FIXTURES/shelf.json"
+# The route host is found by the service's own name rather than by a list index,
+# because an index into `services` is an ordering the registry decides and this
+# file is about a workload's own host.
+host=$(python3 -c '
+import json, sys
+for entry in json.load(open(sys.argv[1]))["services"]:
+    if entry["name"] == "shelf-preview":
+        print(entry["route_hosts"].get("shelf", ""))
+' "$GUARDEN_FIXTURES/shelf.json")
+[ "$host" = "preview.shelf" ] \
+    || _fail "shelf-preview claims the route host ${host:-none}, expected preview.shelf"
+# No `.internal` suffix and no name map. Both are anchored to files the run
+# actually wrote: the registry and the rendered edge slice. A grep over JSON that
+# no code path emits is vacuous, so the search is over the whole registry
+# directory rather than over one service's own record, and `/etc/hosts` is
+# compared against the bytes guarden was given the chance to write.
+if grep -rq '\.internal' /var/lib/guarden/registry/; then
+    _fail "a preview carries an .internal suffix, which is not a name guarden has"
+fi
+if grep -q 'shelf' /etc/hosts 2>/dev/null; then
+    _fail "guarden wrote a name into /etc/hosts; there is no name map"
+fi
+
+# --- cap lives only on an instance track -------------------------------------
+
+# `cap` is read from the track's row and nowhere else, so there is no second
+# place a cap could be agreed. A `kind = "slot"` row carrying one is exit 2 naming
+# the track, and the shipped table is restored afterwards because every other
+# block in this file resolves against it.
+capped=$GUARDEN_PREFIX/etc/guarden/guarden.toml
+awk '/^host_prefix = "staging\."$/{print "cap = 2"}1' "$capped" > "$capped.capped"
+mv "$capped.capped" "$capped"
+run weedr service ingest shelf-staging --from poke shelf@3ab91d7
+assert_exit 2
+assert_stderr_has "must not carry a cap"
+stage_config guarden.toml
