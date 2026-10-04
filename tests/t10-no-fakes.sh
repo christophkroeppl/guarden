@@ -15,6 +15,11 @@
 # that inspected the `PATH` of a suite it did not run would be asserting about
 # the runner, not about the box, and the two are not the same thing — which is
 # the mistake that let the prepend stand for as long as it did.
+#
+# machine: shared
+# it reads files, this process's own `PATH`, and one `soil packages --list`.
+# `--list` is the phase's read-only form: it resolves the family and prints
+# the row, and reaches neither `apt-get` nor a fetch.
 
 . "$(dirname "$0")/lib.sh"
 

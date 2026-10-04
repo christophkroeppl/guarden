@@ -41,3 +41,26 @@ deliberately and not alongside other work.**
 
 One `just provision`, about an hour, and the golden's snapshot changes identity. Everything
 recorded against the current snapshot is invalidated, so do this when nothing else is in flight.
+## The blocker three tickets hit at once, and what it actually was
+
+Ticket 50's agent, ticket 110's and ticket 120's all reported the same wall from
+three directions: **`weedr service ingest` never installed a service's own units.**
+A service existed, was listed, held its volumes and rendered a firewall set, and
+`weedr service start` refused it with "has no unit to start". `units.install` existed
+and was called only for a *module's* service (`weedr.py:308`, `:707`).
+
+`service.create()` ended at spec 5.3 step 10. **Step 11 was missing.** Wired in, and
+it had to go *after* `registry.save`: `units.install` reads the record for the uid it
+installs under, so rendering first answered "there is no registry entry for
+<service>, so there is nothing to render its units for".
+
+Verified in the VM on a clean cut — `weedr service ingest` now leaves:
+
+```
+/var/lib/guarden/services/qx-production/home/.config/containers/systemd/
+    web.container  worker.container  data.volume  chainstate.volume
+    web.container.d/10-guarden-order.conf
+```
+
+and `service.units_of("qx-production")` answers `['web', 'worker']`, so the deploy path
+has something to start for the first time.

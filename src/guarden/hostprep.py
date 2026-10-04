@@ -597,6 +597,56 @@ def prepare_for(phase: str, family: str | None = None) -> Callable[[], None] | N
     return None
 
 
+# The two phases that write a unit file into the system manager's search path.
+# Neither reloaded afterwards, so a unit one of them wrote was on disk and unknown
+# to systemd until the next boot: ADR-0011 step 5 assumes a reload and there was
+# none anywhere in `src/`.
+UNIT_PHASES = ("install", "units")
+
+
+def finish_for(phase: str) -> Callable[[], None] | None:
+    """The step a phase runs after its items, or nothing at all.
+
+    **`--apply` only, for the same reason `prepare_for` is: a check that
+    reloaded would be a check that changed something.** A reload is not an item
+    because there is no file of guarden's to compare against — "the manager has
+    read the units on disk now" has no declared state behind it, and an item
+    asking it would answer `false` on every host forever and never hold, so
+    `--check` would report drift no apply could clear.
+
+    It runs *after* the items rather than before, and that ordering is the whole
+    of it: a reload before the phase writes its units reloads the state that
+    existed before, and the units just written stay unread.
+    """
+    if phase in UNIT_PHASES:
+        return _reload_system_manager
+    return None
+
+
+def _reload_system_manager() -> None:
+    """`systemctl daemon-reload`, once, after a phase wrote system units.
+
+    A unit file systemd has not read is not a unit: the manager answers
+    `not-found` for it, so the oneshot the path unit triggers never appears and
+    a boot-time materialisation silently does not happen. The reload is what
+    makes the converge mean what it says.
+
+    Not fatal, and the reason is the host. A manager that cannot be reached is
+    not a reason to refuse a converged install, and the items above it already
+    reported whatever they could not converge; this one line says the reload
+    did not happen so an operator is not told a unit is wanted when the manager
+    has never heard of it.
+    """
+    result = h.run("systemctl", "daemon-reload")
+    if not result.ok:
+        detail = result.err.strip().splitlines()
+        h.warn(
+            "systemctl daemon-reload did not succeed, so the units this phase "
+            "wrote are not read by the system manager: "
+            + (detail[0] if detail else f"exit {result.code}")
+        )
+
+
 def _refresh_package_index(family: str | None) -> None:
     """Run the family's own refresh argv, from the list, once, before the installs.
 
@@ -1084,47 +1134,44 @@ def _deadman_armed() -> bool:
     return h.run("systemctl", "is-active", "guarden-firewall-deadman.timer").line == "active"
 
 
-def _module_ingress() -> list[tuple[str, str]]:
-    """The enabled modules' declared ingress, with the publication each goes to.
+def _module_ingress() -> list[tuple[str, str, str]]:
+    """The enabled modules' declared ingress, each with the publication it lands on.
 
-    The publication is read from the service's registry rather than assumed,
+    `(port, protocol, publication)`, in the order the modules declare it. The
+    publication is read from the service's registry rather than assumed,
     because it is allocated from `ingress.publication_range` and no number in
-    this design is fixed. A module whose service is not installed yet contributes
-    nothing, which is what "a fresh host has no ingress" means.
+    this design is fixed; the registry key is the **entrypoint**, so `80/tcp`
+    and `443/tcp` land on two different entrypoints' publications and only
+    `443/udp` shares `443/tcp`'s.
+
+    A module whose service is not installed yet contributes nothing, which is
+    what "a fresh host has no ingress" means, and a module whose declared
+    entrypoint has no allocated publication yet is the same case: the edge is
+    being created and the nat rules arrive with the next converge.
     """
     config = h.read_config(h.config_path()) or h.shipped_config()
-    enabled = config.get("modules", {}).get("enabled", [])
-    modules = paths.MODULES
-    found: list[tuple[str, str]] = []
-    for module in enabled:
-        manifest = modules / module / "module.toml"
-        if not manifest.is_file():
+    found: list[tuple[str, str, str]] = []
+    for module in [str(name) for name in config.get("modules", {}).get("enabled", [])]:
+        where = paths.MODULES / module / "module.toml"
+        if not where.is_file():
             continue
-        for entry in h.read_config(manifest).get("services", []):
-            service = entry.get("service", "")
-            registry = h.read_config(hostpath(*REGISTRY_DIR, f"{service}.toml"))
-            for port in entry.get("ingress", []):
-                found.append((port, _publication_for(registry)))
-    return [(port, publication) for port, publication in found if publication]
+        document = h.read_config(where)
+        for entry in document.get("services", []):
+            service = str(entry.get("service", ""))
+            record = h.read_config(hostpath(*REGISTRY_DIR, f"{service}.toml"))
+            publications = record.get("publication") or {}
+            if not isinstance(publications, dict):
+                continue
+            for value in entry.get("ingress", []):
+                endpoint, _, number = str(value).partition(":")
+                port, _, protocol = number.partition("/")
+                publication = publications.get(endpoint.strip())
+                if publication:
+                    found.append((port, protocol, str(publication)))
+    return found
 
 
-def _publication_for(registry: dict) -> str:
-    """The container and port a forward lands on, for one service.
-
-    `registry["publication"]` is the edge's own; an entry with `api = true` is
-    the control surface and is never forwarded.
-    """
-    publication = registry.get("publication")
-    if isinstance(publication, dict):
-        return str(publication.get("port", ""))
-    if isinstance(publication, list):
-        for entry in publication:
-            if isinstance(entry, dict) and not entry.get("api"):
-                return str(entry.get("port", ""))
-    return ""
-
-
-def _ingress_nat(interface: str, ingress: list[tuple[str, str]]) -> str:
+def _ingress_nat(interface: str, ingress: list[tuple[str, str, str]]) -> str:
     """The edge's forwarding rules, and nothing else.
 
     Three of them, because `443/udp` is a different protocol and a different
@@ -1142,17 +1189,19 @@ def _ingress_nat(interface: str, ingress: list[tuple[str, str]]) -> str:
         "# POSTROUTING masquerade: the destination is local after the translation,",
         "# so the packet is delivered to INPUT and never reaches POSTROUTING, and",
         "# conntrack rewrites the reply's source to the public address dialled.",
+        "#",
+        "# Only DNAT, never REDIRECT: redirect rewrites the destination to the",
+        "# incoming interface's own address, and the edge listens on loopback only.",
         "",
-        "TABLE=nat",
-        "CHAIN=PREROUTING",
+        "table nat",
+        "chain PREROUTING {",
         "",
     ]
-    for port, publication in ingress:
-        number, _, protocol = port.partition("/")
+    for port, protocol, publication in ingress:
         lines.append(
-            f"[ 'i {interface}' 'p {protocol}' '--dport {number}' ] "
-            f"-j DNAT --to-destination 127.0.0.1:{publication}"
-        )
+            f"    if {interface} proto {protocol} dport {port} "
+            f"jump DNAT to 127.0.0.1:{publication};")
+    lines.append("}")
     return "\n".join(lines) + "\n"
 
 
@@ -1166,19 +1215,30 @@ def _framework(interface: str) -> str:
             "# 30-services.conf, which the mutator writes and which is disjoint from",
             "# this file and from 20-ingress-nat.conf. Each has exactly one writer.",
             "#",
+            "# guarden-in is declared here and jumped to above INPUT's own drop, and",
+            "# 30-services.conf fills it. The chain and the jump are skeleton: no",
+            "# port, no protocol and no grant appears in this file, and a grant",
+            "# cannot reach anything here.",
+            "#",
             f"# route_localnet is scoped to {interface} alone, and is persisted in",
             "# /etc/sysctl.d/90-guarden.conf. Without it the kernel treats a packet",
             "# addressed to 127.0.0.1 that arrived on a non-loopback interface as a",
             "# martian and drops it, which is the whole reason the forwarding works.",
             "",
-            "TABLE=filter",
-            "CHAIN=INPUT",
-            "[ 'm conntrack' '--ctstate RELATED,ESTABLISHED' ] -j ACCEPT",
-            "[ 'i lo' ] -j ACCEPT",
-            "[ 'p tcp' '--dport 22' ] -j ACCEPT",
-            "[ 'p tcp' '--dport 443' ] -j ACCEPT",
-            "[ 'p udp' '--dport 443' ] -j ACCEPT",
-            "-j DROP",
+            "table filter",
+            "chain guarden-in {",
+            "}",
+            "",
+            "table filter",
+            "chain INPUT {",
+            "    mod conntrack ctstate (ESTABLISHED RELATED) jump ACCEPT;",
+            "    if lo jump ACCEPT;",
+            "    proto tcp dport 22 jump ACCEPT;",
+            "    proto tcp dport 443 jump ACCEPT;",
+            "    proto udp dport 443 jump ACCEPT;",
+            "    jump guarden-in;",
+            "    jump DROP;",
+            "}",
             "",
             "# The dead-man timer is 10-framework's business because it is the",
             "# framework's safety net: armed only by `soil firewall --apply",
@@ -1255,6 +1315,32 @@ _PROGRAMS = ("soil", "weedr", "loom", "roots", "twig", "furrow", "hose", "stakes
 # is a link to something the kernel cannot run.
 SHEBANG = "#!/usr/bin/env python3"
 
+# Inserted after the docstring and any `__future__` line: without it an installed
+# program cannot import its own package when PYTHONPATH is not inherited.
+BOOTSTRAP = (
+    "import sys, pathlib\n"
+    "_guarden_lib = pathlib.Path(__file__).resolve().parent.parent / 'lib'\n"
+    "sys.path.insert(0, str(_guarden_lib if (_guarden_lib / 'guarden').is_dir()\n"
+    "                      else pathlib.Path(__file__).resolve().parent.parent))\n"
+)
+
+
+def _with_bootstrap(body: str) -> str:
+    """The module's own text, able to import the package it ships beside."""
+    lines = body.split("\n")
+    at = 0
+    if lines and lines[0].startswith('"""'):
+        at = 1
+        while at < len(lines) and not lines[at].rstrip().endswith('"""'):
+            at += 1
+        at += 1
+    while at < len(lines) and (
+        not lines[at].strip() or lines[at].startswith(("from __future__", "#"))
+    ):
+        at += 1
+    head, tail = "\n".join(lines[:at]), "\n".join(lines[at:])
+    return f"{head}\n{BOOTSTRAP}\n{tail}"
+
 
 def _source_tree() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -1268,8 +1354,15 @@ def _install_programs() -> None:
         h.run_or_die("install", "-m", "0755", "-o", "root", "-g", "root",
                      str(source / "guarden" / f"{program}.py"),
                      str(binaries / program))
-    h.run_or_die("install", "-m", "0644", "-o", "root", "-g", "root",
-                 str(source / "guarden" / "cli.py"), str(paths.LIBDIR))
+    # The whole package, not just cli.py: every program imports more of it.
+    h.run_or_die("install", "-d", "-m", "0755", "-o", "root", "-g", "root",
+                 str(paths.LIBDIR / "guarden"))
+    for module in sorted((source / "guarden").glob("*.py")):
+        h.run_or_die("install", "-m", "0644", "-o", "root", "-g", "root",
+                     str(module), str(paths.LIBDIR / "guarden" / module.name))
+    templates = source / "guarden" / "templates"
+    if templates.is_dir():
+        h.run_or_die("cp", "-r", "-T", str(templates), str(paths.TEMPLATES))
 
 
 def _programs_installed() -> bool:
@@ -1310,14 +1403,24 @@ def _make_programs_runnable() -> None:
     binaries = paths.BIN
     for program in _PROGRAMS:
         body = (source / "guarden" / f"{program}.py").read_text(encoding="utf-8")
-        h.write_file(binaries / program, f"{SHEBANG}\n{body}", 0o755)
+        h.write_file(binaries / program, f"{SHEBANG}\n{_with_bootstrap(body)}", 0o755)
     h.run_or_die("chown", "-R", "root:root", str(binaries))
 
 
 def _templates_installed() -> bool:
+    """Whether the installed templates are the checkout's, contents and all.
+
+    Contents, not existence, for the reason `_modules_installed` gives.
+    """
     installed = paths.TEMPLATES
     source = _source_tree() / "guarden" / "templates"
-    return all((installed / path.name).is_file() for path in source.iterdir())
+    for path in sorted(source.iterdir()):
+        if not path.is_file():
+            continue
+        target = installed / path.name
+        if not target.is_file() or target.read_bytes() != path.read_bytes():
+            return False
+    return True
 
 
 def _link_target(program: str) -> str:
@@ -1361,6 +1464,55 @@ def _install_templates() -> None:
     for path in sorted(source.iterdir()):
         h.run_or_die("install", "-m", "0644", "-o", "root", "-g", "root",
                      str(path), str(paths.TEMPLATES))
+
+
+def _install_modules() -> None:
+    source = _modules_source()
+    for module in sorted(path for path in source.iterdir() if path.is_dir()):
+        target = paths.MODULES / module.name
+        h.run_or_die("install", "-d", "-m", "0755", "-o", "root", "-g", "root", str(target))
+        for path in sorted(module.rglob("*")):
+            relative = path.relative_to(module)
+            if path.is_dir():
+                h.run_or_die("install", "-d", "-m", "0755", "-o", "root", "-g", "root",
+                             str(paths.MODULES / module.name / relative))
+                continue
+            mode = "0755" if os.access(path, os.X_OK) else "0644"
+            h.run_or_die("install", "-D", "-m", mode, "-o", "root", "-g", "root",
+                         str(path), str(paths.MODULES / module.name / relative))
+    h.run_or_die("chown", "-R", "root:root", str(paths.MODULES))
+
+
+def _modules_source() -> Path:
+    """The checkout's `modules/`, or the installed copy on a host that has one.
+
+    Same shape as the template lookup: a development checkout is where the
+    module being edited and the module being read are the same file, and a
+    converge that read a stale installed copy would be a different program on a
+    developer's box than on a host.
+    """
+    beside = _source_tree().parent / "modules"
+    return beside if beside.is_dir() else paths.MODULES
+
+
+def _modules_installed() -> bool:
+    """Whether the installed modules are the checkout's, contents and all.
+
+    Contents, not existence: an edited file kept its name and was never
+    re-installed, so the host kept the old bytes.
+    """
+    source = _modules_source()
+    if source == paths.MODULES:
+        return True
+    for path in sorted(source.rglob("*")):
+        if not path.is_file():
+            continue
+        installed = paths.MODULES / path.relative_to(source)
+        if not installed.is_file():
+            return False
+        if installed.read_bytes() != path.read_bytes():
+            return False
+    return True
 
 
 def _user_exists(name: str) -> bool:
@@ -1511,6 +1663,15 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             _link_programs,
         ),
         Item("guarden's templates are installed", _templates_installed, _install_templates),
+        # The module directory is guarden's own installation and root-owned: a
+        # module is data that ships with the programs, and `weedr module add`
+        # reads it months after this phase last ran.
+        Item(
+            "guarden's module definitions are installed, and a module can be added without "
+            "re-running this phase",
+            _modules_installed,
+            _install_modules,
+        ),
         # The pin is seeded, not converged: an operator fills in a digest once and
         # it is theirs from then on, so a converge to the shipped template would
         # erase the only thing that makes the fetch reachable. Same rule as
@@ -1524,16 +1685,16 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
         h.text_item("the tmpfiles entry recreates /run/guarden at every boot",
                     hostpath(*SYSTEMD_DIR, "guarden-tmpfiles.conf"),
                     _template("guarden-tmpfiles.conf")),
+        # spec 6.9 / ADR-0005: two units do this for the whole host. This is the
+        # instantiable one the `.path` triggers per blob; `guarden-creds-boot` is
+        # the boot oneshot. It is triggered by the path unit, never enabled, so
+        # it carries no [Install].
         h.text_item(
             "the credential materialiser unit is installed, and it decrypts once in the "
             "system manager",
             hostpath(*SYSTEMD_DIR, "guarden-credential-materialiser@.service"),
             _template("guarden-credential-materialiser@.service"),
         ),
-        # spec 6.9: the credential materialiser is a `.path` on the blob directory
-        # and one boot-time oneshot — two units for the whole host. There is no
-        # `guarden-creds.service`, because a runbook that named one would send an
-        # operator to start a unit that does not exist.
         h.text_item(
             "the credential materialiser's path unit is installed, and it watches "
             "/etc/guarden/creds/",
@@ -1562,6 +1723,21 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             "would sit in a blob until the next boot",
             lambda: h.run("systemctl", "is-enabled", "guarden-creds.path").line == "enabled",
             lambda: h.run("systemctl", "enable", "guarden-creds.path"),
+        ),
+        # **The boot oneshot is enabled, and it was not.** It carries
+        # `WantedBy=multi-user.target`, so `enable` is the only thing that makes
+        # boot materialisation happen: the path unit answers a *change* under
+        # /etc/guarden/creds/ and never fires on a host nobody wrote to, so after
+        # a reboot every planted value stayed encrypted and unread. Not `--now`:
+        # the oneshot re-materialises the whole tree, and this item is a claim
+        # about the unit being wanted, not about running it on services that may
+        # not exist yet.
+        Item(
+            "the credential materialiser's boot oneshot is enabled, or a reboot "
+            "materialises nothing and every planted value stays unread",
+            lambda: h.run("systemctl", "is-enabled", "guarden-creds-boot.service").line
+            == "enabled",
+            lambda: h.run("systemctl", "enable", "guarden-creds-boot.service"),
         ),
     ]
 

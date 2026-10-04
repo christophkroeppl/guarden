@@ -89,7 +89,18 @@ def value(service: str, key: str) -> str | None:
     Root-side decryption of the blob, in memory only. A blob that will not
     decrypt is the host not being in the state the request assumed, which is `1`
     rather than a rejection: the key is an input, the blob is on the filesystem.
+
+    **The materialiser unit hands us the decrypted blob and this prefers it.**
+    `LoadCredentialEncrypted=credentials:` puts it at
+    `$CREDENTIALS_DIRECTORY/credentials`, and re-running `systemd-creds decrypt`
+    here would read the encrypted blob off disk a second time to produce a value
+    systemd had already decrypted for us.
     """
+    handed = os.environ.get("CREDENTIALS_DIRECTORY")
+    if handed:
+        staged = Path(handed) / "credentials"
+        if staged.is_file():
+            return staged.read_text().rstrip("\n")
     blob = paths.cred_blob(service, key)
     if not blob.is_file():
         return None

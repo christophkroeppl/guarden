@@ -611,6 +611,41 @@ def _swap_lines(resolved, plan: list[Plan]) -> list[str]:
     ]
 
 
+def seed_instance(resolved, now: str) -> list[str]:
+    """The fork an instance's creation makes, from the track's `fork_from` row.
+
+    spec 5.3 step 12. Not `fork()`: there is nothing to move aside and nothing to
+    start, because the volumes were created seconds ago and no unit names them
+    yet. Takes no lock, because whoever deploys an instance already holds
+    `deploy-<service>-<escaped-ref>` in the process that called this one.
+    """
+    target = _target_of(resolved)
+    state = _state(target)
+    if not state or not resolved.track.fork_from:
+        return []
+    source = lineage_of(resolved)
+    if registry.load(source.service) is None:
+        return [
+            f"the fork source {source.service} has no registry entry, so "
+            f"{resolved.name}/{resolved.ref} starts empty"
+        ]
+    plan = _plan(target, source, state, _recorded_seed(target, resolved.escaped_ref), now)
+    _validate(plan, resolved.name)
+    owner = _owner(target)
+    for volume in state:
+        entry = next((item for item in plan if item.volume == volume.name), None)
+        if entry is None or not entry.number:
+            continue
+        live = paths.volume(resolved.name, volume.kind, volume.name, resolved.escaped_ref)
+        _remove_tree(live)
+        _clone(paths.snapshot(entry.source_service, volume.name, entry.number), live, owner)
+    _record_seed(resolved, target, plan)
+    return [
+        f"forked {resolved.name}/{resolved.ref} from {source.service}",
+        *_swap_lines(resolved, plan),
+    ]
+
+
 # --------------------------------------------------------------------------
 # weedr service rollback
 # --------------------------------------------------------------------------

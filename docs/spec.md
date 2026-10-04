@@ -2569,6 +2569,17 @@ configuration.
 golden snapshot and runs every suite in it with the real tools; `tests/lxc.sh run <pattern>` is
 the same for one file. There is no second tier.
 
+**Each suite declares whether it needs a machine of its own, in the suite itself.** One line —
+`# machine: shared` or `# machine: fresh` — read by the runner, and **an absent declaration is
+`fresh`**. The default is the safe answer: a suite that says nothing must never silently inherit
+another suite's system users, deleted snapshots or installed packages. The declaration travels with
+the suite, so a suite that forgets it gets isolation rather than a neighbour's machine. `just
+test-fresh` cuts per file whatever any suite says, `just test-shared` cuts one machine for the
+whole run, and either flag wins over a declaration because a declaration is a claim about a suite
+and a flag is a decision about a run. Sharing is a claim and `just test-reverse` asks about it:
+the same suites, the opposite order, and both runs green is the only evidence a shared suite does
+not contaminate the next.
+
 - **No fake exists, and `fixtures/bin` is never on `PATH`** — not in a test, not in a VM run, not
   in a developer's shell. The directory is retired. It was not a second opinion: `tests/lib.sh`
   put it first on `PATH` unconditionally and the VM runner never removed it, so the "real
@@ -2593,6 +2604,13 @@ the same for one file. There is no second tier.
   contains exactly one `DNAT` per forwarded port and **no** `POSTROUTING` masquerade, because
   such a rule matches no packet in either direction (§7.5) and its presence would mean the
   render carries a claim it cannot keep.
+
+  **`GUARDEN_PREFIX` relocates guarden's own files and nothing else.** It is not a sandbox: a
+  suite that runs `soil packages --apply` or `soil install --apply` under a prefix still reaches
+  the machine's `apt`, its apt timers and its identity databases, because `apt-get`,
+  `dpkg-query`, `systemctl`, `groupadd` and `useradd` take no prefix. Whether a suite needs a
+  machine of its own is therefore a fact about which verbs it drives and not about whether it
+  called `guarden_prefix`.
 
 `just test` runs the whole suite in a throwaway VM and exits `0`; `just test-one <file>` runs one
 suite in one VM, and that is the command for work in progress. There is no suite that runs

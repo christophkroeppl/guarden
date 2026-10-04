@@ -1,0 +1,19 @@
+#!/bin/sh
+# pre-commit for a project repository: exactly one unit source, refused by name
+# (spec 6.3). Install it as .git/hooks/pre-commit. It reads two paths and stops:
+# no guarden installation, no network, no interpreter to disagree with.
+set -eu
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+if [ -f "$root/compose.yaml" ] && [ -d "$root/.guarden/quadlet" ]; then
+    printf 'compose.yaml and .guarden/quadlet/ are both present: exactly one of them is the unit source.\n' >&2
+    exit 1
+fi
+
+if [ ! -f "$root/compose.yaml" ] && [ ! -d "$root/.guarden/quadlet" ]; then
+    printf 'no unit source: a guarden service needs compose.yaml at the repository root or .guarden/quadlet/.\n' >&2
+    exit 1
+fi
+
+exit 0

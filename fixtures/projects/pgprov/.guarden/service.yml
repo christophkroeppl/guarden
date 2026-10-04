@@ -1,0 +1,18 @@
+# A provider of two kinds, so one host carries both the `database` and the `secret`
+# edge at once and the suite can tell the two credentials apart.
+#
+# The `ports:` entries are what name its containers and give them publications.
+# **They request public ingress and nothing is ever granted**, so `weedr port list`
+# shows 5432 and 8200 pending and the firewall carries no DNAT for them: the
+# publications exist because a declared edge dials them, not because the outside
+# world may reach them.
+project: pgprov
+units: .guarden/quadlet/
+provides:
+  - db
+  - secret
+ports:
+  - container: db
+    port: 5432
+  - container: vault
+    port: 8200

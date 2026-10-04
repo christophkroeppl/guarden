@@ -1,0 +1,5 @@
+[Unit]
+Description=the provider's database container
+
+[Container]
+Image=docker.io/library/postgres:17

@@ -204,6 +204,11 @@ assert_file_exists /etc/systemd/system/guarden-tmpfiles.conf
 assert_file_has /etc/systemd/system/guarden-tmpfiles.conf "/run/guarden/locks"
 assert_file_exists /etc/systemd/system/guarden-creds.path
 assert_file_exists /etc/systemd/system/guarden-creds-boot.service
+# Both enabled, and the boot oneshot is the one that was not: without the
+# symlink a reboot pulled in nothing, so a planted value stayed encrypted with
+# nothing to decrypt it (ticket 221).
+assert_enabled guarden-creds.path
+assert_enabled guarden-creds-boot.service
 assert_file_exists /etc/guarden/creds
 assert_mode /etc/guarden/creds 700
 # The seeded pin, and the rule that a converge must not overwrite it. The template

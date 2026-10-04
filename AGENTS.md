@@ -334,6 +334,17 @@ snapshot and runs every suite in it with the real tools.** There is no fast tier
 call log (ADR-0014). `tests/lxc.sh run <pattern>` is the same thing for one file, and that is how
 you run the suite while you work on it.
 
+**Each suite says in its own file whether it needs a machine of its own** — one line,
+`# machine: shared` or `# machine: fresh`, and **an absent line means `fresh`**. The declaration
+lives in the suite rather than in a list in `lxc.sh` so it travels with the suite, and the default
+is the safe answer because a suite that says nothing must never silently inherit another suite's
+system users, deleted snapshots or installed packages. `just test-fresh` cuts per file whatever
+any suite says and `just test-shared` cuts one machine for the run, so either flag wins over a
+declaration; `just test-reverse` runs the same suites in the opposite order, and both orders being
+green is the only honest proof that a shared suite does not contaminate the next. **`GUARDEN_PREFIX`
+is not what decides it** — it relocates guarden's own files and not `apt`, `systemctl`, `useradd`
+or `btrfs`, so what decides it is which verbs a suite drives.
+
 **`fixtures/` is retired. No fake is added, and `fixtures/bin` is never on `PATH`** — not in a
 test, not in a VM run, not in a shell. It existed until 2026-10-01, and it was worse than a
 second opinion: `tests/lib.sh` put it first on `PATH` unconditionally and the LXD runner never

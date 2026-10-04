@@ -102,30 +102,38 @@ assert_file_has /etc/guarden/firewall/10-framework.conf "30-services.conf"
 # contributes nothing and no publication is invented.
 assert_no_firewall_rule /etc/guarden/firewall/20-ingress-nat.conf
 
-# The three rules, once the gate module is enabled and the edge's publication
-# exists. The publication is read from the registry and never assumed, because
-# it is allocated from `ingress.publication_range`.
+# The three rules, once the gate module is enabled and the edge's publications
+# exist. Each publication is read from the registry and never assumed, because
+# it is allocated from `ingress.publication_range`: `80/tcp` lands on the
+# redirect entrypoint's publication and `443/*` on the TLS one, so the two
+# entrypoints have two numbers and only `443/udp` shares `443/tcp`'s.
+#
+# The module seeded here is the shipped one, in the shape it ships in: an
+# ingress entry names the entrypoint it forwards to, because a publication is a
+# loopback port a container is already listening on.
 seed /usr/lib/guarden/modules/gate/module.toml \
     'name = "gate"' \
     '[[services]]' 'service = "traefik-production"' \
-    'ingress = [ "80/tcp", "443/tcp", "443/udp" ]' 'api = true'
+    'ingress = [ "web:80/tcp", "websecure:443/tcp", "websecure:443/udp" ]' 'api = true'
 seed /var/lib/guarden/registry/traefik-production.toml \
-    'name = "traefik-production"' '[publication]' 'port = 20000'
+    'service = "traefik-production"' '[publication]' 'web = 20000' \
+    'websecure = 20001' 'api = 20002'
 run soil firewall --apply
 assert_exit 0
 assert_file_has /etc/guarden/firewall/20-ingress-nat.conf \
     "[ 'i $interface' 'p tcp' '--dport 80' ] -j DNAT --to-destination 127.0.0.1:20000"
 assert_file_has /etc/guarden/firewall/20-ingress-nat.conf \
-    "[ 'i $interface' 'p tcp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20000"
+    "[ 'i $interface' 'p tcp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20001"
 
 # 443/udp is HTTP/3, and it is a different protocol and a different nat rule:
-# three forwarding rules, not two.
+# three forwarding rules, not two. It is served from the same TLS entrypoint, so
+# it lands on that entrypoint's publication.
 assert_file_has /etc/guarden/firewall/20-ingress-nat.conf \
-    "[ 'i $interface' 'p udp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20000"
+    "[ 'i $interface' 'p udp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20001"
 
 # No masquerade, in any form a rule could take.
 assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "-j MASQUERADE"
-assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "CHAIN=POSTROUTING"
+assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "chain POSTROUTING"
 assert_file_lacks /etc/guarden/firewall/20-ingress-nat.conf "--to-source"
 
 # Every rule lands on the host's loopback and nowhere else, which is the alias

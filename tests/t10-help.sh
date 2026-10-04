@@ -4,6 +4,11 @@
 # copied here deliberately: a parser that drifts from the contract is invisible
 # from anywhere but this file, and copying the list is the only way a test can
 # hold it.
+#
+# machine: shared
+# two help surfaces, one file read, and two rejections that happen in the
+# parser before any host state is consulted. Nothing here creates an
+# identity, a volume or a package.
 
 . "$(dirname "$0")/lib.sh"
 

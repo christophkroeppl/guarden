@@ -1,0 +1,11 @@
+# An edge on a port the provider's manifest names no container for, so there is no
+# bind and no publication to dial. `auth: none` as well, so nothing is planted either
+# way: this fixture is one question, which is what the mutator answers when an edge
+# has nothing on the other end.
+project: unpublished
+units: .guarden/quadlet/
+needs:
+  - service: pgprov-staging
+    as: both
+    port: 9999
+    auth: none

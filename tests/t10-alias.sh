@@ -3,6 +3,12 @@
 # (spec 1.3, AGENTS.md). It is not derived from the long form, no other verb has
 # one, and a new verb brings none by default — so this file pins the one that
 # exists and proves no other help surface shows an alias.
+#
+# machine: shared
+# every call is `--help` or a verb that is not implemented, so nothing here
+# reaches the machine's identity databases, its packages or its volumes.
+# `weedr project remove myapp` exits 1 from `cli.pending` before any path is
+# resolved.
 
 . "$(dirname "$0")/lib.sh"
 

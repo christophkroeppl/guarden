@@ -26,8 +26,22 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from guarden import conf, errors, gate, names, paths, registry, tool, users, volumes
+from guarden import (
+    conf,
+    edges,
+    errors,
+    gate,
+    names,
+    paths,
+    publications,
+    registry,
+    tool,
+    units,
+    users,
+    volumes,
+)
 from guarden import manifest as manifest_mod
+from guarden import modules as modules_mod
 from guarden import overrides as overrides_mod
 
 TREE_MODE = 0o700
@@ -43,10 +57,13 @@ class Source:
     project: str | None = None
     sha: str | None = None
     service: str | None = None
+    module: str | None = None
 
     def directory(self) -> Path:
         if self.kind == "poke":
             return paths.STAGING / str(self.project) / str(self.sha)
+        if self.kind == "module":
+            return modules_mod.source_of(str(self.module), str(self.service))
         return paths.service_home(str(self.service))
 
 
@@ -55,7 +72,9 @@ class Outcome:
     resolved: names.Resolved
     converged: bool = False
     uid: int = 0
+    fresh_instance: bool = False
     warnings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
 
 def parse_from(values: list[str]) -> Source:
@@ -98,11 +117,25 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     project = manifest.project or _project_from(source)
     outcome = Outcome(resolved=resolved)
 
+    # Before identity, before the volumes, before the home: an edge the provider
+    # does not offer, and a route host another service already holds, are the two
+    # things in this ordering that would otherwise leave a system user and a
+    # subvolume behind on the way out.
+    edges.check(resolved.name, manifest)
+    check_hosts(resolved.name, manifest, resolved.track)
+
     existing = registry.load(resolved.name)
     if existing is not None and _converged(existing, resolved, manifest, project):
         outcome.converged = True
         outcome.uid = existing.uid
         return outcome
+
+    fresh = bool(resolved.escaped_ref) and (
+        existing is None or resolved.escaped_ref not in existing.instances
+    )
+    if fresh and existing is not None:
+        outcome.notes += _admit_instance(resolved, existing, now)
+    outcome.fresh_instance = fresh
 
     identity = users.ensure(resolved.name, paths.service_home(resolved.name))
     outcome.uid = identity.uid
@@ -132,17 +165,25 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # is the only copy a consumer can read: the provider's own tree is 0700 to
     # the provider and loom runs as guarden.
     record.provides = list(manifest.provides)
+    # spec 3.4: what the manifest asked for, in manifest order. A grant is matched
+    # against this and against nothing else, so `weedr port open` can refuse a port
+    # no repository asked for.
+    record.ports_requested = [entry.port for entry in manifest.ports]
+    if source.kind == "module":
+        record.installed_by = str(source.module)
     _ensure_admin_units(identity.uid)
 
     if resolved.escaped_ref and resolved.escaped_ref not in record.instances:
         # The instance is recorded at creation, because an instance that is not in
         # the registry cannot be counted against the cap or reported by `list`,
         # and a second ingest of the same ref has to be able to tell that from a
-        # ref that has not been created yet. `seed` and `publication` stay empty:
-        # no fork has taken place, and the publication allocator is a later ticket.
+        # ref that has not been created yet. `seed` stays empty: no fork has taken
+        # place. Its publications are allocated below, once the instance exists.
         record.instances[resolved.escaped_ref] = registry.Instance(
             ref=str(resolved.ref), escaped_ref=resolved.escaped_ref, created=now
         )
+
+    _allocate(resolved, record, manifest, config, source)
 
     # spec 5.3 step 9: on an ungated track every `@sensitive` key nothing has been
     # planted for gets a value minted once, so a poke is never blocked on a human.
@@ -163,13 +204,152 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
         volumes.create_bulk(resolved.name, vol, owner, resolved.escaped_ref)
         _record(record, vol, "bulk", None)
 
+    # spec 5.3 step 10, after step 9: a `@sensitive` key nothing has planted for is
+    # minted first, so an edge adopting `DB_PASSWORD` reuses that value rather than
+    # minting a second one over it. On a gated track step 9 mints nothing and the
+    # edge's own value is what exists.
+    outcome.warnings += edges.install(record, manifest)
+
     with conf.lock("registry"):
         registry.save(record, root_owner)
+
+    # spec 5.3 step 11: the service's own units are installed, so a deploy has
+    # something to start. Without this a service existed, was listed and held its
+    # volumes, and `weedr service start` refused it with "has no unit to start".
+    # **After** the registry is saved: `units.install` reads the record for the
+    # uid it installs under, and rendering before the entry exists answered "there
+    # is no registry entry for <service>".
+    if source.kind != "module":
+        outcome.warnings += units.install(directory, resolved.name)
     return outcome
+
+
+def _admit_instance(resolved, record, now: str) -> list[str]:
+    """spec 9: the cap on this track, per service, evicting the oldest first.
+
+    `registry` is taken before `preview-cap` because that is the order, and both
+    are held across the counting, the eviction and the new instance's own
+    registry entry, so the count is never observable mid-flight.
+    """
+    cap = resolved.track.cap
+    if cap is None or cap < 1:
+        raise errors.GuardenError(
+            f"the {resolved.track.name!r} track carries cap={cap}, and a cap below one "
+            f"bounds nothing",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    with conf.lock("registry", "preview-cap"):
+        printed: list[str] = []
+        while len(record.instances) + 1 > cap:
+            oldest = min(
+                record.instances.values(), key=lambda item: (item.created, item.escaped_ref)
+            )
+            printed += _forget_instance(
+                names.Resolved(
+                    name=resolved.name,
+                    track=resolved.track,
+                    ref=oldest.ref,
+                    escaped_ref=oldest.escaped_ref,
+                    defaulted=resolved.defaulted,
+                ),
+                record,
+            )
+        record.instances[str(resolved.escaped_ref)] = registry.Instance(
+            ref=str(resolved.ref), escaped_ref=str(resolved.escaped_ref), created=now
+        )
+        registry.save(record, (0, users.group_id(GUARDEN_GROUP)))
+    return printed
 
 
 def _record(record, vol: str, kind: str, config_name: str | None) -> None:
     record.volumes[vol] = registry.Volume(name=vol, kind=kind, config=config_name)
+
+
+def _wanted(manifest: manifest_mod.Manifest, source: Source) -> list[str]:
+    """The containers that get a publication, in a fixed order.
+
+    Every container named in a `routes:` or `ports:` entry, because a grant is
+    a translation to a publication and a request naming no container names no
+    destination. A module's service adds the entrypoints its own file declares
+    and, when it declares an API, the API — which is a control surface on its own
+    publication and is never forwarded.
+    """
+    out: list[str] = []
+    for entry in [*manifest.routes, *manifest.ports]:
+        if entry.container not in out:
+            out.append(entry.container)
+    if source.kind == "module":
+        module = modules_mod.read(str(source.module))
+        entry = module.service(str(source.service))
+        if entry is not None:
+            for endpoint, _, _ in module.ingress_for(entry.name):
+                if endpoint not in out:
+                    out.append(endpoint)
+            if entry.api and publications.API not in out:
+                out.append(publications.API)
+    return out
+
+
+def _allocate(resolved, record, manifest, config, source: Source) -> None:
+    """Publications and route hosts, from the ranges the host declares.
+
+    spec 7.4 and 4. One publication per container that gets one, allocated
+    from `ingress.publication_range` and refused rather than shared, and one
+    full host name per route label with the track's own prefix in front of it.
+    An instance's publications are its own, so two previews of one service are
+    both routable at once.
+    """
+    records = _others(record.service)
+    wanted = _wanted(manifest, source)
+    # This service's own instances are in `used` as well as everybody else's: a
+    # preview's publication is allocated in the same namespace as the rest of the
+    # box, and `records` deliberately excludes this service, so without this a
+    # second preview of one service is handed the number the first holds.
+    taken = publications.held(records) | _instance_publications(record)
+
+    record.publication = publications.allocate(
+        wanted, record.publication, taken, config.publication_range, record.service,
+    )
+    holders = publications.host_holders(records)
+    for route in manifest.routes:
+        record.route_hosts[route.host] = publications.claim_host(
+            route.host, resolved.track.host_prefix, holders, record.service
+        )
+
+    if resolved.escaped_ref:
+        instance = record.instances.get(resolved.escaped_ref)
+        if instance is not None:
+            instance.publication = publications.allocate(
+                wanted, instance.publication,
+                taken | set(record.publication.values()),
+                config.publication_range, f"{record.service}/{resolved.ref}",
+            )
+
+
+def _others(service: str) -> list:
+    return [
+        entry
+        for entry in (registry.load(name) for name in registry.names())
+        if entry is not None and entry.service != service
+    ]
+
+
+def _instance_publications(record) -> set[int]:
+    return {
+        port for instance in record.instances.values() for port in instance.publication.values()
+    }
+
+
+def check_hosts(name: str, manifest: manifest_mod.Manifest, track) -> None:
+    """Every route host this manifest would claim, checked before identity.
+
+    Same reason `edges.check` runs where it does: a claim refused after the user
+    and the tree exist leaves a system account and a home behind on the way out,
+    and the diagnostic the caller gets is the same either way.
+    """
+    holders = publications.host_holders(_others(name))
+    for route in manifest.routes:
+        publications.claim_host(route.host, track.host_prefix, holders, name)
 
 
 def _project_from(source: Source) -> str:
@@ -397,6 +577,14 @@ def _remove_service(resolved, record, now: str) -> list[str]:
 
 
 def _remove_instance(resolved, record) -> list[str]:
+    _instance_of(resolved, record)
+    printed = _forget_instance(resolved, record)
+    with conf.lock("registry"):
+        registry.save(record, (0, users.group_id(GUARDEN_GROUP)))
+    return printed
+
+
+def _instance_of(resolved, record):
     if resolved.track.kind != "instance":
         raise errors.GuardenError(
             f"{resolved.name} is on track {resolved.track.name!r}, which is kind "
@@ -408,14 +596,23 @@ def _remove_instance(resolved, record) -> list[str]:
         raise errors.GuardenError(
             f"{resolved.name} has no instance {resolved.ref!r}", errors.HOST_NOT_AS_ASSUMED
         )
+    return instance
+
+
+def _forget_instance(resolved, record) -> list[str]:
+    """spec 5.3: what one instance's removal does, and the lines that say so.
+
+    The cap's eviction and `weedr service remove <name>/<ref>` both come through
+    here, so a ref removed by the cap is removed by the verb.
+    """
+    instance = _instance_of(resolved, record)
+    escaped = str(resolved.escaped_ref)
 
     printed = [f"removed the instance {resolved.ref} of {resolved.name}"]
     stop_units(resolved.name, escaped)
     _drop(paths.instance_tree(resolved.name, escaped))
     _drop(paths.instance_home(resolved.name, escaped))
     del record.instances[escaped]
-    with conf.lock("registry"):
-        registry.save(record, (0, users.group_id(GUARDEN_GROUP)))
 
     released = ", ".join(f"{key}={port}" for key, port in sorted(instance.publication.items()))
     printed.append(f"released the instance's publications ({released or 'none'})")

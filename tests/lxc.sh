@@ -28,9 +28,20 @@
 #
 # Usage:
 #   tests/lxc.sh provision   build the golden, convert it to btrfs, snapshot it
-#   tests/lxc.sh run [pat]   cut a fresh VM per test file and run it there
+#   tests/lxc.sh run [pat] [opts]   run the suites, honouring what each says
 #   tests/lxc.sh shell       a fresh VM you can poke at
 #   tests/lxc.sh destroy     remove the golden
+#
+# run's options:
+#   --fresh    cut a machine per file whatever any suite asks. The default was
+#              this and it is the answer `--fresh` still gives; `just test-fresh`
+#              is the recipe that says it out loud.
+#   --shared   cut one machine for the whole run, ignoring every declaration.
+#   --reverse  run the selected suites in the opposite order.
+#
+# `--reverse` exists because sharing is a claim and a claim needs proving: the
+# suites that share a machine are run in one order and then in the other, and
+# both runs have to be green. It is the second half of that and nothing else.
 #
 # lxc is the LXD snap. It is not on PATH for a non-interactive shell, so it is
 # resolved by absolute path rather than hoped for.
@@ -64,6 +75,44 @@ _is_host_only() {
         [ "$name" = "$candidate" ] && return 0
     done
     return 1
+}
+
+# A suite says whether it needs a machine of its own, in the suite itself:
+#
+#     # machine: shared
+#     # machine: fresh
+#
+# The declaration is in the file rather than in a list here for the reason the
+# ticket gives — it travels with the suite, and a suite that forgets it is the
+# safe answer rather than a silent inheritor of another suite's system users.
+#
+# **An absent declaration is `fresh`, and that is the whole of the safety
+# argument.** `sed -n 's/^# machine: //p'` reads one line, the value is checked
+# against the two words, and anything else is refused by name rather than
+# treated as a near miss. A typo that read as "share" would put a suite that
+# writes real `/etc/guarden`, real users and real btrfs subvolumes on a machine
+# another suite already changed, and the run would be green about a host nobody
+# set up.
+#
+# `sed -n` with one substitution rather than `grep` because the first match is
+# the answer: a second declaration in the same suite is a contradiction rather
+# than a refinement, and reading the last one would let a file carry both
+# answers and depend on which line came last.
+_declaration_of() {
+    sed -n 's/^# machine: //p' "$1" | head -n 1
+}
+
+_needs_fresh() {
+    local path=$1 declared
+    declared=$(_declaration_of "$path")
+    case "$declared" in
+        '') return 0 ;;
+        fresh) return 0 ;;
+        shared) return 1 ;;
+        *)
+            die "${path##*/} declares '# machine: $declared'; it is 'fresh' or 'shared', and a suite that says neither gets a machine of its own"
+            ;;
+    esac
 }
 
 die() {
@@ -434,9 +483,58 @@ _reset() {
     _push "$RUNNER" "$REPO" "$VM_REPO"
 }
 
+_run_suite() {
+    local name=$1 rc
+    # -T always, and with stdin closed and a wall clock. A command that reads
+    # stdin — an echo-off prompt, a tool that asks a question — otherwise
+    # blocks forever on a stream nobody is feeding, and the run stops with no
+    # failure anywhere. A suite that needs input must be given it the way
+    # `lib.sh` gives a value to `systemd-creds` — on a pipe, in the test.
+    #
+    # `--foreground` is load-bearing and was not optional. `timeout` otherwise
+    # puts its child in a **new process group**, and `lxc exec` talks to the
+    # guest agent over a session that does not survive that: the guest ran the
+    # suite to completion, exited, and the client waited on a session nobody
+    # would ever close again. The symptom was a wedge with no test process in
+    # the guest and nothing printed, which is the failure this timeout exists
+    # to report — so the timeout was causing the thing it was added to catch.
+    if timeout --foreground --signal=KILL "$SUITE_TIMEOUT" \
+        $LXC exec -T "$RUNNER" --cwd "$VM_REPO" \
+        --env "PYTHONPATH=$VM_REPO/src" \
+        --env "GUARDEN_ROOT=$VM_REPO" \
+        -- bash -c "cd '$VM_REPO' && bash tests/$name" </dev/null; then
+        printf 'ok   %s\n' "$name"
+        return 0
+    fi
+    rc=$?
+    printf 'FAIL %s\n' "$name"
+    if [ "$rc" -eq 137 ]; then
+        printf 'error: %s exceeded %ss and was killed; a suite that hangs reports nothing\n' \
+            "$name" "$SUITE_TIMEOUT" >&2
+    fi
+    return 1
+}
+
 cmd_run() {
-    local pat=${1:-} file name failures=0 total=0
-    local fresh=${2:-"--fresh"}
+    local pat=${1:-}
+    [ "$#" -gt 0 ] && shift
+
+    # Three flags and none of them about the suites: what a run shares is decided
+    # by each suite, and the flags decide what happens to a suite that says
+    # nothing.
+    local fresh=0 shared=0 reverse=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --fresh) fresh=1 ;;
+            --shared) shared=1 ;;
+            --reverse) reverse=1 ;;
+            *) die "unknown option for run: $1" ;;
+        esac
+        shift
+    done
+    if [ "$fresh" = 1 ] && [ "$shared" = 1 ]; then
+        die "--fresh and --shared are opposites; pass one"
+    fi
 
     cmd_provision || exit 1
 
@@ -445,18 +543,11 @@ cmd_run() {
     # runner does not.
     trap '_teardown_runner' EXIT INT TERM
 
-    # A fresh machine per test file. The tests write real /etc/guarden, real
-    # /var/lib/guarden, real users and real btrfs subvolumes now that nothing is
-    # faked, so a shared machine is not isolation — it is the next test inheriting
-    # this one's system users and deleted snapshots. Pass `--shared` to cut one
-    # machine for the whole run, which is only sound while every test still
-    # relocates the host with GUARDEN_PREFIX.
-    local shared=0
-    if [ "$fresh" != "--fresh" ]; then
-        _reset || die "cannot cut a clean $RUNNER"
-        shared=1
-    fi
-
+    # The selected suites, in the order they will run. `--reverse` reverses the
+    # selection rather than the machine: sharing is a claim about one suite not
+    # contaminating the next, and only running the shared ones in both orders
+    # asks the question.
+    local files=() reversed=() file name i
     for file in "$REPO"/tests/t[0-9]*.sh; do
         [ -f "$file" ] || continue
         name=${file##*/}
@@ -466,50 +557,62 @@ cmd_run() {
         if _is_host_only "$name"; then
             continue
         fi
+        files+=("$file")
+    done
+    if [ "$reverse" = 1 ]; then
+        for ((i = ${#files[@]} - 1; i >= 0; i--)); do
+            reversed+=("${files[$i]}")
+        done
+        files=("${reversed[@]}")
+    fi
+
+    local total=0 failures=0 cuts=0 overridden=0
+
+    # One machine for the shared suites, cut once before the first of them and
+    # kept for the rest. A suite that needs one of its own closes the group: the
+    # next shared suite gets a clean machine rather than the one the fresh suite
+    # just changed.
+    local shared_open=0
+
+    for file in "${files[@]}"; do
+        name=${file##*/}
         total=$((total + 1))
 
-        if [ "$shared" = 0 ]; then
+        local want_fresh
+        if [ "$shared" = 1 ]; then
+            want_fresh=0
+        elif [ "$fresh" = 1 ]; then
+            want_fresh=1
+            _needs_fresh "$file" && overridden=$((overridden + 1))
+        else
+            want_fresh=1
+            _needs_fresh "$file" || want_fresh=0
+        fi
+
+        if [ "$want_fresh" = 1 ]; then
             if ! _reset; then
                 printf 'FAIL %s\n' "$name"
                 printf 'error: cannot cut a clean %s\n' "$RUNNER" >&2
                 failures=$((failures + 1))
+                shared_open=0
                 continue
             fi
+            cuts=$((cuts + 1))
+            shared_open=0
+        elif [ "$shared_open" = 0 ]; then
+            _reset || die "cannot cut a clean $RUNNER"
+            cuts=$((cuts + 1))
+            shared_open=1
         fi
 
-        # -T always, and with stdin closed and a wall clock. A command that reads
-        # stdin — an echo-off prompt, a tool that asks a question — otherwise
-        # blocks forever on a stream nobody is feeding, and the run stops with no
-        # failure anywhere. A suite that needs input must be given it the way
-        # `lib.sh` gives a value to `systemd-creds` — on a pipe, in the test.
-        #
-        # `--foreground` is load-bearing and was not optional. `timeout` otherwise
-        # puts its child in a **new process group**, and `lxc exec` talks to the
-        # guest agent over a session that does not survive that: the guest ran the
-        # suite to completion, exited, and the client waited on a session nobody
-        # would ever close again. The symptom was a wedge with no test process in
-        # the guest and nothing printed, which is the failure this timeout exists
-        # to report — so the timeout was causing the thing it was added to catch.
-        if timeout --foreground --signal=KILL "$SUITE_TIMEOUT" \
-            $LXC exec -T "$RUNNER" --cwd "$VM_REPO" \
-            --env "PYTHONPATH=$VM_REPO/src" \
-            --env "GUARDEN_ROOT=$VM_REPO" \
-            -- bash -c "cd '$VM_REPO' && bash tests/$name" </dev/null; then
-            printf 'ok   %s\n' "$name"
-        else
-            rc=$?
-            if [ "$rc" -eq 137 ]; then
-                printf 'FAIL %s\n' "$name"
-                printf 'error: %s exceeded %ss and was killed; a suite that hangs reports nothing\n' \
-                    "$name" "$SUITE_TIMEOUT" >&2
-            else
-                printf 'FAIL %s\n' "$name"
-            fi
-            failures=$((failures + 1))
-        fi
+        _run_suite "$name" || failures=$((failures + 1))
     done
 
-    printf '\n%d suites, %d failures\n' "$total" "$failures"
+    if [ "$fresh" = 1 ] && [ "$overridden" -gt 0 ]; then
+        printf 'note: --fresh cuts a machine per file and overrode the shared declaration of %d suite(s)\n' \
+            "$overridden"
+    fi
+    printf '\n%d suites, %d failures, %d machines cut\n' "$total" "$failures" "$cuts"
     [ "$failures" -eq 0 ]
 }
 
@@ -560,5 +663,9 @@ case "${1:-run}" in
     shell) shift; cmd_shell "$@" ;;
     destroy) shift; cmd_destroy "$@" ;;
     clean) shift; cmd_clean "$@" ;;
-    *) printf 'usage: %s {provision|run|shell|destroy|clean}\n' "$0" >&2; exit 2 ;;
+    *)
+        printf 'usage: %s {provision|run [pat] [--fresh|--shared|--reverse]|shell|destroy|clean}\n' \
+            "$0" >&2
+        exit 2
+        ;;
 esac

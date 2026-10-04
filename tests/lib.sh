@@ -248,15 +248,16 @@ assert_no_firewall_rule() {
 
 assert_rule_count() {
     local count
-    count=$(grep -cE '^\[ ' "$1")
+    count=$(grep -vE '^[[:space:]]*(#|$)' "$1" | grep -cE '^[[:space:]]+(jump|proto|mod|ip|if|daddr|iif) ')
     [ "$count" = "$2" ] || _fail "$1 carries $count rules, expected $2"
 }
 
 # assert_file_lacks <path> <text>: a key that must be absent, which is how
 # "the gate table is omitted rather than written as a verdict" is checked.
+# Comments are excluded: a unit explaining why it lacks a directive names it.
 assert_file_lacks() {
     [ -e "$1" ] || return 0
-    if grep -qF -- "$2" "$1"; then
+    if grep -vE '^[[:space:]]*(#|;)' "$1" | grep -qF -- "$2"; then
         _fail "$1 names $2 and should not"
     fi
 }

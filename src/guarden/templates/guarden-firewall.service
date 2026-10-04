@@ -15,9 +15,11 @@ Type=oneshot
 RemainAfterExit=yes
 # The three files are disjoint and each has exactly one writer: 10 and 20 are
 # soil's, 30 is the mutator's. They are read in order and flushed once.
-ExecStart=/usr/sbin/ferm -f /etc/guarden/firewall/10-framework.conf /etc/guarden/firewall/20-ingress-nat.conf /etc/guarden/firewall/30-services.conf
-ExecReload=/usr/sbin/ferm -f /etc/guarden/firewall/10-framework.conf /etc/guarden/firewall/20-ingress-nat.conf /etc/guarden/firewall/30-services.conf
-ExecStop=/usr/sbin/ferm -F
+# ferm takes ONE input file and has no `-f`, so the three are assembled here; a
+# missing file is skipped, because 30-services.conf is absent until a service exists.
+ExecStart=/bin/sh -c 'cat /etc/guarden/firewall/10-framework.conf /etc/guarden/firewall/20-ingress-nat.conf /etc/guarden/firewall/30-services.conf 2>/dev/null > /etc/guarden/firewall/.combined.conf; exec /usr/sbin/ferm /etc/guarden/firewall/.combined.conf'
+ExecReload=/bin/sh -c 'cat /etc/guarden/firewall/10-framework.conf /etc/guarden/firewall/20-ingress-nat.conf /etc/guarden/firewall/30-services.conf 2>/dev/null > /etc/guarden/firewall/.combined.conf; exec /usr/sbin/ferm /etc/guarden/firewall/.combined.conf'
+ExecStop=/bin/sh -c 'cat /etc/guarden/firewall/10-framework.conf /etc/guarden/firewall/20-ingress-nat.conf /etc/guarden/firewall/30-services.conf 2>/dev/null > /etc/guarden/firewall/.combined.conf; exec /usr/sbin/ferm -F /etc/guarden/firewall/.combined.conf'
 
 [Install]
 WantedBy=multi-user.target

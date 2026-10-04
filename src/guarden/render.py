@@ -37,10 +37,23 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from guarden import compose, conf, errors, names, paths, registry, secretschema, unitsource
+from guarden import (
+    compose,
+    conf,
+    edgeconf,
+    edges,
+    errors,
+    names,
+    paths,
+    registry,
+    secretschema,
+    unitsource,
+)
 from guarden import config as config_mod
 from guarden import manifest as manifest_mod
+from guarden import modules as modules_mod
 from guarden import overrides as overrides_mod
+from guarden import publications as publications_mod
 from guarden.compose import Mount
 from guarden.config import Config, Track
 from guarden.overrides import Overrides
@@ -556,22 +569,95 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
 def check_ingress(document: manifest_mod.Manifest, context: Context) -> str:
     """The alias, and only where it is needed.
 
-    `AddHost=<provider>:<alias>` is the whole of the name resolution there is, so
-    a service with an edge and an empty `ingress.alias` would render host entries
-    that resolve to nothing. Empty is what the key is until `soil install` measures
-    it, so this is exit `1` — the host is not in the state the render assumed. A
-    service with no edges does not need the alias and is not refused for it.
+    `AddHost=<name>:<alias>` is the whole of the name resolution there is, so a
+    service that needs a name and an empty `ingress.alias` would render host
+    entries that resolve to nothing. Empty is what the key is until `soil
+    install` measures it, so this is exit `1` — the host is not in the state the
+    render assumed. A service that needs no name is not refused for a missing
+    alias.
     """
-    if not document.needs:
+    if not document.needs and not routed_names(context.service):
         return context.config.alias
     if not context.config.alias:
         raise errors.GuardenError(
-            f"{context.config.path}: ingress.alias is empty and {context.service} declares "
-            f"edges, so every rendered AddHost= would resolve to nothing; `soil install` "
+            f"{context.config.path}: ingress.alias is empty and {context.service} renders host "
+            f"entries, so every rendered AddHost= would resolve to nothing; `soil install` "
             f"measures the alias and writes it there",
             errors.HOST_NOT_AS_ASSUMED,
         )
     return context.config.alias
+
+
+def is_edge(service: str) -> bool:
+    """Whether an enabled module installed this service as the edge."""
+    for name in config_mod.load().modules:
+        try:
+            entry = modules_mod.read(name).edge()
+        except errors.GuardenError:
+            continue
+        if entry is not None and entry.name == service:
+            return True
+    return False
+
+
+def routed_names(service: str) -> list[str]:
+    """Every service this render's consumer may have to name: the routed ones.
+
+    The edge resolves the service name of every route it proxies, so those names
+    go into the **edge's** own units as `AddHost=` entries pointing at the alias.
+    Without them the edge cannot resolve its own configuration, which is a 502
+    on every route and the first thing to check when one appears.
+    """
+    if service is None or not is_edge(service):
+        return []
+    out = []
+    for name in registry.names():
+        record = registry.load(name)
+        if record is not None and record.route_hosts and record.service != service:
+            out.append(record.service)
+    return sorted(out)
+
+
+def ingress_ports(service: str) -> list[str]:
+    """Every loopback `PublishPort` the edge's declared ingress binds on.
+
+    `127.0.0.1:<publication>:<container port>` per declared ingress entry, and
+    the renderer owns the whole set like every other port: the module's file is
+    guarden's own and the allocation is the registry's, and nothing else may
+    write a `PublishPort` line. `/udp` rides on the line because a forwarded udp
+    port is a different protocol from the same number over tcp.
+
+    The API publication rides here too, on the entrypoint the edge's own source
+    serves it from: it is a control surface rather than ingress, so it is never
+    forwarded, but a publication nothing binds is a port the firewall admits and
+    nothing answers.
+    """
+    record = registry.load(service) if service else None
+    if record is None or not is_edge(service):
+        return []
+    out: list[str] = []
+    for module in config_mod.load().modules:
+        try:
+            entry = modules_mod.read(module).edge()
+        except errors.GuardenError:
+            continue
+        if entry is None or entry.name != service:
+            continue
+        for endpoint, port, protocol in modules_mod.read(module).ingress_for(service):
+            publication = record.publication.get(endpoint)
+            if publication is None:
+                continue
+            suffix = "/udp" if protocol == "udp" else ""
+            out.append(f"{LOOPBACK}:{publication}:{port}{suffix}")
+        if entry.api:
+            publication = record.publication.get(publications_mod.API)
+            port = edgeconf.api_port(
+                edgeconf.of_source(modules_mod.source_of(module, entry.name), entry.name),
+                entry.name,
+            )
+            if publication is not None and port:
+                out.append(f"{LOOPBACK}:{publication}:{port}")
+    return out
 
 
 # --- the render --------------------------------------------------------------
@@ -588,10 +674,12 @@ def build(
     check_mount_paths(mounts, source, context)
 
     edge_ports: list[tuple[str, int]] = []
+    routed: list[str] = []
     if context is not None:
         check_edges(document, context)
         check_ingress(document, context)
         edge_ports = edge_publications(document, context)
+        routed = routed_names(context.service)
 
     schema = secretschema.read(directory / document.schema if document.schema else ABSENT)
     plan.warnings.extend(_image_warnings(source, context))
@@ -610,6 +698,7 @@ def build(
                 merged=dropins.get(container),
                 ports=ports,
                 edge_ports=edge_ports,
+                routed=routed,
                 schema=schema,
                 domain=domain,
             ),
@@ -712,6 +801,7 @@ def _container_unit(
     merged: Unit | None,
     ports: dict[str, tuple[int, int]],
     edge_ports: list[tuple[str, int]],
+    routed: list[str],
     schema: secretschema.Schema,
     domain: str,
 ) -> str:
@@ -739,11 +829,18 @@ def _container_unit(
         unit.put("Container", "ContainerName", [f"{service}-{container}".lstrip("-")])
     if context is not None:
         unit.put("Container", "Network", [context.config.network])
-        unit.put(
-            "Container",
-            "AddHost",
-            [f"{provider}:{context.config.alias}" for provider, _ in sorted(edge_ports)],
-        )
+        # Every name this unit may have to resolve: the providers it declared an
+        # edge to, and — for the edge itself — every routed service, because a
+        # route target is `<service>:<publication>` and the edge has no other
+        # way to turn that name into an address.
+        hosts = [provider for provider, _ in sorted(edge_ports)]
+        hosts.extend(name for name in routed if name not in hosts)
+        if hosts:
+            unit.put(
+                "Container",
+                "AddHost",
+                [f"{name}:{context.config.alias}" for name in hosts],
+            )
         if edge_ports:
             unit.put("Container", "EnvironmentFile", [str(context.unit_dir() / ENV_FILE)])
     volume_keys = _volume_lines(document, source, container, context)
@@ -752,6 +849,13 @@ def _container_unit(
     if container in ports:
         publication, port = ports[container]
         unit.put("Container", "PublishPort", [f"{LOOPBACK}:{publication}:{port}"])
+    ingress = ingress_ports(service) if service else []
+    if ingress:
+        published = list(unit.get("Container", "PublishPort"))
+        for line in ingress:
+            if line not in published:
+                published.append(line)
+        unit.put("Container", "PublishPort", published)
     requests = _secret_requests(document, schema)
     if requests:
         unit.put("Container", "Secret", requests)
@@ -842,9 +946,10 @@ def _secret_requests(
     `Secret=<KEY>,type=file` in `[Container]` and nothing else: podman resolves
     `<KEY>` from that service's own secret store and presents it at
     `/run/secrets/<KEY>`. A key whose application needs a variable gets
-    `type=env`, which is what the schema's `@type env` means. A `database` edge
-    adds the uppercased prefix plus `_PASSWORD`, which is the role's own password
-    in the consumer's store.
+    `type=env`, which is what the schema's `@type env` means. An edge adds its
+    own key under the `as` prefix — `<AS>_PASSWORD` for `auth: database`,
+    `<AS>_SECRET` for `auth: secret` — so the credential the mutator planted is
+    a credential the unit actually asks for.
 
     **There is no `LoadCredentialEncrypted=`**, and a test asserts the absence.
     These units run in the *service user's* user manager, which cannot read the
@@ -856,7 +961,9 @@ def _secret_requests(
     """
     out: list[str] = [f"{key.name},type={key.injection}" for key in schema.requests()]
     out.extend(
-        f"{edge.variable}_PASSWORD,type=file" for edge in document.needs if edge.auth == "database"
+        f"{edges.credential_key(edge.auth, edge)},type=file"
+        for edge in document.needs
+        if edge.auth in (edges.AUTH_DATABASE, edges.AUTH_SECRET)
     )
     ordered: list[str] = []
     for line in out:

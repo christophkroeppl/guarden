@@ -8,6 +8,13 @@
 # holds is the per-service uid with `0700` on the service tree. What these buy is
 # that a capability, a device or a host mount cannot be obtained by adding a line
 # to a file, and that the mistake is visible in review.
+#
+# machine: shared
+# `guarden_prefix` stages the host, and every staged manifest, staged unit
+# source and staged `guarden.toml` is under `$GUARDEN_PREFIX` or
+# `$GUARDEN_FIXTURES`; the refused renders name `/var/lib/postgresql/data`
+# in a *diagnostic* and never touch it. `install_pinned_converter` reaches
+# real apt and the machine's apt timers; see the note in t40-manifest.sh.
 
 . "$(dirname "$0")/lib.sh"
 

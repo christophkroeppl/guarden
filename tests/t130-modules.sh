@@ -93,28 +93,12 @@ run soil install --apply --modules homepage
 assert_exit 0
 assert_file_has "$config" 'enabled = ["gate", "homepage"]'
 
-# `weedr module add` is the third writer of that key and it appends too. It is
-# **not implemented yet** — `cli.pending` is what answers it, and no `modules/`
-# directory ships in this repository — so the verb's behaviour is asserted as
-# pending rather than exercised, and the append it would perform is asserted
-# through the writer that *is* implemented.
-#
-# The assertion that used to sit here was `assert_called "install -m"`, read from a
-# call log after the verb ran. It was asking a stand-in what it had been asked to
-# write, and the honest answer to that claim on this tree is that there is nothing
-# to ask: the verb has no body yet. **No probe was invented to preserve it** — a
-# probe that wrote a module file itself would be asserting that the probe works,
-# which is the failure ADR-0014 retires.
-#
-# What is left is the composition claim, which is about the *key* and is therefore
-# about the two implemented writers: a second `soil install --modules` merges with
-# what the file already says rather than replacing the value, and it does so
-# because it re-reads under the lock.
-assert_file_missing /usr/lib/guarden/modules/gate/module.toml
-run weedr module add gate
-assert_exit 1
-assert_stderr_has "not implemented"
-assert_file_missing /usr/lib/guarden/modules/gate/module.toml
+# `soil install` installs the module directory, so `weedr module add gate` has
+# something to read months later without this phase running again. The verb
+# itself is exercised in `t50-module.sh`, which creates the edge's user and its
+# publications; what is asserted *here* is the key, because this file is about
+# the key.
+assert_file_exists /usr/lib/guarden/modules/gate/module.toml
 
 # The append composed rather than replacing, so both the installer's selection and
 # the module's own are in the list. This is the whole of the shared-key claim and
@@ -169,13 +153,11 @@ assert_file_has "$config" 'alias = "192.0.2.1"'
 assert_file_has "$config" 'domain = "example.com"'
 
 # An unknown module is rejected input rather than a module that silently enables
-# nothing — but the verb is pending, so on this tree the verb is what answers and
-# the name never reaches a parser. The input assertion is left to the ticket that
-# writes the verb's body; asserting it now would be asserting a diagnostic this
-# repository does not produce.
+# nothing: the verb refuses the name and writes nothing.
 run weedr module add nosuchmodule
-assert_exit 1
-assert_stderr_has "not implemented"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "nosuchmodule"
 assert_file_lacks "$config" "nosuchmodule"
 
 # The lock directory is where the `modules` lock lives, and it is tmpfs: only the

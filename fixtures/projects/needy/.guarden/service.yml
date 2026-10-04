@@ -1,0 +1,12 @@
+# A second consumer of the same provider, and of the **same** port as `needful`, so
+# the suite can show that two consumers dial one publication and hold a credential
+# each. It does not declare the vault edge, which is what makes the "a consumer is
+# granted per publication and not per provider" assertion possible: this service's
+# uid appears on the db publication and not on the vault one.
+project: needy
+units: .guarden/quadlet/
+needs:
+  - service: pgprov-staging
+    as: db
+    port: 5432
+    auth: database

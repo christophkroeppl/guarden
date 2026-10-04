@@ -1,0 +1,11 @@
+# Two containers, so that "into every unit of the consumer" is a claim about more
+# than one unit.
+[Unit]
+Description=the consumer's web container
+
+[Container]
+Image=docker.io/library/nginx:1.27
+Network=pasta:--map-gw
+
+[Service]
+Restart=always

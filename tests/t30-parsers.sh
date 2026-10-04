@@ -5,6 +5,10 @@
 #
 # The assertions live in the .py beside this file; the seam here is the command
 # line, as it is everywhere else.
+#
+# machine: shared
+# the module sets `GUARDEN_PREFIX` to its own `mkdtemp` before the import,
+# and its assertions read documents it wrote. No host state.
 
 . "$(dirname "$0")/lib.sh"
 

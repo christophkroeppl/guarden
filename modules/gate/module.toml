@@ -1,0 +1,23 @@
+# The gate module: the edge and the program that writes its routes (spec 3.6).
+#
+# `requires` is empty and the module is in the shipped `[modules] enabled`
+# list, because `weedr module add gate` is a whole operation and a module
+# nothing else needs is not a dependency anything has to be checked against.
+name = "gate"
+requires = []
+
+[[services]]
+service = "traefik-production"
+# The edge's own forwarded set, one nat rule each. `web` is the redirect
+# entrypoint and `websecure` terminates TLS; 443/udp is HTTP/3 served from the
+# same TLS entrypoint, and a forwarded udp port is a different protocol and a
+# different rule, so this is three rules and not two. These are the **container**
+# ports the entrypoints listen on: a publication forwards to a loopback port a
+# container is already bound to.
+ingress = [ "web:80/tcp", "websecure:443/tcp", "websecure:443/udp" ]
+# The API is a control surface, not ingress: it gets a loopback publication and
+# an accept set restricted to `host.admin_user`, and it is never forwarded.
+api = true
+
+[[switches]]
+program = "roots"

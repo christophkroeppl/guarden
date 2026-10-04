@@ -32,6 +32,7 @@ ETC_GUARDEN = ETC / "guarden"
 GUARDEN_TOML = ETC_GUARDEN / "guarden.toml"
 ETC_SERVICES = ETC_GUARDEN / "services"
 PROJECTS_TOML = ETC_GUARDEN / "projects.toml"
+FIREWALL = ETC_GUARDEN / "firewall"
 # spec 2: the credential blobs, `0700 root`. One directory per service, one
 # `<KEY>.cred` per key, and the pair is the whole of what a value is on this host
 # outside the service that owns it.

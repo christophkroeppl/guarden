@@ -107,21 +107,36 @@ assert_owner /var/lib/guarden/render guarden:guarden
 assert_mode /run/guarden/locks 0770
 assert_owner /run/guarden/locks root:guarden
 
-# The credential materialiser decrypts once, in the system manager, and the
-# generated unit for a service carries no LoadCredentialEncrypted= because it
-# runs in that service's user manager and cannot read a 0600 root host key.
-assert_file_has /etc/systemd/system/guarden-credential-materialiser@.service \
-    "LoadCredentialEncrypted=credentials:"
+# ADR-0005's two units, plus the instantiable per-blob unit the path triggers,
+# which carries no [Install] so it cannot fire at boot and double-materialise.
+assert_file_exists /etc/systemd/system/guarden-credential-materialiser@.service
+assert_file_lacks /etc/systemd/system/guarden-credential-materialiser@.service "[Install]"
 assert_file_has /etc/systemd/system/guarden-credential-materialiser@.service \
     "ExecStart=/usr/lib/guarden/bin/weedr secret materialise %i"
-assert_file_has /etc/systemd/system/guarden-credential-materialiser@.service \
-    "After=snapperd.service"
+assert_file_exists /etc/systemd/system/guarden-creds.path
+assert_file_exists /etc/systemd/system/guarden-creds-boot.service
+assert_file_has /etc/systemd/system/guarden-creds-boot.service \
+    "ExecStart=/usr/lib/guarden/bin/weedr secret materialise"
+assert_file_has /etc/systemd/system/guarden-creds-boot.service "WantedBy=multi-user.target"
+assert_file_has /etc/systemd/system/guarden-creds-boot.service "After=snapperd.service"
+assert_file_has /etc/systemd/system/guarden-creds.path "PathChanged=/etc/guarden/creds/"
 
-# The probe is the one thing this phase cannot converge without, so it is drift
+# **Both of the pair are enabled, and the boot oneshot was not.** It carries
+# WantedBy=multi-user.target, so `enable` is the only thing that makes boot
+# materialisation happen: the path unit answers a *change* under the blob
+# directory and never fires on a host nobody wrote to, so without this a reboot
+# left every planted value encrypted and unread. Asserted of the machine, not of
+# the argv that was supposed to produce it, and after the apply above because
+# this is the converge that enables them.
+assert_enabled guarden-creds.path
+assert_enabled guarden-creds-boot.service
+
+# The probe is the one item this phase cannot converge without, so it is drift
 # on every run until the probe has run: an alias that is wrong is worse than an
 # alias that is absent, because the edge refuses to start without it. One drift
 # line and no other is the whole of the claim -- a converged host with an
-# unmeasurable alias is exactly what this is.
+# unmeasurable alias is exactly that, and the enable items above are converged so
+# they are not the extra line a new item would otherwise add here.
 run soil install --check
 assert_exit 1
 # The line count is read with wc and not with lib.sh's assert_one_diagnostic,

@@ -7,6 +7,20 @@
 # refused naming both accepted locations rather than picking one: a renderer that
 # quietly preferred one would make the repository's real behaviour depend on
 # which file happened to exist.
+#
+# machine: shared
+# `guarden_prefix` stages the host, and `install_pinned_converter` installs
+# the converter into that staged prefix at
+# `$GUARDEN_PREFIX/usr/lib/guarden/bin/podlet`, so every file this suite
+# reads or writes is under `$GUARDEN_PREFIX` or `$GUARDEN_FIXTURES`. **It is
+# not staged that far: `install_pinned_converter` runs a real `soil packages
+# --apply`, and apt and `systemctl disable` are not prefixed.** Those two
+# reach the machine every time this suite runs, which is the leak the ticket
+# asks to be preserved rather than widened, and it is why the same four
+# suites that call it are order-insensitive today: they all ask for the same
+# convergent state and none of them asserts an absence a converged machine
+# no longer has. What this suite asserts is entirely about the manifest and
+# the refusal, so a converged apt set costs it nothing.
 
 . "$(dirname "$0")/lib.sh"
 

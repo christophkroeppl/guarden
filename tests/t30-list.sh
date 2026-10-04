@@ -124,7 +124,11 @@ assert_json services.1.volumes.1.config null
 assert_json services.1.volumes.1.snapshots null
 assert_json_missing services.1.volumes.1.snapshots.total
 assert_json services.0.instances.0.ref '"feature-login"'
-assert_json services.0.instances.0.seed '{}'
+# The instance is forked from the workload's staging service as an internal step
+# of the create (spec 5.3 step 12), so its seed names the snapshot it was cloned
+# from rather than sitting empty.
+assert_json services.0.instances.0.seed.data.service '"myapp-staging"'
+assert_json services.0.instances.0.seed.data.volume '"data"'
 assert_json services.0.volumes.0.config '"myapp-preview-feature\\x2dlogin-data"'
 
 # The field set is closed, so a field that is not in it is not there. `removed` is

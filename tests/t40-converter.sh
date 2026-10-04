@@ -23,6 +23,13 @@
 # filled, so this suite is green on the golden today and stays green after. It
 # cannot assert that translation works — that needs the real binary and belongs to
 # the suites that render a Compose file.
+#
+# machine: shared
+# `guarden_prefix` stages the host, and every path this file touches is
+# under `$GUARDEN_PREFIX` or `$GUARDEN_FIXTURES`. The converter file it
+# plants is inside the staged host, so the suite that reaches
+# `install_pinned_converter` reaches it on its own staged copy and not on a
+# machine this file shares.
 
 . "$(dirname "$0")/lib.sh"
 

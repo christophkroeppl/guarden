@@ -1,0 +1,17 @@
+# A consumer of `pgprov` with two edges of two different `auth:` kinds.
+#
+# `as:` is the prefix of the generated variables, so these read
+# `DB_HOST`/`DB_PORT` with `DB_PASSWORD` and `VAULT_HOST`/`VAULT_PORT` with
+# `VAULT_SECRET`. `needy` declares the first and not the second, which is what makes
+# "a consumer is granted per publication and not per provider" assertable.
+project: needful
+units: .guarden/quadlet/
+needs:
+  - service: pgprov-staging
+    as: db
+    port: 5432
+    auth: database
+  - service: pgprov-staging
+    as: vault
+    port: 8200
+    auth: secret

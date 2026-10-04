@@ -1,0 +1,32 @@
+{#
+  One service's routes, as traefik's file provider reads them.
+
+  The target is `<service>:<publication>` with nothing appended and nothing
+  removed: the edge resolves the service's own name through the AddHost entry
+  loom wrote into its units, and a loopback address would be the host's, which
+  a container does not share. One file per service, so a route change is one
+  file changing and the edge picks it up from its own watch.
+#}
+# Written by roots. Do not edit: the next sync overwrites this file.
+http:
+  routers:
+{% for row in rows %}
+    {{ row.router }}:
+      rule: "{{ row.rule }}"
+      entryPoints:
+{% for entrypoint in row.entrypoints %}
+        - {{ entrypoint }}
+{% endfor %}
+      service: {{ row.router }}
+{% if row.middleware %}
+      middlewares:
+        - guarden-forward-auth
+{% endif %}
+{% endfor %}
+  services:
+{% for row in rows %}
+    {{ row.router }}:
+      loadBalancer:
+        servers:
+          - url: "{{ row.target }}"
+{% endfor %}

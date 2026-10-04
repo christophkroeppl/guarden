@@ -7,6 +7,12 @@
 # defines**. The two answers come from different places on purpose: a consumer
 # cannot read a provider's tree, so the provider's `provides:` lives in a file the
 # mutator wrote, and every disagreement therefore has one input and one exit code.
+#
+# machine: shared
+# `guarden_prefix` stages the host, and every registry row, every staged
+# manifest and every rendered unit is under `$GUARDEN_PREFIX` or
+# `$GUARDEN_FIXTURES`. The unit source is hand-written quadlet, so no
+# converter and no fetch is involved.
 
 . "$(dirname "$0")/lib.sh"
 

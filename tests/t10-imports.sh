@@ -9,6 +9,11 @@
 #
 # The rule is checked against fixture files, so it holds on a host that has not
 # run `soil packages` yet, and separately against the package itself.
+#
+# machine: shared
+# it reads source and writes into `GUARDEN_FIXTURES`, which is a `mktemp -d`
+# of this suite's own. The `--imports-only` form is the point: no scan half,
+# so nothing here reads the host's package database.
 
 . "$(dirname "$0")/lib.sh"
 

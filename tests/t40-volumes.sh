@@ -11,6 +11,15 @@
 # alike, because a container must be able to mount either — the difference
 # between the two is whether a snapper configuration exists, not whether a
 # container can reach the data.
+#
+# machine: shared
+# `guarden_prefix` stages the host; every registry row, staged manifest and
+# rendered `.volume` unit is under `$GUARDEN_PREFIX` or `$GUARDEN_FIXTURES`.
+# The paths this file asserts are the *rendered strings*, not directories
+# that exist, so no subvolume is created and `btrfs` is never called.
+# `install_pinned_converter` reaches real apt and the machine's apt timers;
+# see the note in t40-manifest.sh, which is the same leak in the same four
+# suites.
 
 . "$(dirname "$0")/lib.sh"
 

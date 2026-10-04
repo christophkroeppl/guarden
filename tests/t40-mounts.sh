@@ -7,6 +7,13 @@
 # entry there is a grant in the same sense a port is. A repository cannot widen
 # its own mounts, so the renderer never writes that file and never reads one the
 # repository supplied.
+#
+# machine: shared
+# `guarden_prefix` stages the host, and every registry row, admin grant,
+# rendered unit and checked host path is under `$GUARDEN_PREFIX` or
+# `$GUARDEN_FIXTURES`. `install_pinned_converter` reaches real apt and the
+# machine's apt timers; see the note in t40-manifest.sh, the same leak in
+# the same four suites.
 
 . "$(dirname "$0")/lib.sh"
 

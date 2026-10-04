@@ -6,6 +6,13 @@
 # the claims that are about the bytes — the network backend, the weights, the
 # credential requests, the substitution, the templates, and the fact that `check`
 # writes nothing at all.
+#
+# machine: shared
+# `guarden_prefix` stages the host and every registry row, admin drop-in,
+# rendered unit and template set is under `$GUARDEN_PREFIX` or
+# `$GUARDEN_FIXTURES`. The unit source is hand-written quadlet, so no
+# converter is driven and no fetch happens; `loom` runs unprivileged and
+# writes only into `--out`.
 
 . "$(dirname "$0")/lib.sh"
 

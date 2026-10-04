@@ -1,0 +1,9 @@
+# The edge, as a service: one user, one home, one unit directory.
+#
+# No volumes: a throwaway machine cannot complete ACME, and certificates that
+# were only ever examples are worse than none. The routes come from `roots`,
+# which reads /var/lib/guarden/shared/<service>/routes.toml and writes the
+# edge's file-provider configuration; the directory this unit mounts read-only
+# is the one `weedr module add gate` creates.
+project: traefik
+units: .guarden/quadlet/

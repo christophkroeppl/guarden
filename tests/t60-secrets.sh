@@ -31,6 +31,13 @@
 # prefix at the end of the test, so it must not occur in any file guarden writes.
 VALUE=top-secret-value-77
 
+# The fixture names `operator` as admin_user and nothing creates it; the API
+# accept set is keyed on that uid.
+id -u operator >/dev/null 2>&1 || {
+    getent group operator >/dev/null 2>&1 || groupadd --system operator
+    useradd --system --no-create-home --gid operator --shell /usr/sbin/nologin operator
+}
+
 stage_quadlet()
 {
     local project=qapp ref=9f2c1ab
@@ -77,15 +84,29 @@ registry=$GUARDEN_PREFIX/var/lib/guarden/registry
 seed "$registry/postgres-staging.toml" \
     'service = "postgres-staging"' 'workload = "postgres"' 'project = "postgres"' \
     'environment = "staging"' 'uid = 1099' 'created = "2026-09-30T09:00:00Z"' \
-    '[provides]' 'kinds = [ "db" ]' '[publication]' 'api = 20107'
+    '[provides]' 'kinds = [ "db" ]' '[publication]' 'api = 20107' 'db = 20108'
+
+# The provider's own manifest names the container serving 5432; without it the
+# edge records no publication and the refusal below is correct.
+pg_home=$GUARDEN_PREFIX/var/lib/guarden/services/postgres-staging/home
+mkdir -p "$pg_home/.guarden"
+printf '%s\n' \
+    'project: postgres' \
+    'units: .guarden/quadlet/' \
+    'ports:' \
+    '  - container: db' \
+    '    port: 5432' \
+    >"$pg_home/.guarden/service.yml"
+
+# Not assert_stderr_empty: the firewall and not-running-provider warnings are
+# correct on an unconverged host, so the claim is that the edge resolves.
 run weedr service ingest qapp-production --from poke qapp@9f2c1ab
 assert_exit 0
-assert_stderr_empty
+assert_stderr_lacks "the edge is recorded with no publication"
 
-# Nothing was planted, so nothing is on disk under the credential directory: a
-# gated track mints no value, and generating one would hide exactly the condition
-# the gate exists to catch.
-assert_file_missing "$GUARDEN_PREFIX/etc/guarden/creds/qapp-production/DB_PASSWORD.cred"
+# A database edge mints a value (key = prefix uppercased + _PASSWORD), so the
+# blob is on disk after ingest.
+assert_file_exists "$GUARDEN_PREFIX/etc/guarden/creds/qapp-production/DB_PASSWORD.cred"
 
 run weedr secret set qapp-production DB_PASSWORD <<<"$VALUE"
 assert_exit 0
@@ -166,7 +187,7 @@ assert_stderr_has "credential key"
 assert_stdout_empty
 
 # One path unit on the blob directory and one boot-time oneshot, two units for the
-# whole host. The install phase converges all three of the new items, and
+# whole host and two in total. The install phase converges all of them, and
 # `--check` naming them is a question asked of the machine.
 run soil install --check
 assert_exit 1
@@ -174,28 +195,35 @@ assert_stderr_has "the credential materialiser's path unit is installed"
 assert_stderr_has "the credential materialiser's boot oneshot is installed"
 assert_stderr_has "/etc/guarden/creds is 0700 root"
 
-# Those two units, and the shape spec 6.9 pins for them: the oneshot is root and
-# runs the one program that decrypts, and the path unit triggers that oneshot
-# rather than a unit of its own that does not exist.
+# ADR-0005's two units, and the shape spec 6.9 pins for them: the oneshot is root
+# and runs the one program that decrypts, and the path unit triggers that oneshot.
+#
+# The instantiable `guarden-credential-materialiser@.service` is the third template
+# on disk and it is **not** a violation of "two units in total": it is what the
+# path unit triggers per blob, and it carries no `[Install]` precisely because a
+# `WantedBy=` would fire it at boot and double-materialise against the oneshot.
+# (Ticket 221 removed it on the reading that it did nothing; it was restored,
+# because the mechanism is the ADR's and the real defect was that
+# `credentials.value()` ignored the `$CREDENTIALS_DIRECTORY` systemd handed it.)
 oneshot=$PWD/src/guarden/templates/guarden-creds-boot.service
 path_unit=$PWD/src/guarden/templates/guarden-creds.path
+per_blob=$PWD/src/guarden/templates/guarden-credential-materialiser@.service
 assert_file_has "$oneshot" "ExecStart=/usr/lib/guarden/bin/weedr secret materialise"
 assert_file_has "$oneshot" "Type=oneshot"
 assert_file_has "$path_unit" "PathChanged=/etc/guarden/creds/"
 assert_file_has "$path_unit" "Unit=guarden-creds-boot.service"
+assert_file_exists "$per_blob"
+assert_file_has "$per_blob" "ExecStart=/usr/lib/guarden/bin/weedr secret materialise %i"
+assert_file_lacks "$per_blob" "[Install]"
 
-# The mutator records an edge's allocated publication when it installs the edge,
-# and that step is not in this tree yet, so the consumer's record carries what it
-# would carry. The renderer reads `<AS>_PORT` from the consumer's own record and
-# never guesses a port.
-printf '%s\n' '[edges."postgres-staging"]' 'port = 5432' 'as = "db"' \
-    'auth = "database"' 'publications = [ 20007 ]' \
-    >>"$registry/qapp-production.toml"
+# **The enabled state is asserted where the phase is converged, not here.** This
+# file stages a host where `soil install` has never been applied, so the units are
+# *not* enabled and their being enabled would mean another suite installed them:
+# `t221-cred-units.sh` converges the phase and asserts them enabled.
 
-# The container's own publication, for the same reason: a grant is a translation
-# to a publication and the allocator records it.
-printf '%s\n' '[publication]' 'web = 20114' 'api = 20106' \
-    >>"$registry/qapp-production.toml"
+# The edge table is written by ingest above; appending it here was a duplicate key.
+
+# Likewise the publication table: the registry writes it.
 
 # The generated unit names the secret and nothing else. It is rendered from the
 # same project the schema came from, and the whole render tree is searched for the

@@ -7,6 +7,10 @@
 # itself is minutes long and needs a machine. It is pointed at a throwaway one
 # and not at this box: nothing in it may reformat, reconfigure or reboot the
 # host the tests are running on.
+#
+# machine: shared
+# `--print` is the whole plan and every other call is a refusal that happens
+# before a target is resolved. Nothing here converges a host.
 
 . "$(dirname "$0")/lib.sh"
 
