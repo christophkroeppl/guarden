@@ -319,7 +319,12 @@ def _decode(pubkey: str, where: str) -> tuple[str, str]:
         raise errors.GuardenError(
             f"the public key in {where} is not base64 and cannot be an ssh key: {exc}", 2
         ) from None
-    if not raw.startswith(KEY_TYPE.encode() + b" "):
+    # The blob is the SSH wire format, so it opens with a 4-byte big-endian
+    # length and then the type: \x00\x00\x00\x0bssh-ed25519. Checking for the type
+    # at offset 0 refused every real key; the length prefix is what the format
+    # puts there.
+    want = KEY_TYPE.encode()
+    if raw[4:4 + len(want)] != want:
         raise errors.GuardenError(
             f"the key in {where} is declared {KEY_TYPE} but its contents are not, so the "
             f"key blob and the type disagree",
@@ -514,7 +519,8 @@ def _make_staging(project_name: str) -> None:
     target = staging(project_name)
     target.mkdir(parents=True, exist_ok=True)
     os.chmod(target, STAGING_MODE)
-    conf.set_owner(target, _hose_ids())
+    uid, _ = _hose_ids()
+    conf.set_owner(target, (uid, users.group_id("root")))
 
 
 def _drop_staging(project_name: str) -> None:
@@ -533,11 +539,12 @@ def _config():
     return config_mod.load()
 
 
-def list_json(as_json: bool) -> int:
+def list_json(args) -> int:
     """`weedr project list`: the projects, and where each one's copy of the
     allowlist is. The one verb on the poke's sudoers rule, and it reads nothing
     private: `projects.toml` and `projects.d/` are `0444` precisely so that it
     can."""
+    as_json = args.json
     found = load()
     if as_json:
         document = {
@@ -566,11 +573,13 @@ def list_json(as_json: bool) -> int:
     return 0
 
 
-def list_keys(project_name: str, as_json: bool) -> int:
+def list_keys(args) -> int:
     """`weedr project keys`: what is installed, by type and fingerprint. Never a
     value, and a forced command is reported so an operator can see which project
     a line is bound to."""
+    project_name = args.name
     get(project_name)
+    as_json = args.json
     keys = keys_of(project_name)
     if as_json:
         sys.stdout.write(

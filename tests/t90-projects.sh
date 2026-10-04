@@ -24,7 +24,7 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 export GUARDEN_PREFIX=/
 
 getent group guarden >/dev/null 2>&1 || groupadd --system guarden
-id -u hose >/dev/null 2>&1 || useradd --system --no-create-home --no-shell \
+id -u hose >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin \
     --home-dir /var/lib/guarden hose
 mkdir -p /etc/guarden/projects.d /etc/ssh/authorized_keys.d
 install -d -m 0755 -o root -g root /var/lib/guarden/staging
@@ -155,7 +155,11 @@ assert_owner "$staging/myapp" "hose:root"
 run weedr project grant myapp "$pubkey"
 assert_exit 0
 assert_stdout_has "already"
-[ "$(grep -c -- "$pubkey" "$keys")" = 1 ] || _fail "the key is installed twice"
+# Match the BLOB, not the whole `ssh-keygen` line: grant writes
+# `<type> <blob> guarden-added-<stamp>` and does not carry the comment over, so a
+# grep for the three-word original matches nothing and reports 0, which is not 1.
+[ "$(grep -c -- "$(printf '%s' "$pubkey" | cut -d' ' -f2)" "$keys")" = 1 ] ||
+    _fail "the key is installed twice"
 
 run weedr project grant onlyshared "$second"
 assert_exit 0
@@ -174,7 +178,14 @@ run weedr project keys myapp --json
 assert_exit 0
 assert_json project '"myapp"'
 assert_json keys.0.type '"ssh-ed25519"'
-assert_json keys.0.fingerprint '"SHA256:'
+# `assert_json` compares EXACTLY, so a bare `"SHA256:` prefix could never match a
+# real digest — the assertion could not pass. The claim is the SHAPE: the standard
+# SSH prefix, then 43 base64 characters with no padding. Checked here rather than
+# through a new lib.sh helper, because lib.sh is shared with every other suite.
+fp=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["keys"][0]["fingerprint"])' \
+    "$GUARDEN_FIXTURES/last-stdout")
+printf '%s' "$fp" | grep -qE '^SHA256:[A-Za-z0-9+/]{43}$' ||
+    _fail "the reported fingerprint is $fp, not SHA256: plus 43 unpadded base64 characters"
 assert_json_missing keys.0.key
 
 run weedr project keys nosuch
@@ -213,6 +224,11 @@ assert_stdout_has "no poke key"
 # --- `remove` is refused under a live key -------------------------------------
 
 # A key whose every poke fails for a reason naming nothing is worse than no key.
+# myapp's key was revoked above, so it needs one back: `remove` is refused while
+# a live key names the project, and with nothing installed there is nothing to
+# refuse.
+run weedr project grant myapp "$pubkey"
+assert_exit 0
 run weedr project remove myapp
 assert_exit 1
 assert_one_diagnostic "error:"
@@ -246,4 +262,13 @@ done
 # is `weedr project grant` and never `hose grant`.
 run hose --help
 assert_exit 0
-assert_stdout_lacks "grant"
+# The claim is about the VERB SET, not the word: the epilog says a poke "grants
+# nothing", which is prose. What must not appear is `grant` as a command, so match
+# it as one — at the start of a line in the command list, or as `hose grant`.
+assert_verbs hose poke drop check
+if printf '%s' "$GUARDEN_STDOUT" | grep -qE '(^|[[:space:]])grant([[:space:]]|$)'; then
+    _fail "hose --help lists grant as a verb"
+fi
+if printf '%s' "$GUARDEN_STDOUT" | grep -q 'hose grant'; then
+    _fail "hose --help names a 'hose grant' command"
+fi
