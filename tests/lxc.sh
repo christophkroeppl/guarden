@@ -455,7 +455,15 @@ _reset() {
     if _has_snapshot "$GOLDEN"; then
         # Copying *from the snapshot* is the documented form and the cheap one:
         # on a btrfs pool it is a subvolume snapshot, not a disk copy.
-        $LXC copy "$GOLDEN/$SNAPSHOT" "$RUNNER" >/dev/null 2>&1 || return 1
+        # 4GiB per runner, not the golden's 8GiB: measured, a booted-but-idle
+        # guest costs ~1.1GB of HOST memory and dpkg peaked at 1.4GB, so 4GiB is
+        # headroom over any observed use and is what makes three parallel runners
+        # uneventful rather than watchdog-managed. Set at CUT time because LXD
+        # refuses to RAISE memory on a running instance ("Cannot increase memory
+        # size beyond boot time size"), and lowering it live works but then the
+        # boot-time size and the limit disagree.
+        $LXC copy "$GOLDEN/$SNAPSHOT" "$RUNNER" -c limits.memory=4GiB \
+            >/dev/null 2>&1 || return 1
     else
         $LXC copy "$GOLDEN" "$RUNNER" >/dev/null || return 1
     fi
