@@ -1,7 +1,7 @@
 """`/etc/guarden/services/<name>/overrides.toml`: the admin's grant surface, and
 the whole of it (spec 3.3).
 
-Four tables and nothing else. `[ports] open` is a public port the admin granted;
+Five tables and nothing else. `[ports] open` is a public port the admin granted;
 `[retention] keep_last` and `[retention] free_limit` override the track's
 defaults; `[groups] add` gives the service user supplementary groups, which is
 how a hardware-transcoding service reaches `/dev/dri` without the renderer
@@ -32,11 +32,15 @@ from guarden import conf, errors, paths
 
 OVERRIDES_MODE = 0o640
 
-KEYS = {"ports", "retention", "groups", "mounts"}
+KEYS = {"ports", "retention", "groups", "mounts", "firewall"}
 PORT_KEYS = {"open"}
 RETENTION_KEYS = {"keep_last", "free_limit", "weekly", "monthly", "quarterly"}
 GROUP_KEYS = {"add"}
 MOUNT_KEYS = {"allow"}
+# `[firewall] allow` holds NAMES of requested rules the admin agreed to
+# install, never rule text: the rule behind a name lives in the manifest
+# that asked for it (spec 3.3, ADR-0013).
+FIREWALL_KEYS = {"allow"}
 
 WEEKLY = 4
 MONTHLY = 6
@@ -53,6 +57,7 @@ class Overrides:
     quarterly: int | None = None
     groups: list[str] = field(default_factory=list)
     mounts: list[str] = field(default_factory=list)
+    firewall: list[str] = field(default_factory=list)
 
     def to_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {}
@@ -75,6 +80,8 @@ class Overrides:
             document["groups"] = {"add": list(self.groups)}
         if self.mounts:
             document["mounts"] = {"allow": list(self.mounts)}
+        if self.firewall:
+            document["firewall"] = {"allow": list(self.firewall)}
         return document
 
     def keep_last_or(self, track_default: int) -> int:
@@ -152,7 +159,11 @@ def load(service: str) -> Overrides:
             f"{where}: [retention] has an unknown key {extra[0]!r}", errors.HOST_NOT_AS_ASSUMED
         )
 
-    for table, allowed in (("groups", GROUP_KEYS), ("mounts", MOUNT_KEYS)):
+    for table, allowed in (
+        ("groups", GROUP_KEYS),
+        ("mounts", MOUNT_KEYS),
+        ("firewall", FIREWALL_KEYS),
+    ):
         section = document.get(table, {})
         if not isinstance(section, dict):
             raise errors.GuardenError(
@@ -173,6 +184,9 @@ def load(service: str) -> Overrides:
         quarterly=_int(retention, "quarterly", f"{where} [retention]"),
         groups=_string_list(document.get("groups", {}), "add", GROUP_KEYS, f"{where} [groups]"),
         mounts=_string_list(document.get("mounts", {}), "allow", MOUNT_KEYS, f"{where} [mounts]"),
+        firewall=_string_list(
+            document.get("firewall", {}), "allow", FIREWALL_KEYS, f"{where} [firewall]"
+        ),
     )
 
 

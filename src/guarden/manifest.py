@@ -14,12 +14,13 @@ impossible, so the top-level check is here even for the keys this ticket does no
 consume.
 
 What this ticket consumes is the whole of it: `project`, `units`, `state`, `bulk`,
-`provides`, `needs`, `ports`, `routes`, `widgets` and `schema`. The volumes are
+`provides`, `needs`, `ports`, `routes`, `widgets`, `firewall` and `schema`. The volumes are
 what the mutator creates and what the registry records, the project is one of two
 registry fields that may differ, and the remaining blocks are the renderer's
 input — the edges it validates against the registry, the containers it looks up
-in the unit source, and the keys whose credential *requests* it emits. The deep
-shape of each block is validated here rather than in the renderer, because a
+in the unit source, and the keys whose credential *requests* it emits. A
+`firewall:` block installs nothing and its three fields are recorded verbatim. The
+deep shape of each block is validated here rather than in the renderer, because a
 manifest is input and a manifest's failures are the ones nobody hears about.
 """
 
@@ -30,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from guarden import errors, names
+from guarden import errors, names, rules
 
 MANIFEST_REL = Path(".guarden") / "service.yml"
 
@@ -44,6 +45,7 @@ TOP_LEVEL_KEYS = {
     "ports",
     "routes",
     "widgets",
+    "firewall",
     "schema",
 }
 
@@ -58,6 +60,7 @@ BLOCK_KEYS = {
     "ports": {"container", "port"},
     "routes": {"container", "port", "host", "auth"},
     "widgets": {"container", "file"},
+    "firewall": {"name", "chain", "rule"},
 }
 
 # spec 4: an `environment` key is refused specifically, with a message saying who
@@ -143,6 +146,19 @@ class Widget:
     file: str
 
 
+@dataclass(frozen=True)
+class RuleRequest:
+    """One `firewall:` entry: the name a grant names, the chain, the rule text.
+
+    `rule` is the line as the manifest wrote it, because that is the text a
+    request is deduplicated by and the text `weedr firewall list` reports.
+    """
+
+    name: str
+    chain: str
+    rule: str
+
+
 @dataclass
 class Manifest:
     source: Path
@@ -155,6 +171,7 @@ class Manifest:
     ports: list[Publication] = field(default_factory=list)
     routes: list[Route] = field(default_factory=list)
     widgets: list[Widget] = field(default_factory=list)
+    firewall: list[RuleRequest] = field(default_factory=list)
     schema: str | None = None
 
     def volume_kind(self, name: str) -> str:
@@ -241,6 +258,7 @@ def read(path: Path) -> Manifest:
         ports=_publications(document.get("ports", []), path),
         routes=_routes(document.get("routes", []), path),
         widgets=_widgets(document.get("widgets", []), path),
+        firewall=_firewall(document.get("firewall", []), path),
         schema=_schema(document.get("schema"), path),
     )
 
@@ -452,6 +470,47 @@ def _widgets(value: Any, path: Path) -> list[Widget]:
                 f"the manifest {path}: the widgets entry for {container!r} has no file"
             )
         out.append(Widget(container=container, file=file))
+    return out
+
+
+def _firewall(value: Any, path: Path) -> list[RuleRequest]:
+    """`firewall:` entries: a name, a chain and one iptables-shaped rule line.
+
+    **A request installs nothing.** The whole of what this block does is produce
+    three fields the mutator records, and the closed shape is what makes that
+    safe: `rules` admits only options that add a rule, so there is no key here
+    that could flush a chain, set a policy or take a position. `chain` may be
+    omitted and defaults to the chain guarden jumps to from `filter OUTPUT`, so
+    a manifest that names no chain asks for a rule in guarden's own chain
+    rather than having the entry refused for a key nobody had to write.
+
+    `rules.parse` is where the line is checked, and it is called here rather
+    than in the renderer because a manifest's failures are the ones nobody hears
+    about (spec 4). The `Request` it returns is discarded: what a request is
+    written down as is the text the manifest wrote, not the re-derived shape,
+    because that text is the identity deduplication is by.
+    """
+    out: list[RuleRequest] = []
+    seen: set[str] = set()
+    if not isinstance(value, list):
+        raise errors.GuardenError(f"the manifest {path}: firewall is not a list")
+    for entry in value:
+        name = rules.validate_name(entry.get("name"), f"the manifest {path}")
+        if name in seen:
+            raise errors.GuardenError(
+                f"the manifest {path}: two firewall entries are both named {name!r}, and it is "
+                f"what a grant names, so a grant would be ambiguous"
+            )
+        seen.add(name)
+        where = f"the firewall entry {name!r} in the manifest {path}"
+        chain = rules.validate_chain(entry.get("chain"), where)
+        out.append(
+            RuleRequest(
+                name=name,
+                chain=chain,
+                rule=rules.parse(entry.get("rule"), where).rule,
+            )
+        )
     return out
 
 

@@ -9,9 +9,19 @@ from __future__ import annotations
 
 import difflib
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from guarden import conf, errors, hosttool, paths, publications, registry, tool, users
+from guarden import (
+    conf,
+    errors,
+    hosttool,
+    paths,
+    publications,
+    registry,
+    rules,
+    tool,
+    users,
+)
 from guarden import config as config_mod
 from guarden import manifest as manifest_mod
 from guarden import modules as modules_mod
@@ -280,7 +290,7 @@ def render(config, grants: list[Grant]) -> str:
     for grant in grants:
         lines.append(
             f"    if {interface} proto {grant.protocol} dport {grant.port} "
-            f"jump DNAT to 127.0.0.1:{grant.publication};"
+            f"DNAT to 127.0.0.1:{grant.publication};"
         )
     lines += [
         "}",
@@ -292,11 +302,17 @@ def render(config, grants: list[Grant]) -> str:
         "# these accepts are reachable. INPUT takes a forwarded port plainly: the",
         "# packet has no socket there, so an owner match would be unreliable, and",
         "# the uid restriction belongs in OUTPUT.",
+        "#",
+        "# **The port here is the PUBLICATION, not the public port.** PREROUTING",
+        "# DNAT rewrites the destination port as well as the address, so a packet",
+        "# that dialled the public port arrives at INPUT carrying the publication's",
+        "# number. An accept on the public port matches no packet in either",
+        "# direction and the grant delivers nothing from off the box.",
     ]
-    for grant in grants:
-        lines.append(
-            f"    proto {grant.protocol} dport {grant.port} jump ACCEPT;"
-        )
+    # Deduplicated by `(protocol, publication)`: the render is a set, so two public
+    # ports forwarded onto one container are one accept at INPUT, not two.
+    for protocol, publication in sorted({(g.protocol, g.publication) for g in grants}):
+        lines.append(f"    proto {protocol} dport {publication} jump ACCEPT;")
     lines += [
         "}",
     ]
@@ -318,10 +334,29 @@ def render(config, grants: list[Grant]) -> str:
         "",
         f"chain {OUTPUT_CHAIN} {{",
         *accept_lines(config),
+        # A granted rule renders ABOVE the deny and never after it: position is
+        # guarden's, and a grant that landed below a default deny would be
+        # unreachable while still appearing in the file.
+        *granted_rule_lines(),
         f"    daddr {LOOPBACK_NETWORK} jump DROP;",
         "}",
     ]
     return "\n".join(lines) + "\n"
+
+
+def granted_rule_lines() -> list[str]:
+    """One ferm line per GRANTED requested rule, deduplicated by content.
+
+    Ungranted requests render nothing: a request installs no rule, and a rule
+    nobody granted is the one thing this design refuses to do on a repository's
+    word alone.
+    """
+    out: list[str] = []
+    for rule in granted_rules():
+        granted_by = ", ".join(f"{s} {n}" for s, n in sorted(rule.granted_names))
+        out.append(f"# {rule.rule} — granted by {granted_by}")
+        out.append(f"    {rules.parse(rule.rule, 'a granted rule').ferm_line()}")
+    return out
 
 
 def installed() -> str:
@@ -379,13 +414,19 @@ def print_diff(diff: str) -> None:
         sys.stdout.write(diff if diff.endswith("\n") else diff + "\n")
 
 
+def _distinct(numbers: list[int]) -> list[int]:
+    """`granted` is a set of port numbers: tcp and udp on one number are two grants
+    and one port, and reporting it twice would name a port granted once."""
+    return list(dict.fromkeys(numbers))
+
+
 def listing() -> list[dict]:
     out: list[dict] = []
     for name in registry.names():
         record = registry.load(name)
         if record is None:
             continue
-        granted = overrides_mod.load(name).granted_numbers()
+        granted = _distinct(overrides_mod.load(name).granted_numbers())
         requested = list(record.ports_requested)
         out.append(
             {
@@ -427,3 +468,113 @@ def _api_publication(service: str) -> int | None:
 
 def _ports(numbers: list[int]) -> str:
     return ", ".join(str(number) for number in numbers) or "none"
+
+
+@dataclass
+class GrantedRule:
+    """One requested rule, keyed by its text, with everyone behind it.
+
+    **`holders` is who asked and `granted_names` is who was granted.** Conflating
+    them made `weedr firewall list` — the command for "which service opened this"
+    — list no service at all for every pending rule, because a request has no
+    grant yet and the listing was built from grants alone.
+    """
+
+    chain: str
+    rule: str
+    holders: list[tuple[str, str]] = field(default_factory=list)
+    granted_names: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.chain, self.rule)
+
+    @property
+    def granted(self) -> bool:
+        return bool(self.granted_names)
+
+    def object(self) -> dict:
+        return {
+            "rule": self.rule,
+            "chain": self.chain,
+            "file": str(SERVICES_CONF),
+            "granted": self.granted,
+            "requested_by": [
+                {"service": service, "name": name}
+                for service, name in sorted(self.holders)
+            ],
+        }
+
+
+def collect_rules() -> list[GrantedRule]:
+    """Every requested rule on the box, keyed by its text, with every asker.
+
+    `overrides.toml` is the authority; the registry's granted mirror is not
+    consulted, so an admin's file and the rendered ruleset cannot disagree.
+    """
+    found: dict[tuple[str, str], GrantedRule] = {}
+    for service in registry.names():
+        record = registry.load(service)
+        if record is None:
+            continue
+        allowed = overrides_mod.load(service).firewall
+        for entry in record.firewall_requested:
+            rule = found.setdefault(
+                (entry.chain, entry.rule), GrantedRule(entry.chain, entry.rule)
+            )
+            if (service, entry.name) not in rule.holders:
+                rule.holders.append((service, entry.name))
+                if entry.name in allowed:
+                    rule.granted_names.append((service, entry.name))
+    return [found[key] for key in sorted(found)]
+
+
+def granted_rules() -> list[GrantedRule]:
+    return [rule for rule in collect_rules() if rule.granted]
+
+
+def rules_listing() -> list[dict]:
+    return [rule.object() for rule in collect_rules()]
+
+
+def rules_as_text(entries: list[dict]) -> str:
+    """One line per rule text after deduplication, with every service behind it.
+
+    A rule asked for by two services appears once with both names, because two
+    lines for one rule would report the ruleset as being larger than it is.
+    """
+    if not entries:
+        return "no service asks for a firewall rule\n"
+    width = max(len(entry["rule"]) for entry in entries)
+    chain = max(len(entry["chain"]) for entry in entries)
+    lines = [f"{'RULE'.ljust(width)}  {'CHAIN'.ljust(chain)}  {'STATE':<9}  SERVICES"]
+    for entry in entries:
+        services = ", ".join(
+            f"{ask['service']} {ask['name']}" for ask in entry["requested_by"]
+        )
+        state = "installed" if entry["granted"] else "pending"
+        lines.append(
+            f"{entry['rule'].ljust(width)}  {entry['chain'].ljust(chain)}  "
+            f"{state:<9}  {services}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def requested_rule(record, name: str):
+    """The requested rule called `name`, or exit 2 naming what was asked for.
+
+    A grant with no request behind it is an admin typing a rule into a file that
+    no manifest will ever fill in, so the answer is a rejected input and it names
+    the entries that do exist — otherwise the operator is left guessing which
+    spelling was meant.
+    """
+    for entry in record.firewall_requested:
+        if entry.name == name:
+            return entry
+    asked = ", ".join(sorted({e.name for e in record.firewall_requested})) or "none"
+    raise errors.GuardenError(
+        f"{record.service!r} asked for no firewall rule named {name!r}; the rules its "
+        f"manifest's `firewall:` block names are: {asked}",
+        errors.REJECTED_INPUT,
+    )
+
