@@ -639,6 +639,11 @@ def seed_instance(resolved, now: str) -> list[str]:
         live = paths.volume(resolved.name, volume.kind, volume.name, resolved.escaped_ref)
         _remove_tree(live)
         _clone(paths.snapshot(entry.source_service, volume.name, entry.number), live, owner)
+    # An empty bulk volume is a subvolume on the fork path too: never a `mkdir`.
+    for volume in _bulk(target):
+        live = paths.volume(resolved.name, volume.kind, volume.name, resolved.escaped_ref)
+        _remove_tree(live)
+        volumes.create_bulk(resolved.name, volume.name, owner, resolved.escaped_ref)
     _record_seed(resolved, target, plan)
     return [
         f"forked {resolved.name}/{resolved.ref} from {source.service}",
