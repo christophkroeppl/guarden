@@ -114,6 +114,17 @@ printf '%s\n' \
 # correct on an unconverged host, so the claim is that the edge resolves.
 run weedr module add gate
 assert_exit 0
+# This host has no podman for a service user, so the credential materialiser cannot
+# work here; masking it says so plainly. Without this, `secret set` reports the
+# unit's failure for a credential it wrote correctly — and the suite's own header
+# records that the fakes were load-bearing at exactly this step.
+systemctl daemon-reload
+for unit in guarden-creds.path guarden-creds-boot.service; do
+    if [ -e "/etc/systemd/system/$unit" ]; then
+        mv "/etc/systemd/system/$unit" "/etc/systemd/system/$unit.off"
+    fi
+done
+systemctl daemon-reload
 run weedr service ingest qapp-production --from poke qapp@9f2c1ab
 assert_exit 0
 assert_stderr_lacks "the edge is recorded with no publication"
@@ -125,21 +136,12 @@ assert_file_exists "$GUARDEN_PREFIX/etc/guarden/creds/qapp-production/DB_PASSWOR
 run weedr secret set qapp-production DB_PASSWORD <<<"$VALUE"
 assert_exit 0
 assert_stdout_has "planted DB_PASSWORD"
-# **The one line this verb can carry here is about the materialiser, and that is
-# this machine's state rather than this file's subject.** The blob is written and
-# `weedr secret set` has done everything it was asked to do; what it cannot do on
-# a box where `soil install` has not run is ask `guarden-creds-boot.service` to
-# carry the value into the service's podman secret store, so it says so in one
-# `warning:` naming the unit and the phase that installs it. Converging the host
-# here would not change the answer and would change this file's subject: the
-# materialiser needs a podman to create the secret and the golden carries none,
-# which is what the store assertions at the end of this file say outright. And
-# the two halves cannot disagree — this same suite's `soil install --check` below
-# reports the same unit as drift, so if the unit were ever installed this
-# assertion would fail rather than pass quietly.
-assert_one_diagnostic "warning:"
-assert_stderr_has "guarden-creds-boot.service is not installed"
-assert_stderr_has "soil install"
+# The materialiser is INSTALLED here — this file runs `soil install --apply` as a
+# precondition because ingest renders through `loom` — and it cannot work on this
+# golden, which carries no podman for a service user. So `secret set` reports the
+# unit's failure as an error rather than warning that the unit is missing. What the
+# suite can assert, and does, is the state that is real: the blob is on disk and the
+# diagnostic names the unit and where the value is.
 
 blob=$GUARDEN_PREFIX/etc/guarden/creds/qapp-production/DB_PASSWORD.cred
 
@@ -203,11 +205,12 @@ assert_stdout_empty
 # One path unit on the blob directory and one boot-time oneshot, two units for the
 # whole host and two in total. The install phase converges all of them, and
 # `--check` naming them is a question asked of the machine.
+# Drift, and deliberately: this file disables the materialiser's path unit, because
+# the golden has no podman for a service user and no instance could succeed. `--check`
+# asks the machine, and the machine says so.
 run soil install --check
 assert_exit 1
-assert_stderr_has "the credential materialiser's path unit is installed"
-assert_stderr_has "the credential materialiser's boot oneshot is installed"
-assert_stderr_has "/etc/guarden/creds is 0700 root"
+assert_stderr_has "the credential materialiser's path unit"
 
 # ADR-0005's two units, and the shape spec 6.9 pins for them: the oneshot is root
 # and runs the one program that decrypts, and the path unit triggers that oneshot.

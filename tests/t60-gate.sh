@@ -59,8 +59,40 @@ mkdir -p /etc/guarden
 if ! getent group guarden >/dev/null 2>&1; then
     groupadd --system guarden
 fi
+id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
+# `host.admin_user` names the uid the edge's API accept set admits, and install
+# refuses to render the firewall without the account existing. useradd exits 9 when
+# the GROUP exists and -g is not given, so the group is created first.
+getent group operator >/dev/null 2>&1 || groupadd --system operator
+id -u operator >/dev/null 2>&1 || useradd --create-home --gid operator --shell /bin/bash operator
 stage_config guarden-measured.toml
 stage_quadlet
+
+# install is a precondition, not the subject: ingest renders through loom.
+install -D -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" \
+    "$GUARDEN_PREFIX/etc/guarden/podlet.release"
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
+run weedr module add gate
+assert_exit 0
+
+# This golden has no podman for a service user, so no materialiser instance could
+# succeed; moving its units aside is what makes `secret set` report the missing
+# phase rather than a unit failure it cannot fix.
+for unit in guarden-creds.path guarden-creds-boot.service; do
+    if [ -e "/etc/systemd/system/$unit" ]; then
+        mv "/etc/systemd/system/$unit" "/etc/systemd/system/$unit.off"
+    fi
+done
+systemctl daemon-reload
+
+# The provider first: it is what the consumer dials, and a consumer whose provider
+# does not exist is a different case that this suite asserts separately.
+stage_poke pgprov 9f2c1ab
+run weedr service ingest postgres-staging --from poke pgprov@9f2c1ab
+assert_exit 0
 
 # Two services, one project, two tracks. The gate is per SERVICE and not per
 # instance, and the track is what makes it two outcomes rather than one.

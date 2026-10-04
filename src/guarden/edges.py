@@ -31,13 +31,15 @@ VALUE_ALPHABET = "-_"
 def credential_key(kind: str, edge: manifest_mod.Edge) -> str:
     """`<AS>_SECRET` for a secret edge, `<AS>_PASSWORD` for a database one.
 
-    Keyed on the prefix alone, two edges of one service that share a prefix
-    shared one credential VALUE — which `_credential`'s docstring names as
-    unresolved. The port is what tells two edges of one provider apart, so it is
-    part of the name, and the two are the same key rule applied once more.
+    The name IS the schema's key, which is what the gate's `@required` check and the
+    example-placeholder comparison both match on, so it carries no port. Two edges
+    of one service that shared a prefix would share a value, and `as:` being the
+    prefix is what makes that unexpressible: the schema declares one credential per
+    prefix. The PORT distinguishes two edges in the REGISTRY (see `edge_key`), which
+    is where two edges of one provider are told apart.
     """
     suffix = "SECRET" if kind == AUTH_SECRET else "PASSWORD"
-    return f"{edge.variable}_{suffix}_{edge.port}"
+    return f"{edge.variable}_{suffix}"
 
 
 def check(consumer: str, document: manifest_mod.Manifest) -> None:

@@ -140,15 +140,15 @@ vault_dialed=$(dialed_publication "$consumer_registry" 8200)
 # The credential. `auth: database` plants one blob in the **consumer's** store and
 # nothing in the provider's (spec 5.3 step 10): the provider's half of a database
 # edge is the role, not a copy of the password.
-db_blob=$creds/needful-staging/DB_PASSWORD_5432.cred
+db_blob=$creds/needful-staging/DB_PASSWORD.cred
 assert_file_exists "$db_blob"
 assert_mode "$db_blob" 600
 assert_mode "$creds/needful-staging" 700
-assert_file_missing "$creds/pgprov-staging/DB_PASSWORD_5432.cred"
+assert_file_missing "$creds/pgprov-staging/DB_PASSWORD.cred"
 # `auth: secret` is planted in **both**, because the provider has to be able to
 # verify it, and the two hold the same value — that is what makes it verifiable.
-assert_file_exists "$creds/needful-staging/SECRET_SECRET_8200.cred"
-assert_file_exists "$creds/pgprov-staging/SECRET_SECRET_8200.cred"
+assert_file_exists "$creds/needful-staging/SECRET_SECRET.cred"
+assert_file_exists "$creds/pgprov-staging/SECRET_SECRET.cred"
 
 # The blob decrypts under this machine's host key, which is the fact rather than a
 # record of an intent: the value came back, so the key is one this host holds.
@@ -156,10 +156,10 @@ run systemd-creds decrypt --with-key=host "$db_blob"
 assert_exit 0
 db_value=$(cat "$GUARDEN_STDOUT")
 assert_file_lacks "$db_blob" "$db_value"
-run systemd-creds decrypt --with-key=host "$creds/needful-staging/SECRET_SECRET_8200.cred"
+run systemd-creds decrypt --with-key=host "$creds/needful-staging/SECRET_SECRET.cred"
 assert_exit 0
 vault_own=$(cat "$GUARDEN_STDOUT")
-run systemd-creds decrypt --with-key=host "$creds/pgprov-staging/SECRET_SECRET_8200.cred"
+run systemd-creds decrypt --with-key=host "$creds/pgprov-staging/SECRET_SECRET.cred"
 assert_exit 0
 [ "$vault_own" = "$(cat "$GUARDEN_STDOUT")" ] \
     || _fail "a secret edge's two stores hold different values, so the provider cannot verify it"
@@ -218,7 +218,7 @@ needy_uid=$(getent passwd needy-staging | cut -d: -f3)
 needy_dialed=$(dialed_publication "$registry/needy-staging.toml" 5432)
 [ "$needy_dialed" = "$db_pub" ] \
     || _fail "the second consumer dials $needy_dialed and the provider binds $db_pub"
-run systemd-creds decrypt --with-key=host "$creds/needy-staging/DB_PASSWORD_5432.cred"
+run systemd-creds decrypt --with-key=host "$creds/needy-staging/DB_PASSWORD.cred"
 assert_exit 0
 [ "$GUARDEN_STDOUT" != "$db_value" ] \
     || _fail "two consumers of one provider share one database password"
@@ -253,8 +253,8 @@ assert_file_has "$render/units/guarden.env" "DB_HOST=pgprov-staging"
 assert_file_has "$render/units/guarden.env" "DB_PORT=$db_pub"
 assert_file_has "$render/units/guarden.env" "SECRET_HOST=pgprov-staging"
 assert_file_has "$render/units/guarden.env" "SECRET_PORT=$vault_pub"
-assert_file_has "$render/units/web.container" "Secret=DB_PASSWORD_5432,type=file"
-assert_file_has "$render/units/web.container" "Secret=SECRET_SECRET_8200,type=file"
+assert_file_has "$render/units/web.container" "Secret=DB_PASSWORD,type=file"
+assert_file_has "$render/units/web.container" "Secret=SECRET_SECRET,type=file"
 # The credential arrives as a request and never as a value, and the renderer's
 # `LoadCredentialEncrypted=` would be a unit its own user manager cannot start.
 assert_file_lacks "$render/units/web.container" "$db_value"
@@ -302,7 +302,7 @@ run weedr service ingest nowhere-staging --from poke nowhere@9f2c1ab
 assert_exit 1
 assert_stderr_has "nowhere-staging"
 assert_file_has "$registry/nowhere-staging.toml" 'publications = []'
-assert_file_missing "$creds/nowhere-staging/DB_PASSWORD_5432.cred"
+assert_file_missing "$creds/nowhere-staging/DB_PASSWORD.cred"
 purge nowhere-staging
 
 # A provider that exists and does not offer the kind. Both services and both kinds
@@ -334,9 +334,9 @@ assert_stderr_has "cache"
 assert_no_passwd ghost-staging
 assert_file_missing "$registry/ghost-staging.toml"
 assert_file_missing "/var/lib/guarden/services/ghost-staging"
-assert_file_missing "$creds/ghost-staging/DB_PASSWORD_5432.cred"
+assert_file_missing "$creds/ghost-staging/DB_PASSWORD.cred"
 
 # And the credential the database edge planted is still there after everything
 # above, encrypted and unreadable at rest.
-assert_file_exists "$creds/needful-staging/DB_PASSWORD_5432.cred"
-assert_mode "$creds/needful-staging/DB_PASSWORD_5432.cred" 600
+assert_file_exists "$creds/needful-staging/DB_PASSWORD.cred"
+assert_mode "$creds/needful-staging/DB_PASSWORD.cred" 600
