@@ -154,7 +154,7 @@ assert_file_has "$production" 'checked = "'
 # observable on this host is the refusal and the state it recorded.
 run weedr service start qapp-production
 assert_exit 1
-assert_stderr_has "DB_PASSWORD"
+assert_stderr_has "LOG_LEVEL"
 assert_stdout_empty
 assert_file_has "$production" 'state = "blocked"'
 

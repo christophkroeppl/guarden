@@ -57,7 +57,7 @@ def evaluate(service: str, schema: secretschema.Schema, gated: bool, now: str) -
         if not key.required:
             continue
         stored = credentials.value(service, key.name)
-        if stored is None or credentials.placeholder(key, stored) is not None:
+        if stored is None:
             blocked.append(f"missing required key: {key.name}")
             continue
         why = credentials.placeholder(key, stored)
