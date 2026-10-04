@@ -575,14 +575,12 @@ def _deploy(entry: dict) -> int:
         list(config_mod.load().tracks),
         allow_default=False,
     )
-    # The escaped ref, not the raw one: `resolved.escaped_ref` is what the queue
-    # file and the deploy lock carry, and a raw `feature/login` reaches the mutator
-    # as a path, so no container is installed for the instance and the start that
-    # follows finds an empty quadlet directory.
+    # The RAW ref, because this string is the mutator's command-line argument and
+    # every verb escapes a ref itself. The escaped form belongs in the queue file
+    # and the deploy lock, which name things on a filesystem; it does not belong
+    # in an argument the mutator will escape a second time.
     target = (
-        resolved.name
-        if not resolved.ref
-        else f"{resolved.name}/{resolved.escaped_ref}"
+        resolved.name if not resolved.ref else f"{resolved.name}/{resolved.ref}"
     )
     try:
         with conf.lock(_deploy_lock(resolved)):
