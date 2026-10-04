@@ -53,6 +53,9 @@ STAGING = LIB / "staging"
 SHARED = LIB / "shared"
 STAKES = LIB / "stakes"
 EDGE_DYNAMIC = LIB / "edge" / "dynamic"
+# `guarden`-owned rather than root-owned like every other `shared/` directory,
+# because `twig` runs as `guarden` and `shared/<name>/` is read-only to it.
+DASHBOARD = SHARED / "dashboard"
 
 # /usr/lib/guarden and /usr/bin, spec 2's FHS rows.
 #

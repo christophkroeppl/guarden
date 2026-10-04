@@ -715,6 +715,7 @@ def build(
     plan.add(f"system/{ORDER_TARGET}", _order_target(document, context))
     plan.add("shared/routes.toml", _routes(document, context, ports))
     plan.add("shared/schema.toml", _schema_slice(schema, context))
+    plan.add("shared/widgets.toml", _widget_slice(document, source, context))
     for widget in document.widgets:
         plan.add(f"shared/widgets/{Path(widget.file).name}", _widget_file(directory, widget.file))
     return plan
@@ -1062,6 +1063,36 @@ def _schema_slice(schema: secretschema.Schema, context: Context | None) -> str:
             }
             for key in schema.requests()
         ],
+    )
+
+
+def _widget_slice(
+    document: manifest_mod.Manifest, source: Source, context: Context | None
+) -> str:
+    """The widget slice `twig` reads: which card is which container, and the
+    container set the unit source defined.
+
+    The files themselves are copied beside it unparsed; this is the only part
+    `loom` generates, and it is generated because `twig` runs as `guarden` and
+    cannot read the unit source to check an entry against.
+    """
+    seen: dict[str, str] = {}
+    rows = []
+    for widget in document.widgets:
+        first = seen.get(widget.container)
+        if first is not None:
+            raise errors.GuardenError(
+                f"the manifest {document.source}: the container {widget.container!r} has a "
+                f"widget in {first!r} and another in {widget.file!r}, and one card is one "
+                f"container"
+            )
+        seen[widget.container] = widget.file
+        rows.append({"container": widget.container, "file": Path(widget.file).name})
+    return render_template(
+        "shared-widgets.toml.j2",
+        service=context.service if context else "",
+        containers=source.containers(),
+        rows=rows,
     )
 
 
