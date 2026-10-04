@@ -147,8 +147,8 @@ assert_mode "$creds/needful-staging" 700
 assert_file_missing "$creds/pgprov-staging/DB_PASSWORD.cred"
 # `auth: secret` is planted in **both**, because the provider has to be able to
 # verify it, and the two hold the same value — that is what makes it verifiable.
-assert_file_exists "$creds/needful-staging/VAULT_SECRET.cred"
-assert_file_exists "$creds/pgprov-staging/VAULT_SECRET.cred"
+assert_file_exists "$creds/needful-staging/SECRET_.cred"
+assert_file_exists "$creds/pgprov-staging/SECRET_.cred"
 
 # The blob decrypts under this machine's host key, which is the fact rather than a
 # record of an intent: the value came back, so the key is one this host holds.
@@ -156,10 +156,10 @@ run systemd-creds decrypt --with-key=host "$db_blob"
 assert_exit 0
 db_value=$GUARDEN_STDOUT
 assert_file_lacks "$db_blob" "$db_value"
-run systemd-creds decrypt --with-key=host "$creds/needful-staging/VAULT_SECRET.cred"
+run systemd-creds decrypt --with-key=host "$creds/needful-staging/SECRET_.cred"
 assert_exit 0
 vault_own=$GUARDEN_STDOUT
-run systemd-creds decrypt --with-key=host "$creds/pgprov-staging/VAULT_SECRET.cred"
+run systemd-creds decrypt --with-key=host "$creds/pgprov-staging/SECRET_.cred"
 assert_exit 0
 [ "$vault_own" = "$GUARDEN_STDOUT" ] \
     || _fail "a secret edge's two stores hold different values, so the provider cannot verify it"
@@ -251,10 +251,10 @@ for unit in web worker; do
 done
 assert_file_has "$render/units/guarden.env" "DB_HOST=pgprov-staging"
 assert_file_has "$render/units/guarden.env" "DB_PORT=$db_pub"
-assert_file_has "$render/units/guarden.env" "VAULT_HOST=pgprov-staging"
-assert_file_has "$render/units/guarden.env" "VAULT_PORT=$vault_pub"
+assert_file_has "$render/units/guarden.env" "SECRET_HOST=pgprov-staging"
+assert_file_has "$render/units/guarden.env" "SECRET_PORT=$vault_pub"
 assert_file_has "$render/units/web.container" "Secret=DB_PASSWORD,type=file"
-assert_file_has "$render/units/web.container" "Secret=VAULT_SECRET,type=file"
+assert_file_has "$render/units/web.container" "Secret=SECRET_,type=file"
 # The credential arrives as a request and never as a value, and the renderer's
 # `LoadCredentialEncrypted=` would be a unit its own user manager cannot start.
 assert_file_lacks "$render/units/web.container" "$db_value"
