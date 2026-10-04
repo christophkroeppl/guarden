@@ -22,6 +22,7 @@ from guarden import (
     edgeconf,
     errors,
     firewall,
+    firewallrules,
     gate,
     lineage,
     modules,
@@ -75,6 +76,12 @@ PORT = (
     ("close", "revoke a granted public port"),
 )
 
+FIREWALL = (
+    ("list", "every requested rule, deduplicated by content, with its services"),
+    ("open", "install a requested rule the manifest asked for"),
+    ("close", "revoke a granted rule"),
+)
+
 PIN = (("sync", "recompute the snapper marks from the pin files and the registries"),)
 
 MODULE = (
@@ -96,6 +103,7 @@ GROUPS = (
     ("service", "identities, volumes, units, snapshots, forks and rollbacks", SERVICE),
     ("secret", "the values a service's containers are given", SECRET),
     ("port", "the public ports an admin has granted", PORT),
+    ("firewall", "the firewall rules a service asks for", FIREWALL),
     ("pin", "the privileged bridge into snapper", PIN),
     ("module", "the shipped bundles of services and shared programs", MODULE),
     ("project", "repositories, their refs and their poke keys", PROJECT),
@@ -106,7 +114,8 @@ EPILOG = """\
 weedr project rm. Nothing else in guarden has one, and nothing else will.
 
 Not on the guarden sudoers rule, and not reachable from a deploy:
-`weedr port open`, `weedr port close`, `weedr service purge`,
+`weedr port open`, `weedr port close`, `weedr firewall open`,
+`weedr firewall close`, `weedr service purge`,
 `weedr service rollback`, `weedr module add`, `weedr project add`,
 `weedr project grant`, `weedr project revoke`.
 """
@@ -216,6 +225,12 @@ def build_parser() -> argparse.ArgumentParser:
         verb_parser = top["port"]["verbs"][verb]
         verb_parser.add_argument("name", metavar="NAME", help="the service")
         verb_parser.add_argument("public_port", metavar="PUBLIC_PORT", help="the public port")
+
+    cli.add_json(top["firewall"]["verbs"]["list"])
+    for verb in ("open", "close"):
+        verb_parser = top["firewall"]["verbs"][verb]
+        verb_parser.add_argument("name", metavar="NAME", help="the service")
+        verb_parser.add_argument("rule", metavar="RULE", help="the name it asked for")
 
     cli.add_json(top["module"]["verbs"]["list"])
     for verb in ("add", "remove"):
@@ -782,6 +797,18 @@ def _module_remove(args) -> int:
     return cli.pending("weedr module remove")
 
 
+def _firewall_open(args) -> int:
+    return firewallrules.open_rule(args.name, args.rule)
+
+
+def _firewall_close(args) -> int:
+    return firewallrules.close_rule(args.name, args.rule)
+
+
+def _firewall_list(args) -> int:
+    return firewallrules.list_rules(bool(getattr(args, "json", False)))
+
+
 HANDLERS = {
     "weedr service ingest": _ingest,
     "weedr service add": _add,
@@ -799,6 +826,9 @@ HANDLERS = {
     "weedr secret set": _secret_set,
     "weedr secret list": _secret_list,
     "weedr secret materialise": _secret_materialise,
+    "weedr firewall open": _firewall_open,
+    "weedr firewall close": _firewall_close,
+    "weedr firewall list": _firewall_list,
     "weedr port list": _port_list,
     "weedr port open": _port_open,
     "weedr port close": _port_close,

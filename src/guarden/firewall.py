@@ -9,9 +9,18 @@ from __future__ import annotations
 
 import difflib
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from guarden import conf, errors, hosttool, paths, publications, registry, tool, users
+from guarden import (
+    conf,
+    errors,
+    hosttool,
+    paths,
+    publications,
+    registry,
+    tool,
+    users,
+)
 from guarden import config as config_mod
 from guarden import manifest as manifest_mod
 from guarden import modules as modules_mod
@@ -427,3 +436,94 @@ def _api_publication(service: str) -> int | None:
 
 def _ports(numbers: list[int]) -> str:
     return ", ".join(str(number) for number in numbers) or "none"
+
+
+@dataclass
+class GrantedRule:
+    """One requested rule, keyed by its text, with everyone behind it.
+
+    **`holders` is who asked and `granted_names` is who was granted.** Conflating
+    them made `weedr firewall list` — the command for "which service opened this"
+    — list no service at all for every pending rule, because a request has no
+    grant yet and the listing was built from grants alone.
+    """
+
+    chain: str
+    rule: str
+    holders: list[tuple[str, str]] = field(default_factory=list)
+    granted_names: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return (self.chain, self.rule)
+
+    @property
+    def granted(self) -> bool:
+        return bool(self.granted_names)
+
+    def object(self) -> dict:
+        return {
+            "rule": self.rule,
+            "chain": self.chain,
+            "file": str(SERVICES_CONF),
+            "granted": self.granted,
+            "requested_by": [
+                {"service": service, "name": name}
+                for service, name in sorted(self.holders)
+            ],
+        }
+
+
+def collect_rules() -> list[GrantedRule]:
+    """Every requested rule on the box, keyed by its text, with every asker.
+
+    `overrides.toml` is the authority; the registry's granted mirror is not
+    consulted, so an admin's file and the rendered ruleset cannot disagree.
+    """
+    found: dict[tuple[str, str], GrantedRule] = {}
+    for service in registry.names():
+        record = registry.load(service)
+        if record is None:
+            continue
+        allowed = overrides_mod.load(service).firewall
+        for entry in record.firewall_requested:
+            rule = found.setdefault(
+                (entry.chain, entry.rule), GrantedRule(entry.chain, entry.rule)
+            )
+            if (service, entry.name) not in rule.holders:
+                rule.holders.append((service, entry.name))
+                if entry.name in allowed:
+                    rule.granted_names.append((service, entry.name))
+    return [found[key] for key in sorted(found)]
+
+
+def granted_rules() -> list[GrantedRule]:
+    return [rule for rule in collect_rules() if rule.granted]
+
+
+def rules_listing() -> list[dict]:
+    return [rule.object() for rule in collect_rules()]
+
+
+def rules_as_text(entries: list[dict]) -> str:
+    """One line per rule text after deduplication, with every service behind it.
+
+    A rule asked for by two services appears once with both names, because two
+    lines for one rule would report the ruleset as being larger than it is.
+    """
+    if not entries:
+        return "no service asks for a firewall rule\n"
+    width = max(len(entry["rule"]) for entry in entries)
+    chain = max(len(entry["chain"]) for entry in entries)
+    lines = [f"{'RULE'.ljust(width)}  {'CHAIN'.ljust(chain)}  {'STATE':<9}  SERVICES"]
+    for entry in entries:
+        services = ", ".join(
+            f"{ask['service']} {ask['name']}" for ask in entry["requested_by"]
+        )
+        state = "installed" if entry["granted"] else "pending"
+        lines.append(
+            f"{entry['rule'].ljust(width)}  {entry['chain'].ljust(chain)}  "
+            f"{state:<9}  {services}"
+        )
+    return "\n".join(lines) + "\n"
+

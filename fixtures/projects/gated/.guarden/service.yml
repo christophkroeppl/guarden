@@ -1,0 +1,19 @@
+# A service the edge cannot speak for: it asks for firewall rules of its own and
+# nothing is installed until an admin agrees to a line (spec 7.7).
+#
+# `wireguard-peer` is the case the section is written for — a protocol with no
+# route through the edge. `peer-range` is the second one: a source range the
+# operator would rather name than imply. **Neither exists on the host after this
+# deploy**: a request records itself and stays pending, exactly as a requested
+# port does, and the grant is `weedr firewall open`.
+#
+# Two entries, and the second carries an explicit `chain:` so both spellings are
+# in a fixture that a real render reads.
+project: gated
+units: .guarden/quadlet/
+firewall:
+  - name: wireguard-peer
+    chain: guarden-svc
+    rule: "-p udp --dport 51820 -j ACCEPT"
+  - name: peer-range
+    rule: "-s 192.0.2.0/24 -p tcp --dport 8333 -j ACCEPT"

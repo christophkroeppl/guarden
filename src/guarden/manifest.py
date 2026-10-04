@@ -44,6 +44,7 @@ TOP_LEVEL_KEYS = {
     "ports",
     "routes",
     "widgets",
+    "firewall",
     "schema",
 }
 
@@ -58,6 +59,7 @@ BLOCK_KEYS = {
     "ports": {"container", "port"},
     "routes": {"container", "port", "host", "auth"},
     "widgets": {"container", "file"},
+    "firewall": {"name", "chain", "rule"},
 }
 
 # spec 4: an `environment` key is refused specifically, with a message saying who
