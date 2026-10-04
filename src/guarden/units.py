@@ -132,7 +132,10 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
             f"{service} has no registry entry, so there is nothing to install units into",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    owner = (record.uid, record.uid)
+    owner = (
+        record.uid,
+        users.group_id(service) if service in users.group_names() else record.uid,
+    )
     written: list[str] = []
 
     for path in sorted(_files(out / "units")):
