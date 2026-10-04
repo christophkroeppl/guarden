@@ -139,7 +139,7 @@ def _service_object(record, invariants: list[str]) -> dict:
             {
                 "ref": instance.ref,
                 "created": instance.created,
-                "seed": dict(instance.seed),
+                "seed": {name: seed.to_document() for name, seed in instance.seed.items()},
             }
             for _, instance in sorted(record.instances.items())
         ],

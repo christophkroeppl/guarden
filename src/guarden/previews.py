@@ -33,7 +33,17 @@ import shutil
 import time
 from datetime import UTC, datetime, timedelta
 
-from guarden import conf, errors, names, paths, registry, users
+from guarden import (
+    conf,
+    errors,
+    names,
+    paths,
+    registry,
+    snapper,
+    tool,
+    users,
+    volumes,
+)
 
 # A stamp tied with one already held orders the cap by spelling, not by age.
 _STAMP = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -155,6 +165,12 @@ def forget(resolved, record) -> list[str]:
 
     printed = [f"removed the instance {resolved.ref} of {resolved.name}"]
     _stop(resolved.name, key)
+    for vol, volume in sorted(record.volumes.items()):
+        if volume.kind != volumes.SUBVOLUME:
+            continue
+        config = paths.snapper_config(resolved.name, vol, key)
+        if snapper.configuration_exists(config):
+            tool.run(["snapper", "--config", config, "delete-config"])
     _drop(paths.instance_tree(resolved.name, key))
     _drop(paths.instance_home(resolved.name, key))
     del record.instances[key]

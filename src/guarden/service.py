@@ -198,11 +198,12 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
 
     retention = volumes.retention_from(resolved.track, granted)
     for vol in manifest.state:
+        volumes.create_state(resolved.name, vol, retention, owner, resolved.escaped_ref)
         _record(
             record,
             vol,
             "state",
-            volumes.create_state(resolved.name, vol, retention, owner, resolved.escaped_ref),
+            None if resolved.escaped_ref else paths.snapper_config(resolved.name, vol),
         )
     for vol in manifest.bulk:
         volumes.create_bulk(resolved.name, vol, owner, resolved.escaped_ref)

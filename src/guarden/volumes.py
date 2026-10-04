@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from guarden import conf, paths, tool
+from guarden import conf, paths, snapper, tool
 
 # The two kinds and the directories they live under are `paths`' to state (spec 2):
 # `state/` and `bulk/` are split precisely so a snapshotted subvolume is never a
@@ -86,9 +86,16 @@ def _percentage(value: float) -> str:
 
 
 def create_subvolume(target, owner: tuple[int, int]) -> None:
-    """One btrfs subvolume, owned by the service user. Never a plain directory."""
+    """One btrfs subvolume, owned by the service user. Never a plain directory.
+
+    Idempotent, because ingest is a reconcile verb: the second ingest of a service
+    whose volumes exist is the ordinary case, and `btrfs subvolume create` on a
+    path that is already a subvolume answers "File exists" and exits 1. Ownership
+    is still applied, so a re-ingest converges the owner too.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
-    tool.run(["btrfs", "subvolume", "create", str(target)])
+    if not target.exists():
+        tool.run(["btrfs", "subvolume", "create", str(target)])
     own(target, owner)
 
 
@@ -103,7 +110,8 @@ def create_state(
     target = paths.volume(name, SUBVOLUME, vol, escaped_ref)
     config = paths.snapper_config(name, vol, escaped_ref)
     create_subvolume(target, owner)
-    tool.run(["snapper", "--config", config, "create-config", str(target)])
+    if not snapper.configuration_exists(config):
+        tool.run(["snapper", "--config", config, "create-config", str(target)])
     for key, value in canonical_values(retention):
         tool.run(["snapper", "--config", config, "set-config", f"{key}={value}"])
     return config
