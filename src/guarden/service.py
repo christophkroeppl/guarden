@@ -476,6 +476,12 @@ def start_units(name: str, escaped_ref: str | None = None) -> None:
     empty unit directory is a failure is a question for the verb that promises a
     start, and `weedr service start` is the only one.
     """
+    # Reload first: a `.container` file is a DECLARATION, and the unit exists only
+    # once quadlet's generator has run. The manager has not reloaded since the
+    # units were installed, so `systemctl --user start` answers "Unit not found"
+    # for a service that is fully declared — which is the first of the two cases
+    # _unit's own docstring names and says is the host, not the program.
+    tool.call(["systemctl", "--user", "--machine", f"{name}@", "daemon-reload"])
     for unit in units_of(name, escaped_ref):
         _unit(name, "start", unit)
 
