@@ -166,7 +166,8 @@ def _warn_stray(stray: list[str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    call = cli.invocation("stakes", args.group, None)
+    verb = args.verb if args.verb and args.verb != args.group else None
+    call = cli.invocation("stakes", args.group, verb)
     handler = HANDLERS.get(call)
     if handler is None:
         return cli.pending(call)

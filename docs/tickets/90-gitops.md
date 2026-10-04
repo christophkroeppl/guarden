@@ -6,7 +6,70 @@ The box takes the source, maps the ref to an environment from a root-owned allow
 
 **Blocked by:** 50 (the edge), 80 (edges), 120 (the queue)
 
-**Status:** ready-for-agent
+**Status:** implemented, unexecuted — see the note at the foot.
+
+## Implementation notes, and the two things another file has to do
+
+Written: `src/guarden/hose.py` (the receiver), `src/guarden/projects.py` (the
+projects, the allowlist and the key file), `src/guarden/templates/poke-workflow.yml.j2`,
+`tests/t90-gitops.sh` and `tests/t90-projects.sh`.
+
+**`weedr.py` needs six dispatch entries and one import.** The verb bodies are
+written and tested; the mutator's `HANDLERS` table is another ticket's file, so
+this is left for whoever owns it:
+
+```
+    projects,                       # in the guarden import list
+    "weedr project list": projects.list_json,
+    "weedr project add": projects.do_add,
+    "weedr project remove": projects.do_remove,
+    "weedr project keys": projects.list_keys,
+    "weedr project grant": projects.do_grant,
+    "weedr project revoke": projects.do_revoke,
+```
+
+Until they are in, `tests/t90-projects.sh` fails on its first assertion and
+`weedr project <verb>` answers "is not implemented" with exit 1 — which is what
+`tests/t10-alias.sh` asserts today and keeps asserting.
+
+**Two spec conflicts were found and resolved in favour of the spec, and are
+worth a decision.**
+
+1. **`hose` cannot read `guarden.toml`.** Spec 2.1 makes it `0640 root:guarden`
+   and spec 6.7 says `hose` is deliberately not in the `guarden` group, so the
+   `[[environments]]` table — and therefore whether a track is `slot` or
+   `instance` — is unreadable to the program that must derive the deploy's name
+   from it. Resolved without a new permission: where the table is readable the
+   kind is used directly, and where it is not the bare service name is tried and
+   `furrow deploy`'s own refusal (`the track … is kind = "instance", so every
+   deploy names one instance`) is what the retry answers to. Nothing is invented
+   from a track's *name*, because a track is a row and not a keyword. The
+   alternative — a fourth carve-out in the mode table — would be a permission
+   added for the convenience of one program.
+
+2. **The deployed-sha short-circuit is unreachable on a conforming host.**
+   `/var/lib/guarden/registry` is `0750 root:guarden` and `hose` is not in that
+   group, so "a poke whose sha equals the deployed sha makes no `furrow` call"
+   cannot be decided by the receiver. It is implemented as a short-circuit that
+   applies wherever the record is readable (the VM suite runs as root, so it is
+   exercised there), and treated as an optimisation rather than a correctness
+   requirement elsewhere: `weedr service ingest` is idempotent, so a repeated poke
+   converges, exits 0 and touches nothing. **This is a weakened guarantee in the
+   ticket and the fix is either a carve-out for the registry or a mutator verb
+   that answers "is this sha deployed".**
+
+**`weedr service build <name>` is not ticket 90's.** It has no body, no ticket
+claims it, and it is a mutator verb for an unprivileged `furrow` that cannot
+become the service user (ADR-0009). It belongs to whoever owns the deploy
+sequence's build step — ticket 120 named the gap and did not take it — and the
+right home is a ticket about the build, not about how code arrives.
+
+**The queue drain verb is not ticket 90's either.** Spec 6.9 names a
+`guarden-queue.path` unit, and no verb in spec 6.6's fixed list drains the queue
+without a `--from`: `furrow deploy` always enqueues, and nothing answers the
+path unit. It is a `furrow` verb, it needs the spec's verb list amended before it
+exists, and no part of the poke path depends on it — a poke is served by the
+deploy it makes. Ticket 120 raised it; it belongs beside that.
 
 - [ ] `weedr project add` writes the entry and the per-project copy in
       `/etc/guarden/projects.d/`, with the ref to environment mapping as an **allowlist**

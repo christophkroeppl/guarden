@@ -35,7 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return cli.pending(cli.invocation("twig", args.group, args.verb))
+    verb = args.verb if args.verb and args.verb != args.group else None
+    return cli.pending(cli.invocation("twig", args.group, verb))
 
 
 if __name__ == "__main__":
