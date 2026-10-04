@@ -450,7 +450,7 @@ When implementing a ticket:
 
 1. Read `CONTEXT.md`, the spec, and every ticket.
 2. Implement only the assigned ticket. Do not fix adjacent bugs in the same change.
-3. Finish with `just test` green. The reply is two lines: `DONE` and one paragraph.
+3. Finish with `just test` green, then commit the work and say what the commit is.
 
 ## What not to do
 
@@ -493,4 +493,11 @@ When implementing a ticket:
 - Do not reintroduce a ledger where a projection will do.
 - Do not rewrite the harness to make one test pass.
 - Do not commit secrets, generated credential material, or VM evidence tarballs.
-- Do not commit unless the human asks. Leave the tree dirty and say what is done.
+- **Commit freely, and merge into `develop` or a feature branch freely.** A commit is how a change
+  reaches the golden VM — `tests/lxc.sh` pushes the checkout into a cut, so uncommitted work
+  cannot be tested on a real machine. Merge a ticket branch into `develop` once its suite is
+  green. **`main` is the operator's, and so is history**: never merge into `main`, never rebase,
+  amend, force-push or otherwise rewrite what is already committed.
+- Never merge a harness change whose claim needs the golden rebuilt, and never merge a suite
+  asserting something the environment happens to satisfy — "green because the environment
+  provides it" is the failure this repository keeps paying for.
