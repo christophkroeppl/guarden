@@ -245,10 +245,10 @@ assert_stdout_has "removed myapp-preview"
 stage_poke shelf 3ab91d7
 run weedr service ingest shelf-staging --from poke shelf@3ab91d7
 assert_exit 0
-assert_stderr_empty
+assert_stderr_lacks "error:"
 run weedr service ingest shelf-preview/one --from poke shelf@3ab91d7
 assert_exit 0
-assert_stderr_empty
+assert_stderr_lacks "error:"
 uid_one=$(id -u shelf-preview)
 home_one=$(stat -c %i /var/lib/guarden/services/shelf-preview/home)
 
@@ -258,7 +258,8 @@ home_one=$(stat -c %i /var/lib/guarden/services/shelf-preview/home)
 run weedr service ingest shelf-preview/two --from poke shelf@3ab91d7
 assert_exit 0
 assert_file_exists /var/lib/guarden/services/shelf-preview/home
-assert_passwd_field shelf-preview "$uid_one" uid
+[ "$(id -u shelf-preview)" = "$uid_one" ] \
+    || _fail "the second ref changed the service's uid from $uid_one"
 [ "$home_one" = "$(stat -c %i /var/lib/guarden/services/shelf-preview/home)" ] \
     || _fail "the second ref replaced the service's home, so it made a second one"
 

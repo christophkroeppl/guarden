@@ -1,5 +1,6 @@
 project: shelf
 units: compose.yaml
+schema: .guarden/.env.schema
 state:
   - data
 bulk:

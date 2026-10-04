@@ -326,6 +326,8 @@ def _edge_units(name: str) -> None:
             continue
         if entry is None:
             continue
+        if registry.load(entry.name) is None:
+            return
         units.report(units.install(modules.source_of(module, entry.name), entry.name))
         return
 

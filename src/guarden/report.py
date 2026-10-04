@@ -134,6 +134,7 @@ def _service_object(record, invariants: list[str]) -> dict:
             "granted": granted_numbers,
             "pending": pending,
         },
+        "route_hosts": dict(record.route_hosts),
         "volumes": [_volume_object(record, volume) for volume in record.volume_list()],
         "instances": [
             {
