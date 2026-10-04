@@ -75,7 +75,19 @@ mkdir -p /etc/guarden
 if ! getent group guarden >/dev/null 2>&1; then
     groupadd --system guarden
 fi
+id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
 stage_config guarden-measured.toml
+
+# `soil install --apply` is a precondition, not the subject: ingest renders through
+# `loom`, and the programs are not on this host until install has run. It goes AFTER
+# stage_config, because install probes the host's gateway and writes what it
+# measured into the config it is reading.
+install -D -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" \
+    "$GUARDEN_PREFIX/etc/guarden/podlet.release"
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 stage_quadlet
 # The project's `needs:` names a database the render resolves out of the registry,
 # and there is no database on this host yet, so its record is seeded rather than
@@ -100,6 +112,8 @@ printf '%s\n' \
 
 # Not assert_stderr_empty: the firewall and not-running-provider warnings are
 # correct on an unconverged host, so the claim is that the edge resolves.
+run weedr module add gate
+assert_exit 0
 run weedr service ingest qapp-production --from poke qapp@9f2c1ab
 assert_exit 0
 assert_stderr_lacks "the edge is recorded with no publication"
