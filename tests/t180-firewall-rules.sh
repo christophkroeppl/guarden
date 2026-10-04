@@ -93,7 +93,12 @@ assert_file_has "$registry/tunnel-staging.toml" 'chain = "guarden-svc"'
 # explicit chain and dropped the omitted one would still pass it. This is the
 # entry with no `chain:` key at all, recorded rather than refused, carrying the
 # default — which is what §4 means by a key that may be omitted.
-assert_file_has "$registry/tunnel-staging.toml" 'requested = [{ name = "peer-range", chain = "guarden-svc"'
+# Ordered as the manifest lists them, which is not the order this line assumed:
+# `peer-range` is the SECOND entry. Asserting the defaulted chain by finding it
+# where it actually is keeps the claim about the default rather than about
+# ordering, which nothing in the ticket fixes.
+grep -q 'name = "peer-range", chain = "guarden-svc"' "$registry/tunnel-staging.toml" ||
+    _fail "the entry that omitted chain: was not recorded with guarden's chain"
 # **A request installs nothing, and it grants nothing either.** The registry's
 # `granted` mirror is absent after an ingest, because the only thing that writes
 # it is `weedr firewall open` and a poke cannot reach that.

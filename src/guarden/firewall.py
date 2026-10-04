@@ -18,6 +18,7 @@ from guarden import (
     paths,
     publications,
     registry,
+    rules,
     tool,
     users,
 )
@@ -327,10 +328,29 @@ def render(config, grants: list[Grant]) -> str:
         "",
         f"chain {OUTPUT_CHAIN} {{",
         *accept_lines(config),
+        # A granted rule renders ABOVE the deny and never after it: position is
+        # guarden's, and a grant that landed below a default deny would be
+        # unreachable while still appearing in the file.
+        *granted_rule_lines(),
         f"    daddr {LOOPBACK_NETWORK} jump DROP;",
         "}",
     ]
     return "\n".join(lines) + "\n"
+
+
+def granted_rule_lines() -> list[str]:
+    """One ferm line per GRANTED requested rule, deduplicated by content.
+
+    Ungranted requests render nothing: a request installs no rule, and a rule
+    nobody granted is the one thing this design refuses to do on a repository's
+    word alone.
+    """
+    out: list[str] = []
+    for rule in granted_rules():
+        granted_by = ", ".join(f"{s} {n}" for s, n in sorted(rule.granted_names))
+        out.append(f"# {rule.rule} — granted by {granted_by}")
+        out.append(f"    {rules.parse(rule.rule, 'a granted rule').ferm_line()}")
+    return out
 
 
 def installed() -> str:
@@ -526,4 +546,23 @@ def rules_as_text(entries: list[dict]) -> str:
             f"{state:<9}  {services}"
         )
     return "\n".join(lines) + "\n"
+
+
+def requested_rule(record, name: str):
+    """The requested rule called `name`, or exit 2 naming what was asked for.
+
+    A grant with no request behind it is an admin typing a rule into a file that
+    no manifest will ever fill in, so the answer is a rejected input and it names
+    the entries that do exist — otherwise the operator is left guessing which
+    spelling was meant.
+    """
+    for entry in record.firewall_requested:
+        if entry.name == name:
+            return entry
+    asked = ", ".join(sorted({e.name for e in record.firewall_requested})) or "none"
+    raise errors.GuardenError(
+        f"{record.service!r} asked for no firewall rule named {name!r}; the rules its "
+        f"manifest's `firewall:` block names are: {asked}",
+        errors.REJECTED_INPUT,
+    )
 
