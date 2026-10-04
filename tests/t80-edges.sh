@@ -124,7 +124,10 @@ assert_file_has "$consumer_registry" '[edges."pgprov-staging:8200"]'
 assert_file_has "$consumer_registry" 'as = "db"'
 assert_file_has "$consumer_registry" 'auth = "database"'
 assert_file_has "$consumer_registry" 'port = 5432'
-assert_file_has "$consumer_registry" 'as = "vault"'
+# `as:` is the provider KIND as well as the variable prefix, and the kinds are db
+# and secret — so this edge asks for `secret` on the vault container's PORT. The two
+# edges are told apart by port, which is what the registry keys them on.
+assert_file_has "$consumer_registry" 'as = "secret"'
 assert_file_has "$consumer_registry" 'auth = "secret"'
 assert_file_has "$consumer_registry" 'port = 8200'
 dialed=$(dialed_publication "$consumer_registry" 5432)
