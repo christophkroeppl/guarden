@@ -820,6 +820,13 @@ def _container_unit(
     unit_keys = _lines(unit, "Unit", domain, drop=("Description",))
     description = source.units[container].one("Unit", "Description")
     unit_keys.insert(0, f"Description={description or f'{service} {container}'.strip()}")
+    # The unit runs in the service's OWN home. Without this podman inherits root's
+    # as its working directory and refuses to start with "cannot chdir to /root:
+    # Permission denied", exit 125 — a unit that is installed correctly and cannot
+    # run. HOME goes with it for the same reason: podman resolves its rootless
+    # storage from it.
+    unit_keys.insert(0, f"WorkingDirectory={paths.service_home(service)}")
+    unit_keys.insert(1, f"Environment=HOME={paths.service_home(service)}")
 
     # The repository's own fields first, in the order the source wrote them, and
     # then the fields guarden owns in a fixed order — so a regenerated unit

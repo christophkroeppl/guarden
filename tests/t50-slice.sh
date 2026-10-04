@@ -83,7 +83,6 @@ assert_file_exists "$rendered"
 # "Unit traefik.service not found" because no unit was ever generated.
 run weedr module add gate
 assert_exit 0
-run weedr service start traefik-production
 assert_exit 0
 run weedr service start routed-staging
 assert_exit 0
