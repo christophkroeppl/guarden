@@ -108,7 +108,12 @@ assert_file_has "$registry/qapp-production.toml" "missing required key: DB_PASSW
 
 # **The order is the point, and it is asserted as an order.** The step names
 # appear on stdout in this sequence, and the journal carries the same lines.
-order=$(grep -oE '^(ensure|render|build|gate|install|start) ' "$GUARDEN_STDOUT" \
+#
+# `stop` IS in the alternation even though this deploy must not reach it: with
+# `stop` left out of the pattern, a stop that ran between the gate and the
+# install would still produce `[ensure,render,build,gate,install]` and this
+# assertion would pass on a deploy that violated the order it exists to prove.
+order=$(grep -oE '^(ensure|render|build|gate|stop|install|start) ' "$GUARDEN_STDOUT" \
     | tr -d ' ' | tr '\n' ',')
 want="ensure,render,build,gate,install,"
 [ "$order" = "$want" ] || _fail "the deploy ran [$order], expected [$want]"
@@ -117,8 +122,24 @@ want="ensure,render,build,gate,install,"
 # gate stops the sequence before it — which is the whole of "a failed build or a
 # blocked gate leaves the running container running", and here it is visible in
 # what was printed rather than in a container nobody has started.
-assert_stdout_lacks "stop   qapp-production"
-assert_stdout_lacks "start  qapp-production"
+# The padding is the assertion: `_step` writes `f"{name:<7} {detail}"`, so a
+# step name is padded to seven columns and then followed by ONE space. A token
+# written with the wrong number of spaces can never appear in stdout, so
+# `assert_stdout_lacks` passes on a deploy that DID run the step.
+assert_stdout_lacks "stop    qapp-production"
+assert_stdout_lacks "start   qapp-production"
+
+# --- a source with no build instruction makes no build call ------------------
+
+# The `9f2c1ab` tree declares no `Build*` key, so the deploy above made no build
+# call and therefore waited for no lane. A deploy that pulls a prebuilt image
+# competes for no resource with anything and does not go behind one (ADR-0010).
+#
+# **This is asserted here, above the `weedr service gate` run below, because
+# `run` overwrites the captured stdout.** Asserted after it, the assertion would
+# read the gate verb's stdout, which carries no step lines at all, and would
+# pass on a deploy that DID make a build call.
+assert_stdout_has "no build instruction, so no build call"
 
 # The verb itself answers `1` about the same condition, and the deploy converted
 # nothing: `weedr service gate` was asked whether it could start and it cannot,
@@ -128,12 +149,6 @@ assert_exit 1
 assert_one_diagnostic "error:"
 assert_stderr_has "cannot start"
 
-# --- a source with no build instruction makes no build call ------------------
-
-# The `9f2c1ab` tree declares no `Build*` key, so the deploy above made no build
-# call and therefore waited for no lane. A deploy that pulls a prebuilt image
-# competes for no resource with anything and does not go behind one (ADR-0010).
-assert_stdout_has "no build instruction, so no build call"
 run furrow status --json
 assert_exit 0
 assert_json in_flight 0
@@ -153,8 +168,12 @@ assert_stderr_has "build"
 # Nothing after the build ran. A failed build is the first of the two ways a
 # deploy can fail while the old container is still serving.
 assert_stdout_lacks "gate   qapp-production"
-assert_stdout_lacks "stop   qapp-production"
-assert_stdout_lacks "start  qapp-production"
+# The padding is the assertion: `_step` writes `f"{name:<7} {detail}"`, so a
+# step name is padded to seven columns and then followed by ONE space. A token
+# written with the wrong number of spaces can never appear in stdout, so
+# `assert_stdout_lacks` passes on a deploy that DID run the step.
+assert_stdout_lacks "stop    qapp-production"
+assert_stdout_lacks "start   qapp-production"
 after=$(sha256sum "$registry/qapp-production.toml" | cut -d' ' -f1)
 [ "$before" = "$after" ] || _fail "a failed build changed the registry of qapp-production"
 
@@ -178,8 +197,36 @@ assert_stdout_has "8a1d2f0"
 run furrow deploy qapp-staging --from poke qapp@8a1d2f0
 assert_exit 1
 assert_passwd qapp-staging
-one=$(ls -1 "$queue" | grep -c '^qapp-staging@8a1d2f0.json$')
+# Inside `if` because `grep -c` exits 1 on no match and `set -euo pipefail` is
+# on: a bare assignment would kill the suite on the count of zero, which is
+# exactly the case this assertion exists to catch.
+one=0
+if two=$(ls -1 "$queue" | grep -c '^qapp-staging@8a1d2f0.json$'); then
+    one=$two
+fi
 [ "$one" = 1 ] || _fail "the queue holds $one files for one service and sha, expected 1"
+
+# --- lanes bound builds, and `deploy-<service>` bounds deploys ---------------
+
+# **The two are different hazards with different mechanisms**, and this is the
+# whole of the distinction: the lane count is read out of the root-owned table
+# on every claim, while `deploy-<service>` is an flock file whose NAME is the
+# claim. A deploy that pulled a prebuilt image took no lane at all (the step
+# line above says so) and still left a `deploy-qapp-production.lock` behind,
+# because the file is created by the lock itself and outlives the process.
+#
+# What this does NOT assert is that two deploys of one service cannot overlap:
+# that needs two real containers and a real running unit to interrupt, which is
+# the golden VM's work (ticket 140). What it does assert is the mechanism, so
+# a future refactor that replaced the flock with a lane counter would be caught.
+assert_file_exists /run/guarden/locks/deploy-qapp-production.lock
+assert_file_has /etc/guarden/guarden.toml "lanes = 1"
+# A prebuilt-image deploy is not queued: its request file is gone, because it
+# succeeded. A request that dropped its file on failure would be unreadable, and
+# one that dropped it on success is the drainer's contract with the `.path`
+# unit (spec 6.9).
+assert_file_missing "$queue/qapp-production@9f2c1ab.json"
+assert_file_exists "$queue/qapp-production@8a1d2f0.json"
 
 # --- the lock is on tmpfs and the request file is not ------------------------
 
@@ -208,9 +255,13 @@ assert_file_exists /run/guarden/locks/deploy-qapp-preview-feature-login.lock
 # A deploy of a preview service with no ref names no instance, and one on a
 # `kind = "slot"` track is refused the same way: the track says what a name may
 # carry, and a repository does not get a say in it.
+# Both of these name a staged tree that exists and a service that may exist, so
+# neither refusal is about the tree: each is the track saying what a name may
+# carry, which is rejected input and exit 2.
 run furrow deploy qapp-preview --from poke qapp@9f2c1ab
 assert_exit 2
 assert_stderr_has "instance"
+assert_file_missing /run/guarden/locks/deploy-qapp-preview.lock
 run furrow deploy qapp-production/feature-login --from poke qapp@9f2c1ab
 assert_exit 2
 assert_stderr_has "slot"

@@ -60,10 +60,14 @@ assert_exit 2
 assert_stderr_has "hexadecimal"
 assert_file_missing "$queue/qapp-production@nothex.json"
 
-# No `--from` at all: there is no second, looser form, and a service that does
-# not exist cannot be deployed from nothing.
+# No `--from` at all, and no registry entry: spec 6.6 fixes this as exit 1
+# naming the service, not 2. 2 would claim the caller's input was rejected when
+# the refusal is about the host — there is nothing here to deploy — so this
+# assertion follows the spec and the two codes are not interchangeable.
 run furrow deploy qapp-production
-assert_exit 2
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "qapp-production"
 assert_stderr_has "--from"
 assert_stdout_empty
 
@@ -117,6 +121,10 @@ assert_stdout_has "weight 1000"
 # else, so a caller may parse the document without knowing the program's state.
 run furrow queue list --json
 assert_exit 0
+# **Every `assert_json` below reads the pristine copy `last-stdout`,** which the
+# first of them replaces `$GUARDEN_STDOUT` with. The exit code is asserted once
+# here for that reason: each later `assert_json` sets GUARDEN_EXIT itself, so an
+# `assert_exit` between them would be asserting the field reader's exit code.
 assert_json requests.0.service '"qapp-production"'
 assert_json requests.0.ref null
 assert_json requests.0.sha '"9f2c1ab"'
@@ -148,11 +156,22 @@ assert_stdout_has "nothing waiting"
 # second run overwrites the first's file rather than adding one.
 run furrow deploy qapp-production --from poke qapp@9f2c1ab
 assert_exit 1
-files=$(ls -1 "$queue" | grep -c 'qapp-production@9f2c1ab.json')
-[ "$files" = 1 ] || _fail "the queue holds $files files for one service and sha, expected 1"
-run furrow queue list
+# **The count is inside `if`, not a bare `grep -c` assignment.** tests/lib.sh runs
+# `set -euo pipefail`, and `grep -c` exits 1 when it counts nothing, so a queue
+# holding ZERO files for this request would kill the suite silently at that
+# assignment — passing by never reaching the comparison below.
+one=0
+if two=$(ls -1 "$queue" | grep -c '^qapp-production@9f2c1ab.json$'); then
+    one=$two
+fi
+[ "$one" = 1 ] || _fail "the queue holds $one files for one service and sha, expected 1"
+# `--json`, because the assertion below reads a JSON document: `jsonfield.py`
+# is handed `last-stdout`, and on the text rendering it reports "stdin is not
+# JSON" and the field is unreachable. The text rendering is asserted above.
+run furrow queue list --json
 assert_exit 0
 assert_json requests.0.sha '"9f2c1ab"'
+assert_json requests.0.state '"failed"'
 
 # --- priority is the track's weight, and a preview is last --------------------
 
@@ -178,7 +197,7 @@ assert_json requests.2.ref '"feature-login"'
 assert_json requests.2.weight 10
 # The ref is escaped in the file name because a raw one may carry a `/`, and a
 # queue file named after one is a path that does not exist.
-assert_file_exists "$queue/qapp-preview-feature-login@7b3e1d9.json"
+assert_file_exists "$queue/qapp-preview-feature\\x2dlogin@7b3e1d9.json"
 
 # --- `--now` moves one request and nobody else --------------------------------
 

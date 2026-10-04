@@ -321,13 +321,27 @@ def _request_name(resolved: names.Resolved, sha: str) -> str:
 # --- a request ---------------------------------------------------------------
 
 
-def _poke(values: list[str] | None, sha_argument: str | None) -> tuple[str, str]:
-    """`--from poke <project>@<sha>`, and nothing that could be a path."""
+def _poke(values: list[str] | None, sha_argument: str | None, known: bool, name: str
+          ) -> tuple[str, str]:
+    """`--from poke <project>@<sha>`, and nothing that could be a path.
+
+    Two refusals, and they are different codes because they are different
+    facts (spec 1.2): no `--from` and no registry entry is the host not being in
+    the state the request assumed — exit `1`, naming the service — while no
+    `--from` on a service that does exist is rejected input, exit `2`.
+    """
     if not values:
+        if not known:
+            raise errors.GuardenError(
+                f"{name} has no registry entry and no `--from` was given, so there is "
+                f"nothing to deploy and nothing to redeploy; `--from poke <project>@<sha>` "
+                f"names the commit to install",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
         raise errors.GuardenError(
-            "`--from` is required: a deploy renders a staged tree, and the service's own "
-            "home is 0700 to the service user, so guarden reads no tree of its own "
-            "choosing; the form is `poke <project>@<sha>`",
+            "`--from` is required on a redeploy too: a deploy renders a staged tree, and "
+            "the service's own home is 0700 to the service user, so guarden reads no tree "
+            "of its own choosing; the form is `poke <project>@<sha>`",
             errors.REJECTED_INPUT,
         )
     if len(values) != 2 or values[0] != "poke":
@@ -392,7 +406,8 @@ def _enqueue(args) -> dict:
             errors.REJECTED_INPUT,
         )
 
-    project, sha = _poke(args.from_values, args.sha)
+    known = registry.load(resolved.name) is not None
+    project, sha = _poke(args.from_values, args.sha, known, resolved.name)
     source = paths.STAGING / project / sha
     if not (source / manifest_mod.MANIFEST_REL).is_file():
         raise errors.GuardenError(
@@ -434,16 +449,35 @@ def _step(name: str, detail: str) -> None:
     sys.stdout.write(f"{name:<7} {detail}\n")
 
 
-def _weedr(verb: str, target: str, doing: str) -> None:
-    result = tool.call(_root("service", verb, target))
-    if result.ok:
-        return
+def _weedr(verb: str, target: str, doing: str, *extra: str) -> int:
+    """One mutator verb, and the exit code it answered with.
+
+    The return code is returned rather than thrown away because `gate` is the
+    one verb whose non-zero answer is an answer: it is `1` on a blocked gate and
+    the deploy branches on the verdict it recorded instead (spec 6.6).
+    """
+    result = tool.call(_root("service", verb, target, *extra))
     detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
-    raise errors.GuardenError(
-        f"{doing}: weedr service {verb} {target} exited {result.returncode}"
-        + (f": {detail}" if detail else ""),
-        errors.HOST_NOT_AS_ASSUMED,
-    )
+    if result.returncode not in (0, 1) or (verb != "gate" and not result.ok):
+        raise errors.GuardenError(
+            f"{doing}: weedr service {verb} {target} exited {result.returncode}"
+            + (f": {detail}" if detail else ""),
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return result.returncode
+
+
+def _ingest_argv(entry: dict) -> tuple[str, ...]:
+    """The `--from` the mutator resolves to a staging tree, never a path.
+
+    `weedr service ingest` requires `--from`, so a call without it is argparse's
+    exit `2` and no service is ever created — the deploy would fail at step zero
+    on every box. The pair the poke carried is what it is given, because the
+    mutator builds `/var/lib/guarden/staging/<project>/<sha>` from it itself and
+    a caller that could name a directory would be the traversal this form
+    removed.
+    """
+    return ("--from", "poke", f"{entry['project']}@{entry['sha']}")
 
 
 def _preview_drop(args) -> int:
@@ -552,10 +586,18 @@ def _deploy(entry: dict) -> int:
 
 
 def _sequence(entry: dict, resolved: names.Resolved, target: str) -> int:
-    """ensure, render, build, gate, stop, install, start — in that order."""
+    """ensure, render, build, gate, stop, install, start — in that order.
+
+    A step that raises ends the sequence there, and the build and the gate both
+    land before the stop, so a failed either leaves the running container
+    running (ADR-0011).
+    """
     if registry.load(resolved.name) is None:
         _step("ensure", f"{resolved.name}: weedr service ingest --from poke")
-        _weedr("ingest", target, f"{resolved.name} could not be created from its staged tree")
+        _weedr(
+            "ingest", target, f"{resolved.name} could not be created from its staged tree",
+            *_ingest_argv(entry),
+        )
     else:
         _step("ensure", f"{resolved.name}: the registry already has an entry")
 
@@ -572,8 +614,7 @@ def _sequence(entry: dict, resolved: names.Resolved, target: str) -> int:
     _step("gate", f"{resolved.name}: {state}")
 
     if state == "blocked":
-        _step("install", f"{target}: weedr service ingest --from poke")
-        _weedr("ingest", target, f"the rendered units of {target} did not install")
+        _install(entry, resolved, target)
         message = (
             f"{resolved.name} deployed, waiting for the credential gate — reason: {reason}"
         )
@@ -585,8 +626,7 @@ def _sequence(entry: dict, resolved: names.Resolved, target: str) -> int:
     _step("stop", f"{target}: weedr service stop")
     _weedr("stop", target, f"the units of {target} did not stop")
 
-    _step("install", f"{target}: weedr service ingest --from poke")
-    _weedr("ingest", target, f"the rendered units of {target} did not install")
+    _install(entry, resolved, target)
 
     _step("start", f"{target}: weedr service start")
     _weedr("start", target, f"{target} did not start")
@@ -594,6 +634,22 @@ def _sequence(entry: dict, resolved: names.Resolved, target: str) -> int:
     entry["error"] = None
     sys.stdout.write(f"deployed {target} at {entry['sha']}\n")
     return 0
+
+
+def _install(entry: dict, resolved: names.Resolved, target: str) -> None:
+    """The mutator verb that installs the rendered units and records the sha.
+
+    `weedr service ingest` is the reconcile verb on the grant and it re-renders
+    the service's own tree through `units.install`, so it is both the install and
+    the record in one call. Calling it a second time for the install is what the
+    order has: the units on disk come from the mutator's own render of the
+    service's home, not from the unprivileged render this program held.
+    """
+    _step("install", f"{target}: weedr service ingest --from poke")
+    _weedr(
+        "ingest", target, f"the rendered units of {target} did not install",
+        *_ingest_argv(entry),
+    )
 
 
 def _drain(mine: str) -> int:
