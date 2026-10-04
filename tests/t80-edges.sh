@@ -278,10 +278,9 @@ assert_file_has "$registry/unpublished-staging.toml" 'publications = []'
 # `auth: none` plants nothing, so the claim is that the service holds NO credential
 # — stated over the directory rather than one file name, so it does not depend on
 # how a key is spelled.
-assert_file_missing "$creds/unpublished-staging/BOTH_PASSWORD_9999.cred"
-if [ -d "$creds/unpublished-staging" ] && [ -n "$(ls -A "$creds/unpublished-staging")" ]; then
-    _fail "auth: none planted a credential: $(ls "$creds/unpublished-staging")"
-fi
+assert_file_missing "$creds/unpublished-staging/DB_PASSWORD_9999.cred"
+leftover=$(ls -A "$creds/unpublished-staging" 2>/dev/null || true)
+[ -z "$leftover" ] || _fail "auth: none left credentials behind: $leftover"
 assert_file_missing "$creds/unpublished-staging/BOTH_SECRET.cred"
 run loom render /var/lib/guarden/services/unpublished-staging/home \
     --service unpublished-staging --out "$GUARDEN_FIXTURES/unpublished"

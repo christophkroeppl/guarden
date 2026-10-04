@@ -6,6 +6,6 @@ project: unpublished
 units: .guarden/quadlet/
 needs:
   - service: pgprov-staging
-    as: both
+    as: db
     port: 9999
     auth: none
