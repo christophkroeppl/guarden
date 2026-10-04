@@ -254,7 +254,7 @@ assert_file_has "$render/units/guarden.env" "DB_PORT=$db_pub"
 assert_file_has "$render/units/guarden.env" "SECRET_HOST=pgprov-staging"
 assert_file_has "$render/units/guarden.env" "SECRET_PORT=$vault_pub"
 assert_file_has "$render/units/web.container" "Secret=DB_PASSWORD_5432,type=file"
-assert_file_has "$render/units/web.container" "Secret=SECRET_,type=file"
+assert_file_has "$render/units/web.container" "Secret=SECRET_SECRET_8200,type=file"
 # The credential arrives as a request and never as a value, and the renderer's
 # `LoadCredentialEncrypted=` would be a unit its own user manager cannot start.
 assert_file_lacks "$render/units/web.container" "$db_value"
@@ -275,7 +275,13 @@ assert_exit 0
 assert_stderr_has "9999"
 assert_stderr_has "pgprov-staging"
 assert_file_has "$registry/unpublished-staging.toml" 'publications = []'
-assert_file_missing "$creds/unpublished-staging/BOTH_PASSWORD.cred"
+# `auth: none` plants nothing, so the claim is that the service holds NO credential
+# — stated over the directory rather than one file name, so it does not depend on
+# how a key is spelled.
+assert_file_missing "$creds/unpublished-staging/BOTH_PASSWORD_9999.cred"
+if [ -d "$creds/unpublished-staging" ] && [ -n "$(ls -A "$creds/unpublished-staging")" ]; then
+    _fail "auth: none planted a credential: $(ls "$creds/unpublished-staging")"
+fi
 assert_file_missing "$creds/unpublished-staging/BOTH_SECRET.cred"
 run loom render /var/lib/guarden/services/unpublished-staging/home \
     --service unpublished-staging --out "$GUARDEN_FIXTURES/unpublished"
