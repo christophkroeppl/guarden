@@ -175,39 +175,49 @@ nat=/etc/guarden/firewall/20-ingress-nat.conf
 run soil firewall --apply
 assert_not_rejected
 assert_file_has "$nat" \
-    "[ 'p tcp' '--dport 80' ] -j DNAT --to-destination 127.0.0.1:$web_publication"
+    "proto tcp dport 80 DNAT to 127.0.0.1:$web_publication"
 assert_file_has "$nat" \
-    "[ 'p tcp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:$tls_publication"
+    "proto tcp dport 443 DNAT to 127.0.0.1:$tls_publication"
 assert_file_has "$nat" \
-    "[ 'p udp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:$tls_publication"
+    "proto udp dport 443 DNAT to 127.0.0.1:$tls_publication"
 assert_rule_count "$nat" 3
-# No masquerade, in any form a rule could take, and never REDIRECT.
+# Bare target words: the `-j` spelling ferm never emits asserted nothing.
 assert_file_lacks "$nat" "MASQUERADE"
-assert_file_lacks "$nat" "chain POSTROUTING"
-assert_file_lacks "$nat" "--to-source"
+assert_file_lacks "$nat" "POSTROUTING"
 assert_file_lacks "$nat" "REDIRECT"
+assert_file_lacks "$nat" "SNAT"
+assert_file_lacks "$nat" "jump DNAT"
 
 # The intra-host rule set: accepts above one drop, and the drop carries no uid.
 services=/etc/guarden/firewall/30-services.conf
 assert_file_exists "$services"
-assert_file_has "$services" "--dport $web_publication' ] -m owner --uid-owner $edge_uid -j ACCEPT"
-assert_file_has "$services" "--dport $tls_publication' ] -m owner --uid-owner $edge_uid -j ACCEPT"
 assert_file_has "$services" "chain guarden-svc"
-assert_file_lacks "$services" "-d 192.0.2.1"
+assert_file_has "$services" \
+    "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $web_publication jump ACCEPT;"
+assert_file_has "$services" \
+    "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $tls_publication jump ACCEPT;"
+assert_file_lacks "$services" "192.0.2.1"
 # The API's accept set is `host.admin_user` and nobody else.
 admin_uid=$(getent passwd operator | cut -d: -f3)
-assert_file_has "$services" "--dport $api_publication' ] -m owner --uid-owner $admin_uid -j ACCEPT"
+assert_file_has "$services" \
+    "mod owner uid-owner $admin_uid daddr 127.0.0.1 proto tcp dport $api_publication jump ACCEPT;"
 # The drop is the last rule and names no uid: a default deny that enumerates who
 # it applies to leaves every other uid with the box's own default policy.
-drop_line=$(grep -n -- "-j DROP" "$services" | tail -1 | cut -d: -f1)
-accept_line=$(grep -n -- "-j ACCEPT" "$services" | tail -1 | cut -d: -f1)
+# Rule lines only, so the provenance comments cannot move the numbers.
+drop_line=$(grep -vE '^[[:space:]]*(#|$)' "$services" | grep -n 'jump DROP;' | tail -1 | cut -d: -f1)
+accept_line=$(grep -vE '^[[:space:]]*(#|$)' "$services" | grep -n 'jump ACCEPT;' | tail -1 | cut -d: -f1)
 [ "$drop_line" -gt "$accept_line" ] \
     || _fail "the loopback drop is not the last rule in 30-services.conf"
-run grep -- "-j DROP" "$services"
+run grep 'jump DROP;' "$services"
 assert_exit 0
 assert_stdout_lacks "uid-owner"
-assert_stdout_has "-o lo"
-assert_stdout_has "-d 127.0.0.0/8"
+assert_stdout_has "daddr 127.0.0.0/8"
+# KNOWN DIVERGENCE, asserted not deleted: spec 7.6 puts `-o lo` on this deny and
+# on every accept; firewall.py emits no interface match at all. Fails until reconciled.
+case "$GUARDEN_STDOUT" in
+    *"if lo"*|*"o lo"*) ;;
+    *) _fail "30-services.conf's deny carries no interface match; spec 7.6 shows -o lo and firewall.py emits none" ;;
+esac
 
 # A second add is a no-op: the service converges, the list does not grow a
 # second copy, and the ingress is still three rules.
