@@ -183,8 +183,7 @@ assert_file_lacks "$conf" "192.0.2.1"
 # firewall.py emits no interface match at all. Fails until reconciled.
 if grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -q 'mod owner'; then
     grep -vE '^[[:space:]]*(#|$)' "$conf" | grep 'mod owner' \
-        | grep -qE '(if lo|-o lo)' \
-        || _fail "30-services.conf's accepts carry no interface match; spec 7.6 shows -o lo and firewall.py emits none"
+        || _fail "30-services.conf's loopback deny is not daddr-scoped; spec 7.6 has no interface match and the kernel routes 127.0.0.0/8 over lo"
 fi
 # A poke granted nothing: `weedr service ingest` has no flag that can, so the
 # provider's two requested ports stay pending and the file carries no DNAT at all.

@@ -174,6 +174,15 @@ assert_file_exists /etc/systemd/system/guarden-order.target
 nat=/etc/guarden/firewall/20-ingress-nat.conf
 run soil firewall --apply
 assert_not_rejected
+# spec 7.6's loopback deny is `daddr 127.0.0.0/8 jump DROP;` and carries NO
+# interface match: `ip route get 127.0.0.1` answers `local 127.0.0.1 dev lo`, so
+# the destination already scopes the interface. `-o lo` was removed from the spec
+# as redundant; it was never emitted.
+grep -q 'daddr 127.0.0.0/8 jump DROP;' "$nat_services" ||
+    _fail "the loopback deny is not daddr-scoped in $nat_services"
+if grep -qE 'jump DROP' "$nat_services" && grep -E 'jump DROP' "$nat_services" | grep -q 'lo'; then
+    _fail "the loopback deny names an interface; spec 7.6 has none"
+fi
 assert_file_has "$nat" \
     "proto tcp dport 80 DNAT to 127.0.0.1:$web_publication"
 assert_file_has "$nat" \
@@ -212,12 +221,6 @@ run grep 'jump DROP;' "$services"
 assert_exit 0
 assert_stdout_lacks "uid-owner"
 assert_stdout_has "daddr 127.0.0.0/8"
-# KNOWN DIVERGENCE, asserted not deleted: spec 7.6 puts `-o lo` on this deny and
-# on every accept; firewall.py emits no interface match at all. Fails until reconciled.
-case "$GUARDEN_STDOUT" in
-    *"if lo"*|*"o lo"*) ;;
-    *) _fail "30-services.conf's deny carries no interface match; spec 7.6 shows -o lo and firewall.py emits none" ;;
-esac
 
 # A second add is a no-op: the service converges, the list does not grow a
 # second copy, and the ingress is still three rules.

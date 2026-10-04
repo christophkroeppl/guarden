@@ -2050,9 +2050,17 @@ with the accept rules above it. Order is the whole of it: accepts first, then on
 
 ```
 filter OUTPUT
-  -A guarden-svc -o lo -d 127.0.0.1 --dport <pub> -m owner --uid-owner <allowed-uid> -j ACCEPT
+  -A guarden-svc -d 127.0.0.1 --dport <pub> -m owner --uid-owner <allowed-uid> -j ACCEPT
   ... one per (publication, allowed uid) ...
-  -A guarden-svc -o lo -d 127.0.0.0/8 -j DROP
+  -A guarden-svc -d 127.0.0.0/8 -j DROP
+
+**There is no interface match, and `-o lo` was removed from this example as
+redundant rather than as a decision.** The kernel routes the whole of
+`127.0.0.0/8` locally — `ip route get 127.0.0.1` answers `local 127.0.0.1 dev lo` —
+so a destination in that network is only ever reachable over loopback, and
+naming the interface says the same thing twice. It was never emitted: `git log -S
+'o lo' -- src/guarden/firewall.py` returns nothing, and an assertion that `30-
+services.conf` carries `-o lo` was checking a property the code has never had.
 
 **The final rule matches no uid at all.** An earlier version put
 `-m owner --uid-owner <every-service-uid>` on it, which meant a uid that is not a service user —
