@@ -54,15 +54,11 @@ cleanup() {
 trap cleanup EXIT
 
 cleanup
-getent group guarden >/dev/null 2>&1 || groupadd --system guarden
-id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
 # `host.admin_user` names the uid the whole OUTPUT accept set admits and the
 # firewall refuses to render without it. `soil install` records the invoking user
 # there, so the account is this fixture's own claim and it has to exist.
-getent group operator >/dev/null 2>&1 || groupadd --system operator
-id -u operator >/dev/null 2>&1 ||
-    useradd --create-home --gid operator --shell /bin/bash operator
 mkdir -p /etc/guarden
+ensure_accounts
 stage_config guarden-measured.toml
 stage_poke pgprov 9f2c1ab
 stage_poke needful 9f2c1ab

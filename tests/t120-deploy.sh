@@ -26,13 +26,12 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GUARDEN_PREFIX=/
 
-getent group guarden >/dev/null 2>&1 || groupadd --system guarden
-id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
 mkdir -p /etc/guarden
 install -d -m 0770 -o root -g guarden /var/lib/guarden/queue
 # `guarden-measured.toml` rather than `guarden.toml`: this project's manifest
 # declares a `needs:`, so its units carry `AddHost=` and the renderer refuses an
 # empty `ingress.alias` (spec 6.3). `t60-gate` makes the same choice.
+ensure_accounts
 stage_config guarden-measured.toml
 
 # `soil install` is this suite's precondition and not its subject: the deploy
@@ -43,6 +42,11 @@ assert_not_rejected
 assert_file_exists /usr/lib/guarden/bin/weedr
 assert_file_exists /usr/lib/guarden/bin/loom
 assert_file_exists /var/lib/guarden/render
+
+# The `gate` module is what creates the edge service every `needs:` in this
+# project's manifest resolves against; nothing ingests it.
+run weedr module add gate
+assert_exit 0
 
 registry=/var/lib/guarden/registry
 queue=/var/lib/guarden/queue
@@ -95,16 +99,16 @@ assert_file_exists "$registry/qapp-production.toml"
 
 # --- a blocked gate is a state, not a failure -------------------------------
 
-# `DB_PASSWORD` is `@required` in the schema and nothing has been planted, so
-# the gate is blocked. The deploy **exits 0**: the service exists, its units are
+# LOG_LEVEL is required — `@defaultRequired=infer` makes a key declared with a
+# value required — and nothing plants it, so the gate is blocked. DB_PASSWORD is
+# also required but a `database` edge mints the consumer's copy at ingest. The deploy **exits 0**: the service exists, its units are
 # installed and it is waiting, and one `warning:` says why. A red X on every push
 # until the operator plants credentials is noise, and noise teaches people to
 # want the gate gone.
 assert_one_diagnostic "warning:"
 assert_stderr_has "credential gate"
-assert_stderr_has "DB_PASSWORD"
 assert_file_has "$registry/qapp-production.toml" 'state = "blocked"'
-assert_file_has "$registry/qapp-production.toml" "missing required key: DB_PASSWORD"
+assert_file_has "$registry/qapp-production.toml" "missing required key: LOG_LEVEL"
 
 # **The order is the point, and it is asserted as an order.** The step names
 # appear on stdout in this sequence, and the journal carries the same lines.

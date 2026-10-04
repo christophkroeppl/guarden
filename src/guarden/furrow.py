@@ -575,7 +575,15 @@ def _deploy(entry: dict) -> int:
         list(config_mod.load().tracks),
         allow_default=False,
     )
-    target = resolved.name if not resolved.ref else f"{resolved.name}/{resolved.ref}"
+    # The escaped ref, not the raw one: `resolved.escaped_ref` is what the queue
+    # file and the deploy lock carry, and a raw `feature/login` reaches the mutator
+    # as a path, so no container is installed for the instance and the start that
+    # follows finds an empty quadlet directory.
+    target = (
+        resolved.name
+        if not resolved.ref
+        else f"{resolved.name}/{resolved.escaped_ref}"
+    )
     try:
         with conf.lock(_deploy_lock(resolved)):
             return _sequence(entry, resolved, target)
@@ -592,7 +600,11 @@ def _sequence(entry: dict, resolved: names.Resolved, target: str) -> int:
     land before the stop, so a failed either leaves the running container
     running (ADR-0011).
     """
-    if registry.load(resolved.name) is None:
+    existing = registry.load(resolved.name)
+    missing = existing is None or (
+        resolved.escaped_ref is not None and resolved.escaped_ref not in existing.instances
+    )
+    if missing:
         _step("ensure", f"{resolved.name}: weedr service ingest --from poke")
         _weedr(
             "ingest", target, f"{resolved.name} could not be created from its staged tree",

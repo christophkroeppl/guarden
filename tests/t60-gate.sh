@@ -59,12 +59,10 @@ mkdir -p /etc/guarden
 if ! getent group guarden >/dev/null 2>&1; then
     groupadd --system guarden
 fi
-id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
 # `host.admin_user` names the uid the edge's API accept set admits, and install
 # refuses to render the firewall without the account existing. useradd exits 9 when
 # the GROUP exists and -g is not given, so the group is created first.
-getent group operator >/dev/null 2>&1 || groupadd --system operator
-id -u operator >/dev/null 2>&1 || useradd --create-home --gid operator --shell /bin/bash operator
+ensure_accounts
 stage_config guarden-measured.toml
 stage_quadlet
 
@@ -116,17 +114,18 @@ run weedr service list
 assert_exit 0
 assert_stdout_has "gate           not evaluated"
 
-# The gated track, blocked. `DB_PASSWORD` is `@required` and nothing has been
-# planted, so the gate says so and the verb exits `1` — it changed nothing else, so
-# the code is the answer rather than a failure.
+# The gated track, blocked. LOG_LEVEL is required — `@defaultRequired=infer` makes a
+# key declared with a value required — and nothing plants it, so the gate says so and
+# the verb exits `1`. DB_PASSWORD is required too, but the `database` edge mints the
+# consumer's copy at ingest, so there is nothing for the gate to block on there.
 run weedr service gate qapp-production
 assert_exit 1
 assert_one_diagnostic "error:"
 assert_stderr_has "cannot start"
-assert_stderr_has "DB_PASSWORD"
+assert_stderr_has "LOG_LEVEL"
 assert_stdout_empty
 assert_file_has "$production" 'state = "blocked"'
-assert_file_has "$production" 'missing required key: DB_PASSWORD'
+assert_file_has "$production" 'missing required key: LOG_LEVEL'
 assert_file_has "$production" 'checked = "'
 
 # **The gate is evaluated before the old container is stopped.**

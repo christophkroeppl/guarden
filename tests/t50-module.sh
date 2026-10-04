@@ -21,8 +21,6 @@ export GUARDEN_PREFIX=/
 
 # `soil install` owns the `guarden` group and the `guarden` user, and this file
 # needs both: the registry is `root:guarden` and `loom` runs as `guarden`.
-getent group guarden >/dev/null 2>&1 || groupadd --system guarden
-id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
 # The host configuration below names `operator` as `host.admin_user`, and the
 # firewall renders the edge's API accept set with that account's uid. On a real
 # host `soil install` records the invoking user, so the account is the fixture's
@@ -33,6 +31,7 @@ id -u operator >/dev/null 2>&1 || {
     useradd --system --no-create-home --gid operator --shell /usr/sbin/nologin operator
 }
 mkdir -p /etc/guarden
+ensure_accounts
 stage_config guarden-nomodules.toml
 
 # `soil install` is this suite's precondition and not its subject: the module

@@ -34,10 +34,9 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GUARDEN_PREFIX=/
 
-getent group guarden >/dev/null 2>&1 || groupadd --system guarden
-id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
 id -u hose >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin \
     --home-dir /var/lib/guarden hose
+ensure_accounts
 mkdir -p /etc/guarden/projects.d /etc/ssh/authorized_keys.d
 
 # `furrow` must EXIST for the track claim to be checkable. Its absence is a real

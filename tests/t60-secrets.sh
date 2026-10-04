@@ -75,7 +75,7 @@ mkdir -p /etc/guarden
 if ! getent group guarden >/dev/null 2>&1; then
     groupadd --system guarden
 fi
-id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
+ensure_accounts
 stage_config guarden-measured.toml
 
 # `soil install --apply` is a precondition, not the subject: ingest renders through

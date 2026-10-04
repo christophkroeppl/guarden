@@ -17,8 +17,6 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GUARDEN_PREFIX=/
 
-getent group guarden >/dev/null 2>&1 || groupadd --system guarden
-id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
 # The host configuration below names `operator` as `host.admin_user`, and the
 # firewall renders the edge's API accept set with that account's uid. On a real
 # host `soil install` records the invoking user, so the account is the fixture's
@@ -29,6 +27,7 @@ id -u operator >/dev/null 2>&1 || {
     useradd --system --no-create-home --gid operator --shell /usr/sbin/nologin operator
 }
 mkdir -p /etc/guarden
+ensure_accounts
 stage_config guarden-nomodules.toml
 
 # `soil install` owns the `guarden` group and the `guarden` user, and it

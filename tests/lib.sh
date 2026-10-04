@@ -382,6 +382,20 @@ stage_config() {
     cp "$GUARDEN_ROOT/fixtures/$1" "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
 }
 
+# ensure_accounts: the guarden and operator accounts every suite that installs or
+# renders needs. One helper rather than the nine copies this had, because a suite
+# that creates only the GROUP dies on `KeyError: 'guarden'` (the renderer reads the
+# user's uid) and one that omits the account entirely dies on the firewall refusing
+# to render: "there is no 'operator' account, and it is the uid the edge's API accept
+# set names". useradd exits 9 when the GROUP exists and -g was not given, so the
+# group is created first — that mistake was in three suites at once.
+ensure_accounts() {
+    getent group guarden >/dev/null 2>&1 || groupadd --system guarden
+    id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
+    getent group operator >/dev/null 2>&1 || groupadd --system operator
+    id -u operator >/dev/null 2>&1 || useradd --create-home --gid operator --shell /bin/bash operator
+}
+
 # stage_poke <project> <sha>: a poke's staged tree, where guarden itself puts it.
 stage_poke() {
     mkdir -p "$GUARDEN_PREFIX/var/lib/guarden/staging/$1/$2"

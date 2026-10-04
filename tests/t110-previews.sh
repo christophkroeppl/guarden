@@ -32,6 +32,7 @@ mkdir -p /etc/guarden
 if ! getent group guarden >/dev/null 2>&1; then
     groupadd --system guarden
 fi
+ensure_accounts
 stage_config guarden.toml
 stage_poke myapp 9f2c1ab
 
