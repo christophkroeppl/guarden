@@ -224,7 +224,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # uid it installs under, and rendering before the entry exists answered "there
     # is no registry entry for <service>".
     if source.kind != "module":
-        outcome.warnings += units.install(directory, resolved.name)
+        outcome.notes += units.install(directory, resolved.name)
     return outcome
 
 

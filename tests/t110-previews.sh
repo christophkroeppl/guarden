@@ -29,11 +29,20 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 export GUARDEN_PREFIX=/
 
 mkdir -p /etc/guarden
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 ensure_accounts
 stage_config guarden.toml
+
+# `soil install --apply` is a precondition and not this file's subject: ingest
+# renders through loom, and the programs are not on this host until install has
+# run. It goes after stage_config because it probes the host's gateway and writes
+# what it measured into the config it is reading.
+install -D -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" \
+    "$GUARDEN_PREFIX/etc/guarden/podlet.release"
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
+
 stage_poke myapp 9f2c1ab
 
 # --- a fork source that is not on the box -------------------------------------
