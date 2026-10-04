@@ -25,7 +25,6 @@
 # machine: fresh
 
 . "$(dirname "$0")/lib.sh"
-trap 'echo "SUITE DIED at line $LINENO" >&2' ERR
 
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GUARDEN_PREFIX=/
@@ -155,11 +154,11 @@ assert_file_exists "$creds/pgprov-staging/SECRET_SECRET_8200.cred"
 # record of an intent: the value came back, so the key is one this host holds.
 run systemd-creds decrypt --with-key=host "$db_blob"
 assert_exit 0
-db_value=$GUARDEN_STDOUT
+db_value=$(cat "$GUARDEN_STDOUT")
 assert_file_lacks "$db_blob" "$db_value"
 run systemd-creds decrypt --with-key=host "$creds/needful-staging/SECRET_SECRET_8200.cred"
 assert_exit 0
-vault_own=$GUARDEN_STDOUT
+vault_own=$(cat "$GUARDEN_STDOUT")
 run systemd-creds decrypt --with-key=host "$creds/pgprov-staging/SECRET_SECRET_8200.cred"
 assert_exit 0
 [ "$vault_own" = "$GUARDEN_STDOUT" ] \
