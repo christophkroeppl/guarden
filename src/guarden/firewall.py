@@ -290,7 +290,7 @@ def render(config, grants: list[Grant]) -> str:
     for grant in grants:
         lines.append(
             f"    if {interface} proto {grant.protocol} dport {grant.port} "
-            f"jump DNAT to 127.0.0.1:{grant.publication};"
+            f"DNAT to 127.0.0.1:{grant.publication};"
         )
     lines += [
         "}",
@@ -302,11 +302,17 @@ def render(config, grants: list[Grant]) -> str:
         "# these accepts are reachable. INPUT takes a forwarded port plainly: the",
         "# packet has no socket there, so an owner match would be unreliable, and",
         "# the uid restriction belongs in OUTPUT.",
+        "#",
+        "# **The port here is the PUBLICATION, not the public port.** PREROUTING",
+        "# DNAT rewrites the destination port as well as the address, so a packet",
+        "# that dialled the public port arrives at INPUT carrying the publication's",
+        "# number. An accept on the public port matches no packet in either",
+        "# direction and the grant delivers nothing from off the box.",
     ]
-    for grant in grants:
-        lines.append(
-            f"    proto {grant.protocol} dport {grant.port} jump ACCEPT;"
-        )
+    # Deduplicated by `(protocol, publication)`: the render is a set, so two public
+    # ports forwarded onto one container are one accept at INPUT, not two.
+    for protocol, publication in sorted({(g.protocol, g.publication) for g in grants}):
+        lines.append(f"    proto {protocol} dport {publication} jump ACCEPT;")
     lines += [
         "}",
     ]
@@ -408,13 +414,19 @@ def print_diff(diff: str) -> None:
         sys.stdout.write(diff if diff.endswith("\n") else diff + "\n")
 
 
+def _distinct(numbers: list[int]) -> list[int]:
+    """`granted` is a set of port numbers: tcp and udp on one number are two grants
+    and one port, and reporting it twice would name a port granted once."""
+    return list(dict.fromkeys(numbers))
+
+
 def listing() -> list[dict]:
     out: list[dict] = []
     for name in registry.names():
         record = registry.load(name)
         if record is None:
             continue
-        granted = overrides_mod.load(name).granted_numbers()
+        granted = _distinct(overrides_mod.load(name).granted_numbers())
         requested = list(record.ports_requested)
         out.append(
             {

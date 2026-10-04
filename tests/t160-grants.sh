@@ -56,8 +56,10 @@ id -u operator >/dev/null 2>&1 || {
 mkdir -p /etc/guarden
 stage_config guarden-measured.toml
 
+# Count RULES, not the word: the file carries provenance comments that spell DNAT
+# out, and a grep that matches prose reports a rule this suite never granted.
 dnat_count() {
-    grep -c -- '-j DNAT' "$conf" || true
+    grep -c -- 'DNAT to 127\.0\.0\.1:' "$conf" || true
 }
 
 # The two services this file grants to. Each row is what `weedr service ingest`
@@ -165,29 +167,51 @@ assert_file_has "$overrides/peer-staging/overrides.toml" 'open = ["8333/tcp"]'
 # ingress interface onto the service's own loopback publication.
 assert_file_has "$conf" "table nat"
 assert_file_has "$conf" "chain PREROUTING"
-assert_file_has "$conf" "-j DNAT --to-destination 127.0.0.1:20133"
+assert_file_has "$conf" "DNAT to 127.0.0.1:20133;"
 
 # **The absence of a masquerade is the asserted behaviour.** A nat POSTROUTING
 # rule here would match no packet in either direction: the destination is local
 # after the DNAT, so the packet is delivered to INPUT and never reaches
 # POSTROUTING, and conntrack unwinds the translation on the reply.
-assert_file_lacks "$conf" "-j MASQUERADE"
+# `MASQUERADE` is named bare rather than in iptables' spelling, because ferm
+# spells a target `jump MASQUERADE;` and the old spelling (`-j MASQUERADE`)
+# matches no output this generator can produce — an absence assertion that cannot
+# fail is not an assertion. `SNAT` is spelled as ferm spells a source rewrite
+# (`to-source ... jump SNAT`), so it cannot match on an unrelated substring.
+assert_file_lacks "$conf" "MASQUERADE"
+assert_file_lacks "$conf" "jump SNAT"
 assert_file_lacks "$conf" "chain POSTROUTING"
-assert_file_lacks "$conf" "--to-source"
+assert_file_lacks "$conf" "to-source"
 
 # Nothing binds a non-loopback address and a grant is never a bind: the only
 # destination this file names is 127.0.0.1, and ingress.alias never appears as
 # one because pasta translates to loopback before the kernel sees the packet.
-assert_file_lacks "$conf" "--to-destination 0.0.0.0"
-assert_file_lacks "$conf" "--to-destination 192.0.2.1"
-assert_file_lacks "$conf" "-j REDIRECT"
+assert_file_lacks "$conf" "0.0.0.0"
+assert_file_lacks "$conf" "192.0.2.1"
+assert_file_lacks "$conf" "jump REDIRECT"
 assert_file_lacks "$conf" "192.0.2.1"
 
 # The rendered INPUT accept is plain, because a forwarded packet has no socket
 # and an owner match there would be unreliable: the uid restriction is in OUTPUT,
 # which is where the owner match works.
+#
+# **And it names the PUBLICATION, not the public port** (spec 7.6: "`INPUT`
+# accepts the published ports plainly"). PREROUTING DNAT rewrites the destination
+# PORT as well as the address, so a packet that dialled 8333 arrives at INPUT
+# carrying 20133. An accept on 8333 matches no packet, the framework's INPUT
+# falls through to its own drop, and the grant delivers nothing from off the box
+# while the file looks healthy. This is the assertion that was wrong, and the
+# render was wrong with it.
 assert_file_has "$conf" "chain guarden-in"
-assert_file_has "$conf" "[ 'p tcp' '--dport 8333' ] -j ACCEPT"
+assert_file_has "$conf" "proto tcp dport 20133 jump ACCEPT;"
+guarden_in_body=$(sed -n '/chain guarden-in/,/^}/p' "$conf")
+printf '%s' "$guarden_in_body" | grep -q 'dport 8333 ' &&
+    _fail "guarden-in accepts the public port 8333; INPUT sees the publication"
+# The public port belongs to the nat chain and the publication to this one. The
+# absence has to be anchored to the ACCEPT, not to the bare dport: the nat rule
+# legitimately reads `dport 8333 jump DNAT to ...` and a substring search on the
+# port alone matches it, which is a false failure for a rule that is correct.
+assert_file_lacks "$conf" "proto tcp dport 8333 jump ACCEPT;"
 
 # Two mutations in a row cannot install out of order: the render is whole-file
 # from the union of every grant, so the first grant is still in the second.
@@ -221,8 +245,11 @@ assert_file_lacks "$overrides/relay-staging/overrides.toml" "8333/tcp"
 # this reason.
 run weedr port open peer-staging 8333/udp
 assert_exit 0
-assert_file_has "$conf" "'p udp' '--dport 8333' ] -j DNAT --to-destination 127.0.0.1:20133"
+assert_file_has "$conf" "proto udp dport 8333 DNAT to 127.0.0.1:20133;"
 [ "$(dnat_count)" = 3 ] || _fail "a udp grant of the same number did not render its own rule"
+# The udp grant lands in the filter table too, on the same publication: one
+# container, two protocols, two nat lines and two accepts.
+assert_file_has "$conf" "proto udp dport 20133 jump ACCEPT;"
 
 # `weedr port list` is the reachable surface of the host in one command, and a
 # pending request is sticky: it stays pending until an admin grants it or the
@@ -234,6 +261,10 @@ assert_stdout_has "PENDING"
 
 run weedr port list --json
 assert_exit 0
+# **`granted` is a set of port NUMBERS, not of grants.** peer-staging holds
+# 8333/tcp and 8333/udp and this reads `[8333]`: two grants of one number are
+# two rules in the firewall and one port in the reachable surface, and a listing
+# naming it twice would report a port the operator granted once.
 assert_json services.0.granted "[8333]"
 assert_json services.0.pending "[]"
 assert_json services.1.granted "[8443]"
@@ -244,13 +275,20 @@ assert_json services.1.pending "[8333]"
 # the manifest still names, so it stays in the registry.
 run weedr port close peer-staging 8333/udp
 assert_exit 0
-assert_file_lacks "$conf" "'p udp' '--dport 8333'"
+# Anchored to the udp protocol: 8333/tcp is still granted, and tcp and udp are
+# two rules over one port number, so a bare `dport 8333` search would match the
+# tcp rule that is required to survive this close.
+assert_file_lacks "$conf" "proto udp dport 8333 DNAT to 127.0.0.1:20133"
+assert_file_lacks "$conf" "proto udp dport 20133 jump ACCEPT;"
 
 run weedr port close peer-staging 8333/tcp
 assert_exit 0
-assert_file_lacks "$conf" "--to-destination 127.0.0.1:20133"
 assert_file_lacks "$overrides/peer-staging/overrides.toml" "8333"
 assert_file_has "$registry/peer-staging.toml" "node = 20133"
+# relay-staging still holds 8333/tcp (line 235), so the accept must SURVIVE this
+# close: two services asking for one number is one rule carrying both names, and
+# closing one leaves it while the other still asks. Asserting its absence here
+# would demand the render drop a grant that is still in force.
 
 # A close of something that was never granted is the requested state already
 # true: exit 0, and a line saying so rather than a failure.
@@ -263,11 +301,11 @@ assert_stdout_has "not granted"
 # publication behind them.
 seed "$ingress" \
     'table nat' 'chain PREROUTING {' '' \
-    "[ 'i eth0' 'p tcp' '--dport 443' ] -j DNAT --to-destination 127.0.0.1:20007"
+    "    if eth0 proto tcp dport 443 DNAT to 127.0.0.1:20007;"
 run weedr port open relay-staging 8443/tcp
 assert_exit 0
-assert_file_lacks "$conf" "--dport 443"
-assert_file_lacks "$ingress" "--dport 8443"
+assert_file_lacks "$conf" "dport 443"
+assert_file_lacks "$ingress" "dport 8443"
 assert_file_lacks "$ingress" "guarden-in"
 assert_file_lacks "$conf" "20007"
 

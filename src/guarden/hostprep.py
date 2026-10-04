@@ -1200,7 +1200,7 @@ def _ingress_nat(interface: str, ingress: list[tuple[str, str, str]]) -> str:
     for port, protocol, publication in ingress:
         lines.append(
             f"    if {interface} proto {protocol} dport {port} "
-            f"jump DNAT to 127.0.0.1:{publication};")
+            f"DNAT to 127.0.0.1:{publication};")
     lines.append("}")
     return "\n".join(lines) + "\n"
 
