@@ -285,6 +285,9 @@ def _apply(
             if item.correctable:
                 drift_line(item.what)
                 unmet += 1
+        finish = hostprep.finish_for(phase)
+        if finish is not None:
+            finish()
     return EXIT_NOT_CONVERGED if unmet else EXIT_OK
 
 
