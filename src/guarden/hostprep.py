@@ -1367,7 +1367,20 @@ def _install_programs() -> None:
 
 def _programs_installed() -> bool:
     binaries = paths.BIN
-    return all((binaries / program).is_file() for program in _PROGRAMS)
+    source = _source_tree()
+    for program in _PROGRAMS:
+        installed = binaries / program
+        wanted = source / "guarden" / f"{program}.py"
+        if not installed.is_file() or installed.read_bytes() != wanted.read_bytes():
+            return False
+    package = paths.LIBDIR / "guarden"
+    if not package.is_dir():
+        return False
+    for module in sorted((source / "guarden").glob("*.py")):
+        installed = package / module.name
+        if not installed.is_file() or installed.read_bytes() != module.read_bytes():
+            return False
+    return True
 
 
 def _programs_runnable() -> bool:

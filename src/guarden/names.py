@@ -150,8 +150,6 @@ def systemd_escape(ref: str) -> str:
         char = chr(byte)
         if char in _SYSTEMD_SAFE:
             out.append(char)
-        elif char == "/":
-            out.append("-")
         else:
             out.append(f"\\x{byte:02x}")
     return "".join(out)

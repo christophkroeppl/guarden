@@ -1,5 +1,8 @@
 services:
   web:
-    image: nginx:1.27
+    image: docker.io/library/nginx:1.27
+    volumes:
+      - data:/var/lib/nginx
+      - cache:/var/cache/nginx
     ports:
       - "80:80"

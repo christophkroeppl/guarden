@@ -207,8 +207,8 @@ def configurations() -> list[str]:
         for volume in record.volume_list():
             if volume.kind != paths.STATE:
                 continue
-            if volume.config is None and not record.instances:
-                found.add(paths.snapper_config(record.service, volume.name))
+            if volume.config is not None:
+                found.add(volume.config)
         for escaped in record.instances:
             for volume in record.volume_list():
                 if volume.kind == paths.STATE:

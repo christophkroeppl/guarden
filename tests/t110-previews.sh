@@ -209,8 +209,8 @@ run weedr service ingest twovol-preview/feature/x --from poke twovol@7c4e8b1
 assert_exit 0
 run weedr service ingest twovol-preview/feature-x --from poke twovol@7c4e8b1
 assert_exit 0
-assert_file_exists /var/lib/guarden/services/twovol-preview/instances/feature-x
 assert_file_exists /var/lib/guarden/services/twovol-preview/instances/feature\\x2dx
+assert_file_missing /var/lib/guarden/services/twovol-preview/instances/feature-x
 preview_registry=/var/lib/guarden/registry/twovol-preview.toml
 assert_file_has "$preview_registry" 'ref = "feature/x"'
 assert_file_has "$preview_registry" 'ref = "feature-x"'
