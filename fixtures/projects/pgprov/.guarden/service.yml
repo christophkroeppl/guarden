@@ -11,6 +11,7 @@ units: .guarden/quadlet/
 provides:
   - db
   - secret
+  - vault
 ports:
   - container: db
     port: 5432
