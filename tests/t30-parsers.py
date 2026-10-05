@@ -159,8 +159,8 @@ def escaping() -> None:
     # filename (spec 5.2), and `feature/x` and `feature-x` must never collide.
     check(names.systemd_escape("feature-login") == "feature\\x2dlogin", "a dash is escaped")
     check(
-        names.systemd_escape("feature/x") == "feature\\x2f",
-        "a slash is escaped, so it cannot collide with a dash",
+        names.systemd_escape("feature/x") == "feature\\x2fx",
+        "a slash is escaped in place, so it cannot collide with a dash",
     )
     check(
         names.systemd_escape("feature/x") != names.systemd_escape("feature-x"),
