@@ -1,7 +1,15 @@
 # Does a service uid reach the stub resolver under the loopback deny?
 
-**Status: open. Measured up to a point, not settled. Do not "fix" this by
-loosening the deny without a decision.**
+**Status: open, and now reproduced with the render fixed. Measured twice, same
+message. Do not "fix" this by loosening the deny without a decision.**
+
+**Update 2026-10-05 (ticket 240 landed, `caa414d`→`13a76a9`).** The probe below that
+"created no service, so `30-services.conf` did not exist" is no longer needed to see
+this: `t50-slice.sh` creates `routed-staging`, `weedr service ingest` writes the
+firewall, and `weedr service start` then fails with the message above. The generated
+`ExecStart` is correct and the generator is reached — see
+`ticket-250-is-not-a-generator-problem.md` — so **the loopback deny is now the
+measured and only remaining blocker between that suite and green.**
 
 ## What is measured
 

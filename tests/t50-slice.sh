@@ -81,6 +81,127 @@ assert_file_exists "$rendered"
 run weedr module add gate
 assert_exit 0
 assert_exit 0
+# ---------------------------------------------------------------------------
+# ticket 250: the manager generates the unit, and the answer was not either cause
+# ---------------------------------------------------------------------------
+
+svc_home=/var/lib/guarden/services/routed-staging/home
+uid=$(id -u routed-staging)
+runtime=/run/user/"$uid"
+
+# A service-user command needs the suite's directory scrubbed out of its
+# environment: `env -C` changes the cwd but not `PWD`, and `OLDPWD` still carried
+# the suite's 0700 root tree, which quadlet then resolved its unit directory from.
+# Measured one variable at a time; `run_in` lives in lib.sh for the same reason.
+run_svc() {
+    run_in "$svc_home" setpriv --reuid=routed-staging --regid=routed-staging \
+        --clear-groups env -u OLDPWD HOME="$svc_home" PWD="$svc_home" \
+        XDG_RUNTIME_DIR="$runtime" "$@"
+}
+
+# The manager is asked to reload, and what it produced is the claim. A user manager
+# writes its generators' output to `$XDG_RUNTIME_DIR/systemd/generator{,.late}`.
+run_svc systemctl --user daemon-reload
+assert_exit 0
+
+# **The manager generates it.** Both causes ticket 250 set out to separate are
+# refuted by measurement, and so is the premise:
+#
+# - The runtime directory EXISTS and is owned by the service uid, so "nothing gives
+#   a service user a /run/user/<uid>" is false.
+# - There is no `systemd/user/` level — a user manager writes to
+#   `$XDG_RUNTIME_DIR/systemd/generator{,.late}`, which is what `daemon-reload`
+#   populated — a 1516-byte `web.service`, byte-identical to what the generator
+#   writes when run by hand with those same three directories.
+# - `generator.late/` holds the xdg-desktop-autostart generator's output, which is
+#   what a late generator is for; podman's quadlet generator is a normal one.
+#
+# So the generator is reached, the manager loads what it produced, and whatever
+# stops the container from starting is neither of the two this ticket named.
+assert_file_has "$runtime/systemd/generator/web.service" "ExecStart"
+assert_file_has "$runtime/systemd/generator/web.service" "podman"
+
+# The unit is generated, loaded and found, so whatever happens next is podman's and
+# not systemd's.
+run weedr service start routed-staging
+assert_exit 0
+
+# Both entrypoints answer on their own publication and on nothing else. `ss` on
+# the host is the kernel's own answer about what is bound, which is why this is
+# not a claim about what a unit file says.
+run ss -ltn
+assert_exit 0
+assert_stdout_has "127.0.0.1:$web_publication"
+assert_stdout_has "127.0.0.1:$tls_publication"
+assert_stdout_has "127.0.0.1:$api_publication"
+# Nothing is bound on a non-loopback address: the public ports belong to the
+# kernel, and a container listening on one would be the edge doing the kernel's
+# job. Asked of the tcp listing, which is the one that carries the redirect.
+assert_stdout_lacks "0.0.0.0:$web_publication"
+assert_stdout_lacks "*:$web_publication"
+# 443/udp is HTTP/3 served from the same TLS publication, and it is a different
+# protocol and therefore a different socket.
+run ss -lun
+assert_exit 0
+assert_stdout_has "127.0.0.1:$tls_publication"
+
+# The routed container is listening on its own publication, which is the only
+# address the edge is allowed to reach it on.
+run ss -ltn
+assert_exit 0
+assert_stdout_has "127.0.0.1:$publication"
+
+# The request. The right `Host` header, the edge's redirect publication, and the
+# answer carries the routed name back.
+run curl -s -o /dev/null -w '%{http_code} %{redirect_url}' \
+    -H 'Host: staging.web' "http://127.0.0.1:$web_publication/"
+assert_exit 0
+assert_stdout_has "301"
+assert_stdout_has "https://staging.web/"
+
+# **A `Host` no route claims is redirected to its own name, not proxied.** The
+# redirect is entrypoint-level (`http.redirections.entrypoint.to=https`), so it
+# fires before any router is consulted and every host on this entrypoint gets a
+# 301 — a 404 for an unclaimed host is only observable on the TLS entrypoint,
+# which needs a certificate a throwaway machine cannot have. That it carries the
+# requested name back is still a real property: the edge echoes what it was
+# asked for rather than falling back to somebody else's route.
+run curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: nosuchhost.example' \
+    "http://127.0.0.1:$web_publication/"
+assert_exit 0
+assert_stdout_has "301"
+assert_stdout_has "https://nosuchhost.example/"
+# And the edge really did read the file `roots` wrote, which is the only place a
+# host name could have come from.
+assert_file_has "$rendered" 'Host(`staging.web`)'
+
+# The edge is a reader of that directory and nothing more: the container's own
+# user is in `edge`, and the mount it reads through is read-only.
+run runuser -u traefik-production -- podman inspect --format '{{.Mounts}}' \
+    traefik-production-traefik
+assert_exit 0
+assert_stdout_has "/var/lib/guarden/edge/dynamic"
+assert_stdout_has "ro"
+assert_supplementary_group traefik-production edge
+assert_mode /var/lib/guarden/edge/dynamic 2750# **The manager generates it.** Both causes ticket 250 set out to separate are
+# refuted by measurement, and so is the premise:
+#
+# - The runtime directory EXISTS and is owned by the service uid, so "nothing gives
+#   a service user a /run/user/<uid>" is false.
+# - There is no `systemd/user/` level — a user manager writes to
+#   `$XDG_RUNTIME_DIR/systemd/generator{,.late}`, which is what `daemon-reload`
+#   populated. The by-hand run and the manager's own run produce a byte-identical
+#   1516-byte `web.service`. podman's quadlet generator is a *normal*
+#   generator, not a late one, and that is correct rather than broken.
+#
+# So the generator is reached, the manager loads what it produced, and whatever
+# stops the container from starting is neither of the two this ticket named.
+assert_file_has "$runtime/systemd/generator/web.service" "ExecStart"
+assert_file_has "$runtime/systemd/generator/web.service" "podman"
+
+
+# The unit is generated, loaded and found: `podman quadlet list` names it and the
+# manager resolves it. Everything from here is podman's, not systemd's.
 run weedr service start routed-staging
 assert_exit 0
 

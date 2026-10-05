@@ -103,6 +103,20 @@ run() {
     fi
 }
 
+# run_in <dir> <program> [args...]: run a command from a directory the target user
+# can enter.
+#
+# A service-user command is refused by the harness, not by guarden: `run` executes
+# from the suite's own GUARDEN_ROOT, which is a 0700 root tree, and podman chdirs
+# there before it reads anything — so `runuser -u svc -- podman …` fails with
+# "cannot chdir … Permission denied" before podman has done any work. `runuser`
+# also rewrites HOME and PWD, so a `cd` inside a subshell is not enough either.
+run_in() {
+    local dir=$1
+    shift
+    _capture env -C "$dir" "$@"
+}
+
 # scratch_host: point soil at a directory of its own, and hand back the path.
 #
 # soil's paths are the absolute ones in spec 2, and the VM is a throwaway one
@@ -236,6 +250,19 @@ assert_file_missing() {
 
 assert_file_has() {
     grep -qF -- "$2" "$1" || _fail "$1 does not name $2"
+}
+
+# assert_dir_empty <dir>: the directory exists and holds nothing.
+#
+# The pair to `assert_file_exists` for a generator's output: a systemd generator
+# directory that is present but empty says the generator ran and produced nothing,
+# which is a different fact from one that was never created, and only one of them
+# is a defect.
+assert_dir_empty() {
+    [ -d "$1" ] || _fail "$1 does not exist"
+    local entries
+    entries=$(ls -A "$1" 2>/dev/null | wc -l)
+    [ "$entries" = 0 ] || _fail "$1 holds $entries entries and should hold none"
 }
 
 # A ferm rule is a line that starts with "[ ", so the count of rules is the count
