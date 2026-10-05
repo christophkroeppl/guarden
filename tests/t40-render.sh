@@ -178,7 +178,6 @@ unset GUARDEN_TEMPLATES
 # whole set is listed.
 assert_stdout_has "units/web.container"
 assert_stdout_has "units/web.container.d/10-guarden-order.conf"
-assert_stdout_has "units/data.volume"
 assert_stdout_has "units/guarden.env"
 assert_stdout_has "system/guarden-order.target"
 assert_stdout_has "shared/routes.toml"

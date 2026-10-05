@@ -99,7 +99,7 @@ REFUSED_DIRECTIVES = (
     "PodmanArgs",
     "BindPaths",
     "BindReadOnlyPaths",
-    "Mounts",
+    "Mount",
     "Device",
     "AddDevice",
     "HostUsers",
@@ -124,6 +124,7 @@ GUARDEN_OWNED_ORDER = (
     "AddHost",
     "EnvironmentFile",
     "Volume",
+    "Mount",
     "PublishPort",
     "Secret",
 )
@@ -164,8 +165,14 @@ class Context:
     def volume_path(self, kind: str, volume: str) -> Path:
         return paths.volume(self.service, kind, volume, self.instance)
 
-    def volume_name(self, volume: str) -> str:
-        return f"{self.service}-{volume}.volume"
+    def volume_root(self) -> Path:
+        """The tree `volume_root()` paths live under, for this unit.
+
+        An instance's own tree when there is one, else the service's: an instance's
+        tree is a SIBLING of the service's volumes rather than a child, so the
+        service tree alone would not cover a preview.
+        """
+        return paths.volume_root(self.service, self.instance)
 
 
 @dataclass
@@ -358,17 +365,20 @@ def _quadlet_source(directory: Path) -> Source:
 
 def _mounts_of_unit(unit: Unit) -> list[Mount]:
     out: list[Mount] = []
-    for value in unit.get("Container", "Volume"):
-        out.append(_quadlet_mount(value, unit))
+    for key in ("Volume", "Mount"):
+        for value in unit.get("Container", key):
+            out.append(_quadlet_mount(value, unit))
     return out
 
 
 def _quadlet_mount(value: str, unit: Unit) -> Mount:
+    if "=" in value and ":" not in value:
+        return _quadlet_long_mount(value, unit)
     parts = value.split(":")
     if len(parts) == 1:
         raise errors.GuardenError(
-            f"the unit source {unit.path}: Volume={value!r} has no source, so it names no "
-            f"volume and no host path"
+            f"the unit source {unit.path}: a mount of {value!r} has no source, so it names "
+            f"no volume and no host path"
         )
     source, target = parts[0], parts[1]
     mode = parts[2] if len(parts) > 2 else ""
@@ -383,6 +393,41 @@ def _quadlet_mount(value: str, unit: Unit) -> Mount:
         )
     kind = "bind" if source.startswith("/") else "volume"
     return Mount(kind=kind, source=source, target=target, mode=mode)
+
+
+def _quadlet_long_mount(value: str, unit: Unit) -> Mount:
+    """`Mount=type=bind,source=<path>,destination=<path>[,opt...]`.
+
+    Quadlet's long form, and the only one that can express a bind with mount
+    options. The keys are read rather than the string being split on `:`, because
+    there are no colons in it and a source path is the `source=` value verbatim.
+    """
+    fields: dict[str, str] = {}
+    for part in value.split(","):
+        key, _, item = part.partition("=")
+        fields[key.strip().lower()] = item.strip()
+    source = fields.get("source", "")
+    if not source:
+        raise errors.GuardenError(
+            f"the unit source {unit.path}: Mount={value!r} has no source=, so it names no "
+            f"volume and no host path"
+        )
+    if source.endswith(".volume") or source.endswith(".image") or source.endswith(".network"):
+        raise errors.GuardenError(
+            f"the unit source {unit.path}: Mount={value!r} names {source!r}, and quadlet "
+            f"resolves that suffix to a podman object rather than a host path; a guarden "
+            f"volume is a btrfs subvolume and is mounted by its own path"
+        )
+    if source.startswith(("./", "../", "~")):
+        raise errors.GuardenError(
+            f"the unit source {unit.path}: Mount={value!r} names the relative host path "
+            f"{source!r}, and a relative path resolves against whatever directory podman is "
+            f"started in; use a declared volume, an absolute path under the service's own "
+            f"volumes, or one the admin allowed in [mounts] allow"
+        )
+    kind = "bind" if source.startswith("/") else "volume"
+    mode = fields.get("options", "")
+    return Mount(kind=kind, source=source, target=fields.get("destination", ""), mode=mode)
 
 
 # --- the checks that need no host --------------------------------------------
@@ -494,7 +539,10 @@ def check_mount_paths(mounts: list[Mount], source: Source, context: Context | No
     for mount in mounts:
         if not mount.is_path:
             continue
-        if _under(mount.source, ALLOWED_ROOT) or any(_under(mount.source, e) for e in allowed):
+        roots = [ALLOWED_ROOT, *allowed]
+        if context is not None:
+            roots.append(str(context.volume_root()))
+        if any(_under(mount.source, root) for root in roots if root):
             continue
         raise errors.GuardenError(
             f"the unit source {source.origin}: a container mounts the host path "
@@ -721,8 +769,6 @@ def build(
 
     if edge_ports:
         plan.add(f"units/{ENV_FILE}", _environment_file(document, edge_ports))
-    for name, kind in document.volumes():
-        plan.add(f"units/{name}.volume", _volume_unit(name, kind, context))
     plan.add(f"system/{ORDER_TARGET}", _order_target(document, context))
     plan.add("shared/routes.toml", _routes(document, context, ports))
     plan.add("shared/schema.toml", _schema_slice(schema, context))
@@ -939,8 +985,8 @@ def _service_keys(context: Context | None, unit: Unit) -> list[str]:
 def _volume_lines(
     document: manifest_mod.Manifest, source: Source, container: str, context: Context | None
 ) -> list[str]:
-    """A named volume becomes the service's own `.volume` unit; a host path the
-    admin allowed is passed through as it was written.
+    """A declared volume becomes the subvolume's own path; an admin-allowed host
+    path is passed through as it was written.
 
     The values carry no `Volume=` prefix: the key is the key, and a value that
     repeated it would render a line no parser could read.
@@ -952,8 +998,15 @@ def _volume_lines(
         if mount.is_path:
             out.append(f"{mount.source}:{mount.target}{mode}")
         elif mount.source in declared:
-            name = context.volume_name(mount.source) if context else f"{mount.source}.volume"
-            out.append(f"{name}:{mount.target}{mode}")
+            # `Volume=<subvolume>:<target>` — a bind mount of the path the mutator
+            # made. Create-before-install already orders it: the subvolume exists
+            # before the unit is installed, so no `.volume` unit is needed and the
+            # dependency edge it would have provided is already held.
+            if context is not None:
+                path = context.volume_path(declared[mount.source], mount.source)
+            else:
+                path = ABSENT / declared[mount.source] / mount.source
+            out.append(f"{path}:{mount.target}{mode}")
     return out
 
 
@@ -989,24 +1042,6 @@ def _secret_requests(
         if line not in ordered:
             ordered.append(line)
     return ordered
-
-
-def _volume_unit(name: str, kind: str, context: Context | None) -> str:
-    """A `.volume` unit for every declared volume, `state` and `bulk` alike,
-    because a container must be able to mount either (spec 6.3).
-
-    A `state` volume is bound to `/var/lib/guarden/services/<name>/state/<vol>`
-    and a `bulk` one to the `bulk/` sibling, which is where the mutator created
-    the subvolume. The path is derived; a manifest never writes one.
-    """
-    return render_template(
-        "quadlet-volume.j2",
-        service=context.service if context else "",
-        volume=name,
-        kind=kind,
-        source=str(context.volume_path(kind, name) if context else ABSENT / kind / name),
-        volume_name=context.volume_name(name) if context else f"{name}.volume",
-    )
 
 
 def _environment_file(document: manifest_mod.Manifest, edge_ports: list[tuple[str, int]]) -> str:

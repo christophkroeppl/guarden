@@ -68,7 +68,7 @@ refuse_quadlet() {
 refuse_quadlet "PodmanArgs" "PodmanArgs=--privileged"
 refuse_quadlet "PodmanArgs" "PodmanArgs=--cap-add=ALL"
 refuse_quadlet "BindReadOnlyPaths" "BindReadOnlyPaths=/etc/shadow"
-refuse_quadlet "Mounts" "Mounts=type=bind,src=/,destination=/host"
+refuse_quadlet "Mount" "Mount=type=bind,source=/,destination=/host"
 refuse_quadlet "Device" "Device=/dev/dri"
 refuse_quadlet "Userns" "Userns=keep-id"
 

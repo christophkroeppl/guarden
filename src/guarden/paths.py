@@ -135,6 +135,14 @@ def instance_tree(name: str, escaped_ref: str) -> Path:
     return service_tree(name) / "instances" / escaped_ref
 
 
+def volume_root(name: str, escaped_ref: str | None = None) -> Path:
+    """The tree every one of this unit's volumes lives under.
+
+    An instance's own tree when there is one, else the service's.
+    """
+    return instance_tree(name, escaped_ref) if escaped_ref else service_tree(name)
+
+
 def volume(name: str, kind: str, vol: str, escaped_ref: str | None = None) -> Path:
     """A volume's host path, always derived and never written by a manifest (spec 4)."""
     base = instance_tree(name, escaped_ref) if escaped_ref else service_tree(name)

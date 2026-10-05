@@ -53,20 +53,12 @@ run loom render "$project" --service myapp-preview --out "$render"
 assert_exit 0
 assert_stderr_empty
 
-# A `.volume` unit per declared volume, and a `state` one is bound to
-# /var/lib/guarden/services/<name>/state/<vol> with a `bulk` one beside it. The
-# path is derived; a manifest never writes one.
-assert_file_has "$render/units/data.volume" "VolumeName=myapp-preview-data.volume"
-assert_file_has "$render/units/data.volume" \
-    "$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/state/data"
-assert_file_has "$render/units/chainstate.volume" "VolumeName=myapp-preview-chainstate.volume"
-assert_file_has "$render/units/chainstate.volume" \
-    "$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/bulk/chainstate"
-
-# The container mounts the volume unit by name rather than the path, which is
-# what makes quadlet start the `.volume` unit before the container.
-assert_file_has "$render/units/web.container" "Volume=myapp-preview-data.volume:/var/lib/app"
-assert_file_has "$render/units/web.container" "Volume=myapp-preview-chainstate.volume:/data"
+assert_file_has "$render/units/web.container" \
+    "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/state/data:/var/lib/app"
+assert_file_has "$render/units/web.container" \
+    "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/bulk/chainstate:/data"
+assert_file_missing "$render/units/data.volume"
+assert_file_missing "$render/units/chainstate.volume"
 
 # An instance's volumes are its own, under instances/<escaped-ref>/, which is a
 # sibling of the service's and never a child of it: btrfs does not recurse into
@@ -75,10 +67,10 @@ assert_file_has "$render/units/web.container" "Volume=myapp-preview-chainstate.v
 instance=$GUARDEN_FIXTURES/instance
 run loom render "$project" --service myapp-preview --instance 'feature\x2dlogin' --out "$instance"
 assert_exit 0
-assert_file_has "$instance/units/data.volume" \
-    "$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/instances/feature\\x2dlogin/state/data"
-assert_file_has "$instance/units/chainstate.volume" \
-    "$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/instances/feature\\x2dlogin/bulk/chainstate"
+assert_file_has "$instance/units/web.container" \
+    "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/instances/feature\\x2dlogin/state/data:/var/lib/app"
+assert_file_has "$instance/units/web.container" \
+    "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/instances/feature\\x2dlogin/bulk/chainstate:/data"
 
 # The expensive mistake. The container mounts a named volume the manifest never
 # declared, so the volume is refused by name rather than quietly installed, and
@@ -118,3 +110,43 @@ seed "$compose/compose.yaml" "services:" "  web:" \
 run loom render "$compose" --service myapp-preview --out "$render"
 assert_exit 2
 assert_stderr_has "scratch"
+
+# ---------------------------------------------------------------------------
+# a subvolume is the service's own, and only the service's own
+# ---------------------------------------------------------------------------
+
+# `Mount=` is quadlet's long form -- `type=bind,source=<path>,destination=<path>` --
+# and it was in neither REFUSED_DIRECTIVES nor GUARDEN_OWNED_ORDER while
+# `_mounts_of_unit` read only `Volume=`. So a repository could write
+# `Mount=type=bind,source=/,destination=/host` and nothing looked at it. It is
+# refused by name now, which is stricter than letting the mount guard see it.
+seed "$project/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27" \
+    "Volume=data:/var/lib/app" "Volume=chainstate:/data" \
+    "Mount=type=bind,source=/,destination=/host"
+run loom render "$project" --service myapp-preview --out "$refused"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "Mount="
+assert_stderr_has "does not get it"
+
+# The other half, and the one that is easy to get backwards: the guard permits the
+# service's OWN volume tree, because that is where a subvolume lives, and nothing
+# else. Another service's tree is not this service's own, so it is refused -- which
+# is what makes the allowance safe rather than a widening.
+#
+# `Volume=` is the key that reaches the mount guard at all. `Mount=` is in
+# REFUSED_DIRECTIVES, so a repository's `Mount=` is refused by name before the guard
+# is consulted -- stricter, not weaker, and the assertion above is that it is
+# refused at all rather than silently honoured.
+seed "$project/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27" \
+    "Volume=data:/var/lib/app" "Volume=chainstate:/data" \
+    "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-production/state/data:/stolen"
+run loom render "$project" --service myapp-preview --out "$refused"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "myapp-production"
+# The refusal names the path as "not the service's own volume", which was false
+# while that tree was in neither the allowance nor the check.
+assert_stderr_has "not the service's own volume"
