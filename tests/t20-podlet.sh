@@ -87,6 +87,15 @@ assert_unchanged() {
     [ "$now" = "$1" ] || _fail "$2"
 }
 
+# The other direction: `--check` must NOT change what is on disk. Asserting only
+# that a check restored the pinned bytes would pass a check that acted while being
+# asked to report, so the tamper is expected to survive it.
+assert_check_changed_nothing() {
+    local now
+    now=$(digest "$binary")
+    [ "$now" != "$1" ] || _fail "$2"
+}
+
 # A real program, in a real archive, under the name the install matches on. The
 # member path is the release's own, one directory deep, so the install is
 # exercised against the shape it actually has to handle rather than a flat one.
@@ -115,6 +124,9 @@ seed_record tar.xz "file://$archive" "$archive_digest" "$payload_digest"
 # from here on is the pin, and the pin's own convergence is the ELF header and the
 # two digests below rather than a phase's exit code.
 run soil install --apply
+assert_not_rejected
+seed_record tar.xz "file://$archive" "$archive_digest" "$payload_digest"
+run soil packages --apply
 assert_not_rejected
 
 # **It is a program.** The ELF header first, because the executable bit does not
@@ -165,6 +177,15 @@ run soil packages --check
 assert_exit 1
 assert_stderr_has "drift: the pinned podlet is installed"
 assert_elf "$binary"
+# `--check` reports and changes nothing, so the tampering is still there: the
+# digest assertion is the proof that the check re-read the bytes rather than
+# trusting that it put them there. The apply that restores them is the second half,
+# and the block asserted the ORIGINAL bytes here without issuing one — which could
+# only pass if the check had already restored them, the opposite of a check.
+assert_check_changed_nothing "$payload_digest" \
+    "the check restored the bytes it was asked to report on"
+run soil packages --apply
+assert_not_rejected
 assert_unchanged "$payload_digest" "the re-apply did not restore the pinned bytes"
 
 # **The other format the record may name**, driven through the same claim. The
