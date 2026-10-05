@@ -27,9 +27,44 @@ about traffic from inside a container. This is the HOST: podman's pull runs as
 the service user, and the packet goes out through `OUTPUT`, which jumps to
 `guarden-svc`, whose deny is `daddr 127.0.0.0/8 jump DROP;`.
 
-**Not measured:** whether `guarden-svc` is what drops the packet. The probe that
-tried to answer this created no service, so `30-services.conf` did not exist and
-the deny never rendered. It needs a probe that renders the firewall first.
+## MEASURED: the deny is the cause
+
+`tests/t50-slice.sh` renders the firewall with a real service and reads
+`guarden-svc`'s own packet counters across one UDP send from the service uid to
+`127.0.0.53:53`:
+
+```
+DENY_COUNTER_BEFORE=0
+DENY_COUNTER_AFTER=1
+```
+
+**`guarden-svc` drops it.** The rule is `-A guarden-svc -d 127.0.0.0/8 -j DROP`,
+and the counter on it moves when a service uid sends one packet to systemd-resolved's
+stub listener. So the first branch above is the true one and it has a consequence
+larger than the spec's claim:
+
+**No service can pull an image**, so every first deploy of a new workload fails. Not
+"a hostname does not resolve" — the pull cannot complete, because the resolver is
+unreachable from every service uid.
+
+## A host fact that had to be established first
+
+The measurement was misleading until this was accounted for: `/usr/sbin/iptables` on
+this golden is **iptables-nft**, while guarden's rules are in **iptables-legacy** —
+`update-alternatives --query iptables` reports `Value: /usr/sbin/iptables-nft`, and
+`iptables -S guarden-svc` answers *"No chain/target/match by that name"* because the
+chain is in the other table.
+
+`ferm` invokes `iptables` by name, so whichever the alternatives system names when it
+runs is the table that gets written, and on this host that was legacy. Reading
+through `iptables` therefore looks for a chain that is not there, and an earlier
+probe read that as "no rules exist at all".
+
+**This is worth its own attention.** A host whose alternatives point at nft would
+have guarden's rules written to legacy tables while every tool an operator reaches
+for reads nft — the firewall would appear absent while the packets it was written to
+drop still flow. Which table guarden converges should be stated rather than
+inherited from whatever `update-alternatives` happens to say.
 
 ## Why this matters either way
 

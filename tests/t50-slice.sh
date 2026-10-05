@@ -121,6 +121,49 @@ assert_exit 0
 assert_file_has "$runtime/systemd/generator/web.service" "ExecStart"
 assert_file_has "$runtime/systemd/generator/web.service" "podman"
 
+# ---------------------------------------------------------------------------
+# is the loopback deny what refuses the stub resolver?
+# ---------------------------------------------------------------------------
+#
+# The deny is `daddr 127.0.0.0/8 jump DROP` in `guarden-svc`, which the OUTPUT path
+# jumps to. 127.0.0.53 is systemd-resolved's stub. If the counter moves when a
+# service uid sends one packet there, the deny is the cause and no service can pull
+# an image; if it does not, this is a golden-VM artefact and the fix is in the
+# harness.
+run soil firewall --apply
+assert_exit 0
+# A host fact that changes what this measurement means, recorded rather than worked
+# around: `/usr/sbin/iptables` is **nft**, and guarden's rules are in
+# **iptables-legacy**. `ferm` invokes `iptables` by name, so whichever the
+# alternatives system names when it runs is the table that gets written, and this
+# golden had it pointing at legacy. Reading the chain through `iptables` looks for a
+# chain that is not there.
+#
+# The deny is therefore read from the table that HOLDS it.
+run iptables-legacy -S guarden-svc
+assert_exit 0
+assert_stdout_has "127.0.0.0/8"
+assert_stdout_has "DROP"
+
+# `iptables -nvx -L` prints `pkts bytes target prot opt in out source destination`,
+# so the DROP rule's counter is the FIRST field and its destination is
+# `127.0.0.0/8`. One function, so the two readings cannot differ in how they were
+# taken.
+deny_packets() {
+    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
+        | awk '$3 == "DROP" && $NF == "127.0.0.0/8" {print $1; exit}'
+}
+
+before=$(deny_packets)
+echo "DENY_COUNTER_BEFORE=$before" >&2
+run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.53 53' || true
+after=$(deny_packets)
+echo "DENY_COUNTER_AFTER=$after" >&2
+[ -n "$before" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"
+[ -n "$after" ] || _fail "the deny rule's packet counter is unreadable"
+[ "$after" != "$before" ] \
+    || _fail "the deny counter did not move, so something else refuses the stub"
+
 # The unit is generated, loaded and found, so whatever happens next is podman's and
 # not systemd's.
 run weedr service start routed-staging
