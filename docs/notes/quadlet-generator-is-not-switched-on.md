@@ -12,9 +12,10 @@
   path (`paths.QUADLET`).
 - `podman quadlet list` for the service user is **empty**: the generator is not
   reading that directory.
-- Consequently `node.container.d/` contains only guarden's own
-  `10-guarden-order.conf` drop-in and **no generated `.service`**, and
-  `systemctl --user start node` answers `Unit node.service not found` (exit 5).
+- Consequently `web.container.d/` contains only guarden's own
+  `10-guarden-order.conf` drop-in and **no generated `.service`**, and the start
+  answers `Job for web.service failed because the control process exited with error
+  code` — the unit name resolves, but to nothing quadlet produced.
 - `Quadlet=true` in `/etc/systemd/user.conf.d/` does **not** fix it on this
   family, and `podman quadlet install` installs quadlet *files*, not the generator.
 
