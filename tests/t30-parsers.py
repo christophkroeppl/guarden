@@ -158,7 +158,10 @@ def escaping() -> None:
     # One escaped form governs every place a ref becomes a path, a key or a
     # filename (spec 5.2), and `feature/x` and `feature-x` must never collide.
     check(names.systemd_escape("feature-login") == "feature\\x2dlogin", "a dash is escaped")
-    check(names.systemd_escape("feature/x") == "feature-x", "a slash becomes a dash")
+    check(
+        names.systemd_escape("feature/x") == "feature\\x2f",
+        "a slash is escaped, so it cannot collide with a dash",
+    )
     check(
         names.systemd_escape("feature/x") != names.systemd_escape("feature-x"),
         "a slash and a dash do not collide",

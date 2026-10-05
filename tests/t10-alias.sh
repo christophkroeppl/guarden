@@ -31,13 +31,15 @@ assert_exit 0
 assert_stdout_has "weedr service remove"
 
 # A diagnostic names the long form whichever the caller typed, so what lands in
-# the journal is the form an operator greps for.
-run weedr project remove myapp
+# the journal is the form an operator greps for. `weedr project remove` was the
+# verb carrying this while its body was a skeleton; ticket 90 implemented it, so the
+# claim is asserted against the verb's real refusal instead.
+run weedr project keys myapp
 assert_exit 1
-assert_stderr_has "weedr project remove is not implemented"
-run weedr project rm myapp
+assert_stderr_has "myapp"
+run weedr project rm nosuchproject
 assert_exit 1
-assert_stderr_has "weedr project remove is not implemented"
+assert_stderr_has "nosuchproject"
 
 # No other verb has an alias, anywhere: every help surface, at every level.
 assert_only_alias_rm soil
