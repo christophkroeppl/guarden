@@ -20,6 +20,12 @@ default:
 # in its own file whether it needs a machine of its own — `# machine: shared`
 # or `# machine: fresh` — and a suite that says nothing gets one. A suite you
 # are working on is `just test-one <file>`; the whole run is for the end.
+#
+# A suite whose tree and golden are unchanged is **inherited** rather than run,
+# and prints `inherit t30-create.sh (green from the cache; not observed this
+# run)` — never a line that could be read as a pass. Nothing expires: a result
+# stays valid while the thing it was a function of does, and a rebuilt golden
+# invalidates all of them.
 test:
     tests/lxc.sh run
 
@@ -44,6 +50,19 @@ test-shared:
 # claim and this is how it is asked about: the same suites, both orders, green.
 test-reverse:
     tests/lxc.sh run "" --reverse
+
+# run every suite and record the result, inheriting nothing. This is what a
+# release gate uses: an inherited green is a real green, but it is not one this
+# run observed, and a gate that reads one as an observation has verified nothing.
+# The results are still recorded, so the next `just test` can inherit them.
+test-gate:
+    tests/lxc.sh run "" --no-cache
+
+# throw the recorded results away, keeping the golden. The cache lives outside
+# the repository and is disposable; this is the whole of removing it.
+test-cache-clear:
+    rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/guarden/suite-results"
+    @echo "cleared the suite cache"
 
 # build the golden VM without running anything against it
 provision:

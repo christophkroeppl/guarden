@@ -345,6 +345,17 @@ green is the only honest proof that a shared suite does not contaminate the next
 is not what decides it** — it relocates guarden's own files and not `apt`, `systemctl`, `useradd`
 or `btrfs`, so what decides it is which verbs a suite drives.
 
+**A suite whose golden and tree are unchanged is inherited, and says so.** Its line is
+`inherit <suite> (green from the cache; not observed this run)` — never something that could be
+read as a pass — and the run's summary states how many ran and how many were inherited. **Only an
+observed pass is recorded**, so a failing suite is re-run rather than inherited, and the three
+non-determinisms this repository has paid for would otherwise be cached forever instead of fixed.
+The key is the golden's identity (a rebuilt golden invalidates everything), the suite's read set,
+and the machine it ran on: which shared group, and which order. **Nothing expires**, because an
+expiry would make a run's meaning depend on a clock. `--no-cache` / `just test-gate` runs every
+suite and inherits nothing, and is what a release gate uses; `just test-cache-clear` throws the
+results away. The cache is outside the repository and disposable.
+
 **`fixtures/` is retired. No fake is added, and `fixtures/bin` is never on `PATH`** — not in a
 test, not in a VM run, not in a shell. It existed until 2026-10-01, and it was worse than a
 second opinion: `tests/lib.sh` put it first on `PATH` unconditionally and the LXD runner never

@@ -38,10 +38,18 @@
 #              is the recipe that says it out loud.
 #   --shared   cut one machine for the whole run, ignoring every declaration.
 #   --reverse  run the selected suites in the opposite order.
+#   --no-cache run every selected suite and record the result. A release gate
+#              uses this, because an inherited green is not an observed one.
 #
 # `--reverse` exists because sharing is a claim and a claim needs proving: the
 # suites that share a machine are run in one order and then in the other, and
 # both runs have to be green. It is the second half of that and nothing else.
+#
+# Everything else in a run is cached by default (ticket 210). A suite's result
+# is a function of the golden it was cut from and the tree it read, so an
+# unchanged suite is **inherited** and says so on its own line. The line does not
+# read as a pass: `inherit t30-create.sh (green from the cache; not observed this
+# run)`. A cache that could be read as a verification would be worse than none.
 #
 # lxc is the LXD snap. It is not on PATH for a non-interactive shell, so it is
 # resolved by absolute path rather than hoped for.
@@ -58,6 +66,7 @@ POOL_SOURCE=${GUARDEN_LXC_POOL_SOURCE:-/media/data/guarden-lxd}
 REPO=${GUARDEN_LXC_REPO:-$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")}
 VM_REPO=${GUARDEN_LXC_VM_REPO:-/home/ubuntu/guarden}
 CONVERT=${GUARDEN_LXC_CONVERT:-$REPO/tests/lxc-btrfs-convert}
+CACHE_TOOL=${GUARDEN_LXC_CACHE_TOOL:-$REPO/tests/suitecache.py}
 
 # Tests that cannot run in the machine, by construction rather than by accident.
 #
@@ -149,6 +158,61 @@ _has_snapshot() {
     local listing
     listing=$($LXC info "$1" 2>/dev/null | sed -n '/^Snapshots:/,$p') || return 1
     printf '%s\n' "$listing" | grep -qE "^\| +$SNAPSHOT +"
+}
+
+# The golden's identity, and the only half of the cache key the harness does not
+# choose itself (ticket 210). Everything here is asked of LXD and hashed as read:
+# which instance, which pool, which snapshot, and when LXD says that snapshot was
+# created.
+#
+# **The creation time is the field that makes a rebuild visible**, and it has to
+# come from LXD rather than from this file. A golden identified by what the
+# harness put in it — the image, the user-data, the conversion state — is
+# identical before and after a rebuild, because those inputs are identical, so
+# every cached result would answer from a machine that no longer exists.
+# `lxc info` reports each snapshot with its own creation time, and re-snapshotting
+# a rebuilt golden gives a new one.
+#
+# The timestamp is found by its **shape** on the snapshot's own row rather than by
+# its column. LXD's table carries a description column whose width follows the
+# text in it, so a fixed field number reads a different column on a golden that
+# happened to take a description, and reads the ETag on one that did not — either
+# of which is an identity that changes for no reason. A row's first timestamp is
+# the snapshot's creation, and there is nothing else on the row that has one.
+#
+# `--no-cache` is *not* an answer to an unreadable identity: it runs everything
+# and inherits nothing, which is the honest response to a golden that may have
+# been rebuilt and the only answer available without rebuilding it by hand.
+_snapshot_created() {
+    $LXC info "$1" 2>/dev/null | awk -v want="$SNAPSHOT" '{
+        n = split($0, cell, "|")
+        for (i = 1; i <= n; i++) {
+            key = cell[i]
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+            if (key != want) continue
+            for (j = i + 1; j <= n; j++) {
+                value = cell[j]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                if (value ~ /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2} [0-9]{2}:[0-9]{2}/) {
+                    print value
+                    exit
+                }
+            }
+        }
+    }'
+}
+_golden_identity() {
+    printf 'instance=%s\n' "$GOLDEN"
+    printf 'pool=%s\n' "$(_pool_of "$GOLDEN")"
+    printf 'snapshot=%s\n' "$SNAPSHOT"
+    printf 'created=%s\n' "$(_snapshot_created "$GOLDEN")"
+}
+
+# _golden_digest: the identity, hashed. Empty output means the identity could not
+# be read, and a run with no golden identity inherits nothing and says so —
+# a cache keyed on nothing answers for a machine it cannot name.
+_golden_digest() {
+    printf '%s\n' "$(_golden_identity)" | python3 "$CACHE_TOOL" golden 2>/dev/null
 }
 
 vm_exec_t() {
@@ -506,36 +570,41 @@ _run_suite() {
     # would ever close again. The symptom was a wedge with no test process in
     # the guest and nothing printed, which is the failure this timeout exists
     # to report — so the timeout was causing the thing it was added to catch.
+    #
+    # **The exit code is returned rather than reduced to a boolean.** A failure
+    # must reach the ledger and must not be recorded, and the one thing that
+    # decides both is whether this suite actually passed.
     if timeout --foreground --signal=KILL "$SUITE_TIMEOUT" \
         $LXC exec -T "$RUNNER" --cwd "$VM_REPO" \
         --env "PYTHONPATH=$VM_REPO/src" \
         --env "GUARDEN_ROOT=$VM_REPO" \
         -- bash -c "cd '$VM_REPO' && bash tests/$name" </dev/null; then
-        printf 'ok   %s\n' "$name"
+        python3 "$CACHE_TOOL" line pass "$name"
         return 0
     fi
     rc=$?
-    printf 'FAIL %s\n' "$name"
+    python3 "$CACHE_TOOL" line fail "$name"
     if [ "$rc" -eq 137 ]; then
         printf 'error: %s exceeded %ss and was killed; a suite that hangs reports nothing\n' \
             "$name" "$SUITE_TIMEOUT" >&2
     fi
-    return 1
+    return "$rc"
 }
 
 cmd_run() {
     local pat=${1:-}
     [ "$#" -gt 0 ] && shift
 
-    # Three flags and none of them about the suites: what a run shares is decided
+    # Four flags and none of them about the suites: what a run shares is decided
     # by each suite, and the flags decide what happens to a suite that says
     # nothing.
-    local fresh=0 shared=0 reverse=0
+    local fresh=0 shared=0 reverse=0 no_cache=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --fresh) fresh=1 ;;
             --shared) shared=1 ;;
             --reverse) reverse=1 ;;
+            --no-cache) no_cache=1 ;;
             *) die "unknown option for run: $1" ;;
         esac
         shift
@@ -551,11 +620,30 @@ cmd_run() {
     # runner does not.
     trap '_teardown_runner' EXIT INT TERM
 
-    # The selected suites, in the order they will run. `--reverse` reverses the
-    # selection rather than the machine: sharing is a claim about one suite not
-    # contaminating the next, and only running the shared ones in both orders
-    # asks the question.
-    local files=() reversed=() file name i
+    # The selected suites, in the order they will run, and for each one **the
+    # machine it will be on** — both decided here, before anything runs.
+    #
+    # `--reverse` reverses the selection rather than the machine: sharing is a
+    # claim about one suite not contaminating the next, and only running the
+    # shared ones in both orders asks the question. The machine travels with the
+    # suite through the reversal, because it is a property of the suite's place
+    # in the sharing order.
+    #
+    # Both are decided here rather than in the loop because **the cache must not
+    # change them.** A group derived from the run's own progress would make a
+    # shared suite's key a function of whether its neighbours hit or missed: a
+    # first run where three shared suites all ran numbers them 1, and a second
+    # run where the first is inherited numbers the other two 2 — so the two runs
+    # disagree about the machine they were on and the cache inherits nothing.
+    # Counted from the selection, the number is the same in every run and
+    # describes what was cut rather than what was observed.
+    #
+    # `runner` is one machine and no history, so every suite wanting its own
+    # shares that name: a green observed on one of them is a claim about the
+    # machine it ran on and nothing else.
+    local files=() groups=() frishes=() reversed=() rev_groups=() rev_frishes=()
+    local file name i group=0 want_fresh machine
+    local overridden=0
     for file in "$REPO"/tests/t[0-9]*.sh; do
         [ -f "$file" ] || continue
         name=${file##*/}
@@ -565,16 +653,87 @@ cmd_run() {
         if _is_host_only "$name"; then
             continue
         fi
+        if [ "$shared" = 1 ]; then
+            want_fresh=0
+            machine=0
+        elif [ "$fresh" = 1 ]; then
+            want_fresh=1
+            machine=$RUNNER
+            _needs_fresh "$file" && overridden=$((overridden + 1))
+        else
+            want_fresh=1
+            _needs_fresh "$file" && want_fresh=0
+            if [ "$want_fresh" = 1 ]; then
+                machine=$RUNNER
+            else
+                machine=$group
+                group=$((group + 1))
+            fi
+        fi
         files+=("$file")
+        groups+=("$machine")
+        frishes+=("$want_fresh")
     done
     if [ "$reverse" = 1 ]; then
         for ((i = ${#files[@]} - 1; i >= 0; i--)); do
             reversed+=("${files[$i]}")
+            rev_groups+=("${groups[$i]}")
+            rev_frishes+=("${frishes[$i]}")
         done
         files=("${reversed[@]}")
+        groups=("${rev_groups[@]}")
+        frishes=("${rev_frishes[@]}")
     fi
 
-    local total=0 failures=0 cuts=0 overridden=0
+    local total=0 failures=0 cuts=0
+
+    # What this run may inherit is decided once, before the first suite. It is
+    # the golden's identity and nothing else: the tree is read per suite, by the
+    # key, from the checkout the suite is about to run against.
+    #
+    # `--no-cache` does not skip the identity, because it still records: a release
+    # gate's run is an observation like any other, and the results it observed are
+    # the best thing to leave behind. It is the consulting that is suppressed.
+    local golden_digest
+    golden_digest=$(_golden_digest)
+    if [ -z "$golden_digest" ]; then
+        printf 'note: the golden at %s carries no readable snapshot identity, so\n' "$GOLDEN"
+        printf 'note: nothing can be inherited and nothing can be recorded\n'
+    else
+        python3 "$CACHE_TOOL" prune "$golden_digest"
+    fi
+
+    # The ledger: one line per selected suite, `verdict<TAB>name`. It is the run's
+    # own record of what happened, and the summary is computed from it rather
+    # than from counters that a caller could set to anything. A ledger written
+    # somewhere it cannot be read is a run that reports nothing, so it is
+    # created up front and its directory is refused if it cannot be written.
+    local ledger
+    ledger=$(mktemp -d)/ledger
+    : >"$ledger" || die "cannot write a run ledger"
+
+    # The mode is part of the key, not a run-wide annotation, and it carries two
+    # things a run decides.
+    #
+    # **The policy**, because `--shared` and `--fresh` put a suite on a machine
+    # another suite changed, and a green observed that way is a claim about a
+    # different machine than a green observed on one of its own.
+    #
+    # **The order**, because a shared suite's machine carries the history of
+    # whatever shared suites ran on it before, and `just test-reverse` runs the
+    # same suites in the opposite order. Without the order in the key, a green
+    # observed in a reversed run would answer for the forward run's machine —
+    # the one contamination claim this repository cares most about not making,
+    # because `--reverse` exists to ask exactly that question.
+    local mode
+    case "$fresh:$shared:$reverse" in
+        1:0:0) mode=fresh ;;
+        1:0:1) mode=fresh-reversed ;;
+        0:1:0) mode=shared ;;
+        0:1:1) mode=shared-reversed ;;
+        0:0:0) mode=declared ;;
+        0:0:1) mode=declared-reversed ;;
+    esac
 
     # One machine for the shared suites, cut once before the first of them and
     # kept for the rest. A suite that needs one of its own closes the group: the
@@ -582,24 +741,34 @@ cmd_run() {
     # just changed.
     local shared_open=0
 
-    for file in "${files[@]}"; do
+    for ((i = 0; i < ${#files[@]}; i++)); do
+        file=${files[$i]}
         name=${file##*/}
         total=$((total + 1))
+        group=${groups[$i]}
+        want_fresh=${frishes[$i]}
 
-        local want_fresh
-        if [ "$shared" = 1 ]; then
-            want_fresh=0
-        elif [ "$fresh" = 1 ]; then
-            want_fresh=1
-            _needs_fresh "$file" && overridden=$((overridden + 1))
-        else
-            want_fresh=1
-            _needs_fresh "$file" || want_fresh=0
+        # A hit costs nothing: no machine is cut and no suite is executed. What it
+        # costs is the claim, so the line printed is the ticket's central
+        # requirement — an inherited suite announces itself as inherited, and a
+        # line that could be read as a pass is not acceptable here.
+        #
+        # A hit does not open a shared group either. The suite it stands for did
+        # not run, so the machine the next shared suite gets is the one its group
+        # was cut as, which was decided from the selection above.
+        local key=''
+        if [ -n "$golden_digest" ]; then
+            key=$(python3 "$CACHE_TOOL" key "$golden_digest" "$file" "$mode" "$group")
+            if [ "$no_cache" = 0 ] && python3 "$CACHE_TOOL" get "$golden_digest" "$key" "$name"; then
+                printf 'inherit\t%s\n' "$name" >>"$ledger"
+                python3 "$CACHE_TOOL" line inherited "$name"
+                continue
+            fi
         fi
 
         if [ "$want_fresh" = 1 ]; then
             if ! _reset; then
-                printf 'FAIL %s\n' "$name"
+                printf 'fail\t%s\n' "$name" >>"$ledger"
                 printf 'error: cannot cut a clean %s\n' "$RUNNER" >&2
                 failures=$((failures + 1))
                 shared_open=0
@@ -613,14 +782,32 @@ cmd_run() {
             shared_open=1
         fi
 
-        _run_suite "$name" || failures=$((failures + 1))
+        local rc=0
+        _run_suite "$name" || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            printf 'pass\t%s\n' "$name" >>"$ledger"
+        else
+            printf 'fail\t%s\n' "$name" >>"$ledger"
+            failures=$((failures + 1))
+            continue
+        fi
+
+        # Reached only for exit 0, and `put` refuses anything else a second time.
+        # A failure has no record, so the next run runs the suite rather than
+        # inheriting it — the whole of what makes a cached green worth anything.
+        if [ -n "$golden_digest" ]; then
+            python3 "$CACHE_TOOL" put "$golden_digest" "$key" "$name" "$mode" "$group" 0 \
+                || die "cannot record the result of $name; the cache is not writable"
+        fi
     done
 
     if [ "$fresh" = 1 ] && [ "$overridden" -gt 0 ]; then
         printf 'note: --fresh cuts a machine per file and overrode the shared declaration of %d suite(s)\n' \
             "$overridden"
     fi
-    printf '\n%d suites, %d failures, %d machines cut\n' "$total" "$failures" "$cuts"
+    local report_args=(--ledger "$ledger" --golden "$golden_digest" --cuts "$cuts")
+    [ "$no_cache" = 1 ] && report_args+=(--no-cache)
+    python3 "$CACHE_TOOL" report "${report_args[@]}"
     [ "$failures" -eq 0 ]
 }
 
@@ -672,7 +859,7 @@ case "${1:-run}" in
     destroy) shift; cmd_destroy "$@" ;;
     clean) shift; cmd_clean "$@" ;;
     *)
-        printf 'usage: %s {provision|run [pat] [--fresh|--shared|--reverse]|shell|destroy|clean}\n' \
+        printf 'usage: %s {provision|run [pat] [--fresh|--shared|--reverse|--no-cache]|shell|destroy|clean}\n' \
             "$0" >&2
         exit 2
         ;;

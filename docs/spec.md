@@ -2588,6 +2588,21 @@ and a flag is a decision about a run. Sharing is a claim and `just test-reverse`
 the same suites, the opposite order, and both runs green is the only evidence a shared suite does
 not contaminate the next.
 
+**A suite's result is cached, and an inherited result is never an observed one.** A suite passes or
+fails as a function of two things — the golden it was cut from and the tree it read — so the key is
+a hash of both, plus the machine it ran on: which shared group, and whether the run shared at all
+and in which order. `just test` inherits every suite whose key is unchanged and prints
+`inherit <suite> (green from the cache; not observed this run)`, which is not a line anyone can
+read as a pass, and a summary that states how many suites ran and how many were inherited. **A
+failure is never recorded**, so a suite that did not pass runs again rather than being inherited —
+the property that makes a cached green worth having at all, and the reason this cache may only be
+built on a suite that passes when run twice. **Nothing expires**: a result stays valid while the
+golden and the tree do, so a run's meaning never depends on a clock, and a rebuilt golden — a
+different `lxc info` creation time — invalidates every recorded result. `--no-cache` runs every
+suite and inherits nothing; that is what a release gate uses, and its run still records, so the
+next ordinary run can inherit what the gate observed. The cache lives outside the repository, under
+`$XDG_CACHE_HOME/guarden/suite-results`, and `just test-cache-clear` removes it.
+
 - **No fake exists, and `fixtures/bin` is never on `PATH`** — not in a test, not in a VM run, not
   in a developer's shell. The directory is retired. It was not a second opinion: `tests/lib.sh`
   put it first on `PATH` unconditionally and the VM runner never removed it, so the "real
