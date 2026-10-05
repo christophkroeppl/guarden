@@ -67,14 +67,6 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 export GUARDEN_PREFIX=/
 # The real path, not a relocated one: `stage_config` writes where guarden reads,
 # and /etc/guarden is absent on a host where `soil install` has never run.
-mkdir -p /etc/guarden
-# `soil install` creates the group and is not this file's phase. It is load-bearing
-# rather than tidiness: the registry and every `overrides.toml` are root:guarden, the
-# unprivileged programs read them through it, and `users.group_id` refuses to write a
-# service without it.
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 ensure_accounts
 stage_config guarden-measured.toml
 
@@ -82,8 +74,7 @@ stage_config guarden-measured.toml
 # `loom`, and the programs are not on this host until install has run. It goes AFTER
 # stage_config, because install probes the host's gateway and writes what it
 # measured into the config it is reading.
-install -D -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" \
-    "$GUARDEN_PREFIX/etc/guarden/podlet.release"
+stage_podlet_release
 run soil packages --apply
 assert_not_rejected
 run soil install --apply

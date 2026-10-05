@@ -28,15 +28,6 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 
 export GUARDEN_PREFIX=/
 
-# `soil install` creates the group and is not this file's phase. It is load-bearing
-# rather than tidiness: the registry and every `overrides.toml` are root:guarden
-# and the unprivileged programs read them through it, and `users.group_id` refuses
-# to write a service without it. Established here so the answer below is about
-# `list` and not about whichever suite ran first.
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
-mkdir -p /etc/guarden
 stage_config guarden.toml
 stage_poke myapp 9f2c1ab
 
@@ -53,6 +44,11 @@ assert_exit 0
 run sysctl -w net.ipv4.ip_unprivileged_port_start=1024
 assert_exit 0
 
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 0
 run weedr service ingest myapp-staging --from poke myapp@9f2c1ab

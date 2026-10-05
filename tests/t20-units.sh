@@ -42,6 +42,11 @@ systemctl daemon-reload >/dev/null 2>&1 || :
 if ! getent group guarden >/dev/null; then
     groupadd --system guarden
 fi
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run soil storage --apply
 assert_file_exists /etc/systemd/system/guarden-snapper-cleanup.timer
 assert_file_exists /etc/systemd/system/guarden-snapper-cleanup.service

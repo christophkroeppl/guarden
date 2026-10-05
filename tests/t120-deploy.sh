@@ -26,7 +26,6 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GUARDEN_PREFIX=/
 
-mkdir -p /etc/guarden
 install -d -m 0770 -o root -g guarden /var/lib/guarden/queue
 # `guarden-measured.toml` rather than `guarden.toml`: this project's manifest
 # declares a `needs:`, so its units carry `AddHost=` and the renderer refuses an
@@ -37,6 +36,9 @@ stage_config guarden-measured.toml
 # `soil install` is this suite's precondition and not its subject: the deploy
 # reaches the mutator and the renderer at the paths that phase installs them,
 # and a test driving a copy in the checkout would test something no host runs.
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
 run soil install --apply
 assert_not_rejected
 assert_file_exists /usr/lib/guarden/bin/weedr

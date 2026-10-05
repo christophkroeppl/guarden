@@ -57,7 +57,6 @@ cleanup
 # `host.admin_user` names the uid the whole OUTPUT accept set admits and the
 # firewall refuses to render without it. `soil install` records the invoking user
 # there, so the account is this fixture's own claim and it has to exist.
-mkdir -p /etc/guarden
 ensure_accounts
 stage_config guarden-measured.toml
 stage_poke pgprov 9f2c1ab
@@ -69,8 +68,7 @@ stage_poke unpublished 9f2c1ab
 # `loom`, and the programs are not on this host until install has run. The note
 # below about the firewall unit is still true — install installs the unit but this
 # file does not converge the rendered set, which is t20-firewall's business.
-install -D -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" \
-    "$GUARDEN_PREFIX/etc/guarden/podlet.release"
+stage_podlet_release
 run soil packages --apply
 assert_not_rejected
 run soil install --apply

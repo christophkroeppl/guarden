@@ -26,7 +26,6 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 export GUARDEN_PREFIX=/
-mkdir -p /etc/guarden
 
 # The rendered document, and the phase list it agrees with. `soil packages
 # --render-user-data` is the render path, because the packages are the one list
@@ -130,9 +129,6 @@ assert_one_diagnostic "error:"
 # actually about idempotence is the one `t20-install.sh` already makes, in this form:
 # apply, and only then count; apply again; count again.
 stage_config guarden-measured.toml
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 run soil install --apply
 assert_exit 0
 assert_stderr_empty

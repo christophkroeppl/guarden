@@ -43,9 +43,6 @@ cleanup() {
 trap cleanup EXIT
 
 cleanup
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 # `host.admin_user` names the uid the whole OUTPUT accept set admits, and a
 # converged guarden host carries an account by that name -- `soil install` records
 # the invoking user there. The fixture names `operator`, so the account is here.
@@ -53,7 +50,6 @@ id -u operator >/dev/null 2>&1 || {
     getent group operator >/dev/null 2>&1 || groupadd --system operator
     useradd --system --no-create-home --gid operator --shell /usr/sbin/nologin operator
 }
-mkdir -p /etc/guarden
 stage_config guarden-measured.toml
 
 # Count RULES, not the word: the file carries provenance comments that spell DNAT
@@ -91,6 +87,11 @@ seed "$tree/relay-staging/home/.guarden/service.yml" \
 # granted, and the JSON field set spec 1.2 closes at `services` with exactly
 # `name`, `requested`, `granted` and `pending` per service. Both services asked
 # and neither was granted, which is the state a poke leaves behind.
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run weedr port list
 assert_exit 0
 assert_stdout_has "peer-staging"

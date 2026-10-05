@@ -33,10 +33,6 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 export GUARDEN_PREFIX=/
-mkdir -p /etc/guarden
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 config=/etc/guarden/guarden.toml
 
 # The shipped table with an unmeasured alias, which is the state of a host whose

@@ -45,6 +45,7 @@ assert_stdout_lines 6
 # rejected input, not a silently ignored one.
 run soil firewall --apply --deadman
 assert_not_rejected
+stage_podlet_release
 run soil packages --apply --deadman
 assert_exit 2
 assert_one_diagnostic "error:"

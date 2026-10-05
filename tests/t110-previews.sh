@@ -28,7 +28,6 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 
 export GUARDEN_PREFIX=/
 
-mkdir -p /etc/guarden
 ensure_accounts
 stage_config guarden.toml
 
@@ -36,8 +35,7 @@ stage_config guarden.toml
 # renders through loom, and the programs are not on this host until install has
 # run. It goes after stage_config because it probes the host's gateway and writes
 # what it measured into the config it is reading.
-install -D -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" \
-    "$GUARDEN_PREFIX/etc/guarden/podlet.release"
+stage_podlet_release
 run soil packages --apply
 assert_not_rejected
 run soil install --apply

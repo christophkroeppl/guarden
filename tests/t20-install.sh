@@ -20,7 +20,6 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 export GUARDEN_PREFIX=/
-mkdir -p /etc/guarden
 
 # This file owns the phase's starting state, because which items drift is
 # otherwise a fact about whichever file ran before it on a shared machine: the

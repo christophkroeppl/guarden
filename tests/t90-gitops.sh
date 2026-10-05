@@ -99,6 +99,11 @@ tar -C "$GUARDEN_ROOT/fixtures/projects/quadlet-app" -cf "$tree_tar" .
 # `--project` argument anywhere, because a client's would beat the forced
 # command's.
 assert_verbs hose poke drop check
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run hose --help
 assert_exit 0
 assert_stdout_lacks "--project "

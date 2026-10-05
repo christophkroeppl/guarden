@@ -34,12 +34,13 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 export GUARDEN_PREFIX=/
-mkdir -p /etc/guarden
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 stage_config guarden-measured.toml
 stage_poke myapp 9f2c1ab
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 0
 run weedr service ingest myapp-staging --from poke myapp@9f2c1ab

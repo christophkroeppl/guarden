@@ -44,6 +44,11 @@ second=$(cat "$GUARDEN_FIXTURES/other.pub")
 
 # --- the dispatch entry this file is here to pin ------------------------------
 
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run weedr project add myapp --repository 'git@github.com:you/myapp.git'
 assert_exit 0
 

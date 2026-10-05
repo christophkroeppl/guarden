@@ -28,9 +28,11 @@ id -u operator >/dev/null 2>&1 || {
     getent group operator >/dev/null 2>&1 || groupadd --system operator
     useradd --system --no-create-home --gid operator --shell /usr/sbin/nologin operator
 }
-mkdir -p /etc/guarden
 ensure_accounts
 stage_config guarden-nomodules.toml
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
 run soil install --apply
 assert_not_rejected
 run weedr module add gate

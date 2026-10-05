@@ -30,7 +30,6 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 export GUARDEN_PREFIX=/
-mkdir -p /etc/guarden
 
 record=/etc/guarden/podlet.release
 binary=/usr/lib/guarden/bin/podlet
@@ -119,6 +118,7 @@ python3 "$GUARDEN_ROOT/tests/pinarchive.py" tar.xz "$GUARDEN_FIXTURES/payload" "
 payload_digest=$(digest "$GUARDEN_FIXTURES/payload")
 archive_digest=$(digest "$archive")
 seed_record tar.xz "file://$archive" "$archive_digest" "$payload_digest"
+stage_podlet_release
 run soil packages --apply
 assert_exit 0
 assert_file_exists "$binary"

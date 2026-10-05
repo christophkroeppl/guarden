@@ -36,10 +36,6 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 export GUARDEN_PREFIX=/
-mkdir -p /etc/guarden
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 
 templates=$GUARDEN_ROOT/src/guarden/templates
 
@@ -99,6 +95,9 @@ assert_exit 1
 assert_stderr_has "the credential materialiser's path unit is enabled"
 assert_stderr_has "the credential materialiser's boot oneshot is enabled"
 
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
 run soil install --apply
 assert_not_rejected
 

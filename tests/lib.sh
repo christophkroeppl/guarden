@@ -895,3 +895,21 @@ assert_no_snapshot() {
         _fail "snapshot $1:$2 exists and should not"
     fi
 }
+
+# The pinned converter's release record, at the path `soil packages` reads. A
+# suite that renders needs podlet, and podlet's fetch is refused without this
+# file — one template in the checkout is the whole of it, so every suite that
+# installs it stages the same bytes rather than each carrying a copy.
+stage_podlet_release() {
+    mkdir -p "${GUARDEN_PREFIX:-}/etc/guarden"
+    install -D -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" \
+        "${GUARDEN_PREFIX:-}/etc/guarden/podlet.release"
+}
+
+# The accounts every suite needs, created once at source time rather than by each
+# suite that renders or installs. `units.render_units` reads the guarden user's uid
+# out of /etc/passwd and the firewall refuses to render without an operator uid for
+# the edge's API accept set, so a suite that runs a guarden program and has not
+# created them dies on a KeyError that names neither the cause nor the fix. 38
+# suites had their own copy of this; one call here is the whole of it.
+ensure_accounts

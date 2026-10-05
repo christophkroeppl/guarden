@@ -28,17 +28,12 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 
 export GUARDEN_PREFIX=/
 
-# `soil install` creates the group and is not this file's phase. It is load-bearing
-# rather than tidiness: the registry and every `overrides.toml` are root:guarden
-# and the unprivileged programs read them through it, so a converge told to hand a
-# directory to a group that does not exist is reporting a missing precondition
-# rather than testing the phase. The probe's own complaint goes to stderr and is
-# silenced: a suite that says out loud that it had to create a precondition is
-# noise in a log somebody reads for failures.
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run soil storage --check
 assert_exit 1
 assert_stderr_has "drift:"

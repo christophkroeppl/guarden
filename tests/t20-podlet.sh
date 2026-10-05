@@ -38,7 +38,6 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 export GUARDEN_PREFIX=/
-mkdir -p /etc/guarden
 
 record=/etc/guarden/podlet.release
 binary=/usr/lib/guarden/bin/podlet
@@ -115,6 +114,9 @@ seed_record tar.xz "file://$archive" "$archive_digest" "$payload_digest"
 # refreshing it fails on a version the mirror has moved past. What is asserted
 # from here on is the pin, and the pin's own convergence is the ELF header and the
 # two digests below rather than a phase's exit code.
+run soil install --apply
+assert_not_rejected
+stage_podlet_release
 run soil packages --apply
 assert_not_rejected
 

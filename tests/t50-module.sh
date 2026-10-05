@@ -30,13 +30,15 @@ id -u operator >/dev/null 2>&1 || {
     getent group operator >/dev/null 2>&1 || groupadd --system operator
     useradd --system --no-create-home --gid operator --shell /usr/sbin/nologin operator
 }
-mkdir -p /etc/guarden
 ensure_accounts
 stage_config guarden-nomodules.toml
 
 # `soil install` is this suite's precondition and not its subject: the module
 # directory is guarden's own installation, and a module added months later must
 # not need the phase to run again.
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
 run soil install --apply
 assert_not_rejected
 assert_file_exists /usr/lib/guarden/modules/gate/module.toml

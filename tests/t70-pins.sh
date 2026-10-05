@@ -33,12 +33,13 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 export GUARDEN_PREFIX=/
-mkdir -p /etc/guarden
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 stage_config guarden-measured.toml
 stage_poke myapp 9f2c1ab
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 0
 
@@ -352,7 +353,6 @@ mv "$registry.away" "$registry"
 # reads the effective configuration with `snapper get-config` and never parses the
 # file — so the restart here is what an out-of-band edit is worth on this machine,
 # and it is what makes the failure real rather than cached away.
-mkdir -p /etc/guarden
 cp "/etc/snapper/configs/$config" "$GUARDEN_FIXTURES/snapper-config.saved"
 printf '%s\n' 'SUBVOLUME=/etc/guarden' 'FSTYPE=btrfs' \
     'NUMBER_CLEANUP=yes' 'TIMELINE_CLEANUP=yes' \

@@ -23,7 +23,6 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 export GUARDEN_PREFIX=/
 
 getent group guarden >/dev/null 2>&1 || groupadd --system guarden
-mkdir -p /etc/guarden
 # `soil storage` owns this directory's mode and owner and is not this file's
 # phase. It is made here with the mode and the owner spec 2.1 states, because
 # `furrow` runs as `guarden` and a directory it created would be its own: a
@@ -49,6 +48,11 @@ assert_file_exists /run/guarden/locks
 
 # `--from` is `poke <project>@<sha>`. A path in either slot is rejected input
 # naming the form, and nothing was enqueued by the refusal.
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run furrow deploy qapp-production --from /var/lib/guarden/staging
 assert_exit 2
 assert_stderr_has "never a path"

@@ -27,16 +27,13 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 
 export GUARDEN_PREFIX=/
 
-# `soil install` creates the group and is not this file's phase. It is load-bearing
-# rather than tidiness: the registry, every `overrides.toml` and all of
-# /etc/guarden are root:guarden, and `users.group_id` refuses to write a service
-# without it.
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
-mkdir -p /etc/guarden
 stage_config guarden.toml
 stage_poke myapp 9f2c1ab
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run weedr service ingest myapp-staging --from poke myapp@9f2c1ab
 assert_exit 0
 

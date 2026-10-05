@@ -77,6 +77,11 @@ run systemctl enable --now ufw.service
 assert_exit 0
 assert_enabled ufw.service
 
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run soil firewall --check
 assert_exit 1
 assert_stderr_has "drift: the distribution's own firewall is disabled"

@@ -62,12 +62,10 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 # seeded registry, because a staged `/etc/passwd` cannot be reconciled with a real
 # `useradd` and a hand-written record would be a service that never existed.
 export GUARDEN_PREFIX=/
-mkdir -p /etc/guarden
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 stage_config guarden-measured.toml
 stage_poke myapp 9f2c1ab
+run soil install --apply
+assert_not_rejected
 run weedr service ingest myapp-staging --from poke myapp@9f2c1ab
 assert_exit 0
 registry=/var/lib/guarden/registry

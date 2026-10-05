@@ -14,10 +14,14 @@
 export GUARDEN_PREFIX=/
 # The real path, not a relocated one: stage_config writes where guarden reads,
 # and /etc/guarden is absent on a host where `soil install` has never run.
-mkdir -p /etc/guarden
 stage_config guarden.toml
 
 # A host with the shipped table and no services is a done state, not a failure.
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run weedr service list
 assert_exit 0
 assert_stdout_has "no services"

@@ -32,11 +32,12 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 
 export GUARDEN_PREFIX=/
 arch=$(uname -m)
-mkdir -p /etc/guarden
 
 # The one list, and the two of its entries this file is about. Read with `soil`
 # rather than out of the TOML, because the question is what the phase converges and
 # not what a file says.
+run soil install --apply
+assert_not_rejected
 run soil packages --list
 assert_exit 0
 assert_stdout_has "python3-yaml"
@@ -160,6 +161,7 @@ assert_stderr_has "drift: the pinned podlet is installed"
 # whole of what it said: the three packages were installed by this same run —
 # `dpkg-query` is the distribution's own record of that — and the one thing it
 # could not do was fetch an artefact nothing had told it how to fetch.
+stage_podlet_release
 run soil packages --apply
 assert_exit 2
 assert_one_diagnostic "error:"

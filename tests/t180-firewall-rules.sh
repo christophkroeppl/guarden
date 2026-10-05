@@ -37,9 +37,6 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 # The `guarden` user too, not just its group: `weedr service ingest` renders a
 # service's units AS that user, so the ingest below cannot proceed without it.
 id -u guarden >/dev/null 2>&1 ||
@@ -47,6 +44,9 @@ id -u guarden >/dev/null 2>&1 ||
 # `soil install` is this suite's precondition and not its subject: ingest renders
 # a service's units with `loom` out of /usr/lib/guarden/bin, and only `install`
 # puts it there.
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
 run soil install --apply
 assert_not_rejected
 assert_file_exists /usr/lib/guarden/bin/loom
@@ -58,7 +58,6 @@ id -u operator >/dev/null 2>&1 || {
     getent group operator >/dev/null 2>&1 || groupadd --system operator
     useradd --system --no-create-home --gid operator --shell /usr/sbin/nologin operator
 }
-mkdir -p /etc/guarden
 stage_config guarden-measured.toml
 stage_poke gated 9f2c1ab
 

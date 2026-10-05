@@ -34,16 +34,14 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 export GUARDEN_PREFIX=/
 # The real path, not a relocated one: stage_config writes where guarden reads,
 # and /etc/guarden is absent on a host where `soil install` has never run.
-mkdir -p /etc/guarden
-# `soil install` creates the group and is not this file's phase. It is
-# load-bearing rather than tidiness: `users.group_id` refuses to write a service
-# without it.
-if ! getent group guarden >/dev/null 2>&1; then
-    groupadd --system guarden
-fi
 stage_config guarden.toml
 stage_poke myapp 9f2c1ab
 
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 run weedr service ingest subid-probe-production --from poke myapp@9f2c1ab
 assert_exit 0
 assert_stderr_empty
