@@ -2,6 +2,20 @@
 
 **Status: open, measured, not fixed. This is a product gap, not a test problem.**
 
+**This note's conclusion is WRONG and superseded.** It says nothing enables
+quadlet's generator. The generator is reached — `podman-user-generator` is a
+systemd generator and runs at the `daemon-reload` `start_units` already performs.
+The real cause is guarden's own rendered `.volume` unit naming a key quadlet does
+not accept, which stops that unit being generated at all, and the container then
+cannot resolve the volume it names.
+
+See
+[`quadlet-volume-key-is-not-a-spelling-fix.md`](quadlet-volume-key-is-not-a-spelling-fix.md)
+for the generator's own dry-run output and the decision the fix needs.
+
+Kept because the measurements here are what ruled the earlier hypotheses out, and
+because they stop the next reader re-deriving them.
+
 ## What is measured (podman 5.7.0, the family `packages.toml` declares)
 
 - `/usr/lib/systemd/user/quadlet.service` **does not exist**. podman 5.7 ships
