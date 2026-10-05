@@ -25,6 +25,35 @@ Nothing in guarden enables the generator. The renderer emits quadlet
 declarations and the mutator installs them, but no code path starts `podman.service`
 in the service user's manager, so the `.container` file never becomes a unit.
 
+**Correction to that first reading, from measurement.** podman 5.7 ships **no
+`quadlet.service` at all**, and `podman.service` — the unit of that name — is the
+**REST API** (`ExecStart=/usr/bin/podman system service`), not the generator.
+Starting it as the service user succeeds and generates nothing.
+
+What podman 5.7 actually ships is `/usr/lib/systemd/user-generators`, so quadlet
+generates at **daemon-reload** rather than from a unit of its own. `start_units`
+already reloads, so the remaining question is narrower than "nothing enables it":
+the generator runs and does not produce a unit for these files.
+
+**Also measured, and it narrows it further:** a
+`SYSTEMD_LOG_LEVEL=debug systemctl --user daemon-reload` in the service user's
+manager logs **nothing at all** about quadlet, a container, or a skip. So the
+generator is not declining these files with a reason — it is not being invoked for
+this directory, which points at the search path rather than at the file's contents.
+`Image=`, `Network=` and the drop-in are therefore not yet suspects.
+
+**Not yet measured:** whether the generator is reached at all on this family, and
+if not, what reaches it. `podman quadlet list` being empty is the same fact seen
+from the other side. The next step is to find what a generator run on this machine
+*does* produce for a service user's home — `systemd-analyze --user verify` or the
+generator binary run by hand as that user — rather than another inference.
+
+So the fix is **not** "guarden starts quadlet.service" — that unit does not exist
+on this family, and the earlier note's options 1 and 3 are wrong for that reason.
+What remains is a generator invocation, and the next measurement is
+`SYSTEMD_LOG_LEVEL=debug systemctl --user daemon-reload` in the service user's
+manager, which will say what the generator decided and why.
+
 Every claim that depends on a container actually running is therefore blocked —
 which is the claim `tests/t70-fork.sh` cannot make (see its own comment at the
 stop/start assertion: it needs "a running container on a real user manager").
@@ -37,19 +66,18 @@ start.** Nothing tested the hop between a declaration on disk and a loadable uni
 
 ## The decision this needs
 
-Where the generator gets switched on. Three candidates, and the spec does not say:
+Where the generator gets invoked. Two candidates, and the spec does not say:
 
-1. `soil install` starts `podman.service` once per service user, or once per
-   session — root, mutating another user's manager.
-2. A `podman.service` preset/drop-in is installed into the service user's home by
-   the mutator, so the user's own manager pulls it.
-3. Guarden keeps a `podman quadlet install` of each rendered unit — a second
-   mechanism for the same job, which ADR-0012's "no second way" shape argues
-   against.
+1. Guarden runs the generator itself — `systemd-run --user` or a reload the mutator
+   already performs — which keeps one mechanism and one owner.
+2. A drop-in or preset is installed into the service user's home so their own
+   manager pulls the generator in, which leaves the mutator out of the user
+   manager's runtime state but adds a file whose only job is to make systemd do
+   something guarden could ask for directly.
 
-Option 2 is the smallest and keeps the mutator out of the user manager's runtime
-state, but it is a real decision rather than an obvious default: it decides whether
-a service's units are the service user's business or guarden's.
+Option 1 is smaller and stays inside the existing `start_units` reload. It is
+still a real decision: it decides whether generating a service's units is
+guarden's job or the user manager's.
 
 **Do not "fix" this by making `start_units` tolerate exit 5 for a start.** That
 exit code is the one case `_unit`'s docstring says must stay a failure — it would
