@@ -642,7 +642,7 @@ cmd_run() {
     # shares that name: a green observed on one of them is a claim about the
     # machine it ran on and nothing else.
     local files=() groups=() frishes=() reversed=() rev_groups=() rev_frishes=()
-    local file name i group=0 want_fresh machine
+    local file name i group=0 slot=0 want_fresh machine
     local overridden=0
     for file in "$REPO"/tests/t[0-9]*.sh; do
         [ -f "$file" ] || continue
@@ -658,20 +658,21 @@ cmd_run() {
             machine=0
         elif [ "$fresh" = 1 ]; then
             want_fresh=1
-            machine=$RUNNER
+            machine="fresh-$slot"
             _needs_fresh "$file" && overridden=$((overridden + 1))
         else
             want_fresh=1
             _needs_fresh "$file" && want_fresh=0
             if [ "$want_fresh" = 1 ]; then
-                machine=$RUNNER
+                machine="fresh-$slot"
             else
-                machine=$group
+                machine="shared-$group"
                 group=$((group + 1))
             fi
         fi
         files+=("$file")
         groups+=("$machine")
+        slot=$((slot + 1))
         frishes+=("$want_fresh")
     done
     if [ "$reverse" = 1 ]; then
