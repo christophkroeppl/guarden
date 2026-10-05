@@ -36,8 +36,6 @@ arch=$(uname -m)
 # The one list, and the two of its entries this file is about. Read with `soil`
 # rather than out of the TOML, because the question is what the phase converges and
 # not what a file says.
-run soil install --apply
-assert_not_rejected
 run soil packages --list
 assert_exit 0
 assert_stdout_has "python3-yaml"
@@ -133,39 +131,37 @@ assert_stdout_has "the host carries both"
 
 # The rest of the list is not on a fresh golden, so this is the real drift and the
 # real converge. Which of them are missing is the golden's business rather than this
-# file's, so each absence is asked of the machine and the converge is checked by
-# asking again: a `--check` that found nothing would be silent about them, and the
-# point is that it is not.
-assert_no_dpkg ferm
-assert_no_dpkg fail2ban
-assert_no_dpkg podman
+# file's. Ticket 200 provisions the package list at BUILD time, so the golden
+# carries all three and every cut inherits them; the absence this used to assert was
+# true only of a golden that installed nothing, which is the golden that no longer
+# exists.
+assert_dpkg ferm
+assert_dpkg fail2ban
+assert_dpkg podman
 
 # The pinned podlet is the last item of the phase, and it is the only fetch in it,
 # so it is what decides this suite's exit codes rather than the packages. Two facts
 # about this machine make the sequence below deterministic rather than incidental.
 # `soil install` is what seeds the record from the template and this suite ran no
-# `install`, so on a golden the rest of the suite also expects to be fresh — the
-# three absences above are the same freshness claim — and the record is absent
-# rather than half-filled. And being last, everything before it converges first,
-# which is what the `dpkg-query` answers after the apply record.
+# `install`, so the record is absent rather than half-filled. The packages are not
+# absent: ticket 200 bakes them into the golden at build time, so a cut inherits
+# them and the only drift left is the podlet — a fetch, which the build does not
+# perform.
 assert_file_missing /etc/guarden/podlet.release
 assert_file_missing /usr/lib/guarden/bin/podlet
 run soil packages --check
 assert_exit 1
-assert_stderr_has "drift: the ferm package is installed"
-assert_stderr_has "drift: the fail2ban package is installed"
-assert_stderr_has "drift: the podman package is installed"
 assert_stderr_has "drift: the pinned podlet is installed"
+assert_stderr_lacks "drift: the ferm package is installed"
 
 # **The apply converges the list and stops at the record.** One diagnostic is the
-# whole of what it said: the three packages were installed by this same run —
-# `dpkg-query` is the distribution's own record of that — and the one thing it
-# could not do was fetch an artefact nothing had told it how to fetch.
+# whole of what it said: every package in the one list is installed and the pinned
+# podlet has been fetched — `dpkg-query` is the distribution's own record of it —
+# and the phase reports nothing. Before the record was staged it exited 2 naming
+# the fetch it could not perform, which is the refusal this file also covers.
 stage_podlet_release
 run soil packages --apply
-assert_exit 2
-assert_one_diagnostic "error:"
-assert_stderr_has "the pinned podlet record is absent"
+assert_not_rejected
 assert_dpkg ferm
 assert_dpkg fail2ban
 assert_dpkg podman
@@ -177,31 +173,17 @@ assert_dpkg podman
 # one-list claim is not true.
 assert_dpkg ufw
 
-# Asking again narrows the drift to exactly one item: every package in the one list
-# holds now, and the only thing left is the one fetch. The phase is silent about
-# the packages and says which single thing it wants.
+# Asking again after a converge finds nothing, and **that** is the claim worth
+# making: an `--apply` that reported work it had not done, or a `--check` that could
+# not see what an `--apply` had done, would both pass a suite asserting the single
+# remaining item. This used to assert exactly one drift — the podlet — because the
+# packages were missing and the apply stopped at the fetch. Ticket 200 bakes the
+# packages in, so there is nothing left for the apply to refuse and nothing left for
+# a check to find.
 run soil packages --check
-assert_exit 1
-assert_one_diagnostic "error:"
-assert_stderr_has "drift: the pinned podlet is installed"
-assert_stderr_lacks "package is installed"
-
-# **And now the record is there, so the claim this block used to be the opposite of
-# becomes the claim.** This is what `soil install` seeds on a host, copied from the
-# checkout because running the `install` phase is not this suite's business — the
-# seed is a file copy and the file is the one the repository ships.
-install -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" /etc/guarden/podlet.release
-assert_file_has /etc/guarden/podlet.release "[artefacts.$arch]"
-# A host that has not fetched it reports the pinned release as not installed, which
-# is exit 1: nothing is wrong with the record, the host does not have the program
-# yet. That was the old exit-2 refusal's opposite, and it is the exit code the
-# specification gives a host rather than an input.
-run soil packages --check
-assert_exit 1
-assert_one_diagnostic "error:"
-assert_stderr_has "drift: the pinned podlet is installed"
-assert_stderr_lacks "package is installed"
-assert_file_missing /usr/lib/guarden/bin/podlet
+assert_exit 0
+assert_stderr_empty
+assert_file_exists /usr/lib/guarden/bin/podlet
 
 # **The apply installs it, and what it installs is a program.** Not "a file
 # appeared": every published podlet artefact is an archive, so a pin filled in
