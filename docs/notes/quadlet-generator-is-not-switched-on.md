@@ -53,3 +53,19 @@ a service's units are the service user's business or guarden's.
 **Do not "fix" this by making `start_units` tolerate exit 5 for a start.** That
 exit code is the one case `_unit`'s docstring says must stay a failure — it would
 report work that did not happen as success, which spec 1.2 forbids.
+
+## Suites blocked on it
+
+Three suites fail on this and for no other reason:
+
+- `tests/t30-remove.sh:114` — `systemctl --user stop node` answers
+  `Transport endpoint is not connected` and exit 1. `_unit`'s docstring calls that
+  the one answer a stop must not treat as success: a manager that cannot be reached
+  is not a manager whose units are stopped. The verb refuses, and it is right to.
+- `tests/t70-fork.sh` — the stop/start half of a fork, same cause.
+- `tests/t50-slice.sh` — starts the edge and asks it a question over the wire.
+
+All three are correct refusals of a host that cannot run a container, so the fix is
+the generator and not a tolerance. The `t30-remove` consequence is worth stating
+plainly: **`weedr service remove` cannot currently remove a service whose units
+quadlet never generated**, which on such a host is every service.

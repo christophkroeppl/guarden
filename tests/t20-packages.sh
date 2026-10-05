@@ -67,17 +67,21 @@ assert_dpkg snapper
 assert_dpkg python3-yaml
 assert_dpkg python3-jinja2
 
-# The other three are absent, and a `--check` that converged nothing says so by
-# naming each one: the phase asks the distribution's own query rather than a
-# second opinion of its own.
-assert_no_dpkg ferm
-assert_no_dpkg fail2ban
-assert_no_dpkg podman
+# The other three came with the golden: ticket 200 provisions the package list at
+# BUILD time, so a cut inherits all of it. The absence asserted here was true only
+# of a golden that installed nothing, which is the golden that no longer exists.
+#
+# The podlet is the one item the build does NOT bake in — it is a fetch, and the
+# build performs no fetch. So it is the only drift a cut carries, and a `--check`
+# that could not name it would be silent. The phase asks the distribution's own
+# query rather than a second opinion of its own.
+assert_dpkg ferm
+assert_dpkg fail2ban
+assert_dpkg podman
 run soil packages --check
 assert_exit 1
-assert_stderr_has "drift: the ferm package is installed"
-assert_stderr_has "drift: the fail2ban package is installed"
-assert_stderr_has "drift: the podman package is installed"
+assert_stderr_has "drift: the pinned podlet is installed"
+assert_stderr_lacks "the ferm package is installed"
 
 # The two python packages above are the runtime dependencies and the only imports
 # outside the standard library, which is what keeps the host installable on a
@@ -155,6 +159,15 @@ systemctl enable apt-daily.timer
 run soil packages --check
 assert_exit 1
 assert_stderr_has "drift: the distribution's own apt timers are disabled"
+# `--check` REPORTS and changes nothing, so the timer the line above enabled is
+# still enabled: the assertion is the proof that the phase saw it and did not
+# quietly act. The apply that takes it away again is the next step, and its own
+# result is asserted there — this block used to assert "not enabled" here, which
+# contradicted the enable two lines above and could only pass if `--check` mutated
+# the host, which is the opposite of what a check is.
+assert_enabled apt-daily.timer
+run soil packages --apply
+assert_exit 0
 assert_not_enabled apt-daily.timer
 assert_enabled unattended-upgrades.service
 
