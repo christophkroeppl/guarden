@@ -112,3 +112,11 @@ All three are correct refusals of a host that cannot run a container, so the fix
 the generator and not a tolerance. The `t30-remove` consequence is worth stating
 plainly: **`weedr service remove` cannot currently remove a service whose units
 quadlet never generated**, which on such a host is every service.
+
+## The verified state, for comparison
+
+With everything else landed, the VM reports **50 suites green and 3 red**, and the
+three are exactly the ones above. `tests/t35-env-schema.sh` is deliberately
+excluded from VM runs by `tests/lxc.sh` (`HOST_ONLY`): it asks git about the
+repository, and a checkout pushed without `.git` cannot answer that. It is
+repository hygiene, not guarden, and `just test` still runs it.
