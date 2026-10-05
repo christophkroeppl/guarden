@@ -391,7 +391,8 @@ stage_config() {
 # group is created first — that mistake was in three suites at once.
 ensure_accounts() {
     getent group guarden >/dev/null 2>&1 || groupadd --system guarden
-    id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home --gid guarden guarden
+    id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home \
+        --shell /usr/sbin/nologin --gid guarden guarden
     getent group operator >/dev/null 2>&1 || groupadd --system operator
     id -u operator >/dev/null 2>&1 || useradd --create-home --gid operator --shell /bin/bash operator
 }
