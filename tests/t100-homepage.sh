@@ -45,7 +45,9 @@ assert_file_exists /usr/lib/guarden/modules/homepage/homepage-production/.guarde
 assert_file_exists /usr/lib/guarden/modules/homepage/homepage-production/.guarden/quadlet/homepage.container
 run weedr module list --json
 assert_exit 0
-assert_json available.1 '"homepage"'
+assert_json available.0 '"auth"'
+assert_json available.1 '"gate"'
+assert_json available.2 '"homepage"'
 assert_json enabled '[]'
 # The registry is a closed key set: the dashboard declares no forwarded port
 # and no API, because it is reached through the edge by a route rather than by
