@@ -89,6 +89,11 @@ REFUSED_KEYS = {
     "published_ports": "the published-port set is the renderer's, from the grants and the "
     "allocations",
     "mounts": "[mounts] allow in the root-owned overrides.toml is the only mount surface",
+    "zram": "a zram device is host configuration, in the root-owned "
+            "/etc/guarden/guarden.toml, and it is the operator's",
+    "swap": "a swap device is host configuration, and it is the operator's",
+    "swappiness": "vm.swappiness is a host kernel knob guarden converges from its own "
+                  "configuration, never a manifest's",
 }
 
 VOLUME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")

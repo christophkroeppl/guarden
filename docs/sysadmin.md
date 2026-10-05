@@ -118,6 +118,60 @@ soil firewall --apply --deadman     # arm the timer before you touch a rule
 If ferm cuts you off, wait for the timer, or use the provider's console. The timer's arm,
 duration, effect and disarm are under **Ports and the firewall** below.
 
+### compressed swap, if you asked for it
+
+**There is none unless your `guarden.toml` says so.** No `[zram]` table means no generator
+package, no `/etc/systemd/zram-generator.conf`, no `/dev/zram0`, and `soil sysctl` does not
+touch `vm.swappiness`. That is the default on every host.
+
+To ask for one, add the table to `/etc/guarden/guarden.toml` and run `soil packages --apply`
+(it installs `systemd-zram-generator`, which is why it is not on a host that did not ask) and
+then `soil install --apply` and `soil sysctl --apply`.
+
+```toml
+[zram]
+algorithm = "zstd"
+level = 6
+size_percent = 50
+```
+
+| field | what it means |
+|---|---|
+| `algorithm` | `zstd`, and only `zstd`. Which compressor suits a given box's memory is a measurement guarden cannot make for you, so the set is short and closed rather than the kernel's |
+| `level` | zstd runs 1–22, and this is an integer rather than a preset because "high" is not a value. Level 22 on a busy host costs more CPU than the memory it saves |
+| `size_percent` | a percentage of this host's RAM, never over 100. An absolute size is not portable, and over 100 asks for a device larger than the memory behind it |
+
+Ask the machine what it actually ended up with, rather than reading the file `soil` wrote:
+
+```sh
+cat /sys/block/zram0/comp_algorithm     # the algorithm in force, in brackets
+cat /sys/block/zram0/disksize           # the size in bytes
+swapon --show                            # the device and its priority
+zramctl                                 # disksize, data, compratio
+```
+
+**The level cannot be read back.** The kernel exposes `algorithm_params` as write-only, so
+there is no way to ask the device what level it is compressing at. What a bad level does is
+leave no device at all — the backend rejects it and the device never initialises — and
+`soil install --check` reports that.
+
+Removing the table and running `soil install --apply` again **takes the device down** rather
+than leaving it enabled: swapped off, reset, hot-removed, and both files deleted. To do that by
+hand:
+
+```sh
+systemctl stop dev-zram0.swap
+swapoff /dev/zram0
+zramctl --reset /dev/zram0
+printf '0\n' >/sys/class/zram-control/hot_remove
+rm -f /etc/systemd/zram-generator.conf /var/lib/guarden/soil/zram
+systemctl daemon-reload
+```
+
+`vm.swappiness` goes back out of `/etc/sysctl.d/90-guarden.conf` with it, and the next
+`soil sysctl --apply` stops converging the knob — a device-less host has no business having a
+swappiness value that soil put there.
+
 ---
 
 ## Verb aliases

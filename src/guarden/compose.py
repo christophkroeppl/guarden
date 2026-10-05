@@ -75,6 +75,20 @@ REFUSED_COMPOSE_KEYS: dict[str, str] = {
     "podman_args": "any value",
 }
 
+# Host memory knobs, refused in the Compose vocabulary for the reason the same
+# thing is refused in the manifest's: a zram device or a swappiness value is
+# host configuration, it is in the root-owned `/etc/guarden/guarden.toml`, and
+# `sysctls:` here would be a repository stating a value the host owns. Refused
+# by name rather than left to the closed key set's "unknown key", because a
+# developer who reaches for this wants to be told who owns it.
+REFUSED_COMPOSE_HOST: dict[str, str] = {
+    "zram": "a zram device is host configuration, in the root-owned "
+            "/etc/guarden/guarden.toml, and it is the operator's",
+    "swap": "a swap device is host configuration, and it is the operator's",
+    "sysctls": "vm.swappiness and the rest of the host's kernel knobs are converged by "
+               "`soil sysctl` from the root-owned guarden.toml",
+}
+
 
 @dataclass(frozen=True)
 class Mount:
@@ -179,6 +193,12 @@ def refuse(body: dict[str, Any], container: str, path: Path) -> None:
             f"{_shown(value)}, and a guarden service does not get {key} ({wanted}); "
             f"the isolation boundary is the service's own uid and the 0700 on its tree"
         )
+    for key, why in REFUSED_COMPOSE_HOST.items():
+        if key in body:
+            raise errors.GuardenError(
+                f"the unit source {path}: the service {container!r} asks for {key}: "
+                f"{_shown(body[key])}, and {why}"
+            )
 
 
 def mounts(body: dict[str, Any], container: str, path: Path) -> list[Mount]:

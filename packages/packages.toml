@@ -26,6 +26,17 @@
 # role separate is what stops the harness's tools from becoming every host's
 # dependency, which is the failure the other direction would cause.
 #
+# `conditional` is a third role: a distribution package some hosts need and most
+# must not carry. The one row today is `zram` -- the `systemd-zram-generator`
+# the compressed swap device is built on -- and it is conditional because "absent
+# means absent" is part of what the zram knob promises: a host whose guarden.toml
+# has no `[zram]` installs no generator, writes no configuration and creates no
+# device, and a package in the substrate list would make that claim false on
+# every host the list was copied onto. `soil packages` converges a conditional
+# role only when the operator's configuration asks for it, and
+# `tools/render-user-data` renders the substrate and the harness roles only,
+# because a machine being provisioned is not yet a configured host.
+#
 # ## Per family
 #
 # The names are the part that is not portable: `python3-yaml` on Debian,
@@ -107,6 +118,22 @@ packages = [
 # The throwaway machine's extras. Deliberately a separate role: `soil packages`
 # never reads this table, so a golden-VM check can grow a dependency without
 # putting it on a production host.
+#
+# Nothing zram-related belongs here. The generator is `conditional` because a
+# machine being provisioned is not yet a configured host, and baking it into this
+# list would put it on every golden-VM image and make "absent means absent: no
+# package" untestable on the very machine that has to test it. What the harness
+# needs to *read* a device — `zramctl` and `swapon` — is `util-linux`, which the
+# runner's own user-data already installs.
+
+[conditional.debian]
+zram = ["systemd-zram-generator"]
+
+[conditional.fedora]
+zram = ["systemd-zram-generator"]
+
+[conditional.arch]
+zram = ["systemd-zram-generator"]
 
 [harness.debian]
 harness = [

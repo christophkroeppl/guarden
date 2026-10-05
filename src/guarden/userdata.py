@@ -60,6 +60,15 @@ def package_block(family: str | None = None) -> str:
 
     Rendered from the one list, so a package added to `packages.toml` and not to
     this file is a package that reaches the machine by exactly one path.
+
+    **The conditional roles are not rendered, and that is the design rather than
+    an omission.** They carry the packages a *configured* host installs when its
+    operator's guarden.toml asks for the thing they provide — the zram
+    generator is the one there is today. A machine being provisioned is not yet
+    a configured host, so baking them in would put the generator on every
+    golden-VM image and make "absent means absent: no package" untestable on the
+    machine that has to test it. The phase installs one the moment the knob is
+    there, which is the same path a real host takes.
     """
     substrate = packagelist.package_names(family)
     harness = packagelist.harness_names(family)

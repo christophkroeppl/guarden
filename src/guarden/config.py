@@ -14,6 +14,14 @@ Two exit codes, and the split is the point:
   naming the track: `cap` on a `kind = "slot"` track or missing from a
   `kind = "instance"` one, and a `fork_from` that names no track or its own.
 
+`[zram]` is the one optional table. It is absent on every host that has not been
+asked for a compressed swap device, and its absence is the default rather than a
+default value: `zram.knob` returns nothing for it and `soil install` builds no
+items, so nothing about zram exists on a host that never asked. Its rules live
+in `guarden/zram.py` rather than here, because they are the kernel's and the
+generator's and not this table's — an algorithm guarden does not offer, a level
+outside zstd's own range, and a percentage over 100.
+
 Nothing here writes the file. `weedr module add` appends to `[modules] enabled`
 and `soil install` writes the measured alias; a read is a read, and it takes no
 lock (spec 3.5).
@@ -24,13 +32,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from guarden import conf, errors, paths
+from guarden import conf, errors, paths, zram
 
 SLOT = "slot"
 INSTANCE = "instance"
 KINDS = (SLOT, INSTANCE)
 
-TOP_LEVEL_KEYS = {"host", "ingress", "network", "build", "modules", "environments"}
+TOP_LEVEL_KEYS = {"host", "ingress", "network", "build", "modules", "zram", "environments"}
 TRACK_KEYS = {
     "name",
     "host_prefix",
@@ -96,6 +104,7 @@ class Config:
     tracks: tuple[Track, ...]
     backend: str = BACKEND
     pasta_options: tuple[str, ...] = ("--map-gw",)
+    zram: zram.Zram | None = None
 
     def track(self, name: str) -> Track | None:
         return next((track for track in self.tracks if track.name == name), None)
@@ -219,6 +228,7 @@ def load(path: Any = None) -> Config:
         tracks=tuple(tracks),
         backend=_backend(network, where_file),
         pasta_options=_pasta_options(network, where_file),
+        zram=zram.knob(document, str(where_file)),
     )
 
 

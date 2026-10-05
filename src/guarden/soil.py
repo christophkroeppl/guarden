@@ -154,6 +154,12 @@ def _package_list(family: str | None) -> int:
     A family the list does not carry is a rejected input: the caller named one
     that does not exist, and answering with a family that does would make the
     question unanswerable rather than answered wrongly.
+
+    The conditional roles are printed under their own heading and not mixed in
+    with the substrate. They are installed only when the operator's
+    configuration asks for what they provide, so a list that showed them as
+    "what this host needs" would be reporting a package the host quite properly
+    does not have.
     """
     try:
         name, row = packagelist.resolve(family)
@@ -165,6 +171,10 @@ def _package_list(family: str | None) -> int:
     sys.stdout.write(f"query    {' '.join(str(part) for part in row.get('query', []))}\n")
     for package in packages:
         sys.stdout.write(f"{package}\n")
+    for role in sorted(packagelist.conditional_table().get(name, {})):
+        sys.stdout.write(f"conditional {role}: installed only when the configuration asks\n")
+        for package in packagelist.conditional_names(role, name):
+            sys.stdout.write(f"  {package}\n")
     return EXIT_OK
 
 
@@ -253,6 +263,16 @@ def _check(
         items = _collect(phases, deadman, family, modules)
     except packagelist.UnknownFamily as exc:
         return _reject(str(exc))
+    except errors.GuardenError as exc:
+        # A phase builds its items before `--check` asks any of them, and
+        # building them reads the host configuration — so a `[zram]` table that
+        # breaks a rule the table states is refused here, with the code it
+        # carries, rather than escaping as a traceback. `packages_items` already
+        # has a guard of its own for the same reason; this is the other half.
+        if exc.code == errors.REJECTED_INPUT:
+            return _reject(exc.message)
+        error(exc.message)
+        return EXIT_NOT_CONVERGED
     drifted = 0
     for item in items:
         if not item.holds():
@@ -270,7 +290,20 @@ def _apply(
         ready, reject = _prepare(phase, family)
         if reject is not None:
             return reject
-        for item in hostprep.items_for(phase, deadman, family, modules):
+        try:
+            phase_items = hostprep.items_for(phase, deadman, family, modules)
+        except packagelist.UnknownFamily as exc:
+            return _reject(str(exc))
+        except errors.GuardenError as exc:
+            # The same guard `_check` has, and for the same reason: a phase builds
+            # its items by reading the host configuration, and a `[zram]` table
+            # that breaks a rule the table states is a rejected input whether
+            # the mode is `--check` or `--apply`.
+            if exc.code == errors.REJECTED_INPUT:
+                return _reject(exc.message)
+            error(exc.message)
+            return EXIT_NOT_CONVERGED
+        for item in phase_items:
             if item.holds():
                 continue
             if ready:

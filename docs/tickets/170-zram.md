@@ -14,8 +14,9 @@ is refused by name, exactly as `weight:` and `environment:` are.
 **Blocked by:** 20 (`soil install` and `soil storage` are where this lands), and 130 for the
 cloud-init half
 
-**Status:** draft — the decisions below are not made, and each one is a real tradeoff rather
-than a detail
+**Status:** implemented on `ticket-170-zram`. The decisions are recorded below and
+carried into `docs/spec.md` §3.1, §4, §6.1 and `docs/sysadmin.md`, which is where a
+reader of the code is sent.
 
 ## Decide first
 
@@ -61,3 +62,57 @@ than a detail
 - [ ] With the knob removed, `/dev/zram0` is gone
 - [ ] A load test is **not** in this ticket: measuring that compression helps is an
       `assumptions` exercise for ticket 15, and the answer depends on the box
+
+## What was decided, and where it is recorded
+
+- **Which implementation.** `systemd-zram-generator`. It is the distribution's own, it is a
+  distribution package and therefore installable on a family nobody has tried, and it produces
+  its units through a systemd generator rather than shipping a hand-written one. `zram-tools` is
+  not used and the package list has no row for it.
+- **Algorithm and level.** `algorithm = "zstd"` is a closed set of one, and `level` is an
+  integer in zstd's own range of 1–22. **There is no named preset**, because the ticket is right
+  that "high" is not a value: a preset would have to state a level *and* a ratio, and the ratio
+  is a measurement of somebody else's memory. Which algorithm suits a box is the operator's.
+- **Device size.** `size_percent`, an integer percentage of this host's RAM, refused over 100.
+  Absolute sizes are not portable, and a percentage over 100 asks the generator for a device
+  larger than the memory behind it — which the generator itself only *warns* about
+  (`would require improbable compression ratio`), so refusing it is guarden's job rather than
+  the tool's. "What happens when it is set on a box that already has zram": the converge takes
+  the existing device down first, because `disksize` and `comp_algorithm` cannot be written to an
+  initialised device.
+- **Swap.** zram **is** swap, and that is the answer to the §8 question: a zram device is RAM,
+  so it does not move the free-space floor `FREE_LIMIT` reads and the retention story is
+  unaffected. What it does change is `vm.swappiness`, which joins `soil sysctl`'s canonical set —
+  and only when the knob is present.
+- **Interaction with `soil sysctl`.** `vm.swappiness = 180`, above 100, so the kernel prefers
+  the RAM-backed device over a disk swapfile and stops using disk while it has room. The
+  kernel's default of 60 would do the opposite and leave the device idle, which is the one thing
+  an operator who asked for it did not ask for.
+- **Converge in both directions.** A marker at `/var/lib/guarden/soil/zram` records that the
+  device is guarden's, because nothing else on the box says which of two zram devices guarden
+  made. Its absence with the knob absent is the teardown.
+
+### What could not be done as the ticket asks, and why
+
+- **"The chosen algorithm **and level** are read back from the running device."** The algorithm
+  is: `/sys/block/zram0/comp_algorithm` brackets the one in force. **The level is not, and cannot
+  be** — `algorithm_params` is `DEVICE_ATTR_WO` in the driver, so there is no sysfs read-back for
+  it and a check claiming one would be checking the file guarden wrote. What stands in for it is
+  that the device exists at all: a level the backend rejects fails `disksize_store` and leaves
+  nothing initialised, which the predicate does require. This is stated in spec §3.1 and in the
+  runbook rather than papered over.
+- **"A load test is not in this ticket."** Agreed and not attempted; it is ticket 15's
+  `assumptions` work and the answer is a property of the box.
+
+### The suites
+
+- `tests/t170-zram.sh` — the host, on the real machine: absent means absent, present means
+  converged, the device read back from the kernel, the second apply a no-op, the teardown, and
+  the two refusals. `fresh`, because it creates and removes a real block device.
+- `tests/t170-zram-parsers.py` (driven by `tests/t170-zram-parsers.sh`) — the knob's two exit
+  codes and the size arithmetic, under the seam's one exception for parsers whose failures are
+  invisible from outside.
+- `tests/t170-zram-refusals.sh` — `zram:` refused by name in all three vocabularies a
+  repository speaks.
+- `tests/t170-zram-userdata.sh` — the rendered document and `tools/golden-vm --print` agree, and
+  neither carries the generator.

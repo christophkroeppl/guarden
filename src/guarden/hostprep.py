@@ -33,7 +33,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
-from guarden import errors, packagelist, paths
+from guarden import errors, packagelist, paths, zram
 from guarden import hosttool as h
 from guarden.hosttool import Item, hostpath, lock
 
@@ -484,6 +484,21 @@ def packages_items(family: str | None = None) -> list[Item]:
         )
         for package in distribution_packages(family)
     ]
+
+    # The zram generator is the substrate's exception and the reason is the
+    # knob's: "absent means absent — no package". So the item is only built when
+    # the operator's own configuration asks for a device, and a host that never
+    # asked carries no item, installs nothing and reports nothing about zram.
+    if zram.knob(h.read_config(h.config_path())) is not None:
+        for package in packagelist.conditional_names(zram.PACKAGE_ROLE, family):
+            items.append(
+                Item(
+                    f"the {package} package is installed, because this host's configuration "
+                    f"asks for a zram device",
+                    lambda package=package: _installed(package, row),
+                    lambda package=package: _install_packages([package], row),
+                )
+            )
 
     def podlet_installed() -> bool:
         """Whether the pinned release is on this host, and it is the pinned one.
@@ -1031,12 +1046,24 @@ def _sysctl_value(key: str) -> str:
 
 
 def _sysctl_items() -> list[Item]:
-    interface = h.ingress_interface(h.read_config(h.config_path()) or h.shipped_config())
+    config = h.read_config(h.config_path()) or h.shipped_config()
+    interface = h.ingress_interface(config)
     wanted: list[tuple[str, str]] = [
         ("net.ipv4.ip_unprivileged_port_start", IP_UNPRIVILEGED_PORT_START),
         ("net.ipv6.conf.all.disable_ipv6", "1"),
         ("net.ipv6.conf.default.disable_ipv6", "1"),
     ]
+    if zram.knob(config) is not None:
+        # `vm.swappiness` is in the canonical set rather than beside it, and it
+        # is here **only when the knob is**, for the reason the rest of the phase
+        # is "never from a manifest" in reverse: a zram device is faster than a
+        # disk swap, so the kernel's default of 60 would keep preferring the disk
+        # and leave the device idle. Absent means absent down to the last sysctl,
+        # so a host with no device does not get soil writing a knob that only
+        # means something when the device exists. The value is guarden's and not
+        # the operator's: it is a property of having a compressed device at all,
+        # and one knob an operator cannot state is one knob they cannot break.
+        wanted.append(("vm.swappiness", zram.SWAPPINESS))
     if interface:
         # Scoped to the ingress interface and never to conf.all: the deny is
         # scoped to one interface because a packet DNATed to 127.0.0.1 that
@@ -1760,13 +1787,27 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             lambda: bool(_admin_user()),
             lambda: _record_admin_user(_invoking_user()),
         ),
+    ]
+
+    # The zram device, when the operator asked for one and when they did not.
+    # `zram.items` returns nothing at all for a host with no knob and no marker,
+    # which is what makes "absent means absent: no package, no unit, no config,
+    # no sysctl write, and `--check` reports nothing" a property of the shape
+    # rather than of a conditional in each of the five places it could have gone.
+    #
+    # **Before the probe, so the probe stays last.** Two suites assert that the
+    # probe is the last item in the phase by counting the drift lines on a host
+    # where everything else has converged, and an item appended after it would
+    # make that count a property of whether the knob was present.
+    items += zram.items(h.read_config(h.config_path()))
+    items.append(
         Item(
             "ingress.alias holds an address the probe measured; the edge does not "
             "start without it, and a wrong one answers every route with a 502",
             lambda: bool(_alias()),
             lambda: alias_probe(),
-        ),
-    ]
+        )
+    )
     return items
 
 
@@ -1969,8 +2010,10 @@ def what_for(phase: str) -> str:
         "packages": "the distribution's apt timers, the package index, the distribution "
                     "packages, and the one pinned podlet release",
         "storage": "btrfs layout, the snapper value set, root and home, the cleanup timer",
-        "sysctl": "route_localnet on the ingress interface, IPv6 off, the port threshold",
+        "sysctl": "route_localnet on the ingress interface, IPv6 off, the port threshold, "
+                  "and vm.swappiness when this host asked for a zram device",
         "firewall": "ferm, fail2ban, 10-framework.conf, 20-ingress-nat.conf, the dead-man timer",
-        "install": "guarden into /usr/lib/guarden, the two program users, the alias probe",
+        "install": "guarden into /usr/lib/guarden, the two program users, the alias probe, "
+                   "and the zram device when this host asked for one",
         "units": "the system units of the unprivileged programs",
     }[phase]

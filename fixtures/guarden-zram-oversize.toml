@@ -1,0 +1,40 @@
+# A host that asked for a compressed swap device and then asked for one larger
+# than the memory behind it.
+#
+# `size_percent = 150` is the case `systemd-zram-generator` itself only *warns*
+# about — it logs "would require improbable compression ratio" and creates the
+# device anyway — which is exactly why guarden refuses the value before writing
+# it. A machine cannot be asked for a device bigger than its own memory.
+[host]
+domain = "example.com"
+interface = ""
+admin_user = "operator"
+
+[ingress]
+alias = "192.0.2.1"
+publication_range = [20000, 32767]
+
+[network]
+backend = "pasta"
+pasta_options = [ "--map-gw" ]
+
+[build]
+lanes = 1
+
+[modules]
+enabled = ["gate", "homepage"]
+
+[zram]
+algorithm = "zstd"
+level = 3
+size_percent = 150
+
+[[environments]]
+name = "production"
+host_prefix = ""
+gated = true
+weight = 1000
+free_limit = 0.10
+keep_last = 7
+kind = "slot"
+fork_from = ""

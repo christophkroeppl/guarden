@@ -1,0 +1,66 @@
+# The shipped environment table (spec 3.1) with the one table that is absent by
+# default now present: this host asked for a compressed swap device.
+#
+# It is a fixture and not a constant, and it is a fixture rather than a
+# rewritten one so that a test does not have to edit a table to get past the one
+# value the probe writes. The alias below is a documentation address, and the VM
+# measures a real one (spec 7.1).
+#
+# `size_percent` is 25 rather than the more flattering 50 because the golden VM is
+# 8GiB and the runner caps each cut at 4GiB: a device of half a cut is a large
+# allocation the VM's own memory pressure does not need during a suite run. The
+# value is a percentage, so the arithmetic under test is identical either way.
+[host]
+domain = "example.com"
+interface = ""
+admin_user = "operator"
+
+[ingress]
+alias = "192.0.2.1"
+publication_range = [20000, 32767]
+
+[network]
+backend = "pasta"
+pasta_options = [ "--map-gw" ]
+
+[build]
+lanes = 1
+
+[modules]
+enabled = ["gate", "homepage"]
+
+[zram]
+algorithm = "zstd"
+level = 3
+size_percent = 25
+
+[[environments]]
+name = "production"
+host_prefix = ""
+gated = true
+weight = 1000
+free_limit = 0.10
+keep_last = 7
+kind = "slot"
+fork_from = ""
+
+[[environments]]
+name = "staging"
+host_prefix = "staging."
+gated = false
+weight = 100
+free_limit = "0.20"
+keep_last = 0
+kind = "slot"
+fork_from = "production"
+
+[[environments]]
+name = "preview"
+host_prefix = "preview."
+gated = false
+weight = 10
+free_limit = "0.20"
+keep_last = 0
+kind = "instance"
+fork_from = "staging"
+cap = 3

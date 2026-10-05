@@ -95,6 +95,24 @@ def family_names() -> tuple[str, ...]:
     return tuple(sorted(families()))
 
 
+def conditional_table() -> dict[str, dict]:
+    """Every family's optional row, keyed by role."""
+    return dict(_document().get("conditional", {}))
+
+
+def conditional_names(role: str, name: str | None = None) -> tuple[str, ...]:
+    """The packages a role needs on this family, or nothing.
+
+    A role is the package list's word for "only when somebody asked". The
+    substrate is unconditional because a guarden host cannot be one without it;
+    a role like the zram generator is installed only when the operator's own
+    configuration asks for the thing it provides, so a host that never asked
+    installs nothing.
+    """
+    family_name, _ = resolve(name)
+    return tuple(conditional_table().get(family_name, {}).get(role, []))
+
+
 def _os_release() -> dict[str, str]:
     """The host's own declaration of what it is, or nothing.
 

@@ -88,6 +88,13 @@ OWNED_KEYS = (
 # The refusal list (spec 6.3) in the vocabulary a hand-written quadlet file is
 # written in. A Compose file's spelling of the same requests is refused in
 # `compose.refuse`, before the converter ever sees it.
+#
+# `Sysctl=` is here for the same reason as `zram:` is refused in the Compose
+# vocabulary and `zram:` in the manifest: `vm.swappiness` and its neighbours are
+# the host's kernel knobs and `soil sysctl` converges them from the root-owned
+# guarden.toml, so a `Sysctl=` line is a repository stating a value the host
+# owns. It is the one way a unit source names a host knob at all, which is
+# exactly why it needs refusing by name rather than an "unknown key".
 REFUSED_DIRECTIVES = (
     "PodmanArgs",
     "BindPaths",
@@ -100,6 +107,7 @@ REFUSED_DIRECTIVES = (
     "Userns",
     "NoNewPrivileges",
     "Privileged",
+    "Sysctl",
 )
 
 LOOPBACK = "127.0.0.1"

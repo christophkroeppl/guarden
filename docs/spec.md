@@ -325,6 +325,26 @@ pasta_options = [ "--map-gw" ]   # the complete set guarden will run pasta with.
 [build]
 lanes = 1                        # concurrent builds; 1 is the default and the recommendation
 
+# [zram]                          # a compressed swap device. ABSENT by default, and
+                                 # its absence is the default rather than a value:
+                                 # with no [zram] table, `soil packages` installs no
+                                 # generator, `soil install` writes no configuration
+                                 # and creates no device, and `soil sysctl` says
+                                 # nothing about swappiness. An operator may ask for
+                                 # one on a box where swapping to disk thrashes, and
+                                 # the right compression is a machine-to-machine
+                                 # tradeoff guarden cannot make for them.
+# [zram]
+# algorithm = "zstd"               # zstd is the only algorithm offered; the level
+#                                  # trades CPU for ratio and 22 on a busy host costs
+#                                  # more than the memory it saves
+# level = 6                        # zstd runs 1-22; guarden offers no named preset,
+#                                  # because "high" is not a value
+# size_percent = 50                # a percentage of this host's RAM, and never over
+#                                  # 100: an absolute size is not portable and a
+#                                  # percentage over 100 asks for a device larger than
+#                                  # the memory backing it
+
 [modules]
 enabled = ["gate", "homepage"]
 
@@ -413,6 +433,43 @@ is refused with exit `1` and the reason named.
 release branch, and `hose poke <ref> <sha> [<environment>]` carries the choice. The environment
 is validated against that ref's allowed set and refused with exit `2` naming the set if it is not
 in it; a ref whose matching pattern grants several and which names none is refused with the set
+**`[zram]` is the one optional table, and it is absent on every host that has not been asked
+for a compressed swap device.** Its absence is the default rather than a default value: `soil
+packages` converges no zram package, `soil install` writes no configuration and creates no
+device, and `soil sysctl` does not name `vm.swappiness`. The implementation is
+`systemd-zram-generator`, the distribution's own, on the same argument as every other runtime
+dependency — no pip, no wheels, no third-party fetch — and `zram-tools` is not used. `algorithm`
+is `zstd` and only `zstd`; `level` is an integer in zstd's own range of 1–22 and guarden offers
+no named preset, because "high" is not a value; `size_percent` is a percentage of this host's
+RAM and never over 100, since an absolute size is not portable and a percentage over 100 asks
+for a device larger than the memory backing it — a value the generator itself only warns about,
+which is not good enough for something guarden is about to write.
+
+**The device is read back from the kernel and never from the file guarden wrote**, on the same
+rule as `ingress.alias` (§7.1): `/sys/block/zram0/comp_algorithm` brackets the algorithm in
+force, `disksize` is the size, and `swapon` reports the priority. The **level is the exception
+and the documents say so**: the driver declares `algorithm_params` write-only, so there is no
+sysfs read-back for a level, and a check that claimed one would be checking the file. What
+stands in for it is that the device exists at all, because a level the backend rejects fails
+`disksize_store` and leaves nothing initialised. The expected size is computed the way
+`systemd-zram-generator` computes it — `MemTotal` in MiB truncated, the percentage applied in
+floating point, truncated again, then the driver page-aligns — because any other arithmetic is a
+`--check` reporting drift forever against a device of exactly the right size.
+
+**zram is swap, and that answers §8.** A zram device is RAM, so it does not move the free-space
+floor `FREE_LIMIT` reads and the retention story is unaffected. It does change
+`vm.swappiness`, which therefore joins §6.1's canonical sysctl set with the same "never from a
+manifest" property — and only when the table is present, because absent means absent down to the
+last sysctl.
+
+**A converge that only ever creates cannot take down what it created**, so a marker under
+`/var/lib/guarden/soil/` records that the device is guarden's. Removing the table and re-running
+`--apply` swaps the device off, resets it, hot-removes it and deletes both files, which is the
+converge-in-both-directions property `soil sysctl` has. **A `zram:` key in a manifest is refused
+by name** in all three vocabularies a repository speaks — the manifest's own top level, a
+Compose service's keys, and a hand-written quadlet file's `Sysctl=` line — because a repository
+that could state a device would be a second place for it to be wrong.
+
 printed. "First match wins" decides *which set applies*, and nothing inside the set is decided by
 order — a rule that silently deployed the first track in a list would make a permission set
 behave like an assignment, which is the confusion the allowlist exists to avoid.
@@ -800,6 +857,15 @@ Validation rules:
   second `weedr service ingest` whose route host is already taken is exit `1` with the holder
   named, exactly as for a duplicate port (§1.2). The allocation lives in the host's
   `[route_hosts]` table, so it survives regeneration and two instances of one preview service
+- **A `zram:` key is refused specifically, in all three vocabularies a repository speaks.** It
+  is host configuration, it is in the root-owned `/etc/guarden/guarden.toml` (§3.1), and the
+  answer is never in a repository — the same shape and the same reason as `environment:` and
+  `weight:`. The refusal covers the manifest's own top level (and any block nested inside it),
+  a `zram:` or `swap:` key on a Compose service, and a `Sysctl=` line in a hand-written quadlet
+  file, because those are three parsers on three inputs and a refusal in one of them would leave
+  the door open in the vocabulary most developers write. `sysctls:` and `swappiness:` are refused
+  with them: `vm.swappiness` is the one real sysctl this design adds to the set `soil sysctl`
+  owns, and neither is a grant nor a request, so neither is anything a repository may state.
   cannot collide. Nothing about this is cooperative: a repository cannot take a name that is
   already serving, and a service that loses its host on removal has it released, so the name
   becomes available again.
@@ -1215,6 +1281,17 @@ still converge and the run still exits `1`.
   and records four things, none of which may be assumed:
 
   1. the gateway address the container sees in its own route table — this is what
+  **A `conditional` role in `packages/packages.toml` is converged by this phase and by nothing
+  else, and only when the operator's own configuration asks for the thing it provides.** The one
+  role today is `zram`, which carries `systemd-zram-generator`, and it is conditional because
+  §3.1's promise is "absent means absent — no package": a generator in the substrate list would
+  make that false on every host the list was copied onto. The drift line names the package *and*
+  the reason it is wanted, because on a host without the knob the same package is one nobody
+  needs. `tools/render-user-data` renders the substrate and the harness roles only and **not**
+  the conditional ones, because a machine being provisioned is not yet a configured host —
+  baking the generator into every golden-VM image would make the absence untestable on the one
+  machine whose job is to test it. The phase installs one the moment the knob is there, which is
+  the same path a real host takes.
      `ingress.alias` is set to, and it is a literal address, never podman's
      `host.containers.internal` token, because a rendered `AddHost=` has to survive a resolver
      that is not ours;
@@ -1240,6 +1317,14 @@ weedr service add <name[/ref]> --from <service>
 weedr service remove <name[/ref]>
 weedr service purge <name>                 # the only destructive verb; not on any sudoers rule
 weedr service gate <name>                  # evaluate the credential gate; change nothing else.
+  `ingress.alias` still matches the address the default route resolves to (§6.1). **It also
+  owns `vm.swappiness`, and only on a host whose `guarden.toml` carries a `[zram]` table
+  (§3.1).** A zram device is faster than a disk swap, so the kernel's default of 60 would keep
+  preferring the disk and leave the device idle — the one thing an operator who asked for it did
+  not ask for. The key is in the canonical set rather than beside it and, like every other key
+  here, is never from a manifest. It is **absent from the set on a host with no device**, because
+  absent means absent down to the last sysctl and a knob nothing on the box needs is a value
+  guarden should not be writing.
                                            # No [/ref]: the verdict is per SERVICE, because
                                            # every instance shares the service's secret store
 weedr service start|stop|restart <name[/ref]>   # start re-evaluates the gate
@@ -1292,6 +1377,20 @@ weedr project add <name> --repository <url> [--environments <mapping>]
 weedr project remove <name>
 weedr project keys <name> [--json]
 weedr project grant <name> <pubkey>
+  **It also converges the zram device, when the operator's `guarden.toml` carries a `[zram]`
+  table, and builds no zram item at all when it does not** (§3.1). "No item" is the mechanism,
+  not a conditional scattered through the phase: the device's configuration, its marker, and the
+  predicate that asks the kernel whether it holds are three items appended by one call, so a host
+  with no knob gets none of them and `--check` has nothing to say about zram. When the knob is
+  present, `--apply` swaps any existing device off, reloads the manager so the generator runs and
+  turns the configuration into `dev-zram0.swap`, and starts it — and it does so **without
+  depending on what the device was**, because neither `disksize` nor `comp_algorithm` can be
+  written to an initialised device, so a changed percentage converges only if the old one is torn
+  down first. When the knob has been *removed* and the marker is present, one item converges the
+  other direction: the device is swapped off, reset, hot-removed and both files deleted, which
+  is the property `sysctl` has and a create-only converge never can. The marker is what makes
+  that possible — nothing else on the box says which of two zram devices guarden made.
+
 weedr project revoke <name> <pubkey>
 ```
 

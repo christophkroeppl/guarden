@@ -28,6 +28,22 @@ lanes = 1
 [modules]
 enabled = ["gate", "homepage"]
 
+# A compressed swap device. This table is ABSENT by default and its absence is
+# the default rather than a value: with no [zram] here, `soil packages` installs
+# no generator, `soil install` writes no configuration and creates no device, and
+# `soil sysctl` says nothing about swappiness.
+#
+#   algorithm      zstd, and only zstd
+#   level          1-22; above about 6 the CPU cost outruns the memory it saves
+#   size_percent   a percentage of this host's RAM, and never over 100
+#
+# Add the block to ask for one and `soil install --apply` to converge it; remove
+# it again and the next `--apply` takes the device down.
+# [zram]
+# algorithm = "zstd"
+# level = 6
+# size_percent = 50
+
 [[environments]]
 name = "production"
 host_prefix = ""

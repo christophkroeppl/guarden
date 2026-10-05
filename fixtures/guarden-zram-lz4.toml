@@ -1,0 +1,41 @@
+# A host that asked for a compressed swap device with an algorithm guarden does
+# not offer.
+#
+# `lz4` is a real zram backend and a real tradeoff — it buys CPU and gives up
+# most of the ratio — and it is offered by neither systemd-zram-generator's
+# recommended set nor guarden. The point of the refusal is the message: the set
+# guarden offers is short and closed, so the choice between two is the
+# operator's to make on a machine rather than a default guarden picked.
+[host]
+domain = "example.com"
+interface = ""
+admin_user = "operator"
+
+[ingress]
+alias = "192.0.2.1"
+publication_range = [20000, 32767]
+
+[network]
+backend = "pasta"
+pasta_options = [ "--map-gw" ]
+
+[build]
+lanes = 1
+
+[modules]
+enabled = ["gate", "homepage"]
+
+[zram]
+algorithm = "lz4"
+level = 3
+size_percent = 25
+
+[[environments]]
+name = "production"
+host_prefix = ""
+gated = true
+weight = 1000
+free_limit = 0.10
+keep_last = 7
+kind = "slot"
+fork_from = ""
