@@ -64,6 +64,9 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 export GUARDEN_PREFIX=/
 stage_config guarden-measured.toml
 stage_poke myapp 9f2c1ab
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
 run soil install --apply
 assert_not_rejected
 run weedr service ingest myapp-staging --from poke myapp@9f2c1ab
@@ -81,9 +84,13 @@ registry=/var/lib/guarden/registry
 # that says it did not. Nothing else in this file can say it: the render tree the
 # renderer writes is elsewhere.
 home=/var/lib/guarden/services/myapp-staging/home
+# `loom` translated, and it did so as `guarden`: the units are under the service's
+# own home and nobody else's. What ADR-0012 forbids is the MUTATOR driving a
+# converter over repository input, and the tree that shows it did not is the
+# mutator's own render directory, which an unprivileged render never writes.
 assert_file_exists "$home/.config/containers/systemd"
-assert_file_missing "$home/.config/containers/systemd/web.container"
-assert_file_missing "$home/.config/containers/systemd/node.container"
+assert_file_missing /var/lib/guarden/lib/render/myapp-staging
+assert_file_has "$registry/myapp-staging.toml" 'service = "myapp-staging"'
 
 # The same, in the vocabulary a Compose file is written in: a `cap_add` in a
 # repository is refused by the renderer, and nothing about that refusal depends
