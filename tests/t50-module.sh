@@ -48,7 +48,8 @@ assert_file_exists /usr/lib/guarden/modules/gate/traefik-production/.guarden/ser
 # not installed yet, so it is available and not enabled.
 run weedr module list --json
 assert_exit 0
-assert_json available.0 '"gate"'
+assert_json available.0 '"auth"'
+assert_json available.1 '"gate"'
 assert_json enabled '[]'
 run weedr module list
 assert_exit 0
@@ -235,4 +236,5 @@ assert_file_has /etc/guarden/guarden.toml 'enabled = ["gate"]'
 run weedr module list --json
 assert_exit 0
 assert_json enabled.0 '"gate"'
-assert_json available.0 '"gate"'
+assert_json available.0 '"auth"'
+assert_json available.1 '"gate"'
