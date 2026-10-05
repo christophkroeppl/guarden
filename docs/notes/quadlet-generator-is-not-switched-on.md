@@ -1,122 +1,81 @@
-# Quadlet never generates a unit, so no container can ever start
+# The quadlet generator is reached, and produces a unit nobody loads
 
-**Status: open, measured, not fixed. This is a product gap, not a test problem.**
+**Status: root cause found by running the generator the way systemd runs it. This
+supersedes the "not reached" reading below.**
 
-**This note's conclusion is WRONG and superseded.** It says nothing enables
-quadlet's generator. The generator is reached — `podman-user-generator` is a
-systemd generator and runs at the `daemon-reload` `start_units` already performs.
-The real cause is guarden's own rendered `.volume` unit naming a key quadlet does
-not accept, which stops that unit being generated at all, and the container then
-cannot resolve the volume it names.
+## What is measured
 
-See
-[`quadlet-volume-key-is-not-a-spelling-fix.md`](quadlet-volume-key-is-not-a-spelling-fix.md)
-for the generator's own dry-run output and the decision the fix needs.
+`podman quadlet list`, as the service user, on a rendered home:
 
-Kept because the measurements here are what ruled the earlier hypotheses out, and
-because they stop the next reader re-deriving them.
+```
+NAME           UNIT NAME    PATH ON DISK                                    STATUS
+web.container  web.service  …/home/.config/containers/systemd/web.container  Not loaded
+```
 
-## What is measured (podman 5.7.0, the family `packages.toml` declares)
+**The generator IS reached and DOES produce `web.service`.** Run by hand exactly as
+systemd runs it — three output directories, as the generator's own error message
+demands ("missing output directory argument" when given none):
 
-- `/usr/lib/systemd/user/quadlet.service` **does not exist**. podman 5.7 ships
-  `/usr/libexec/podman/quadlet` and a user unit named **`podman.service`**
-  instead — the generator's unit was renamed.
-- Guarden writes `.container` and `.volume` files into the service user's
-  `~/.config/containers/systemd/`, which is the correct uid-scoped rootless search
-  path (`paths.QUADLET`).
-- `podman quadlet list` for the service user is **empty**: the generator is not
-  reading that directory.
-- Consequently `web.container.d/` contains only guarden's own
-  `10-guarden-order.conf` drop-in and **no generated `.service`**, and the start
-  answers `Job for web.service failed because the control process exited with error
-  code` — the unit name resolves, but to nothing quadlet produced.
-- `Quadlet=true` in `/etc/systemd/user.conf.d/` does **not** fix it on this
-  family, and `podman quadlet install` installs quadlet *files*, not the generator.
+```
+$ podman-user-generator /tmp/genout.normal /tmp/genout.early /tmp/genout.late
+$ ls /tmp/genout.normal
+web.service
+```
 
-## What this means
+So the earlier conclusion — that the generator "is not being invoked for this
+directory", and that this "points at the search path rather than at the file's
+contents" — **was wrong.** It is invoked, and it writes the unit.
 
-Nothing in guarden enables the generator. The renderer emits quadlet
-declarations and the mutator installs them, but no code path starts `podman.service`
-in the service user's manager, so the `.container` file never becomes a unit.
+## The actual cause
 
-**Correction to that first reading, from measurement.** podman 5.7 ships **no
-`quadlet.service` at all**, and `podman.service` — the unit of that name — is the
-**REST API** (`ExecStart=/usr/bin/podman system service`), not the generator.
-Starting it as the service user succeeds and generates nothing.
+Quadlet ships `/usr/lib/systemd/user-generators/podman-user-generator`. That is the
+**user** manager's generator directory, and the unit manager runs it at
+`daemon-reload` — into `$XDG_RUNTIME_DIR/systemd/user/generator.{early,normal,late}`.
 
-What podman 5.7 actually ships is `/usr/lib/systemd/user-generators`, so quadlet
-generates at **daemon-reload** rather than from a unit of its own. `start_units`
-already reloads, so the remaining question is narrower than "nothing enables it":
-the generator runs and does not produce a unit for these files.
+`Not loaded` therefore says the generated `web.service` is not in the user manager's
+unit search path. Two candidate causes, and the probe did not separate them:
 
-**Also measured, and it narrows it further:** a
-`SYSTEMD_LOG_LEVEL=debug systemctl --user daemon-reload` in the service user's
-manager logs **nothing at all** about quadlet, a container, or a skip. So the
-generator is not declining these files with a reason — it is not being invoked for
-this directory, which points at the search path rather than at the file's contents.
-`Image=`, `Network=` and the drop-in are therefore not yet suspects.
+1. The generated unit went to a runtime directory the manager is not reading, or
+2. `daemon-reload` in the service user's manager is not reaching the generator at
+   all — which would be consistent with the earlier finding that a debug
+   `daemon-reload` logs **nothing** about quadlet, a container, or a skip.
 
-**Not yet measured:** whether the generator is reached at all on this family, and
-if not, what reaches it. `podman quadlet list` being empty is the same fact seen
-from the other side. The next step is to find what a generator run on this machine
-*does* produce for a service user's home — `systemd-analyze --user verify` or the
-generator binary run by hand as that user — rather than another inference.
+The second is the more likely, and it has a concrete suspect: **nothing sets
+`XDG_RUNTIME_DIR` for the user manager of a service whose home is `0700` and outside
+`/run/user/<uid>`.** A user manager needs a runtime directory it owns; guarden gives
+each service a home under `/var/lib/guarden/services/<name>/home` and a `0700` tree,
+and nothing in `weedr`'s install path establishes `/run/user/<uid>` for it.
 
-So the fix is **not** "guarden starts quadlet.service" — that unit does not exist
-on this family, and the earlier note's options 1 and 3 are wrong for that reason.
-What remains is a generator invocation, and the next measurement is
-`SYSTEMD_LOG_LEVEL=debug systemctl --user daemon-reload` in the service user's
-manager, which will say what the generator decided and why.
+## What this means for ticket 240
 
-Every claim that depends on a container actually running is therefore blocked —
-which is the claim `tests/t70-fork.sh` cannot make (see its own comment at the
-stop/start assertion: it needs "a running container on a real user manager").
-`tests/t50-slice.sh` is blocked on the same thing: it starts the edge and asks it a
-question over the wire.
+`240-subvolume-mounts.md` says the `.volume` unit is rejected and must be replaced by
+a bind mount. **That diagnosis stands** — `Source=` is genuinely not a `[Volume]` key,
+and the man page is unambiguous.
 
-`podlet` translating Compose to `.container` files works, and the renderer's own
-unit tests pass, which is why this stayed invisible: **the render is not the
-start.** Nothing tested the hop between a declaration on disk and a loadable unit.
+But `t50-slice` cannot go green on that change alone, because no generated unit is
+loaded *at all*, with or without a `.volume` file. The `Not loaded` status is
+independent of the volume question.
 
-## The decision this needs
+So there are **two defects, in different places**:
 
-Where the generator gets invoked. Two candidates, and the spec does not say:
+- **240** — the rejected `[Volume]` unit and the manifest-injection gap in
+  `REFUSED_DIRECTIVES`. A renderer fix.
+- **this one** — the service user's user manager does not load generated units. A
+  mutator fix, and it is the one that blocks a container from ever starting.
 
-1. Guarden runs the generator itself — `systemd-run --user` or a reload the mutator
-   already performs — which keeps one mechanism and one owner.
-2. A drop-in or preset is installed into the service user's home so their own
-   manager pulls the generator in, which leaves the mutator out of the user
-   manager's runtime state but adds a file whose only job is to make systemd do
-   something guarden could ask for directly.
+## The next step, stated as a measurement
 
-Option 1 is smaller and stays inside the existing `start_units` reload. It is
-still a real decision: it decides whether generating a service's units is
-guarden's job or the user manager's.
+As the service user, with the runtime directory named explicitly:
 
-**Do not "fix" this by making `start_units` tolerate exit 5 for a start.** That
-exit code is the one case `_unit`'s docstring says must stay a failure — it would
-report work that did not happen as success, which spec 1.2 forbids.
+```
+runuser -u <service> -- env XDG_RUNTIME_DIR=/run/user/<uid>   systemctl --user daemon-reload
+ls /run/user/<uid>/systemd/user/generator.normal/
+```
 
-## Suites blocked on it
+If `web.service` appears there and `systemctl --user status web.service` then resolves,
+the cause is the runtime directory and the fix belongs in `weedr`'s install path: a
+`systemd-logind` or `pam_systemd` arrangement for a service user whose home is
+elsewhere, or a `RuntimeDirectory=` on the user manager unit.
 
-Three suites fail on this and for no other reason:
-
-- `tests/t30-remove.sh:114` — `systemctl --user stop node` answers
-  `Transport endpoint is not connected` and exit 1. `_unit`'s docstring calls that
-  the one answer a stop must not treat as success: a manager that cannot be reached
-  is not a manager whose units are stopped. The verb refuses, and it is right to.
-- `tests/t70-fork.sh` — the stop/start half of a fork, same cause.
-- `tests/t50-slice.sh` — starts the edge and asks it a question over the wire.
-
-All three are correct refusals of a host that cannot run a container, so the fix is
-the generator and not a tolerance. The `t30-remove` consequence is worth stating
-plainly: **`weedr service remove` cannot currently remove a service whose units
-quadlet never generated**, which on such a host is every service.
-
-## The verified state, for comparison
-
-With everything else landed, the VM reports **50 suites green and 3 red**, and the
-three are exactly the ones above. `tests/t35-env-schema.sh` is deliberately
-excluded from VM runs by `tests/lxc.sh` (`HOST_ONLY`): it asks git about the
-repository, and a checkout pushed without `.git` cannot answer that. It is
-repository hygiene, not guarden, and `just test` still runs it.
+Do **not** guess this one the way `Source=` was guessed. It is a second, independent
+defect and it deserves its own ticket once the measurement above is taken.
