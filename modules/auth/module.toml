@@ -1,0 +1,18 @@
+name = "auth"
+requires = []
+
+[[services]]
+# The auth service is a service like any other: its own user, its own home,
+# its own quadlet unit directory, in a gated track because its credentials are
+# the ones worth gating. It is reachable through the edge by a `routes:` entry
+# in its own shipped manifest, so it declares no forwarded port of its own and
+# is not a control surface.
+service = "auth-production"
+
+[[switches]]
+# `roots` is the program this module switches on, and it is the existing one:
+# a route declaring `auth: true` is rendered by the program that already renders
+# routes. There is no second renderer and no per-module code path — the whole
+# connection between this module and the middleware is the one root-owned
+# marker file.
+program = "roots"

@@ -17,10 +17,20 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from guarden import errors, unitsource
+from guarden import conf, errors, names, paths, registry, unitsource, users
 
 ARGUMENT = re.compile(r"^--entryPoints\.(?P<name>[A-Za-z0-9_-]+)\.(?P<rest>.+)$")
 ADDRESS = re.compile(r"^:(?P<port>\d+)$")
+
+# `/etc/guarden/edge/auth-provider`: the one file connecting the auth module to
+# `roots`. The middleware is defined in a file of its own rather than inside
+# every rendered route file, because a route with no `auth:` must render byte for
+# byte what it rendered before — a definition in the template would be in all of
+# them, and the file provider merges the directory so one definition serves all.
+MARKER_NAME = "auth-provider"
+MARKER = paths.ETC_GUARDEN / "edge" / MARKER_NAME
+MARKER_MODE = 0o640
+MIDDLEWARE = "guarden-forward-auth"
 
 
 @dataclass
@@ -171,3 +181,92 @@ def routing_entrypoints(found: dict[str, Entrypoint]) -> list[str]:
         for entry in found.values()
         if not entry.redirect and not entry.api and entry.port
     ]
+
+
+def write_marker(service: str) -> None:
+    """Write `/etc/guarden/edge/auth-provider`, `0640 root:guarden`.
+
+    Written once, by `weedr module add auth`, and by nothing else: not by a
+    service, not by a manifest, not by a poke and not by a later sync. The
+    renderer reads it and never creates it, so a marker that is missing is a
+    host that has no auth provider rather than a file it is about to get.
+    """
+    conf.write_file(MARKER, f"{service}\n", MARKER_MODE, (0, users.group_id("guarden")))
+
+
+def read_marker() -> str | None:
+    """The service name the marker names, or `None` when there is no marker.
+
+    Absent is not an error here: the module not being installed is the warning
+    path, and a caller that wants the refusal asks `provider`.
+    """
+    try:
+        text = MARKER.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise errors.GuardenError(
+            f"{MARKER} could not be read: {exc.strerror}", errors.HOST_NOT_AS_ASSUMED
+        ) from exc
+    return text.strip()
+
+
+def provider(config) -> str:
+    """The auth service named by the marker, validated, or exit `1`.
+
+    **Fail-closed and before any configuration is written.** The name must be a
+    well-formed service name, must resolve to a service that exists, and that
+    service must be in a track with `gated = true`. A caller that gets a name
+    back can render a rule aimed at it; a caller that gets an exception writes
+    nothing at all, so the routes that were working keep working.
+
+    A marker naming nothing is exit `1` and not exit `2`: the marker is a
+    root-owned file on the host, so it is the host and not an input a caller
+    supplied.
+    """
+    name = read_marker()
+    if name is None:
+        raise errors.GuardenError(
+            f"{MARKER} does not exist, and it names the service `auth: true` routes are "
+            f"aimed at; `weedr module add auth` writes it",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if not names.NAME_RE.match(name):
+        raise errors.GuardenError(
+            f"{MARKER} names {name!r}, which is not a service name; it holds one service "
+            f"name and nothing else",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    record = registry.load(name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{MARKER} names the service {name!r}, and no service by that name exists on "
+            f"this host; `weedr service list` reports the services that do",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    track = config.track(record.environment)
+    if track is None:
+        raise errors.GuardenError(
+            f"{MARKER} names the service {name!r}, whose environment {record.environment!r} "
+            f"names no track in {paths.GUARDEN_TOML}; the tracks are: "
+            f"{names.known_tracks(list(config.tracks)) or 'none'}",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if not track.gated:
+        raise errors.GuardenError(
+            f"{MARKER} names the service {name!r}, which is in the track {track.name!r} and "
+            f"that track is not gated; an auth provider behind the same gate as the things it "
+            f"protects is no gate at all",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return name
+
+
+def marker_is_current(service: str) -> bool:
+    """Whether the marker already names `service`, so the write can be skipped.
+
+    Idempotence in the mutator rather than in the filesystem: `weedr module add`
+    is run twice on a host that converged, and a rewrite of an identical file
+    would change its mtime for no reason.
+    """
+    return read_marker() == service

@@ -293,3 +293,33 @@ def listing(config) -> dict[str, list[str]]:
         "enabled": [name for name in config.modules],
         "available": shipped,
     }
+
+
+AUTH_MODULE = "auth"
+
+
+def auth_provider(module: Module) -> str | None:
+    """The service a `auth: true` route is put behind, from this module's services.
+
+    It is the module's own service and never a name in its file: a module
+    declares services, and the marker names one of them, so the marker is
+    derived rather than another value a module could state.
+    """
+    if module.name != AUTH_MODULE or not module.services:
+        return None
+    return module.services[0].name
+
+
+def write_auth_provider(module: Module) -> str | None:
+    """Write the marker, once, and only for the auth module.
+
+    Called from `weedr module add` and from nothing else — not from a service
+    install, not from a render, not from a sync. A module that is not `auth`
+    returns without touching the file, so adding `gate` cannot overwrite it and
+    a re-add of a module that has not changed rewrites nothing.
+    """
+    service = auth_provider(module)
+    if service is None or edgeconf.marker_is_current(service):
+        return None
+    edgeconf.write_marker(service)
+    return service

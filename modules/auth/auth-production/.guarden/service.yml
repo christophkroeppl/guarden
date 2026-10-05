@@ -1,0 +1,24 @@
+# The auth service, as a service: one user, one home, one unit directory.
+#
+# No volumes and no `state:`: a session or a key cache is not worth a snapshot,
+# and a forward-auth provider that owned its own key material would be a secret
+# outside the credential materialiser.
+#
+# The route is how sign-in is reached, and it is an ordinary `routes:` entry —
+# the edge still holds 80 and 443 and forwards them, and it dials this service's
+# loopback publication on the label `auth`.
+#
+# **`auth: true` is declared here on purpose.** A provider behind itself cannot
+# answer its own sign-in page, and the fix for that is not "remember not to
+# declare it": it is that the renderer refuses the rule on the provider's own
+# route whatever the manifest says. Shipping the declaration is what keeps that
+# rule honest — the one manifest in the tree that asks for the middleware and
+# must not get it.
+project: auth
+units: .guarden/quadlet/
+
+routes:
+  - container: auth
+    port: 9000
+    host: auth
+    auth: true

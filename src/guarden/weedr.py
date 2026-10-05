@@ -732,6 +732,9 @@ def _install_module(module: modules.Module, config) -> int:
             sys.stdout.write(f"{entry.name} may bind {allowed}\n")
         units.report(units.install(source, entry.name))
     _edge_group(module)
+    provider = modules.write_auth_provider(module)
+    if provider:
+        sys.stdout.write(f"auth provider {provider} in {edgeconf.MARKER}\n")
     firewall.print_diff(firewall.install(config))
     firewall.load_set()
     _edge_directory(module)

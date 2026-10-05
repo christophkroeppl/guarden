@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from guarden import cli, conf, edgeconf, errors, paths, render
+from guarden import cli, conf, edgeconf, errors, paths, registry, render
 from guarden import config as config_mod
 from guarden import modules as modules_mod
 
@@ -24,16 +24,19 @@ GROUPS = (("sync", "render every service's routes into the edge's directory", No
 
 TEMPLATE = "edge-routes.yml.j2"
 EXTENSION = ".yml"
+FORWARD_AUTH = f"_{edgeconf.MIDDLEWARE}{EXTENSION}"
 
 EPILOG = """\
 `roots sync` writes one file per service into the edge's configuration
 directory and nowhere else. The edge reads that directory, so a route change
 appears without a restart.
 
-With the auth module installed, a route declaring `auth: true` gets the
-forward-auth rule aimed at the service named in /etc/guarden/edge/auth-provider.
-With it not installed, `roots` emits the route without a middleware and writes
-one warning naming the service and the route, on every sync.
+With the auth module installed, /etc/guarden/edge/auth-provider names the
+service a route declaring `auth: true` is put behind, and roots validates that
+name on every sync: it must be a service that exists in a track with
+`gated = true`, and anything else is exit 1 with nothing written at all.
+With the module not installed, roots emits the route without a middleware and
+writes one warning naming the service and the route, on every sync.
 """
 
 
@@ -68,14 +71,23 @@ def _router(service: str, route: dict) -> str:
     return f"{service}-{route.get('label', route.get('host', 'route'))}"
 
 
-def render_service(service: str, routes: list[dict], entrypoints: list[str]) -> str:
+def render_service(service: str, routes: list[dict], entrypoints: list[str],
+                   provider: str | None) -> str:
+    """One service's routes, as the file provider reads them.
+
+    A route carries the middleware only when it asked for it, there is a
+    provider to ask for it from, and it is not the provider's own route. The
+    provider's own route is the lockout this excludes: a sign-in page behind
+    itself cannot be reached, whatever its manifest declares.
+    """
     rows = [
         {
             "router": _router(service, route),
             "rule": f"Host(`{route.get('host', '')}`)",
             "entrypoints": entrypoints,
             "target": f"http://{route.get('target', '')}",
-            "middleware": bool(route.get("auth")),
+            "middleware": bool(route.get("auth")) and provider is not None
+            and service != provider,
         }
         for route in routes
     ]
@@ -108,6 +120,90 @@ def main(argv: list[str] | None = None) -> int:
         return failure.code
 
 
+def provider_for(config) -> str | None:
+    """The auth service a `auth: true` route is put behind, or `None`.
+
+    The module not being enabled is `None` and not an error: the ticket makes an
+    absent provider a warning on every sync rather than a failure, because a
+    host without the auth module is a host whose routes were never protected and
+    making `roots` fail would break the edge on top of it.
+
+    The module being enabled and the marker being unusable IS an error, raised
+    from `edgeconf.provider` and caught by `main` as exit 1 with nothing
+    written.
+    """
+    if "auth" not in config.modules:
+        return None
+    return edgeconf.provider(config)
+
+
+def _warnings(routes: dict[str, list[dict]], provider: str | None) -> list[str]:
+    """One `warning:` line per route that asked for the middleware and did not
+    get it, every sync.
+
+    Repeated rather than once-ever on purpose: a warning somebody scrolled past
+    is the same as no warning at all. There is no provider's-own-route case to
+    skip: with no provider named, no route is the provider's.
+    """
+    if provider is not None:
+        return []
+    out: list[str] = []
+    for service, entries in routes.items():
+        for route in entries:
+            if not route.get("auth"):
+                continue
+            out.append(
+                errors.warn(
+                    f"{service}: the route {_router(service, route)} declares `auth: true` "
+                    f"and the auth module is not installed, so it is emitted without a "
+                    f"middleware"
+                )
+            )
+    return out
+
+
+def provider_publication(provider: str) -> int:
+    """The loopback publication the provider's own sign-in page is reached on.
+
+    Read from the provider's own route slice rather than guessed from its
+    registry: the slice says which container serves the route, and a provider
+    with two containers would otherwise be aimed at whichever publication sorted
+    first. A registry with no entry for it at all is exit `1` naming the service,
+    because a forward-auth rule aimed at port 0 answers nothing and looks
+    configured.
+    """
+    slice_path = paths.SHARED / provider / "routes.toml"
+    for route in conf.read_toml(slice_path).get("routes") or []:
+        publication = route.get("publication")
+        if isinstance(publication, int) and not isinstance(publication, bool) and publication:
+            return publication
+    record = registry.load(provider)
+    held = sorted(set(record.publication.values())) if record is not None else []
+    if held:
+        return held[0]
+    raise errors.GuardenError(
+        f"the auth provider {provider} holds no publication, so a route put behind it would "
+        f"be aimed at nothing; `weedr service list` reports the publications a service holds",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
+def forward_auth(provider: str) -> str:
+    """The middleware definition, aimed at the provider's own publication.
+
+    Forward-auth is one request to the provider, answered with a redirect to its
+    sign-in page or with 2xx carrying the header, so the address is
+    `<name>:<publication>` — the same form every route target uses (spec 7.3),
+    because the edge resolves the name through the `AddHost=` entry loom wrote
+    and a loopback address would be the host's, which a container does not share.
+    """
+    return render.render_template(
+        "edge-forward-auth.yml.j2",
+        middleware=edgeconf.MIDDLEWARE,
+        address=f"{provider}:{provider_publication(provider)}",
+    )
+
+
 def sync() -> int:
     config = config_mod.load()
     entrypoints = _entrypoints(config)
@@ -117,27 +213,29 @@ def sync() -> int:
             f"the enabled modules are: {', '.join(config.modules) or 'none'}",
             errors.HOST_NOT_AS_ASSUMED,
         )
+    provider = provider_for(config)
     routes = slices()
-    written: set[str] = set()
-    printed: list[str] = []
-    warnings: list[str] = []
-    for service, entries in routes.items():
-        write(service, render_service(service, entries, entrypoints))
-        written.add(file_name(service))
-        printed.append(f"{service} {len(entries)} routes")
-        if "auth" not in config.modules:
-            for route in entries:
-                if route.get("auth"):
-                    warnings.append(
-                        errors.warn(
-                            f"{service}: the route {_router(service, route)} declares "
-                            f"`auth: true` and the auth module is not installed, so it is "
-                            f"emitted without a middleware"
-                        )
-                    )
+    # **The whole plan is rendered before the first byte is written**, after
+    # `provider_for` has refused a marker that does not hold. A validator that
+    # writes the routes and then complains has already broken the routes that
+    # were working, which is the one outcome this exists to prevent.
+    plan = [
+        (service, render_service(service, entries, entrypoints, provider))
+        for service, entries in routes.items()
+    ]
+    auth_body = forward_auth(provider) if provider else None
+    written = {file_name(service) for service, _ in plan}
+
+    for service, body in plan:
+        write(service, body)
+    if auth_body is not None:
+        conf.write_file(paths.EDGE_DYNAMIC / FORWARD_AUTH, auth_body, 0o644)
+        written.add(FORWARD_AUTH)
+    printed = [f"{service} {len(routes[service])} routes" for service, _ in plan]
     for name in sweep(written):
         printed.append(f"removed {name}")
-    for line in warnings:
+
+    for line in _warnings(routes, provider):
         sys.stderr.write(line + "\n")
     for line in printed:
         sys.stdout.write(line + "\n")

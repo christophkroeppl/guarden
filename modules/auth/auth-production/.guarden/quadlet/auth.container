@@ -1,0 +1,18 @@
+[Unit]
+Description=the auth provider
+
+[Container]
+# traefik's own forward-auth, which is what "forward-auth" names: one request
+# on the middleware's address, answered with a redirect to the sign-in page or
+# with 2xx carrying the header. It is an ordinary service in a gated track and
+# nothing about it is wired into any application — the renderer and the edge are
+# the only things that know it exists.
+Image=docker.io/traefik/forward-auth:v2.7.1
+# The three settings the middleware address and the header carrying the verdict
+# are made of. The address is the provider's own loopback publication inside its
+# container, and it is the same string `roots` puts in the middleware definition,
+# so the two cannot drift apart silently: one names the service and its
+# publication, the other names the port inside the container.
+Environment=TRAEFIK_FORWARD_AUTH_ADDRESS=http://127.0.0.1:9000/verify
+Environment=TRAEFIK_FORWARD_AUTH_TRUST_FORWARD_HEADER=true
+Environment=TRAEFIK_FORWARD_AUTH_AUTH_RESPONSE_HEADERS=X-Guarden-Authenticated-User
