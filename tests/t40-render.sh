@@ -166,20 +166,7 @@ assert_exit 0
 # the seam, of the same kind as GUARDEN_PREFIX and no wider: it can only change
 # the bytes a render produces.
 mkdir -p "$GUARDEN_FIXTURES/templates"
-cp "$GUARDEN_ROOT/src/guarden/templates/quadlet-container.j2" \
-    "$GUARDEN_FIXTURES/templates/quadlet-container.j2"
-cp "$GUARDEN_ROOT/src/guarden/templates/quadlet-volume.j2" \
-    "$GUARDEN_FIXTURES/templates/quadlet-volume.j2"
-cp "$GUARDEN_ROOT/src/guarden/templates/quadlet-order-dropin.j2" \
-    "$GUARDEN_FIXTURES/templates/quadlet-order-dropin.j2"
-cp "$GUARDEN_ROOT/src/guarden/templates/guarden-order.target.j2" \
-    "$GUARDEN_FIXTURES/templates/guarden-order.target.j2"
-cp "$GUARDEN_ROOT/src/guarden/templates/guarden.env.j2" \
-    "$GUARDEN_FIXTURES/templates/guarden.env.j2"
-cp "$GUARDEN_ROOT/src/guarden/templates/shared-routes.toml.j2" \
-    "$GUARDEN_FIXTURES/templates/shared-routes.toml.j2"
-cp "$GUARDEN_ROOT/src/guarden/templates/shared-schema.toml.j2" \
-    "$GUARDEN_FIXTURES/templates/shared-schema.toml.j2"
+cp -r "$GUARDEN_ROOT/src/guarden/templates/." "$GUARDEN_FIXTURES/templates/"
 export GUARDEN_TEMPLATES=$GUARDEN_FIXTURES/templates
 run loom render "$project" --service app-production --out "$render"
 assert_exit 0
