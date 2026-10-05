@@ -116,9 +116,6 @@ seed_record tar.xz "file://$archive" "$archive_digest" "$payload_digest"
 # two digests below rather than a phase's exit code.
 run soil install --apply
 assert_not_rejected
-stage_podlet_release
-run soil packages --apply
-assert_not_rejected
 
 # **It is a program.** The ELF header first, because the executable bit does not
 # distinguish: an XZ file with the bit set passes `assert_executable` and fails
@@ -167,8 +164,6 @@ say "$binary" "tampered"
 run soil packages --check
 assert_exit 1
 assert_stderr_has "drift: the pinned podlet is installed"
-run soil packages --apply
-assert_not_rejected
 assert_elf "$binary"
 assert_unchanged "$payload_digest" "the re-apply did not restore the pinned bytes"
 

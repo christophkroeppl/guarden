@@ -13,7 +13,7 @@
 . "$(dirname "$0")/lib.sh"
 
 assert_verbs soil packages storage sysctl firewall install units list
-assert_verbs weedr service secret port pin module project
+assert_verbs weedr service secret port pin module project firewall
 assert_verbs loom render check
 assert_verbs roots sync
 assert_verbs twig sync

@@ -104,9 +104,11 @@ stage_tree() {
 
 stage_tree qapp 9f2c1ab
 
-# This deploy fails — the service does not exist and this host has no installed
-# mutator for `furrow` to reach — and the request keeps its file and the reason.
-# A queue that dropped a failure would be a queue nobody could read.
+# The deploy fails for a reason this suite owns: the service is on a gated track
+# and nothing has planted the credential the gate requires, so the verb refuses and
+# the request KEEPS its file and its reason. A queue that dropped a failure would be
+# a queue nobody could read, and the file must survive because line 168 re-queues
+# this very request.
 run furrow deploy qapp-production --from poke qapp@9f2c1ab
 assert_exit 1
 assert_one_diagnostic "error:"

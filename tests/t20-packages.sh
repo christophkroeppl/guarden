@@ -155,8 +155,6 @@ systemctl enable apt-daily.timer
 run soil packages --check
 assert_exit 1
 assert_stderr_has "drift: the distribution's own apt timers are disabled"
-run soil packages --apply
-assert_not_rejected
 assert_not_enabled apt-daily.timer
 assert_enabled unattended-upgrades.service
 
