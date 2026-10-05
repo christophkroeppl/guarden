@@ -125,7 +125,8 @@ assert_json services.0.instances.0.ref '"feature-login"'
 # from rather than sitting empty.
 assert_json services.0.instances.0.seed.data.service '"myapp-staging"'
 assert_json services.0.instances.0.seed.data.volume '"data"'
-assert_json services.0.volumes.0.config '"myapp-preview-feature\\x2dlogin-data"'
+assert_json services.0.volumes.0.config null
+assert_json services.0.instances.0.volumes.0.config '"myapp-preview-feature\\x2dlogin-data"'
 
 # The field set is closed, so a field that is not in it is not there. `removed` is
 # not: a removed service has no registry entry for an object to hang on, and the

@@ -141,17 +141,23 @@ def _service_object(record, invariants: list[str]) -> dict:
                 "ref": instance.ref,
                 "created": instance.created,
                 "seed": {name: seed.to_document() for name, seed in instance.seed.items()},
+                "volumes": [
+                    _volume_object(record, volume, escaped)
+                    for volume in record.volume_list()
+                ],
             }
-            for _, instance in sorted(record.instances.items())
+            for escaped, instance in sorted(record.instances.items())
         ],
         "gate": dict(record.gate) if record.gate is not None else None,
         "warnings": warnings,
     }
 
 
-def _volume_object(record, volume) -> dict:
+def _volume_object(record, volume, escaped_ref: str | None = None) -> dict:
     moved = _removed_path(record.service, volume.name)
     config_name = volume.config
+    if config_name is None and escaped_ref:
+        config_name = paths.snapper_config(record.service, volume.name, escaped_ref)
     counts = snapper.read(config_name) if config_name else None
     return {
         "name": volume.name,
