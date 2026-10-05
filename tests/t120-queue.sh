@@ -99,16 +99,28 @@ stage_tree() {
        "$staged/.guarden/service.yml"
     cp "$GUARDEN_ROOT/fixtures/projects/routed/.guarden/quadlet/web.container" \
        "$staged/.guarden/quadlet/web.container"
+    cp "$GUARDEN_ROOT/fixtures/projects/quadlet-app/.guarden/.env.schema" \
+       "$staged/.guarden/.env.schema"
+    printf 'schema: .guarden/.env.schema\n' >> "$staged/.guarden/service.yml"
     chmod -R a+rX "$staged"
 }
 
 stage_tree qapp 9f2c1ab
 
-# The deploy fails for a reason this suite owns: the service is on a gated track
-# and nothing has planted the credential the gate requires, so the verb refuses and
-# the request KEEPS its file and its reason. A queue that dropped a failure would be
-# a queue nobody could read, and the file must survive because line 168 re-queues
-# this very request.
+# The request was carried out, so it is not on disk: a queue that kept what it had
+# already done would re-run it. This asserted a FAILURE once — "this host has no
+# installed mutator for furrow to reach" — which was this suite's own missing
+# precondition, and with guarden installed the deploy succeeds.
+#
+# The other half is twenty lines up: an empty staged tree refuses, and THAT request
+# keeps its file, which is the pair that makes the queue readable either way.
+# The request for this service and sha is on disk and readable after a REFUSAL. It
+# used to assert a failure for a reason this suite did not own — "this host has no
+# installed mutator for furrow to reach", which was a missing precondition and is
+# now installed. The refusal is the gate's instead: `production` is gated, the
+# staged manifest declares a required sensitive key, and nothing plants it. The
+# request is enqueued BEFORE the gate runs, so this is the case where the file must
+# survive — the one an operator reads at three in the morning.
 run furrow deploy qapp-production --from poke qapp@9f2c1ab
 assert_exit 1
 assert_one_diagnostic "error:"
