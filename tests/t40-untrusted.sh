@@ -163,7 +163,9 @@ refuse_directive "HostUsers" "HostUsers=keep-id"
 refuse_directive "Rootfs" "Rootfs=/"
 refuse_directive "BindReadOnlyPaths" "BindReadOnlyPaths=/etc/shadow"
 refuse_directive "BindPaths" "BindPaths=/var/lib/postgresql/data:/data"
-refuse_directive "Mounts" "Mounts=type=bind,src=/,destination=/host"
+# `Mount` and not `Mounts`: quadlet's key is `Mount` and its long form spells the
+# source `source=`, so the old spelling asked a question about no key at all.
+refuse_directive "Mount" "Mount=type=bind,source=/,destination=/host"
 refuse_directive "NoNewPrivileges" "NoNewPrivileges=no"
 refuse_directive "Privileged" "Privileged=yes"
 

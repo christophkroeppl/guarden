@@ -111,13 +111,13 @@ _declaration_of() {
     sed -n 's/^# machine: //p' "$1" | head -n 1
 }
 
-_needs_fresh() {
+_shares_machine() {
     local path=$1 declared
     declared=$(_declaration_of "$path")
     case "$declared" in
-        '') return 0 ;;
-        fresh) return 0 ;;
-        shared) return 1 ;;
+        '') return 1 ;;
+        fresh) return 1 ;;
+        shared) return 0 ;;
         *)
             die "${path##*/} declares '# machine: $declared'; it is 'fresh' or 'shared', and a suite that says neither gets a machine of its own"
             ;;
@@ -659,10 +659,10 @@ cmd_run() {
         elif [ "$fresh" = 1 ]; then
             want_fresh=1
             machine="fresh-$slot"
-            _needs_fresh "$file" && overridden=$((overridden + 1))
+            _shares_machine "$file" && overridden=$((overridden + 1))
         else
             want_fresh=1
-            _needs_fresh "$file" && want_fresh=0
+            _shares_machine "$file" && want_fresh=0
             if [ "$want_fresh" = 1 ]; then
                 machine="fresh-$slot"
             else
