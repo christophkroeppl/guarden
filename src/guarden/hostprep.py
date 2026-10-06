@@ -87,12 +87,25 @@ def distribution_packages(family: str | None = None) -> tuple[str, ...]:
     """The packages this host's family needs, and the only list of them."""
     return packagelist.package_names(family)
 
-# The one fetch from outside a distribution repository. Its version, the artefact's
-# SHA256 and the installed program's SHA256 are recorded in the repository and
-# verified on install, and there is no version of guarden that fetches an unpinned
-# artefact.
-PODLET_RECORD_NAME = "podlet.release"
-PODLET_RECORD = ("etc", "guarden", PODLET_RECORD_NAME)
+# Every fetch from outside a distribution repository, and the shape all of them
+# take (ADR-0015). A pin is a url and two digests: the artefact's, compared in
+# the fetch temporary before anything is unpacked out of it, and the program's,
+# re-read on every `--check` because the artefact is not kept. The mechanism is
+# named for nothing in particular, because a second pinned binary reuses all of
+# it and a second copy of a verified fetch is two places to get the property
+# wrong.
+#
+# The pin file is `<name>.release` and the fetch temporary is `<name>.fetch`.
+# Both are the artefact's own name, because two artefacts on one host are two
+# files, and a name they shared would be one file overwritten by whichever of
+# them ran last.
+ARTEFACT_RECORD_SUFFIX = ".release"
+ARTEFACT_FETCH_SUFFIX = ".fetch"
+
+# One artefact's own name. Every function below takes the name as an argument
+# rather than reading one out of this module, so the second pinned artefact is a
+# name at a call site and not an edit to the mechanism.
+PODLET = "podlet"
 
 # The record carries one row per host architecture rather than one url, because a
 # single url is a pin that cannot be correct on any host but the machine it was
@@ -102,29 +115,31 @@ PODLET_RECORD = ("etc", "guarden", PODLET_RECORD_NAME)
 # `platform.machine()` picks the row, and both spellings of each architecture are
 # accepted because a pin written on an amd64 machine says `x86_64` and one that
 # calls itself `amd64` is the same machine. See the record's own comment.
-_PODLET_MACHINES = {
+_ARTEFACT_MACHINES = {
     "x86_64": "x86_64",
     "amd64": "x86_64",
     "aarch64": "aarch64",
     "arm64": "aarch64",
 }
 
-# What an artefact may be. A closed set of two, because the unpack reads the
-# archive as the format says it is and a format nobody has looked at is a format
-# nobody can claim is unpacked safely.
-PODLET_FORMATS = ("tar.xz", "zip")
+# What an artefact may be. A closed set, because the unpack reads the archive as
+# the format says it is and a format nobody has looked at is a format nobody can
+# claim is unpacked safely. `raw` is the vendor publishing the program itself with
+# no archive around it: there is nothing to unpack, so the reader is the identity
+# and the artefact's digest and the program's are the same number.
+ARTEFACT_FORMATS = ("tar.xz", "zip", "raw")
 
 # The four fields a row must carry, and the order a diagnostic names the first
 # missing one in. Both digests are required: one is the artefact's, checked before
 # anything is unpacked out of it, and one is the program's, re-read on every
 # `--check` because the artefact is not kept.
-PODLET_FIELDS = ("format", "url", "sha256", "binary_sha256")
+ARTEFACT_FIELDS = ("format", "url", "sha256", "binary_sha256")
 
-# The temporary the fetch lands in, a sibling of the installed program rather
-# than a path under /tmp: its digest is compared from there, before anything is
-# unpacked out of it, and a file another process could see is not where that
-# happens.
-PODLET_FETCH = "podlet.fetch"
+# Every artefact this host installs a pin for, in the order the phase installs
+# them. A second name here is a second pinned artefact and nothing else: the
+# fetch, the digest comparison and the unpack are the functions below, and they
+# take the name rather than being written once per artefact.
+PINNED_ARTEFACTS = (PODLET,)
 
 # spec 6.1: the kernel owns the public ports and nothing unprivileged binds
 # below 1024. Raising the threshold to the kernel default is a tightening;
@@ -223,18 +238,27 @@ def _installed(package: str, row: dict) -> bool:
     return packagelist.is_installed(package, row)
 
 
-def _podlet_record() -> dict:
+def artefact_record_name(name: str) -> str:
+    """The pin file for one artefact: `<name>.release`, in `/etc/guarden`."""
+    return f"{name}{ARTEFACT_RECORD_SUFFIX}"
+
+
+def artefact_record(name: str) -> tuple[str, ...]:
+    return ("etc", "guarden", artefact_record_name(name))
+
+
+def _artefact_record(name: str) -> dict:
     """The pin, read as TOML because it is a TOML file and a digest is quoted.
 
     A hand-rolled line split would compare the digest against a string carrying
     the quotes that were never part of it, and would call a correct pin a
     mismatch.
     """
-    return h.read_config(hostpath(*PODLET_RECORD))
+    return h.read_config(hostpath(*artefact_record(name)))
 
 
-def _podlet_binary() -> Path:
-    return paths.BIN / "podlet"
+def _artefact_binary(name: str) -> Path:
+    return paths.BIN / name
 
 
 def _machine() -> str:
@@ -245,10 +269,10 @@ def _machine() -> str:
     for a string the interpreter already holds.
     """
     reported = platform.machine().lower()
-    return _PODLET_MACHINES.get(reported, reported)
+    return _ARTEFACT_MACHINES.get(reported, reported)
 
 
-def _podlet_pin(record: dict, record_path: Path) -> tuple[str, dict[str, str]]:
+def _artefact_pin(name: str, record: dict, record_path: Path) -> tuple[str, dict[str, str]]:
     """The version and this host's row, or a rejection naming what is missing.
 
     Every one of these is about the **record**, and none of them is about the
@@ -260,37 +284,37 @@ def _podlet_pin(record: dict, record_path: Path) -> tuple[str, dict[str, str]]:
     version = str(record.get("version", "")).strip()
     if not version:
         raise IncompleteRecord(
-            f"the pinned podlet record is incomplete: it names no version: {record_path}"
+            f"the pinned {name} record is incomplete: it names no version: {record_path}"
         )
     rows = record.get("artefacts")
     if not isinstance(rows, dict) or not rows:
         raise IncompleteRecord(
-            f"the pinned podlet record is incomplete: it carries no [artefacts] table: "
+            f"the pinned {name} record is incomplete: it carries no [artefacts] table: "
             f"{record_path}"
         )
     machine = _machine()
     if machine not in rows:
         raise IncompleteRecord(
-            f"the pinned podlet record is incomplete: it has no artefact for this host's "
+            f"the pinned {name} record is incomplete: it has no artefact for this host's "
             f"architecture ({machine}); it carries {', '.join(sorted(rows))}: {record_path}"
         )
     row = rows[machine]
     if not isinstance(row, dict):
         raise IncompleteRecord(
-            f"the pinned podlet record is incomplete: [artefacts.{machine}] is not a "
+            f"the pinned {name} record is incomplete: [artefacts.{machine}] is not a "
             f"table: {record_path}"
         )
-    for key in PODLET_FIELDS:
+    for key in ARTEFACT_FIELDS:
         if not str(row.get(key, "")).strip():
             raise IncompleteRecord(
-                f"the pinned podlet record is incomplete: [artefacts.{machine}] has no "
+                f"the pinned {name} record is incomplete: [artefacts.{machine}] has no "
                 f"{key}: {record_path}"
             )
-    pin = {key: str(row[key]).strip() for key in PODLET_FIELDS}
-    if pin["format"] not in PODLET_FORMATS:
+    pin = {key: str(row[key]).strip() for key in ARTEFACT_FIELDS}
+    if pin["format"] not in ARTEFACT_FORMATS:
         raise IncompleteRecord(
-            f"the pinned podlet record names format {pin['format']!r} for "
-            f"[artefacts.{machine}], which is not one of {', '.join(PODLET_FORMATS)}: "
+            f"the pinned {name} record names format {pin['format']!r} for "
+            f"[artefacts.{machine}], which is not one of {', '.join(ARTEFACT_FORMATS)}: "
             f"{record_path}"
         )
     return version, pin
@@ -300,7 +324,7 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _fetch_artefact(fetched: Path, version: str, pin: dict[str, str]) -> None:
+def _fetch_artefact(name: str, fetched: Path, version: str, pin: dict[str, str]) -> None:
     """curl into the temporary, and nothing else.
 
     A fetch that does not happen is a **host** that is not in the state the
@@ -316,10 +340,11 @@ def _fetch_artefact(fetched: Path, version: str, pin: dict[str, str]) -> None:
     if result.ok:
         return
     reason = errors.oneline(result.err.strip()) or str(result.code)
-    h.error(f"fetching podlet {version} for this host: {pin['url']}: {reason}")
+    h.error(f"fetching {name} {version} for this host: {pin['url']}: {reason}")
 
 
-def _verify_artefact(fetched: Path, version: str, pin: dict[str, str], record: Path) -> None:
+def _verify_artefact(name: str, fetched: Path, version: str, pin: dict[str, str],
+                     record: Path) -> None:
     """The digest of the artefact as downloaded, before anything is unpacked.
 
     This is the whole of the pin. Nothing out of the archive is read into a file,
@@ -330,13 +355,14 @@ def _verify_artefact(fetched: Path, version: str, pin: dict[str, str], record: P
     if found == pin["sha256"]:
         return
     raise IncompleteRecord(
-        f"podlet {version}: the SHA256 does not match {record}: the artefact fetched "
+        f"{name} {version}: the SHA256 does not match {record}: the artefact fetched "
         f"from {pin['url']} is {found} and the record pins {pin['sha256']}"
     )
 
 
-def _one_member(members: list, path_of, pin: dict[str, str], version: str, record: Path):
-    """The single regular member named `podlet`, or a refusal naming the archive.
+def _one_member(name: str, members: list, path_of, pin: dict[str, str], version: str,
+                record: Path):
+    """The single regular member named as the program, or a refusal naming the archive.
 
     Exactly one, because an archive with two members of that name is ambiguous and
     an archive with none is not the artefact the record pins. Both are one line
@@ -345,35 +371,36 @@ def _one_member(members: list, path_of, pin: dict[str, str], version: str, recor
     same are not distinguishable by their basenames.
     """
     found = [
-        member for member in members if PurePosixPath(path_of(member)).name == "podlet"
+        member for member in members if PurePosixPath(path_of(member)).name == name
     ]
     if len(found) == 1:
         return found[0]
     if not found:
         raise IncompleteRecord(
-            f"podlet {version}: the artefact {pin['url']} is a {pin['format']} archive "
-            f"with no regular member named podlet, and {record} pins it as the "
+            f"{name} {version}: the artefact {pin['url']} is a {pin['format']} archive "
+            f"with no regular member named {name}, and {record} pins it as the "
             f"program this install puts in place"
         )
     names = ", ".join(sorted(path_of(member) for member in found))
     raise IncompleteRecord(
-        f"podlet {version}: the artefact {pin['url']} is a {pin['format']} archive "
-        f"with {len(found)} regular members named podlet ({names}), and {record} pins "
+        f"{name} {version}: the artefact {pin['url']} is a {pin['format']} archive "
+        f"with {len(found)} regular members named {name} ({names}), and {record} pins "
         f"it as the program this install puts in place"
     )
 
 
-def _tar_xz_bytes(fetched: Path, pin: dict[str, str], version: str, record: Path) -> bytes:
+def _tar_xz_bytes(name: str, fetched: Path, pin: dict[str, str], version: str,
+                  record: Path) -> bytes:
     with tarfile.open(fetched, "r:xz") as archive:
         regular = [member for member in archive.getmembers() if member.isfile()]
         member = _one_member(
-            regular, lambda entry: entry.name, pin, version, record
+            name, regular, lambda entry: entry.name, pin, version, record
         )
         stream = archive.extractfile(member)
         if stream is None:
             raise IncompleteRecord(
-                f"podlet {version}: the artefact {pin['url']} carries no readable "
-                f"contents for podlet, and {record} pins it as the program this "
+                f"{name} {version}: the artefact {pin['url']} carries no readable "
+                f"contents for {name}, and {record} pins it as the program this "
                 f"install puts in place"
             )
         with stream:
@@ -402,19 +429,26 @@ def _zip_regular(entry: zipfile.ZipInfo) -> bool:
     return stat.S_ISREG(mode)
 
 
-def _zip_bytes(fetched: Path, pin: dict[str, str], version: str, record: Path) -> bytes:
+def _zip_bytes(name: str, fetched: Path, pin: dict[str, str], version: str,
+               record: Path) -> bytes:
     with zipfile.ZipFile(fetched) as archive:
         regular = [entry for entry in archive.infolist() if _zip_regular(entry)]
         member = _one_member(
-            regular, lambda entry: entry.filename, pin, version, record
+            name, regular, lambda entry: entry.filename, pin, version, record
         )
         return archive.read(member)
 
 
-PODLET_UNPACK = {"tar.xz": _tar_xz_bytes, "zip": _zip_bytes}
+def _raw_bytes(name: str, fetched: Path, pin: dict[str, str], version: str,
+               record: Path) -> bytes:
+    return fetched.read_bytes()
 
 
-def _unpacked_program(fetched: Path, pin: dict[str, str], version: str, record: Path) -> bytes:
+ARTEFACT_UNPACK = {"tar.xz": _tar_xz_bytes, "zip": _zip_bytes, "raw": _raw_bytes}
+
+
+def _unpacked_program(name: str, fetched: Path, pin: dict[str, str], version: str,
+                      record: Path) -> bytes:
     """The program's bytes, and the program's bytes rather than the archive's.
 
     The archive is read into memory and the member is written out by `soil`, so
@@ -427,20 +461,21 @@ def _unpacked_program(fetched: Path, pin: dict[str, str], version: str, record: 
     symlink, a hardlink, a directory, a fifo and a device alike. The zip reader
     cannot: a zip stores a symlink as an ordinary file whose content is the
     target's name, so it asks the unix mode (`_zip_regular`) — without that, an
-    archive carrying a symlink named `podlet` installed the *path it pointed at*
-    as the program, which is the exact state this install exists to prevent.
+    archive carrying a symlink named after the program installed the *path it
+    pointed at* as the program, which is the exact state this install exists to
+    prevent.
 
     A truncated or mislabelled archive is one diagnostic and not a traceback:
     every library that reads one raises its own error, and `curl` happily writes
     whatever the remote sent.
     """
     try:
-        return PODLET_UNPACK[pin["format"]](fetched, pin, version, record)
+        return ARTEFACT_UNPACK[pin["format"]](name, fetched, pin, version, record)
     except IncompleteRecord:
         raise
     except (OSError, EOFError, tarfile.TarError, zipfile.BadZipFile, lzma.LZMAError) as exc:
         raise IncompleteRecord(
-            f"podlet {version}: the artefact fetched from {pin['url']} is not a "
+            f"{name} {version}: the artefact fetched from {pin['url']} is not a "
             f"{pin['format']} archive this host can unpack: {errors.oneline(str(exc))}"
         ) from None
 
@@ -500,7 +535,7 @@ def packages_items(family: str | None = None) -> list[Item]:
                 )
             )
 
-    def podlet_installed() -> bool:
+    def artefact_installed(name: str) -> bool:
         """Whether the pinned release is on this host, and it is the pinned one.
 
         The digest compared is the **program's**, because the artefact is not
@@ -514,52 +549,56 @@ def packages_items(family: str | None = None) -> list[Item]:
         what a host does not have yet and exits 1, and refusing to answer would
         make the phase's own reporting mode unusable on the host it is for.
         """
-        record = _podlet_record()
+        record = _artefact_record(name)
         if not record:
             return False
         try:
-            _, pin = _podlet_pin(record, hostpath(*PODLET_RECORD))
+            _, pin = _artefact_pin(name, record, hostpath(*artefact_record(name)))
         except IncompleteRecord:
             return False
-        binary = _podlet_binary()
+        binary = _artefact_binary(name)
         if not binary.is_file() or not os.access(binary, os.X_OK):
             return False
         return _digest(binary) == pin["binary_sha256"]
 
-    def install_podlet() -> None:
-        record_path = hostpath(*PODLET_RECORD)
-        record = _podlet_record()
+    def install_artefact(name: str) -> None:
+        record_path = hostpath(*artefact_record(name))
+        record = _artefact_record(name)
         if not record_path.is_file():
             # Absent and unfilled are different faults with different fixes, so
             # they are different messages, and both are exit 2: the record is a
             # repository input, and a record nobody filled in is not a host that
             # is out of state.
             raise IncompleteRecord(
-                f"the pinned podlet record is absent: {record_path}, and `soil install` "
+                f"the pinned {name} record is absent: {record_path}, and `soil install` "
                 f"seeds it from the template"
             )
-        version, pin = _podlet_pin(record, record_path)
-        binary = _podlet_binary()
+        version, pin = _artefact_pin(name, record, record_path)
+        binary = _artefact_binary(name)
         binary.parent.mkdir(parents=True, exist_ok=True)
-        fetched = binary.parent / PODLET_FETCH
-        # One lock over the read of the record, the fetch, the unpack and the
-        # install, because the installed program is a file `loom` reads while
-        # this replaces it: spec 3.5 says every file one process may read while
-        # another writes is written that way, with no exceptions. The write itself
-        # goes through `write_bytes`, which is the same protocol — a temporary in
-        # the target's own directory, fsync, rename.
-        with lock("podlet"):
+        # A sibling of the installed program rather than a path under /tmp: its
+        # digest is compared from there, before anything is unpacked out of it,
+        # and a file another process could see is not where that happens.
+        fetched = binary.parent / f"{name}{ARTEFACT_FETCH_SUFFIX}"
+        # One lock per artefact over the read of the record, the fetch, the unpack
+        # and the install, because the installed program is a file `loom` reads
+        # while this replaces it: spec 3.5 says every file one process may read
+        # while another writes is written that way, with no exceptions. The write
+        # itself goes through `write_bytes`, which is the same protocol — a
+        # temporary in the target's own directory, fsync, rename.
+        with lock(name):
             try:
-                _fetch_artefact(fetched, version, pin)
+                _fetch_artefact(name, fetched, version, pin)
                 if not fetched.is_file():
                     return
-                _verify_artefact(fetched, version, pin, record_path)
-                h.write_bytes(binary, _unpacked_program(fetched, pin, version, record_path),
+                _verify_artefact(name, fetched, version, pin, record_path)
+                h.write_bytes(binary,
+                              _unpacked_program(name, fetched, pin, version, record_path),
                               0o755)
             finally:
                 # Both temporaries, on every path. A failed unpack must leave
-                # nothing that could be mistaken for an install: `podlet.fetch`
-                # next to the programs and `.podlet.new` beside it are both
+                # nothing that could be mistaken for an install: the `.fetch`
+                # next to the programs and `.<name>.new` beside it are both
                 # plausible-looking, and the second is a rename waiting to happen.
                 _discard(fetched)
                 _discard(binary.parent / f".{binary.name}.new")
@@ -572,9 +611,13 @@ def packages_items(family: str | None = None) -> list[Item]:
             _packaged_apt_disabled,
             lambda: [h.run("systemctl", "disable", "--now", unit) for unit in PACKAGED_APT],
         ),
-        Item("the pinned podlet is installed, and the SHA256 of the program "
-             "on the host is the one the record pins",
-             podlet_installed, install_podlet),
+        *[
+            Item(f"the pinned {name} is installed, and the SHA256 of the program "
+                 f"on the host is the one the record pins",
+                 lambda name=name: artefact_installed(name),
+                 lambda name=name: install_artefact(name))
+            for name in PINNED_ARTEFACTS
+        ],
     ]
 
 
@@ -1792,16 +1835,21 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             _modules_installed,
             _install_modules,
         ),
-        # The pin is seeded, not converged: an operator fills in a digest once and
-        # it is theirs from then on, so a converge to the shipped template would
-        # erase the only thing that makes the fetch reachable. Same rule as
+        # The pins are seeded, not converged: an operator fills in a digest once
+        # and it is theirs from then on, so a converge to the shipped template
+        # would erase the only thing that makes the fetch reachable. Same rule as
         # guarden.toml's `admin_user`: this phase fills a value that is empty and
-        # leaves it alone afterwards.
-        Item(
-            "the pinned podlet record exists, and a missing digest means no fetch",
-            lambda: hostpath(*PODLET_RECORD).is_file(),
-            lambda: h.write_file(hostpath(*PODLET_RECORD), _template(PODLET_RECORD_NAME), 0o644),
-        ),
+        # leaves it alone afterwards. One item per artefact, because each is its
+        # own file and its own template.
+        *[
+            Item(f"the pinned {name} record exists, and a missing digest means no fetch",
+                 lambda name=name: hostpath(*artefact_record(name)).is_file(),
+                 lambda name=name: h.write_file(
+                     hostpath(*artefact_record(name)),
+                     _template(artefact_record_name(name)),
+                     0o644))
+            for name in PINNED_ARTEFACTS
+        ],
         h.text_item("the tmpfiles entry recreates /run/guarden at every boot",
                     hostpath(*SYSTEMD_DIR, "guarden-tmpfiles.conf"),
                     _template("guarden-tmpfiles.conf")),
@@ -2101,7 +2149,7 @@ def items_for(
 def what_for(phase: str) -> str:
     return {
         "packages": "the distribution's apt timers, the package index, the distribution "
-                    "packages, and the one pinned podlet release",
+                    "packages, and the pinned releases",
         "storage": "btrfs layout, the snapper value set, root and home, the cleanup timer",
         "sysctl": "route_localnet on the ingress interface, IPv6 off, the port threshold, "
                   "and vm.swappiness when this host asked for a zram device",

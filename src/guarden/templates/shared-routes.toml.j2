@@ -5,6 +5,7 @@
   and no alias (spec 7.3) — and `host` is the name the mutator allocated from
   the manifest's label and the track's root-owned host_prefix. A repository
   cannot claim a name outside host.domain: it only ever gets a label.
+  `destination` is `edge` or `tunnel` — where this route is published.
 #}
 # Rendered by loom. The mutator installs this read-only; `roots` reads it.
 service = "{{ service }}"
@@ -19,4 +20,5 @@ host = "{{ route.host }}"
 label = "{{ route.label }}"
 auth = {{ "true" if route.auth else "false" }}
 target = "{{ route.target }}"
+destination = "{{ route.destination }}"
 {% endfor %}

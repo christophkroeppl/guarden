@@ -49,6 +49,7 @@ TRACK_KEYS = {
     "kind",
     "fork_from",
     "cap",
+    "expose",
 }
 TRACK_DEFAULTS = {
     "host_prefix": "",
@@ -59,6 +60,7 @@ TRACK_DEFAULTS = {
     "kind": SLOT,
     "fork_from": "",
     "cap": None,
+    "expose": "edge",
 }
 NETWORK_KEYS = {"backend", "pasta_options"}
 
@@ -89,6 +91,7 @@ class Track:
     kind: str
     fork_from: str
     cap: int | None
+    expose: str
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,7 @@ class Config:
     interface: str
     admin_user: str
     alias: str
+    tunnel_domain: str
     publication_range: tuple[int, int]
     modules: tuple[str, ...]
     lanes: int
@@ -191,7 +195,7 @@ def load(path: Any = None) -> Config:
     modules = document.get("modules", {})
     for table, name, keys in (
         (host, "host", {"domain", "interface", "admin_user"}),
-        (ingress, "ingress", {"alias", "publication_range", "forwarded"}),
+        (ingress, "ingress", {"alias", "tunnel_domain", "publication_range", "forwarded"}),
         (network, "network", NETWORK_KEYS),
         (build, "build", {"lanes"}),
         (modules, "modules", {"enabled"}),
@@ -222,6 +226,7 @@ def load(path: Any = None) -> Config:
         interface=_str(host, "interface", f"{where_file} [host]"),
         admin_user=_str(host, "admin_user", f"{where_file} [host]"),
         alias=_str(ingress, "alias", f"{where_file} [ingress]"),
+        tunnel_domain=_str(ingress, "tunnel_domain", f"{where_file} [ingress]"),
         publication_range=(span[0], span[1]),
         modules=tuple(enabled),
         lanes=_int(build, "lanes", f"{where_file} [build]"),
@@ -316,6 +321,7 @@ def _tracks(rows: Any, where_file: Any) -> list[Track]:
                 kind=kind,
                 fork_from=_str(row, "fork_from", where),
                 cap=_cap(row, where),
+                expose=_str(row, "expose", where) or TRACK_DEFAULTS["expose"],
             )
         )
 
@@ -331,5 +337,9 @@ def _tracks(rows: Any, where_file: Any) -> list[Track]:
         if track.fork_from and track.fork_from not in by_name:
             raise errors.GuardenError(
                 f"{where}: fork_from {track.fork_from!r} names no track in the table"
+            )
+        if track.expose not in ("edge", "tunnel"):
+            raise errors.GuardenError(
+                f"{where}: expose is {track.expose!r}; it must be 'edge' or 'tunnel'"
             )
     return tracks

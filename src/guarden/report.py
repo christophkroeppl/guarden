@@ -103,6 +103,8 @@ def _service_object(record, invariants: list[str]) -> dict:
     warnings = [*invariants]
     for group in granted.groups:
         warnings.append(f"warning: supplementary group {group!r} is not on the host")
+    route_hosts = dict(record.route_hosts)
+    route_destinations = dict(record.route_destinations)
     return {
         "name": record.service,
         "workload": record.workload,
@@ -134,7 +136,8 @@ def _service_object(record, invariants: list[str]) -> dict:
             "granted": granted_numbers,
             "pending": pending,
         },
-        "route_hosts": dict(record.route_hosts),
+        "route_hosts": route_hosts,
+        "route_destinations": route_destinations,
         "volumes": [_volume_object(record, volume) for volume in record.volume_list()],
         "instances": [
             {

@@ -1,0 +1,15 @@
+[Unit]
+Description=the tunnel, which dials out and is reached by nobody
+
+[Container]
+Image=docker.io/cloudflare/cloudflared:2026.10.0
+# One config for the whole host. `cloudflared` reads a single `ingress:` list, so
+# there is no per-service file and the tunnel is one process rather than one per
+# route — which is why `roots` renders into this directory and not into a
+# service's own tree.
+Volume=/var/lib/guarden/tunnel:/etc/cloudflared:ro
+Exec=tunnel
+Exec=--config
+Exec=/etc/cloudflared/config.yml
+Exec=run
+Secret=TUNNEL_CREDENTIAL,type=file

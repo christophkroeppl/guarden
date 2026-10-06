@@ -335,13 +335,17 @@ assert_unchanged "$installed" "a failed fetch replaced the installed program"
 assert_file_missing "$bindir/podlet.fetch"
 assert_file_missing "$bindir/.podlet.new"
 
-# A format the install does not read. A closed set of two, named by the diagnostic.
+# A format the install does not read. A closed set, named by the diagnostic. The
+# list is asserted by its two archive formats plus the raw one rather than as the
+# whole string, so adding a format does not silently stop this file asserting the
+# property — a refusal that names a set this file no longer checks is a vacuous
+# assertion the moment the set moves.
 seed_record tar.bz2 "file://$archive" "$archive_digest" "$payload_digest"
 run soil packages --apply
 assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "names format 'tar.bz2'"
-assert_stderr_has "tar.xz, zip"
+assert_stderr_has "tar.xz, zip, raw"
 
 # A row for another architecture and none for this one. The refusal names both the
 # machine and the rows the record carries, because "the pin does not cover this

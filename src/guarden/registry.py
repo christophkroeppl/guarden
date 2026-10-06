@@ -213,6 +213,7 @@ class Registry:
     edges: dict[str, dict] = field(default_factory=dict)
     provides: list[str] = field(default_factory=list)
     route_hosts: dict[str, str] = field(default_factory=dict)
+    route_destinations: dict[str, str] = field(default_factory=dict)
     ports_requested: list[int] = field(default_factory=list)
     ports_granted: list[int] = field(default_factory=list)
     firewall_requested: list[RuleEntry] = field(default_factory=list)
@@ -259,6 +260,8 @@ class Registry:
             document["provides"] = {"kinds": list(self.provides)}
         if self.route_hosts:
             document["route_hosts"] = dict(self.route_hosts)
+        if self.route_destinations:
+            document["route_destinations"] = dict(self.route_destinations)
         if self.ports_requested or self.ports_granted:
             document["ports"] = {
                 "requested": list(self.ports_requested),
@@ -320,6 +323,7 @@ class Registry:
             edges={name: dict(edge or {}) for name, edge in (document.get("edges") or {}).items()},
             provides=list(provides),
             route_hosts=dict(document.get("route_hosts") or {}),
+            route_destinations=dict(document.get("route_destinations") or {}),
             ports_requested=list(ports.get("requested") or []),
             ports_granted=list(ports.get("granted") or []),
             firewall_requested=_rule_entries(firewall.get("requested")),

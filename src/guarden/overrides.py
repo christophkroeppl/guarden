@@ -7,6 +7,9 @@ defaults; `[groups] add` gives the service user supplementary groups, which is
 how a hardware-transcoding service reaches `/dev/dri` without the renderer
 knowing anything about video; and `[mounts] allow` is the only way a host path
 outside the service's own volumes and `/etc/guarden` becomes bind-mountable.
+`[expose] tunnel` names route LABELS published through the tunnel INSTEAD of
+the edge. There is deliberately no `[expose] edge` because "not through the
+tunnel" is what the track's `expose` already says.
 
 **Nothing else is overridable.** Routes, edges, state volumes, the unit source
 and the credential schema are the repository's, and this file does not touch
@@ -32,15 +35,13 @@ from guarden import conf, errors, paths
 
 OVERRIDES_MODE = 0o640
 
-KEYS = {"ports", "retention", "groups", "mounts", "firewall"}
+KEYS = {"ports", "retention", "groups", "mounts", "firewall", "expose"}
 PORT_KEYS = {"open"}
 RETENTION_KEYS = {"keep_last", "free_limit", "weekly", "monthly", "quarterly"}
 GROUP_KEYS = {"add"}
 MOUNT_KEYS = {"allow"}
-# `[firewall] allow` holds NAMES of requested rules the admin agreed to
-# install, never rule text: the rule behind a name lives in the manifest
-# that asked for it (spec 3.3, ADR-0013).
 FIREWALL_KEYS = {"allow"}
+EXPOSE_KEYS = {"tunnel"}
 
 WEEKLY = 4
 MONTHLY = 6
@@ -58,6 +59,7 @@ class Overrides:
     groups: list[str] = field(default_factory=list)
     mounts: list[str] = field(default_factory=list)
     firewall: list[str] = field(default_factory=list)
+    expose_tunnel: list[str] = field(default_factory=list)
 
     def to_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {}
@@ -82,6 +84,8 @@ class Overrides:
             document["mounts"] = {"allow": list(self.mounts)}
         if self.firewall:
             document["firewall"] = {"allow": list(self.firewall)}
+        if self.expose_tunnel:
+            document["expose"] = {"tunnel": list(self.expose_tunnel)}
         return document
 
     def keep_last_or(self, track_default: int) -> int:
@@ -163,6 +167,7 @@ def load(service: str) -> Overrides:
         ("groups", GROUP_KEYS),
         ("mounts", MOUNT_KEYS),
         ("firewall", FIREWALL_KEYS),
+        ("expose", EXPOSE_KEYS),
     ):
         section = document.get(table, {})
         if not isinstance(section, dict):
@@ -186,6 +191,9 @@ def load(service: str) -> Overrides:
         mounts=_string_list(document.get("mounts", {}), "allow", MOUNT_KEYS, f"{where} [mounts]"),
         firewall=_string_list(
             document.get("firewall", {}), "allow", FIREWALL_KEYS, f"{where} [firewall]"
+        ),
+        expose_tunnel=_string_list(
+            document.get("expose", {}), "tunnel", EXPOSE_KEYS, f"{where} [expose]"
         ),
     )
 

@@ -1078,6 +1078,10 @@ def _routes(
     """The route slice `roots` reads. The target is `<name>:<publication>` — the
     service's own name, with no suffix and no alias — and the full host is the
     one the mutator allocated from the manifest's label and the track's prefix."""
+    granted = overrides_mod.load(context.service) if context else None
+    tunnel_labels = set(granted.expose_tunnel) if granted else set()
+    track_expose = context.track.expose if context else "edge"
+
     rows = [
         {
             "container": route.container,
@@ -1088,6 +1092,7 @@ def _routes(
             "auth": route.auth,
             "target": f"{context.service}:{ports[route.container][0]}" if context and
             route.container in ports else "",
+            "destination": "tunnel" if route.host in tunnel_labels else track_expose,
         }
         for route in document.routes
     ]

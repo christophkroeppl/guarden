@@ -9,6 +9,9 @@ format: if the edge is ever replaced, `roots` is replaced.
 One file per service, so a route change is one file changing and the edge
 picks it up from its own watch without a restart, and a service that is removed
 takes its routes with it.
+
+With the tunnel module, `roots` also renders a tunnel ingress file into
+`/var/lib/guarden/tunnel/ingress/` for routes whose destination is `tunnel`.
 """
 
 from __future__ import annotations
@@ -26,7 +29,9 @@ TEMPLATE = "edge-routes.yml.j2"
 EXTENSION = ".yml"
 FORWARD_AUTH = f"_{edgeconf.MIDDLEWARE}{EXTENSION}"
 
-EPILOG = """\
+TUNNEL_TEMPLATE = "tunnel-ingress.yml.j2"
+
+EPILOG = """\\
 `roots sync` writes one file per service into the edge's configuration
 directory and nowhere else. The edge reads that directory, so a route change
 appears without a restart.
@@ -90,12 +95,46 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
             and service != provider,
         }
         for route in routes
+        if route.get("destination") != "tunnel"
     ]
+    if not rows:
+        return ""
     return render.render_template(TEMPLATE, service=service, rows=rows)
 
 
 def write(service: str, body: str) -> None:
+    if not body:
+        return
     conf.write_file(paths.EDGE_DYNAMIC / file_name(service), body, 0o644)
+
+
+def render_tunnel(routes: list[dict], config) -> str:
+    """The host's tunnel ingress, as `cloudflared` reads it.
+
+    Only routes whose destination is `tunnel` are rendered. The catch-all is
+    `http_status:404` and is last, so a hostname in the tunnel's zone that no
+    service claims is a 404 from the tunnel rather than a default page.
+    """
+    if not config.tunnel_domain:
+        return ""
+    rows = [
+        {
+            "hostname": route.get("host", ""),
+            "service": f"http://{route.get('target', '')}",
+        }
+        for route in routes
+        if route.get("destination") == "tunnel"
+    ]
+    if not rows:
+        return ""
+    return render.render_template(TUNNEL_TEMPLATE, rows=rows)
+
+
+def write_tunnel(body: str) -> None:
+    if not body:
+        return
+    paths.TUNNEL.mkdir(parents=True, exist_ok=True)
+    conf.write_file(paths.TUNNEL_CONFIG, body, 0o644)
 
 
 def sweep(written: set[str]) -> list[str]:
@@ -224,13 +263,21 @@ def sync() -> int:
         for service, entries in routes.items()
     ]
     auth_body = forward_auth(provider) if provider else None
-    written = {file_name(service) for service, _ in plan}
+    written = {file_name(service) for service, body in plan if body}
+
+    tunnel_body = render_tunnel(
+        [route for entries in routes.values() for route in entries], config
+    )
 
     for service, body in plan:
         write(service, body)
     if auth_body is not None:
         conf.write_file(paths.EDGE_DYNAMIC / FORWARD_AUTH, auth_body, 0o644)
         written.add(FORWARD_AUTH)
+    if tunnel_body:
+        write_tunnel(tunnel_body)
+    elif paths.TUNNEL_CONFIG.is_file():
+        paths.TUNNEL_CONFIG.unlink()
     printed = [f"{service} {len(routes[service])} routes" for service, _ in plan]
     for name in sweep(written):
         printed.append(f"removed {name}")

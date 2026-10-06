@@ -36,8 +36,8 @@ Neither probe runs a command, so answering "which family is this" cannot have a
 side effect.
 
 Nothing here fetches anything from PyPI and nothing fetches a wheel: the whole
-list is distribution packages, plus the one pinned podlet release `hostprep`
-installs separately under its own SHA256 check.
+list is distribution packages, plus the pinned releases `hostprep` installs
+separately, each under its own SHA256 check (ADR-0015).
 """
 
 from __future__ import annotations

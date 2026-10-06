@@ -53,27 +53,30 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
 
 ## What to build
 
-- [ ] **ADR first**, superseding the `edge` entry in `CONTEXT.md` and the "exactly one fetch"
+- [x] **ADR first**, superseding the `edge` entry in `CONTEXT.md` and the "exactly one fetch"
       sentence in `AGENTS.md`. It states that a host may terminate public traffic in more than one
       place, that the second terminator is *egress-only and therefore not a door*, and which of
       `cloudflared`'s distribution routes guarden takes. Nothing below is implemented before it
-- [ ] **The ADR decides where `cloudflared` comes from, and the honest options are narrow.**
+- [x] **The ADR decides where `cloudflared` comes from, and the honest options are narrow.**
       `cloudflared` is **not in Debian, Ubuntu or Fedora repositories** — the vendor publishes it
       through its own APT repository at `pkg.cloudflare.com` and its own RPM repository, with a
       separately-rolled signing key (<https://pkg.cloudflare.com/>). So this is **not** a
       distribution package and it is **not** the same class of fetch as `podlet`: adding a
       third-party APT repository is a different trust decision from adding a pinned release to a
-      congerger, because the repository's *contents* change under guarden's version pin. The ADR
-      states which of these it takes — a vendor APT repository, a pinned `.deb` with a recorded
-      SHA256 in the manner of `podlet`, or a container image — and why. **Whichever it is, the
-      version in force is recorded in this repository and asserted by `soil packages --check`**,
-      because a vendor repository serves whatever it serves today and a host must know what it is
-      running
-- [ ] `/usr/lib/guarden/modules/tendril/module.toml` declares one service, `tendril-production`,
+      congerger, because the repository's *contents* change under guarden's version pin.
+      **Decided, and the ADR is amended: the container image.** ADR-0015's first revision took the
+      pinned-binary route and this ticket's implementation exposed why it cannot: the tunnel ran as
+      a raw systemd unit with a multi-word `ExecStart=`, which `unitsource.format_line` refuses by
+      design, while a `[Container]` unit passes its arguments one `Exec=` line each — which is how
+      `gate`'s traefik already runs and what spec §2 means by "everything deployed is a service".
+      So `PINNED_ARTEFACTS` is `(podlet,)`, `cloudflared.release` is deleted, and the version in
+      force is the image tag in the module's own unit source rather than a `*.release` file. A
+      vendor APT repository is still refused, for the reason above
+- [x] `/usr/lib/guarden/modules/tendril/module.toml` declares one service, `tendril-production`,
       the shared program it switches on, and **no ingress** — it declares no ports because it binds
       none. `weedr module add tendril` creates the service, its user and its home, and touches no
       other module
-- [ ] `tendril-production` is an ordinary service: its own user, its own home, `0700`, no
+- [x] `tendril-production` is an ordinary service: its own user, its own home, `0700`, no
       capability, no `PublishPort`, and **no publication of its own**. It is not an edge in any
       sense the firewall cares about, because nothing connects to it
 - [ ] **Two credentials, both in that service's own podman secret store, both gated like any
@@ -82,13 +85,18 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       second, read by the mutator and never rendered into a unit or a log. An empty or example
       value blocks the start and the reason is a `warning:` naming the key — the gate is a state,
       not a failure
-- [ ] `[ingress]` gains a root-owned `tunnel_domain`, empty by default. Empty means the tunnel is
-      **not configured**, `weedr module add tendril` refuses to install it, and `soil --check`
-      reports the absence. A repository cannot set it and no manifest carries it
-- [ ] **A track gains one field, `expose`, on its `[[environments]]` row**, `edge` or `tunnel`,
+- [x] `[ingress]` gains a root-owned `tunnel_domain`, empty by default. Empty means the tunnel is
+      **not configured** and `weedr module add tendril` refuses to install it, naming the key. A
+      repository cannot set it and no manifest carries it. **Corrected:** the first revision also
+      said `soil --check` reports the absence, and that was implemented as a warning on every
+      converged host whose tunnel_domain is empty — i.e. every host that has not adopted the
+      tunnel. Removed in `be4e498`: the diagnostic belongs where the action is refused, not in the
+      ambient output of a host that is converged. `t20-packages` caught it by asserting stderr is
+      empty on a converged host
+- [x] **A track gains one field, `expose`, on its `[[environments]]` row**, `edge` or `tunnel`,
       defaulting to `edge`. It is a **default for that track's services**, it is root-owned, and
       nothing in guarden branches on a track's *name* — only on this field
-- [ ] **A service's `overrides.toml` gains exactly one new table, and it can only ever remove
+- [x] **A service's `overrides.toml` gains exactly one new table, and it can only ever remove
       from the edge:**
 
       ```toml
@@ -100,17 +108,17 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       track's `expose` already says and a second spelling of it is a second place to be wrong. An
       unknown route label is exit `2` naming the label and the routes the manifest declared. A
       route that appears in neither list follows its track
-- [ ] **`weedr service list` prints each route's destination** — `edge` or `tunnel` — next to the
+- [x] **`weedr service list` prints each route's destination** — `edge` or `tunnel` — next to the
       route host, because "is this thing public?" must be answerable in one command and not by
       reading three root-owned files
-- [ ] **A route published through the tunnel is not rendered into the edge's dynamic directory at
+- [x] **A route published through the tunnel is not rendered into the edge's dynamic directory at
       all.** Not rendered disabled, not rendered behind a deny — absent. A second route table the
       two terminators both honour is how a service ends up reachable by both
-- [ ] `roots` renders the tunnel's ingress file from the same route slice it already renders the
+- [x] `roots` renders the tunnel's ingress file from the same route slice it already renders the
       edge's, into a second directory it owns, and writes **only** the routes whose destination is
       `tunnel`. `roots` has no intermediate route format and grows none: it emits one file per
       terminator from the routes it has, which is what it is for
-- [ ] The rendered ingress file's catch-all is `http_status:404` and is **last**. A hostname in the
+- [x] The rendered ingress file's catch-all is `http_status:404` and is **last**. A hostname in the
       tunnel's zone that no service claims is a 404 from the tunnel, not a default page and not a
       fall-through to the edge
 - [ ] A preview instance is published at `preview.<tunnel_domain>/<ref>` — **a path on one host**,
@@ -123,7 +131,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       by every verb and escaped internally, and that guarantee now has to hold in the tunnel's
       path space as well as in `systemd-escape`'s — a second namespace with the same collision
       property is a second thing to get wrong
-- [ ] **The tunnel adds no firewall rule to `20-ingress-nat.conf`, and `soil firewall --check`
+- [x] **The tunnel adds no firewall rule to `20-ingress-nat.conf`, and `soil firewall --check`
       fails if it ever does.** It dials out, so no `nat PREROUTING` DNAT exists for it and no
       public port forwards to it. This is the assertion that distinguishes this ticket from the
       Pangolin one, and it is checked rather than asserted in prose
@@ -137,9 +145,11 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       reaches the publications is an explicit uid accept above the deny, not a gap in it
 - [ ] The dead-man timer still restores firewall access, and a tunnel grant cannot disable it: the
       tunnel is egress-only, so it can neither lock an operator out nor be locked out
-- [ ] **`cloudflared` runs as a systemd user unit in its own user manager** — `systemctl --user`,
-      no system unit, nothing in `/etc/guarden` it can write, and a restart of the edge does not
-      restart it. The two terminators fail independently, which is the point of having two
+- [x] **`cloudflared` runs as a service like every other** — a `[Container]` unit in its own user
+      manager, nothing in `/etc/guarden` it can write, and a restart of the edge does not restart
+      it. The two terminators fail independently, which is the point of having two. **Superseded
+      the first revision's "a systemd user unit":** that shape is refused by `unitsource`, and the
+      container is the one model every other service already uses
 
 ## The grant: temporary, revocable, and guarden's to answer for
 
@@ -165,11 +175,20 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       posture as `weedr pin sync`, for the same reason: an unreadable state must never be
       indistinguishable from an empty one
 - [ ] **Expiry is enforced by that reconciler on a root-owned timer, not by the vendor.** An
-      Access policy has **no expiration field at all** — the policies API schema carries no
-      `expir*` key, and the only durable-duration primitive is a *service token*, which is
-      machine-to-machine and not a browser login. So "expires in seven days" is guarden's timer
-      removing the email from the policy, and a stopped timer means the grant outlives its
-      deadline. That is stated in the runbook as the failure it is
+      Access policy has **no `expir*` key at all** — the policies API schema carries none, and the
+      schema was searched for `expir`, `expires`, `expires_at`, `expiration`, `ttl`, `valid_until`
+      and `not_after` with zero hits across all four response objects. **But the second half of
+      this item was wrong and is corrected:** a policy response *does* carry a top-level
+      `session_duration`, "the amount of time that tokens issued for the application will be
+      valid", which is a browser-login duration — so "the only durable-duration primitive is a
+      service token" is false. See `docs/notes/cloudflare-session-duration-exists.md`. The design
+      is unchanged: a session duration bounds one authenticated session, it cannot remove an
+      address from the policy, and removing the email is still the act that ends a grant. What
+      changes is that the ticket must stop claiming the field does not exist, and must decide what
+      `session_duration` is — a second, shorter bound under guarden's deadline, or left at the
+      vendor's default. So "expires in seven days" is guarden's timer removing the email from the
+      policy, and a stopped timer means the grant outlives its deadline. That is stated in the
+      runbook as the failure it is
 - [ ] **The reconciler holds the Cloudflare API token and is the only thing that calls the vendor.**
       It needs an API token with the narrowest scopes that work, named in this ticket, and the
       scopes are recorded next to the token's name in `guarden.toml` so an operator can audit what

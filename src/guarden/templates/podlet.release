@@ -1,9 +1,11 @@
-# The one fetch from outside a distribution repository, pinned.
+# The pinned artefact: a fetch from outside a distribution repository, pinned.
 #
-# Guarden installs no artefact it has not verified, so the digests below are the
-# claim and everything else in this file is bookkeeping. There is no "latest" and
-# no unpinned fallback, because "one third-party binary, verified" is the whole
-# claim and a convenience fetch would make it false.
+# It is the only one. The tunnel is a container rather than a second host binary
+# (ADR-0015, superseded on this point), so the mechanism still serves exactly one
+# name and the digests below are the whole claim. Everything else in this file is
+# bookkeeping. There is no "latest" and no unpinned fallback, because "a
+# third-party binary, verified" is the whole claim and a convenience fetch would
+# make it false.
 #
 # `soil packages --apply` reads this file. `soil install` seeds it from this
 # template once and never overwrites it afterwards, because an operator who edits
