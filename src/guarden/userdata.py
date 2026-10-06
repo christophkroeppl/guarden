@@ -130,8 +130,17 @@ HEADER = """#cloud-config
 #
 # - iproute2 and nftables-family tooling because `soil firewall` converges ferm
 #   and the inspection in ticket 140 reads the installed `nat PREROUTING` chain.
-#   ferm is iptables-nft on this distribution; the chain it installs is what the
-#   ticket's criterion is about, so the tools to read it must be present.
+#   **The chain ferm installs is in iptables-LEGACY, and that is ferm's own
+#   choice** -- ferm 2.7 prefers the `iptables-legacy*` names when resolving the
+#   xtables binary it loads a policy with, measured on the golden by reading the
+#   argv out of `ferm --shell`. Both families of tooling are therefore installed:
+#   the nft ones for what an operator reading nft sees, and the legacy table for
+#   the rules actually in force. See
+#   docs/notes/iptables-variant-must-be-stated.md.
+#
+# The runcmd step below records which table the rules go in before any phase
+# runs, so a machine booting into the two halves disagreeing says so there rather
+# than after six phases report success.
 
 package_update: true
 package_upgrade: false
@@ -179,6 +188,31 @@ runcmd:
       echo "FATAL: btrfs-progs is absent; soil storage cannot converge" >&2
       exit 1
     fi
+
+  # **Which iptables table the firewall rules go in, recorded before any phase
+  # runs.** `soil firewall` converges the variant the package list names and
+  # refuses to report a converged firewall whose rules the host's own `iptables`
+  # cannot read, but a machine booting into the two halves disagreeing should say
+  # so here, where nothing has been converged on top of it yet.
+  #
+  # Both halves are recorded, and separately on purpose: `update-alternatives`
+  # records which variant `/usr/sbin/iptables` NAMES, while ferm resolves its own
+  # binary when loading a policy and prefers the `-legacy` names. The two can
+  # disagree on a healthy host, and on the golden they did — which is the whole
+  # of docs/notes/iptables-variant-must-be-stated.md.
+  - |
+    set -eu
+    vf=/var/lib/guarden-evidence
+    echo "iptables name:   $(iptables --version 2>/dev/null || echo MISSING)" >>"$vf/substrate.txt"
+    ferm --shell /dev/null >"$vf/.ferm-sh" 2>&1 || true
+    echo "ferm would load: $(head -1 "$vf/.ferm-sh" | cut -d' ' -f1)" >>"$vf/substrate.txt"
+    echo "alternatives:    $(iptables --version | sed 's/.*(//;s/)//')" >>"$vf/substrate.txt"
+    iptables-legacy-save -t filter >"$vf/.legacy" 2>/dev/null || true
+    echo "legacy chains:   $(grep -c '^-N' "$vf/.legacy")" >>"$vf/substrate.txt"
+    nft list tables >"$vf/.nft" 2>/dev/null || true
+    echo "nft tables:      $(wc -w <"$vf/.nft")" >>"$vf/substrate.txt"
+    rm -f "$vf/.ferm-sh" "$vf/.legacy" "$vf/.nft"
+    tail -5 "$vf/substrate.txt"
 
   # Converge every phase, then check every phase. The order and the phase list
   # are `soil list`'s, read from the program at render time, so this line and

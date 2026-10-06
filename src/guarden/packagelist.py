@@ -264,3 +264,79 @@ def update_argv(row: dict | None = None) -> list[str]:
     """
     family_row = family() if row is None else row
     return [str(part) for part in family_row.get("update", [])]
+
+
+# Closed set: `name` is what the phase says out loud, so a fourth spelling would
+# produce a diagnostic no operator can act on. An unknown name is a rejected
+# input at load time rather than a variant nobody recognises on a converged host.
+VARIANT_NAMES = ("legacy", "nft")
+
+# All three or none: a row carrying two states a preference it cannot act on,
+# which is the silent mismatch this table exists to remove.
+VARIANT_FIELDS = ("name", "set", "report")
+
+
+def variant_table() -> dict[str, dict]:
+    """Every family's `variant` subtable, keyed by family.
+
+    A family this design has not been run on is absent rather than carrying an
+    empty row: inventing one would be guarden guessing about a host it has never
+    booted.
+    """
+    rows = {}
+    for family_name, row in families().items():
+        declared = row.get("variant")
+        if isinstance(declared, dict):
+            rows[family_name] = declared
+    return rows
+
+
+def variant(name: str | None = None) -> tuple[str, dict]:
+    """This family's variant answer and its row, or a rejection naming the gap.
+
+    **A family with no `variant` is exit 2, not exit 1.** The list is a repository
+    input, so a row nobody filled in is not drift: the phase has no converged
+    state to compare against, because the list does not say which table it
+    converges.
+    """
+    family_name, _ = resolve(name)
+    rows = variant_table()
+    if family_name not in rows:
+        raise UnknownFamily(
+            f"the package list at {list_path()} states no iptables variant for "
+            f"{family_name}, and `soil firewall` will not write rules into a table it has "
+            f"not named: guarden's rules must be readable through the host's own "
+            f"iptables, and only the list says which one that is. It carries a variant "
+            f"for: {', '.join(sorted(rows)) or 'none'}"
+        )
+    row = rows[family_name]
+    for field in VARIANT_FIELDS:
+        if not str(row.get(field, "")).strip():
+            raise UnknownFamily(
+                f"the package list at {list_path()} states an iptables variant for "
+                f"{family_name} that has no {field}: a variant that cannot be selected, or "
+                f"cannot be reported, is a preference rather than a converged state"
+            )
+    declared = str(row["name"]).strip()
+    if declared not in VARIANT_NAMES:
+        raise UnknownFamily(
+            f"the package list at {list_path()} names iptables variant {declared!r} for "
+            f"{family_name}, which is not one of {', '.join(VARIANT_NAMES)}"
+        )
+    return declared, row
+
+
+def variant_argv(field: str, name: str | None = None) -> list[str]:
+    """One of the variant's argvs, from the list.
+
+    `set` makes the host name this variant and `report` answers which one it
+    names. Neither is written here, for the reason `update_argv` gives: the
+    mechanisms differ per family.
+    """
+    _, row = variant(name)
+    return [str(part) for part in row.get(field, [])]
+
+
+def variant_name(name: str | None = None) -> str:
+    """The variant this family converges, as the list states it."""
+    return variant(name)[0]

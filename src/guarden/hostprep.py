@@ -1161,6 +1161,82 @@ def _deadman_armed() -> bool:
     return h.run("systemctl", "is-active", "guarden-firewall-deadman.timer").line == "active"
 
 
+# The chain the framework's skeleton declares on every host, and the one a
+# readability check can ask about before any service exists.
+FRAMEWORK_CHAIN = "guarden-in"
+
+# What `iptables --version` prints for each variant. Measured on the golden:
+# `iptables v1.8.11 (nf_tables)` and `iptables v1.8.11 (legacy)`.
+_VARIANT_MARKERS = {"legacy": "(legacy)", "nft": "(nf_tables)"}
+
+
+def _host_variant(family: str | None = None) -> str:
+    """Which variant the host's own iptables is, or its raw version line."""
+    result = h.run(*packagelist.variant_argv("report", family))
+    if not result.ok:
+        return ""
+    reported = result.line.lower()
+    for variant_name, marker in _VARIANT_MARKERS.items():
+        if marker in reported:
+            return variant_name
+    return result.line
+
+
+def _variant_selected(family: str | None = None) -> bool:
+    return _host_variant(family) == packagelist.variant_name(family)
+
+
+def _select_variant(family: str | None = None) -> None:
+    """Point the host's own iptables at the variant the list states.
+
+    Necessary but NOT sufficient, which is the whole of this note's finding: ferm
+    2.7 does not use the alternatives system. `find_tool` in the ferm binary
+    matches `^(.*tables)(.*)$` and prefers `$1-legacy$2` across `/usr/sbin`,
+    `/sbin` and `$PATH`, so the list states the variant ferm WRITES rather than
+    the one an operator is used to. `_rendered_rules_readable` is what proves the
+    two agree.
+    """
+    argv = packagelist.variant_argv("set", family)
+    if not argv:
+        h.error("the package list states no argv that selects the iptables variant, so "
+                "nothing was selected")
+        return
+    result = h.run(*argv)
+    if result.ok:
+        return
+    reason = result.err.strip().splitlines()
+    h.error(f"{argv[0]} {' '.join(argv[1:])}: "
+            f"{reason[0] if reason else result.code}, so this host still names an iptables "
+            f"variant guarden did not choose")
+
+
+def _rendered_rules_readable(family: str | None = None) -> bool:
+    """Whether `iptables` names guarden's own chain on this host.
+
+    Asked of the rules and never of the alternatives: alternatives records which
+    variant `/usr/sbin/iptables` NAMES, ferm decides which one it WRITES, and
+    only this answers "where is the firewall".
+
+    An absent chain is not claimed as a mismatch — the unit may simply never have
+    run — so this holds only on a positive answer and the unit item reports the
+    rest.
+    """
+    return h.run("iptables", "-S", FRAMEWORK_CHAIN).ok
+
+
+def _firewall_applied(family: str | None = None) -> bool:
+    """The unit is holding the box AND the chain is readable. One item, both halves.
+
+    An `active (exited)` unit over an absent chain is a converge that reported
+    success and stopped nothing. The unit is asked first because the chain cannot
+    exist without it, so a stopped unit reads as "nothing to judge" rather than
+    as a mismatch.
+    """
+    if h.run("systemctl", "is-active", "guarden-firewall.service").line != "active":
+        return False
+    return _rendered_rules_readable(family)
+
+
 def _module_ingress() -> list[tuple[str, str, str]]:
     """The enabled modules' declared ingress, each with the publication it lands on.
 
@@ -1276,7 +1352,7 @@ def _framework(interface: str) -> str:
     ) + "\n"
 
 
-def firewall_items(deadman: bool) -> list[Item]:
+def firewall_items(deadman: bool, family: str | None = None) -> list[Item]:
     config = h.read_config(h.config_path()) or h.shipped_config()
     interface = h.ingress_interface(config)
     items: list[Item] = [
@@ -1303,6 +1379,23 @@ def firewall_items(deadman: bool) -> list[Item]:
             "no POSTROUTING masquerade",
             hostpath(*FIREWALL_DIR, "20-ingress-nat.conf"),
             _ingress_nat(interface, _module_ingress()),
+        ),
+        # Ordering, not a filter: the variant is selected before the unit starts,
+        # because starting it is what makes ferm resolve the binary and load the
+        # policy. The readability check follows the start, because before it there
+        # is nothing to read.
+        Item(
+            f"this host's own iptables is the {packagelist.variant_name(family)} variant "
+            f"guarden converges, so an operator's `iptables -S` reads the rules ferm writes",
+            lambda: _variant_selected(family),
+            lambda: _select_variant(family),
+        ),
+        Item(
+            "guarden-firewall.service is enabled, and is running with guarden's rules "
+            "readable through this host's own iptables rather than in another table",
+            lambda: _firewall_applied(family),
+            lambda: h.run_or_die("systemctl", "enable", "--now",
+                                 "guarden-firewall.service") and None,
         ),
     ]
 
@@ -1996,7 +2089,7 @@ def items_for(
     if phase == "sysctl":
         return sysctl_items()
     if phase == "firewall":
-        return firewall_items(deadman)
+        return firewall_items(deadman, family)
     if phase == "install":
         return install_items(modules)
     if phase == "units":

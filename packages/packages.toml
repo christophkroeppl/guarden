@@ -51,6 +51,9 @@
 #   query     the argv that answers whether one package is installed
 #   installed the output `query` prints when it is; empty means "exit 0 is yes"
 #   update    the argv that refreshes the package index
+#   variant   the iptables variant this family converges, and the argv that
+#             selects it and the one that reports it. Absent means the family
+#             has no answer yet, and a family with no row selects nothing
 #
 # `query`/`installed` are separate keys rather than one command because
 # answering that question is distribution-specific in a way installing a package
@@ -58,6 +61,33 @@
 # absent as present. An empty `installed` is the honest encoding for a query
 # whose exit code is the whole answer.
 
+# The iptables variant this family converges, and the argv that selects it and
+# the one that reports it. **Three keys rather than a name, because naming a
+# variant in the list would be guarden guessing at a host it has not booted.**
+#
+# `ferm` 2.7 resolves its xtables binary in `find_tool`: for a name matching
+# `^(.*tables)(.*)$` it looks for `$1-legacy$2` FIRST across `/usr/sbin`,
+# `/sbin`, `$PATH`, and only falls back to the unsuffixed name. Measured on the
+# golden, `/usr/sbin/ferm` therefore loads guarden's policy through
+# `/usr/sbin/iptables-legacy-restore` no matter what `update-alternatives` says
+# -- and with the `-legacy` names moved off the host it fell back to
+# `/usr/sbin/iptables-restore`, which is nft. So the table guarden's rules land
+# in is ferm's choice, made at the moment it runs, and it is not the alternatives
+# system's.
+#
+# `nft` is the variant this design converges: it is the one `/usr/sbin/iptables`
+# names by default on every family the list carries, so the rules and every tool
+# an operator reaches for read the same tables. **The alternative is not a
+# free choice on a Debian host, and the row says so rather than implying it
+# could be:** `update-alternatives --set` refuses a path `iptables-legacy` is not
+# registered for, and moving the binary off the host to get around that makes
+# `guarden-firewall.service` write one table at start and another at reload,
+# which is the fail-open this key exists to remove. A family with no `variant`
+# row selects nothing and is reported rather than silently left alone.
+
+# The `variant` table is a subtable of the family, so it goes after the family's
+# own keys: TOML has no way to add a table to a table already closed by its
+# values without a new header.
 [families.debian]
 install = ["apt-get", "install", "-y"]
 query = ["dpkg-query", "-W", "-f=${db:Status-Status}"]
@@ -74,6 +104,33 @@ update = ["apt-get", "update"]
 # guarden installs no firewall manager to displace and the phase's "distribution
 # firewall is not in charge" check passes trivially. Naming the real unit for
 # each family is not done yet; see the list of what is left.
+#
+# **`variant` is the only iptables answer a family states, and only Debian
+# states one.** It is a subtable rather than a bare key so the name and the two
+# argvs travel together: a list that carried the variant's name beside some
+# other family's mechanism would let a name be stated with no way to select it.
+# Fedora and Arch ship `iptables-legacy` under the unsuffixed name with no
+# alternatives mechanism to select against, which is a different host shape from
+# Debian's and not something this list can paper over: a family with no
+# `variant` is REPORTED by the firewall phase and converges nothing, which is an
+# honest answer until somebody runs this design on it.
+#
+# **`legacy`, not `nft`, and that is the measurement correcting the obvious
+# answer.** nft is what `/usr/sbin/iptables` names by default, so it is the
+# variant a reader reaches for -- but ferm does not use the alternatives system at
+# all, it resolves the binary itself and prefers the `-legacy` names, so on a host
+# where both binaries are installed **ferm writes legacy whatever alternatives
+# says**. Converging `nft` would therefore leave the host reading a table guarden
+# had stopped writing, which is the fail-open rather than the fix for it. What
+# guarden converges is the table ferm actually writes, and the phase then checks
+# the rules are readable through the host's own binary rather than trusting the
+# selection to have been enough.
+#
+# The trade is stated rather than hidden: the rules live in a table the default
+# `iptables` does not read, and the price is paid by `update-alternatives`
+# pointing operators' own `iptables` at the same table. A host that ships only one
+# variant needs no selection at all, and a host where ferm ever stops preferring
+# legacy is caught by the readability check rather than by this row going stale.
 packages = [
     "btrfs-progs",
     "snapper",
@@ -84,6 +141,11 @@ packages = [
     "python3-yaml",
     "python3-jinja2",
 ]
+
+[families.debian.variant]
+name = "legacy"
+set = ["update-alternatives", "--set", "iptables", "/usr/sbin/iptables-legacy"]
+report = ["iptables", "--version"]
 
 [families.fedora]
 install = ["dnf", "install", "-y"]
