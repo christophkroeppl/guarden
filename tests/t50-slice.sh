@@ -122,14 +122,24 @@ assert_file_has "$runtime/systemd/generator/web.service" "ExecStart"
 assert_file_has "$runtime/systemd/generator/web.service" "podman"
 
 # ---------------------------------------------------------------------------
-# is the loopback deny what refuses the stub resolver?
+# is the loopback deny still closed, and is the stub resolver the one hole in it?
 # ---------------------------------------------------------------------------
 #
 # The deny is `daddr 127.0.0.0/8 jump DROP` in `guarden-svc`, which the OUTPUT path
-# jumps to. 127.0.0.53 is systemd-resolved's stub. If the counter moves when a
-# service uid sends one packet there, the deny is the cause and no service can pull
-# an image; if it does not, this is a golden-VM artefact and the fix is in the
-# harness.
+# jumps to, and 127.0.0.53 is systemd-resolved's stub.
+#
+# **This measurement was inverted by ticket 260 and had to be inverted back.** It
+# read the DROP counter and asserted it MOVED when a service uid sent one packet to the
+# stub — which was true, and was the bug: the deny was refusing the host's own
+# resolver, so `podman pull` could not complete and no first deploy of a new workload
+# could succeed. Ticket 260 renders one owner-matched accept for the stub above the
+# deny, so that packet is now accepted and the counter correctly stays at 0.
+#
+# So the claim here is the one that matters and was never asserted: the deny must still
+# refuse loopback, and it must refuse everything except the one address. The stub is
+# measured as the ACCEPT's counter moving, and a DIFFERENT loopback destination is
+# measured as the DROP's counter moving — which is the negative that would catch an
+# accept rendered too wide.
 run soil firewall --apply
 assert_exit 0
 # A host fact that changes what this measurement means, recorded rather than worked
@@ -154,15 +164,37 @@ deny_packets() {
         | awk '$3 == "DROP" && $NF == "127.0.0.0/8" {print $1; exit}'
 }
 
-before=$(deny_packets)
-echo "DENY_COUNTER_BEFORE=$before" >&2
+stub_packets() {
+    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
+        | awk '$3 == "ACCEPT" && $NF == "127.0.0.53" {n += $1} END {print n + 0}'
+}
+
+[ -n "$(deny_packets)" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"
+
+# **Half one: the stub is reachable, and the accept above the deny is what lets it.**
+# The stub counter is the sum over both protocols because the render carries an accept
+# each, and one UDP send must move the UDP one.
+stub_before=$(stub_packets)
+deny_before=$(deny_packets)
 run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.53 53' || true
-after=$(deny_packets)
-echo "DENY_COUNTER_AFTER=$after" >&2
-[ -n "$before" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"
-[ -n "$after" ] || _fail "the deny rule's packet counter is unreadable"
-[ "$after" != "$before" ] \
-    || _fail "the deny counter did not move, so something else refuses the stub"
+stub_after=$(stub_packets)
+deny_after=$(deny_packets)
+echo "STUB=$stub_before->$stub_after DENY=$deny_before->$deny_after" >&2
+[ "$stub_after" -gt "$stub_before" ] \
+    || _fail "the stub accept did not take the packet, so a service still cannot resolve"
+[ "$deny_after" = "$deny_before" ] \
+    || _fail "the stub was dropped, so the accept is not above the deny"
+
+# **Half two, and the one that never existed before: the deny still refuses loopback.**
+# 127.0.0.53 is the single hole, so a DIFFERENT loopback destination must still be
+# dropped. An accept rendered too wide — say on all of 127.0.0.0/8 — passes half one
+# and fails here, which is why both are asserted.
+other_before=$(deny_packets)
+run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.1 9' || true
+other_after=$(deny_packets)
+echo "OTHER_DENY=$other_before->$other_after" >&2
+[ "$other_after" -gt "$other_before" ] \
+    || _fail "a loopback destination other than the stub was not denied, so the accept is too wide"
 
 # The unit is generated, loaded and found, so whatever happens next is podman's and
 # not systemd's.

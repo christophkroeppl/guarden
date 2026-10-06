@@ -103,7 +103,8 @@ assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "index-url"
 # disagreement, and the two lists are meant to differ exactly there — so the
 # substrate is cut out of the document and the comparison is between the two
 # halves that are supposed to be one.
-grep -vE '^(family|install|query) ' "$GUARDEN_FIXTURES/list-stdout" | sort >"$GUARDEN_FIXTURES/list-packages"
+grep -vE '^(family|install|query|conditional) |^  ' "$GUARDEN_FIXTURES/list-stdout" \
+    | sort >"$GUARDEN_FIXTURES/list-packages"
 sed -n '/^  # harness:/,$d; s/^  - //p' "$GUARDEN_FIXTURES/user-data.yaml" \
     | sort >"$GUARDEN_FIXTURES/rendered-packages"
 comm -23 "$GUARDEN_FIXTURES/list-packages" "$GUARDEN_FIXTURES/rendered-packages" \
@@ -140,15 +141,21 @@ assert_dpkg fail2ban
 assert_dpkg podman
 
 # The pinned podlet is the last item of the phase, and it is the only fetch in it,
-# so it is what decides this suite's exit codes rather than the packages. Two facts
-# about this machine make the sequence below deterministic rather than incidental.
-# `soil install` is what seeds the record from the template and this suite ran no
-# `install`, so the record is absent rather than half-filled. The packages are not
-# absent: ticket 200 bakes them into the golden at build time, so a cut inherits
-# them and the only drift left is the podlet — a fetch, which the build does not
-# perform.
-assert_file_missing /etc/guarden/podlet.release
-assert_file_missing /usr/lib/guarden/bin/podlet
+# so it is what decides this suite's exit codes rather than the packages.
+#
+# **The absent record is a precondition this suite establishes, not one it
+# assumes.** Thirty-eight suites export `GUARDEN_PREFIX=/` and call
+# `stage_podlet_release`, which writes this very file to the real root, so on any
+# machine where one of them ran first the record is present — and this file used to
+# assert its absence and fail, having reasoned that "this suite ran no install".
+# What that reasoning missed is that it is not the only suite on the machine. The
+# golden's `base` snapshot carries no record, so a clean cut satisfies this by
+# itself; a shared one does not, and the answer has to be the same either way.
+#
+# So it is removed rather than asserted. The `--check` below is the claim: on a
+# machine with no record the phase reports the missing fetch, and that is what this
+# asserts — not that a file some other suite may have written is not on disk.
+rm -f /etc/guarden/podlet.release /usr/lib/guarden/bin/podlet
 run soil packages --check
 assert_exit 1
 assert_stderr_has "drift: the pinned podlet is installed"
