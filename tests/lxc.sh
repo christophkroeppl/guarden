@@ -403,9 +403,9 @@ cmd_provision() {
             $LXC delete "$GOLDEN" --force >/dev/null 2>&1 ||
                 die "cannot delete $GOLDEN; remove it by hand"
         elif _has_snapshot "$GOLDEN"; then
-            # Nothing to do, and nothing needs the machine booted to say so:
-            # `lxc info` lists a stopped instance's snapshots. Booting it just to
-            # ask costs 45 seconds on every invocation.
+            # Nothing to do, but the golden must be running for `lxc copy` to
+            # work from its snapshot. A stopped golden makes every _reset fail.
+            [ "$(_state "$GOLDEN")" = RUNNING ] || $LXC start "$GOLDEN" >/dev/null
             return 0
         fi
     fi
