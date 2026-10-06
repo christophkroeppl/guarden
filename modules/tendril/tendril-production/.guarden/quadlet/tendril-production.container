@@ -1,28 +1,15 @@
 [Unit]
-Description=Cloudflare Tunnel for tendril-production
-After=network-online.target
-Wants=network-online.target
+Description=the tunnel, which dials out and is reached by nobody
 
-[Service]
-Type=notify
-ExecStart=/usr/lib/guarden/bin/cloudflared tunnel --config /etc/guarden/tendril-production/config.yml run
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-# Security hardening
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/run/secrets
-ReadWritePaths=/etc/guarden/tendril-production
-
-# Credentials — the renderer names the secret; podman resolves it from this
-# service's own secret store. No LoadCredentialEncrypted= here: this unit runs
-# in the service user's manager, which cannot read the system host key.
+[Container]
+Image=docker.io/cloudflare/cloudflared:2026.10.0
+# One config for the whole host. `cloudflared` reads a single `ingress:` list, so
+# there is no per-service file and the tunnel is one process rather than one per
+# route — which is why `roots` renders into this directory and not into a
+# service's own tree.
+Volume=/var/lib/guarden/tunnel:/etc/cloudflared:ro
+Exec=tunnel
+Exec=--config
+Exec=/etc/cloudflared/config.yml
+Exec=run
 Secret=TUNNEL_CREDENTIAL,type=file
-
-[Install]
-WantedBy=default.target

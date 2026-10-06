@@ -30,8 +30,6 @@ EXTENSION = ".yml"
 FORWARD_AUTH = f"_{edgeconf.MIDDLEWARE}{EXTENSION}"
 
 TUNNEL_TEMPLATE = "tunnel-ingress.yml.j2"
-TUNNEL_EXTENSION = ".yml"
-TUNNEL_DIR = paths.TUNNEL_INGRESS
 
 EPILOG = """\\
 `roots sync` writes one file per service into the edge's configuration
@@ -97,69 +95,52 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
             and service != provider,
         }
         for route in routes
+        if route.get("destination") != "tunnel"
     ]
+    if not rows:
+        return ""
     return render.render_template(TEMPLATE, service=service, rows=rows)
 
 
 def write(service: str, body: str) -> None:
+    if not body:
+        return
     conf.write_file(paths.EDGE_DYNAMIC / file_name(service), body, 0o644)
 
 
-def render_tunnel(service: str, routes: list[dict], config) -> str:
-    """One service's tunnel ingress rules, as cloudflared reads them.
+def render_tunnel(routes: list[dict], config) -> str:
+    """The host's tunnel ingress, as `cloudflared` reads it.
 
-    Only routes with destination='tunnel' are rendered.
-    The catch-all is http_status:404 and is last.
+    Only routes whose destination is `tunnel` are rendered. The catch-all is
+    `http_status:404` and is last, so a hostname in the tunnel's zone that no
+    service claims is a 404 from the tunnel rather than a default page.
     """
-    tunnel_routes = [r for r in routes if r.get("destination") == "tunnel"]
-    if not tunnel_routes:
+    if not config.tunnel_domain:
         return ""
-    
-    tunnel_domain = config.tunnel_domain
-    if not tunnel_domain:
-        return ""
-    
-    rows = []
-    for route in tunnel_routes:
-        rows.append({
+    rows = [
+        {
             "hostname": route.get("host", ""),
             "service": f"http://{route.get('target', '')}",
-            "path": route.get("path", "/"),
-        })
-
-    rows.append({
-        "hostname": f"*.{tunnel_domain}",
-        "service": "http_status:404",
-        "path": "/",
-    })
-
+        }
+        for route in routes
+        if route.get("destination") == "tunnel"
+    ]
+    if not rows:
+        return ""
     return render.render_template(TUNNEL_TEMPLATE, rows=rows)
 
 
-def write_tunnel(service: str, body: str) -> None:
-    """Write tunnel ingress file."""
-    if body:
-        paths.TUNNEL_INGRESS.mkdir(parents=True, exist_ok=True)
-        conf.write_file(paths.TUNNEL_INGRESS / file_name(service), body, 0o644)
+def write_tunnel(body: str) -> None:
+    if not body:
+        return
+    paths.TUNNEL.mkdir(parents=True, exist_ok=True)
+    conf.write_file(paths.TUNNEL_CONFIG, body, 0o644)
 
 
 def sweep(written: set[str]) -> list[str]:
     """Remove the file of a service that is gone, and nothing else."""
     removed: list[str] = []
     for path in sorted(paths.EDGE_DYNAMIC.glob(f"*{EXTENSION}")):
-        if path.name in written:
-            continue
-        path.unlink()
-        removed.append(path.name)
-    return removed
-
-
-def sweep_tunnel(written: set[str]) -> list[str]:
-    """Remove tunnel ingress file of a service that is gone."""
-    removed: list[str] = []
-    if not paths.TUNNEL_INGRESS.is_dir():
-        return removed
-    for path in sorted(paths.TUNNEL_INGRESS.glob(f"*{EXTENSION}")):
         if path.name in written:
             continue
         path.unlink()
@@ -282,26 +263,24 @@ def sync() -> int:
         for service, entries in routes.items()
     ]
     auth_body = forward_auth(provider) if provider else None
-    written = {file_name(service) for service, _ in plan}
-    
-    # Also render tunnel ingress files
-    tunnel_written = set()
-    for service, entries in routes.items():
-        tunnel_body = render_tunnel(service, entries, config)
-        if tunnel_body:
-            write_tunnel(service, tunnel_body)
-            tunnel_written.add(file_name(service))
+    written = {file_name(service) for service, body in plan if body}
+
+    tunnel_body = render_tunnel(
+        [route for entries in routes.values() for route in entries], config
+    )
 
     for service, body in plan:
         write(service, body)
     if auth_body is not None:
         conf.write_file(paths.EDGE_DYNAMIC / FORWARD_AUTH, auth_body, 0o644)
         written.add(FORWARD_AUTH)
+    if tunnel_body:
+        write_tunnel(tunnel_body)
+    elif paths.TUNNEL_CONFIG.is_file():
+        paths.TUNNEL_CONFIG.unlink()
     printed = [f"{service} {len(routes[service])} routes" for service, _ in plan]
     for name in sweep(written):
         printed.append(f"removed {name}")
-    for name in sweep_tunnel(tunnel_written):
-        printed.append(f"removed tunnel {name}")
 
     for line in _warnings(routes, provider):
         sys.stderr.write(line + "\n")

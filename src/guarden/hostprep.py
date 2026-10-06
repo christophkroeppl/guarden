@@ -139,7 +139,7 @@ ARTEFACT_FIELDS = ("format", "url", "sha256", "binary_sha256")
 # them. A second name here is a second pinned artefact and nothing else: the
 # fetch, the digest comparison and the unpack are the functions below, and they
 # take the name rather than being written once per artefact.
-PINNED_ARTEFACTS = (PODLET, "cloudflared")
+PINNED_ARTEFACTS = (PODLET,)
 
 # spec 6.1: the kernel owns the public ports and nothing unprivileged binds
 # below 1024. Raising the threshold to the kernel default is a tightening;

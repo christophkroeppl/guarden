@@ -38,6 +38,35 @@ firewall access — a tunnel grant cannot disable it.
 
 ## Part two — where the binary comes from
 
+**The tunnel is a container, and it is the vendor's own image.** This is the
+**amendment** to this ADR's first revision, which decided `cloudflared` would be a second
+pinned host binary. It is not: the vendor publishes `cloudflare/cloudflared` as an image
+on Docker Hub, and a container is how every other service in this design runs (spec §2,
+"everything deployed is a service"). Taking the image means:
+
+- **No second pinned artefact.** `PINNED_ARTEFACTS` stays `(podlet,)`, `cloudflared.release`
+  is deleted, and the pin machinery serves exactly one name. The 40 MB statically-linked
+  binary, the `raw` format reader, and the "no distribution security update" cost all
+  disappear — they were the price of running the program on the host, and it no longer
+  runs on the host.
+- **The version is still recorded and still asserted.** The image tag is the version
+  (`docker.io/cloudflare/cloudflared:2026.10.0`), it is a line in the module's own unit
+  source, and it is pinned by digest in the same sense every other module's image is. What
+  changed is *which* mechanism records it: a unit source's `Image=` rather than a
+  `*.release` file.
+- **`Image=` is not `ExecStart=`.** The first revision's other problem is gone with it: a
+  raw systemd unit with a multi-word `ExecStart=` is refused by `unitsource.format_line`
+  by design, and a `[Container]` unit passes its arguments one `Exec=` line each, which is
+  how `gate`'s traefik already runs.
+
+**What the first revision got right, and is kept.** A vendor *APT repository* is still
+refused, for the reason below. The pin machinery is still renamed rather than copied, and
+still serves `podlet`. The egress-only property is unaffected by containerising — a
+container that dials out binds no port and is reached by nobody, exactly as a host process
+that dials out does.
+
+## The pin mechanism, and what still uses it
+
 **A pinned third-party binary is `format`, `url`, `sha256`, `binary_sha256` — and the
 implementation is one mechanism, named for nothing in particular.**
 
@@ -86,13 +115,11 @@ resolver. Not a floating "latest".
 
 A vendor repository has no digests guarden can state, which is the whole objection.
 
-## What a raw binary costs, stated honestly
+## What a raw binary *would* have cost — kept as the reason it was not taken
 
-The second artefact guarden will pin is `cloudflared`, and it is published as a **raw
-per-architecture binary** with no extension. That is this shape with **one fewer
-field** — a url and one digest, no archive and no reader.
-
-Read from the vendor's releases API, metadata only:
+The first revision decided `cloudflared` would be pinned as a **raw per-architecture
+binary** with no extension: a url and one digest, no archive and no reader. Read from the
+vendor's releases API, metadata only:
 
 ```
 cloudflared-linux-amd64     40129756
@@ -100,19 +127,22 @@ cloudflared-linux-arm64     37687584
 cloudflared-linux-amd64.deb 19316284
 ```
 
-**40 MB against 19 MB.** The raw binary is statically linked where the package is not,
-so it carries a libc it does not need, and it receives no distribution security update.
-That is a real cost and it is not waved away — it is the same trade `podlet` already
-makes, taken a second time deliberately rather than by accident, and the alternative
-(a vendor repository) costs the recorded-version property *and* a persistent
-third-party APT signing key on every host, which is strictly worse than a large file
-whose digest is known.
+**40 MB against 19 MB**, statically linked where the package is not, so it carries a libc
+it does not need and receives no distribution security update. That cost is why the
+container is the better answer rather than a footnote: the image carries the same program
+with the vendor maintaining it, and the host fetches nothing it must pin and re-verify.
+
+The argument that survives, and is why a vendor APT repository is still refused: **a
+repository's contents move under guarden's pin.** A pin names a url and a digest; a
+repository serves whatever it serves today. An image tag is not a repository — it is an
+immutable name for specific bytes, which is what the pin was for.
 
 ## What this ADR decides, and what it leaves
 
 **Decided:** a host may terminate public traffic in more than one place; the second
-terminator is egress-only and binds nothing; the pin is a url and two digests and the
-fetch machinery is renamed rather than copied.
+terminator is egress-only, binds nothing, and **runs as the vendor's own container image
+rather than as a second pinned host binary** (amended); the pin is a url and two digests,
+it is renamed rather than copied, and it still serves `podlet` and only `podlet`.
 
 **Left to ticket 220's implementation:** the module's shape, the issuance and expiry
 mechanics, and the reconciler. This ADR does not pre-empt them — it refuses them a

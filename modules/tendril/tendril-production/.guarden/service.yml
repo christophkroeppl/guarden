@@ -9,8 +9,9 @@
 # reason `api` is not set either: it is not a control surface, because no
 # loopback publication of its own exists to be one.
 #
-# No volumes: the tunnel's configuration is rendered by `roots` into
-# `/var/lib/guarden/tunnel/ingress/`, and the credential is a podman secret.
-# There is nothing in the service's own tree worth a snapshot.
+# The tunnel's configuration is one host-wide file, `roots` renders it into
+# `/var/lib/guarden/tunnel/`, and the unit mounts that directory read-only. The
+# credential is a podman secret. There is nothing in the service's own tree worth
+# a snapshot, so there is no `state:`.
 project: tendril
 units: .guarden/quadlet/

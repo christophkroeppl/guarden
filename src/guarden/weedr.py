@@ -746,6 +746,7 @@ def _install_module(module: modules.Module, config) -> int:
     firewall.load_set()
     _edge_directory(module)
     _dashboard_directory(module)
+    _tunnel_directory(module)
     _converge_ingress()
     _sync_routes()
     _sync_dashboard()
@@ -812,6 +813,23 @@ def _edge_directory(module: modules.Module) -> None:
     conf.set_owner(path, (uid, users.group_id(EDGE_GROUP)))
     os.chmod(path, EDGE_MODE)
     sys.stdout.write(f"{path} is guarden:{EDGE_GROUP} {EDGE_MODE:04o}\n")
+
+
+def _tunnel_directory(module: modules.Module) -> None:
+    """`/var/lib/guarden/tunnel`, `guarden:guarden 0755`.
+
+    `roots` runs as `guarden` and writes the tunnel's config into it; the tunnel
+    service's own unit mounts it read-only. It is not the edge's directory and
+    does not share its group: the reader here is a container mount, not a service
+    user that needs the write bit's neighbour.
+    """
+    del module
+    path = paths.TUNNEL
+    path.mkdir(parents=True, exist_ok=True)
+    uid = users.passwd_entries()[units.GUARDEN_USER][0]
+    conf.set_owner(path, (uid, users.group_id(units.GUARDEN_USER)))
+    os.chmod(path, DASHBOARD_MODE)
+    sys.stdout.write(f"{path} is {units.GUARDEN_USER}:{units.GUARDEN_USER} {DASHBOARD_MODE:04o}\n")
 
 
 def _converge_ingress() -> None:

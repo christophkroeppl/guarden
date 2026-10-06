@@ -57,9 +57,8 @@ EDGE_DYNAMIC = LIB / "edge" / "dynamic"
 # because `twig` runs as `guarden` and `shared/<name>/` is read-only to it.
 DASHBOARD = SHARED / "dashboard"
 
-# /var/lib/guarden/tunnel — tunnel ingress directory (ticket 220)
 TUNNEL = LIB / "tunnel"
-TUNNEL_INGRESS = TUNNEL / "ingress"
+TUNNEL_CONFIG = TUNNEL / "config.yml"
 
 # /usr/lib/guarden and /usr/bin, spec 2's FHS rows.
 #

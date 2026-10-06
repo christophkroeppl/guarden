@@ -1,10 +1,8 @@
-# The first pinned artefact: a fetch from outside a distribution repository,
-# pinned.
+# The pinned artefact: a fetch from outside a distribution repository, pinned.
 #
-# There is a second one now — `cloudflared.release`, read by the same mechanism —
-# so "the one fetch" is no longer true and this file is not the only shape of a
-# pin. What has not changed is the claim: guarden installs no artefact it has not
-# verified, so the digests below are the claim and everything else in this file is
+# It is the only one. The tunnel is a container rather than a second host binary
+# (ADR-0015, superseded on this point), so the mechanism still serves exactly one
+# name and the digests below are the whole claim. Everything else in this file is
 # bookkeeping. There is no "latest" and no unpinned fallback, because "a
 # third-party binary, verified" is the whole claim and a convenience fetch would
 # make it false.
