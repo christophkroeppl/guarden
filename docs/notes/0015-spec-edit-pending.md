@@ -1,11 +1,18 @@
-# ADR-0015's spec edit, held for integration — agent A owns `docs/spec.md`
+# ADR-0015's spec edit — APPLIED, 2026-10-06
 
-**This is a conflict, recorded rather than raced.** Agent A was given ownership of
-`docs/spec.md` to correct the loopback-deny claim in§7.6/7.7; ADR-0015 needs the same
-file for a different paragraph. Two agents editing one file is one worktree, so this
-edit waits for A to land and is applied on top.
+**Landed in `1aae34e`.** This note is kept for the reasoning, not as a pending action.
 
-## The paragraph, and what it must say
+The edit was held because agent A owned `docs/spec.md` for ticket 260's loopback-deny
+correction and two agents editing one file is one worktree. That blocker is gone: ticket
+260 landed (`028c4db`), there is no `ticket-260` worktree, and `docs/spec.md` already
+cites ADR-0015 at lines 2191 and 2228. The paragraph below was applied verbatim.
+
+It was still worth holding at the time: the two edits are in different sections (§7.6/7.7
+firewall versus the packages section), so there was never a content conflict — only a file
+conflict, and a silent loss is the failure mode worth avoiding. The rule stands even though
+this instance resolved itself.
+
+## The paragraph, and what it now says
 
 `docs/spec.md` around line 1196, in the packages section:
 
