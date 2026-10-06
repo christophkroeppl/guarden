@@ -574,15 +574,16 @@ _run_suite() {
     # **The exit code is returned rather than reduced to a boolean.** A failure
     # must reach the ledger and must not be recorded, and the one thing that
     # decides both is whether this suite actually passed.
-    if timeout --foreground --signal=KILL "$SUITE_TIMEOUT" \
+    local rc=0
+    timeout --foreground --signal=KILL "$SUITE_TIMEOUT" \
         $LXC exec -T "$RUNNER" --cwd "$VM_REPO" \
         --env "PYTHONPATH=$VM_REPO/src" \
         --env "GUARDEN_ROOT=$VM_REPO" \
-        -- bash -c "cd '$VM_REPO' && bash tests/$name" </dev/null; then
+        -- bash -c "cd '$VM_REPO' && bash tests/$name" </dev/null || rc=$?
+    if [ "$rc" -eq 0 ]; then
         python3 "$CACHE_TOOL" line pass "$name"
         return 0
     fi
-    rc=$?
     python3 "$CACHE_TOOL" line fail "$name"
     if [ "$rc" -eq 137 ]; then
         printf 'error: %s exceeded %ss and was killed; a suite that hangs reports nothing\n' \
