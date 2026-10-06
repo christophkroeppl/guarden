@@ -418,11 +418,11 @@ Rules that hold for every test:
   `python3-jinja2`, and the ones `packages/packages.toml` lists per family — including `ferm`,
   which is the firewall guarden runs, and `ufw`, which is the one it disables and is declared
   only so the dead-man timer can hand it back. No `pip install` at deploy time, no wheels
-  checked in. There is exactly one
-  fetch from outside a distribution repository, and it is deliberate: the pinned `podlet`
-  release, whose version and SHA256 are recorded in this repository and verified on install. It
-  is the only third-party binary. This keeps the host installable on a distro we have not tried
-  yet.
+  checked in. A fetch from outside a distribution repository is deliberate and rare: each is a
+  **pinned artefact** whose version and two SHA256s are recorded in this repository and verified
+  on install — `podlet`, and (ADR-0015) the tunnel's `cloudflared`. No vendor repository, ever:
+  a repository's contents move under the pin. This keeps the host installable on a distro we have
+  not tried yet.
 - `jinja2` renders units. YAML is parsed with `pyyaml` using `safe_load` only, because a
   developer-facing manifest should not have to be TOML, and every YAML file we read is one a human
   wrote in a repository. Guarden's own configuration is TOML, read with the standard library,

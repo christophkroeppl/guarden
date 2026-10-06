@@ -167,11 +167,14 @@ budget, not a promise: under disk pressure a marked snapshot can be reaped.
 _Avoid_: backup (unless it has left the box), ledger, refcount
 
 **edge**:
-The one service that terminates public traffic, `traefik-production`. Routes are rendered
-into a directory it reads. An ordinary service with no capability: `soil firewall` forwards
-80/tcp, 443/tcp and 443/udp to its published loopback ports with `DNAT`, each relying on the
-`route_localnet` set once on the ingress interface, so the kernel owns the public ports and it
-binds only loopback ones.
+The service that terminates public traffic on the kernel's forwarded ports,
+`traefik-production`. Routes are rendered into a directory it reads. An ordinary service with
+no capability: `soil firewall` forwards 80/tcp, 443/tcp and 443/udp to its published loopback
+ports with `DNAT`, each relying on the `route_localnet` set once on the ingress interface, so
+the kernel owns the public ports and it binds only loopback ones. It is the **only door**: the
+kernel forwards public ports to it, so anything on the internet can address it. A **tunnel**
+(ADR-0015) terminates traffic too and is **not a door** — it dials out and is reached by nobody,
+so it binds no port and no forwarding rule names it.
 _Avoid_: gate, proxy, ingress controller
 
 **alias**:
