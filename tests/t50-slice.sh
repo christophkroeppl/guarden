@@ -161,12 +161,12 @@ assert_stdout_has "DROP"
 # taken.
 deny_packets() {
     iptables-legacy -nvx -L guarden-svc 2>/dev/null \
-        | awk '$3 == "DROP" && $NF == "127.0.0.0/8" {print $1; exit}'
+        | awk '$3 == "DROP" && $9 == "127.0.0.0/8" {print $1; exit}'
 }
 
 stub_packets() {
     iptables-legacy -nvx -L guarden-svc 2>/dev/null \
-        | awk '$3 == "ACCEPT" && $NF == "127.0.0.53" {n += $1} END {print n + 0}'
+        | awk '$3 == "ACCEPT" && $9 == "127.0.0.53" {n += $1} END {print n + 0}'
 }
 
 [ -n "$(deny_packets)" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"

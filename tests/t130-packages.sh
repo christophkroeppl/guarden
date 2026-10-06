@@ -104,7 +104,18 @@ assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "index-url"
 # disagreement, and the two lists are meant to differ exactly there — so the
 # substrate is cut out of the document and the comparison is between the two
 # halves that are supposed to be one.
-grep -vE '^(family|install|query) ' "$GUARDEN_FIXTURES/list-stdout" | sort >"$GUARDEN_FIXTURES/list-packages"
+#
+# `--list` prints a conditional role as a PROSE HEADER followed by its packages
+# indented under it (`conditional zram: installed only when the configuration
+# asks` then `  systemd-zram-generator`). **Both halves are excluded here, and
+# that is the design rather than a convenience:** `userdata.package_block`
+# renders the substrate and harness roles only, because a machine being
+# provisioned is not yet a configured host. A conditional package is in neither
+# list by intent, so including it would fail the comparison in whichever
+# direction it was left. Dropping the whole block keeps the comparison between
+# the two halves that ARE supposed to be one.
+grep -vE '^(family|install|query) ' "$GUARDEN_FIXTURES/list-stdout" \
+    | sed '/^conditional /,/^[^ ]/d' | sort >"$GUARDEN_FIXTURES/list-packages"
 sed -n '/^  # harness:/,$d; s/^  - //p' "$GUARDEN_FIXTURES/user-data.yaml" |
     sort >"$GUARDEN_FIXTURES/rendered-packages"
 comm -23 "$GUARDEN_FIXTURES/list-packages" "$GUARDEN_FIXTURES/rendered-packages" \
