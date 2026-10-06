@@ -1195,10 +1195,14 @@ still converge and the run still exits `1`.
   ferm, ufw, fail2ban, podman, and `python3-yaml` and `python3-jinja2`. `ufw` is a dependency and
   not an optional extra: guarden installs `ferm` and takes the box's firewall over from `ufw`, so
   `ufw` is both the unit it disables and the one the dead-man timer re-enables. A failsafe that
-  names a package the host does not have is not a failsafe. It also fetches **one** artefact
-  from outside a distribution repository: the pinned `podlet` release, whose version and SHA256
-  are recorded in this repository and verified on install. That is the only exception to
-  "distribution packages only", it is deliberate, and it is the only third-party binary.
+  names a package the host does not have is not a failsafe. It also fetches **pinned artefacts**
+  from outside a distribution repository, and each one is an exception to "distribution packages
+  only" that is deliberate: a **url** and **two SHA256s** — the artefact's, verified before
+  anything is unpacked out of it, and the program's, re-read on every `--check` because the
+  artefact is not kept. Today that is `podlet` and, with ADR-0015, the tunnel's `cloudflared`.
+  **A vendor repository is never one of these**: its contents move under the pin, so the version
+  in force would be the vendor's to decide rather than recorded here. `soil packages --check`
+  asserts the version in force.
 
   **The timers are disabled for the same reason `storage` disables the packaged
   snapper cleanup timer, and it is the same overlap by another name**: a packaging
