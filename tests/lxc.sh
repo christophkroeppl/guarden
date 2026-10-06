@@ -28,28 +28,10 @@
 #
 # Usage:
 #   tests/lxc.sh provision   build the golden, convert it to btrfs, snapshot it
-#   tests/lxc.sh run [pat] [opts]   run the suites, honouring what each says
+#   tests/lxc.sh run [pat]   cut a fresh VM per test file and run it there
 #   tests/lxc.sh shell       a fresh VM you can poke at
+#   tests/lxc.sh prove       a fresh VM, and what its boot cost
 #   tests/lxc.sh destroy     remove the golden
-#
-# run's options:
-#   --fresh    cut a machine per file whatever any suite asks. The default was
-#              this and it is the answer `--fresh` still gives; `just test-fresh`
-#              is the recipe that says it out loud.
-#   --shared   cut one machine for the whole run, ignoring every declaration.
-#   --reverse  run the selected suites in the opposite order.
-#   --no-cache run every selected suite and record the result. A release gate
-#              uses this, because an inherited green is not an observed one.
-#
-# `--reverse` exists because sharing is a claim and a claim needs proving: the
-# suites that share a machine are run in one order and then in the other, and
-# both runs have to be green. It is the second half of that and nothing else.
-#
-# Everything else in a run is cached by default (ticket 210). A suite's result
-# is a function of the golden it was cut from and the tree it read, so an
-# unchanged suite is **inherited** and says so on its own line. The line does not
-# read as a pass: `inherit t30-create.sh (green from the cache; not observed this
-# run)`. A cache that could be read as a verification would be worse than none.
 #
 # lxc is the LXD snap. It is not on PATH for a non-interactive shell, so it is
 # resolved by absolute path rather than hoped for.
@@ -66,7 +48,6 @@ POOL_SOURCE=${GUARDEN_LXC_POOL_SOURCE:-/media/data/guarden-lxd}
 REPO=${GUARDEN_LXC_REPO:-$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")}
 VM_REPO=${GUARDEN_LXC_VM_REPO:-/home/ubuntu/guarden}
 CONVERT=${GUARDEN_LXC_CONVERT:-$REPO/tests/lxc-btrfs-convert}
-CACHE_TOOL=${GUARDEN_LXC_CACHE_TOOL:-$REPO/tests/suitecache.py}
 
 # Tests that cannot run in the machine, by construction rather than by accident.
 #
@@ -84,44 +65,6 @@ _is_host_only() {
         [ "$name" = "$candidate" ] && return 0
     done
     return 1
-}
-
-# A suite says whether it needs a machine of its own, in the suite itself:
-#
-#     # machine: shared
-#     # machine: fresh
-#
-# The declaration is in the file rather than in a list here for the reason the
-# ticket gives — it travels with the suite, and a suite that forgets it is the
-# safe answer rather than a silent inheritor of another suite's system users.
-#
-# **An absent declaration is `fresh`, and that is the whole of the safety
-# argument.** `sed -n 's/^# machine: //p'` reads one line, the value is checked
-# against the two words, and anything else is refused by name rather than
-# treated as a near miss. A typo that read as "share" would put a suite that
-# writes real `/etc/guarden`, real users and real btrfs subvolumes on a machine
-# another suite already changed, and the run would be green about a host nobody
-# set up.
-#
-# `sed -n` with one substitution rather than `grep` because the first match is
-# the answer: a second declaration in the same suite is a contradiction rather
-# than a refinement, and reading the last one would let a file carry both
-# answers and depend on which line came last.
-_declaration_of() {
-    sed -n 's/^# machine: //p' "$1" | head -n 1
-}
-
-_shares_machine() {
-    local path=$1 declared
-    declared=$(_declaration_of "$path")
-    case "$declared" in
-        '') return 1 ;;
-        fresh) return 1 ;;
-        shared) return 0 ;;
-        *)
-            die "${path##*/} declares '# machine: $declared'; it is 'fresh' or 'shared', and a suite that says neither gets a machine of its own"
-            ;;
-    esac
 }
 
 die() {
@@ -142,9 +85,9 @@ _exists() { $LXC info "$1" >/dev/null 2>&1; }
 # no pool at all — which sent provision down the rebuild path every run. The
 # value is in `config show`, under the root device.
 _pool_of() {
-    $LXC config show "$1" 2>/dev/null \
-        | sed -n '/^  root:/,/^[a-z]/p' \
-        | awk '/^[[:space:]]+pool:/ {print $2; exit}'
+    $LXC config show "$1" 2>/dev/null |
+        sed -n '/^  root:/,/^[a-z]/p' |
+        awk '/^[[:space:]]+pool:/ {print $2; exit}'
 }
 
 # This LXD build has no `lxc snapshot list`: `lxc snapshot` only creates, and
@@ -158,61 +101,6 @@ _has_snapshot() {
     local listing
     listing=$($LXC info "$1" 2>/dev/null | sed -n '/^Snapshots:/,$p') || return 1
     printf '%s\n' "$listing" | grep -qE "^\| +$SNAPSHOT +"
-}
-
-# The golden's identity, and the only half of the cache key the harness does not
-# choose itself (ticket 210). Everything here is asked of LXD and hashed as read:
-# which instance, which pool, which snapshot, and when LXD says that snapshot was
-# created.
-#
-# **The creation time is the field that makes a rebuild visible**, and it has to
-# come from LXD rather than from this file. A golden identified by what the
-# harness put in it — the image, the user-data, the conversion state — is
-# identical before and after a rebuild, because those inputs are identical, so
-# every cached result would answer from a machine that no longer exists.
-# `lxc info` reports each snapshot with its own creation time, and re-snapshotting
-# a rebuilt golden gives a new one.
-#
-# The timestamp is found by its **shape** on the snapshot's own row rather than by
-# its column. LXD's table carries a description column whose width follows the
-# text in it, so a fixed field number reads a different column on a golden that
-# happened to take a description, and reads the ETag on one that did not — either
-# of which is an identity that changes for no reason. A row's first timestamp is
-# the snapshot's creation, and there is nothing else on the row that has one.
-#
-# `--no-cache` is *not* an answer to an unreadable identity: it runs everything
-# and inherits nothing, which is the honest response to a golden that may have
-# been rebuilt and the only answer available without rebuilding it by hand.
-_snapshot_created() {
-    $LXC info "$1" 2>/dev/null | awk -v want="$SNAPSHOT" '{
-        n = split($0, cell, "|")
-        for (i = 1; i <= n; i++) {
-            key = cell[i]
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
-            if (key != want) continue
-            for (j = i + 1; j <= n; j++) {
-                value = cell[j]
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
-                if (value ~ /^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2} [0-9]{2}:[0-9]{2}/) {
-                    print value
-                    exit
-                }
-            }
-        }
-    }'
-}
-_golden_identity() {
-    printf 'instance=%s\n' "$GOLDEN"
-    printf 'pool=%s\n' "$(_pool_of "$GOLDEN")"
-    printf 'snapshot=%s\n' "$SNAPSHOT"
-    printf 'created=%s\n' "$(_snapshot_created "$GOLDEN")"
-}
-
-# _golden_digest: the identity, hashed. Empty output means the identity could not
-# be read, and a run with no golden identity inherits nothing and says so —
-# a cache keyed on nothing answers for a machine it cannot name.
-_golden_digest() {
-    printf '%s\n' "$(_golden_identity)" | python3 "$CACHE_TOOL" golden 2>/dev/null
 }
 
 vm_exec_t() {
@@ -260,11 +148,17 @@ _wait_cloud_init() {
     # An image with no cloud-init answer is not a failure, only something that
     # cannot be waited on. Fall back to asking whether apt is still busy.
     #
-    # **Both of apt's locks, and the lists one first.** `package_update` holds
-    # `/var/lib/apt/lists/lock` on its own and the `packages:` install holds
-    # `lock-frontend` afterwards, and the lock that lost a `soil packages` refresh
-    # on the golden VM was the lists one — so a fallback that asked only about the
-    # frontend lock would return while the refresh was still the thing running.
+    # **Both of apt's locks, and the lists one first.** The boot document used to
+    # carry `package_update: true`, which holds `/var/lib/apt/lists/lock` on its own
+    # and a `packages:` install holds `lock-frontend` afterwards, and the lock that
+    # lost a `soil packages` refresh on the golden VM was the lists one — so a
+    # fallback that asked only about the frontend lock would return while the
+    # refresh was still the thing running.
+    #
+    # The document installs nothing now, so cloud-init answers almost at once and
+    # this is what is left to wait for. That is the ticket's win and it is also the
+    # claim: a machine whose cloud-init returns promptly and whose locks are free is
+    # a machine that ran no package transaction during boot.
     local i
     for ((i = 0; i < 60; i++)); do
         if ! $LXC exec -T "$instance" -- sh -c \
@@ -306,33 +200,98 @@ _push() {
     tar -C "$src" -cf - . | vm_exec_t "$instance" \
         "sudo mkdir -p '$dst' && sudo tar -C '$dst' -xf - && sudo chown -R root:root '$dst'"
 }
-# The package list is the harness's, not guarden's: `soil packages` converges
-# packages/packages.toml on a host, and the harness must not test its own list
-# against itself. Everything here stands in for something a fake used to.
+
+# What the image carries, and this is the only place in this file that names a
+# package.
+#
+# **The image is provisioned at build time, so a cut machine runs no package
+# transaction.** A copy of the golden is a new instance to cloud-init, and the
+# document below used to be `package_update: true` and nineteen packages: every
+# suite paid for an `apt-get update` and an `apt-get install` holding apt's locks,
+# measured on a cut machine at 12.5 s to 23.5 s of uptime. `cmd_provision` now
+# installs everything here once, before the snapshot, and leaves the document
+# saying so. That is not only a clock question — `apt-daily-upgrade.service` runs
+# `unattended-upgrade`, whose post-invoke hook answers this machine's
+# `/etc/ufw/ufw.conf` by running `systemctl enable ufw`, so a boot that runs a
+# package transaction can re-enable the distribution's firewall underneath a suite
+# that has already disabled it. `t20-firewall.sh` failed on exactly that on
+# 2026-10-03, and seven suites lost the same apt-lock race on 2026-10-01.
+#
+# Two halves, and they are different in kind. The first is guarden's own
+# dependency **and the harness's**, read out of `packages/packages.toml` through
+# the same renderer that writes a host's cloud-init document — so the golden ships
+# exactly what that document would have installed, and a package added to the list
+# reaches the machine without anyone editing this file. The second is the
+# machinery that builds *this machine*: what `lxc-btrfs-convert` needs, and the
+# base-image packages this harness invokes by name. Those are named here because
+# they are the harness's and no guarden host wants them, which is the same reason
+# `packages.toml` keeps its `harness` role in a table of its own.
+#
+# **It is apt only, and it must stay apt only.** `soil packages --apply` is not
+# this function's caller and must not become one: it fetches the pinned podlet
+# release, and `t20-podlet.sh` asserts that binary is absent on a machine
+# `soil install` has not run. A golden that ran the phase would quietly answer
+# both of those suites' questions for them.
+_image_packages() {
+    local rendered
+    rendered=$(mktemp)
+    if ! PYTHONPATH="$REPO/src" python3 -m guarden.soil packages \
+        --render-user-data "$rendered" >/dev/null 2>&1; then
+        rm -f "$rendered"
+        die "the image's package list could not be rendered from packages/packages.toml"
+    fi
+    sed -n 's/^  - //p' "$rendered"
+    rm -f "$rendered"
+}
+
+_build_tools() {
+    cat <<'TOOLS'
+btrfs-convert
+cloud-guest-utils
+dracut-core
+kmod
+passwd
+procps
+sudo
+uidmap
+util-linux
+TOOLS
+}
+
+# The document a cut machine boots from. It installs nothing, and it says so: a
+# machine whose boot document is empty is indistinguishable from one whose
+# cloud-init silently did not run, and telling those two apart is the whole
+# measurement this change claims. The per-boot marker is written on every boot,
+# so its presence is the proof that cloud-init ran and found nothing to do.
+#
+# `#cloud-config` must be the first line or the document is ignored in silence,
+# which is why readiness has always been proven by asking the machine rather than
+# by reading its state.
 _user_data() {
     cat <<'CLOUD'
 #cloud-config
-package_update: true
-packages:
-  - python3
-  - python3-yaml
-  - python3-jinja2
-  - iproute2
-  - iptables
-  - btrfs-progs
-  - snapper
-  - passwd
-  - uidmap
-  - curl
-  - ca-certificates
-  - sudo
-  - util-linux
-  - kmod
-  - procps
-  - git
-  - rsync
-  - btrfs-convert
-  - dracut-core
+#
+# This image is already provisioned. Its packages were installed at build time by
+# `tests/lxc.sh provision`, from packages/packages.toml, before the snapshot was
+# taken — so there is nothing to update and nothing to install here, and
+# cloud-init reaching `done` on a cut machine is the evidence that no package
+# transaction ran during boot.
+#
+# `soil packages --apply` still installs everything on a real host. This is the
+# machine the harness cuts, not a host, and the difference is that its packages
+# are already on the image.
+write_files:
+  - path: /var/lib/guarden-harness
+    permissions: "0755"
+
+runcmd:
+  # `write_files` content is not templated, so the uptime is read here rather than
+  # written as a literal `$UPTIME`. This runs on every boot of every cut machine,
+  # which is what makes its presence the proof that cloud-init ran and found
+  # nothing to install.
+  - printf 'provisioned at build time; this boot installed nothing; uptime %ss\n' "$(cut -d. -f1 /proc/uptime)" >/var/lib/guarden-harness/BOOT
+
+final_message: "guarden harness image already provisioned, nothing installed, $UPTIME seconds"
 CLOUD
 }
 
@@ -341,8 +300,8 @@ _ensure_pool() {
         return 0
     fi
     mkdir -p "$POOL_SOURCE" || die "cannot create $POOL_SOURCE"
-    $LXC storage create "$POOL" btrfs source="$POOL_SOURCE" >/dev/null \
-        || die "cannot create the btrfs pool $POOL; a dir pool makes a restore take 101s"
+    $LXC storage create "$POOL" btrfs source="$POOL_SOURCE" >/dev/null ||
+        die "cannot create the btrfs pool $POOL; a dir pool makes a restore take 101s"
 }
 
 # _convert <instance>: drive the three-stage conversion to convergence.
@@ -387,17 +346,45 @@ _convert() {
 # than surfacing later as a guarden defect.
 _prove() {
     local instance=$1
-    vm_exec_t "$instance" 'python3 -c "import yaml, jinja2"' \
-        || die "$instance lacks python3-yaml or python3-jinja2"
-    vm_exec_t "$instance" 'btrfs subvolume show / >/dev/null && btrfs subvolume list / | grep -q "@var"' \
-        || die "$instance has no btrfs root with @ and @var; soil storage will never converge on it"
+    vm_exec_t "$instance" 'python3 -c "import yaml, jinja2"' ||
+        die "$instance lacks python3-yaml or python3-jinja2"
+    vm_exec_t "$instance" 'btrfs subvolume show / >/dev/null && btrfs subvolume list / | grep -q "@var"' ||
+        die "$instance has no btrfs root with @ and @var; soil storage will never converge on it"
     vm_exec_t "$instance" 'btrfs subvolume create /var/lib/guarden/.probe >/dev/null 2>&1 &&
-        btrfs subvolume delete /var/lib/guarden/.probe >/dev/null 2>&1' \
-        || die "$instance cannot create a btrfs subvolume under /var/lib/guarden"
-    vm_exec_t "$instance" 'getent passwd nobody >/dev/null' \
-        || die "$instance has no real user database"
-    vm_exec_t "$instance" 'command -v iptables >/dev/null && command -v snapper >/dev/null' \
-        || die "$instance lacks iptables or snapper"
+        btrfs subvolume delete /var/lib/guarden/.probe >/dev/null 2>&1' ||
+        die "$instance cannot create a btrfs subvolume under /var/lib/guarden"
+    vm_exec_t "$instance" 'getent passwd nobody >/dev/null' ||
+        die "$instance has no real user database"
+    vm_exec_t "$instance" 'command -v iptables >/dev/null && command -v snapper >/dev/null' ||
+        die "$instance lacks iptables or snapper"
+}
+
+# _prove_inventory <instance>: every package the image is supposed to carry, asked
+# of dpkg in one call.
+#
+# This is the answer ticket 200 asks to be re-derived rather than remembered. It
+# used to be two suites asserting `ferm`, `fail2ban` and `podman` are **absent** on
+# a fresh cut, which was a fact about an image that installed nineteen packages
+# and no more. The image now carries the whole list, so an absence assertion can
+# no longer distinguish "the image does not ship it" from "the phase did not
+# install it", and the presence of the image's own inventory is the check that
+# replaced it.
+#
+# `podman` is reported on its own line because it is the package the image was
+# missing on 2026-10-03, and its absence is what made `t70-fork.sh` unable to
+# reach a single one of its data-movement success paths.
+_prove_inventory() {
+    local instance=$1 wanted present missing
+    wanted=$(_image_packages | sort)
+    present=$(vm_exec_t "$instance" "dpkg-query -W -f='\${db:Status-Status} \${Package}\n' 2>/dev/null \
+        | awk '\$1 == \"installed\" {print \$2}' | sort")
+    missing=$(comm -23 <(printf '%s\n' "$wanted") <(printf '%s\n' "$present"))
+    [ -z "$missing" ] ||
+        die "$instance is not provisioned; these are not installed: $(printf '%s' "$missing" | tr '\n' ' ')"
+    printf '  image inventory proven: %s packages, podman %s, pasta %s\n' \
+        "$(printf '%s\n' "$wanted" | wc -l)" \
+        "$(vm_exec_t "$instance" 'podman --version' 2>/dev/null || echo MISSING)" \
+        "$(vm_exec_t "$instance" 'pasta --version 2>&1 | head -1' 2>/dev/null || echo MISSING)"
 }
 
 cmd_provision() {
@@ -413,8 +400,8 @@ cmd_provision() {
         if [ "$pool" != "$POOL" ]; then
             printf 'replacing %s: it is on pool %s, not %s\n' "$GOLDEN" "$pool" "$POOL"
             $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
-            $LXC delete "$GOLDEN" --force >/dev/null 2>&1 \
-                || die "cannot delete $GOLDEN; remove it by hand"
+            $LXC delete "$GOLDEN" --force >/dev/null 2>&1 ||
+                die "cannot delete $GOLDEN; remove it by hand"
         elif _has_snapshot "$GOLDEN"; then
             # Nothing to do, and nothing needs the machine booted to say so:
             # `lxc info` lists a stopped instance's snapshots. Booting it just to
@@ -424,8 +411,8 @@ cmd_provision() {
     fi
 
     if ! _exists "$GOLDEN"; then
-        $LXC init "$IMAGE" "$GOLDEN" --vm --storage "$POOL" >/dev/null \
-            || die "cannot create $GOLDEN from $IMAGE on pool $POOL"
+        $LXC init "$IMAGE" "$GOLDEN" --vm --storage "$POOL" >/dev/null ||
+            die "cannot create $GOLDEN from $IMAGE on pool $POOL"
         $LXC config set "$GOLDEN" limits.cpu 4
         $LXC config set "$GOLDEN" limits.memory 8GiB
         $LXC config set "$GOLDEN" boot.autostart false
@@ -441,38 +428,61 @@ cmd_provision() {
     [ "$(_state "$GOLDEN")" = RUNNING ] || $LXC start "$GOLDEN" >/dev/null
     _wait_ready "$GOLDEN" || die "$GOLDEN did not become ready"
 
-    # cloud-init installs the package list, and it answers before it has
-    # finished. Asking anything of apt while it runs loses the dpkg lock, which
-    # is how snapper went missing from a golden — the capability gate caught it,
-    # but the honest wait is cloud-init's own.
+    # cloud-init on a machine cut from this image installs nothing, so this returns
+    # as soon as cloud-init has finished saying so. It stays because it is the only
+    # thing that knows when apt is no longer holding the dpkg lock, and it is the
+    # instrument ticket 200's claim is measured with.
     _wait_cloud_init "$GOLDEN"
 
     if [ "${_needs_build:-0}" = 0 ] && [ "$(_conversion_state "$GOLDEN")" != done ]; then
         printf 'replacing %s: no snapshot and its conversion state is not done\n' "$GOLDEN"
         $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
-        $LXC delete "$GOLDEN" --force >/dev/null 2>&1 \
-            || die "cannot delete $GOLDEN; remove it by hand"
+        $LXC delete "$GOLDEN" --force >/dev/null 2>&1 ||
+            die "cannot delete $GOLDEN; remove it by hand"
         cmd_provision
         return 0
     fi
 
-    local i
-    for ((i = 0; i < 120; i++)); do
-        vm_exec_t "$GOLDEN" 'python3 -c "import yaml, jinja2"' >/dev/null 2>&1 && break
-        sleep 5
-    done
-    vm_exec_t "$GOLDEN" 'python3 -c "import yaml, jinja2"' \
-        || die "$GOLDEN never finished installing python3-yaml and python3-jinja2"
-
-    # cloud-init installs the list, and it silently skips a package whose
-    # install fails — snapper was missing from one golden this way, and the
-    # capability gate below is what caught it. Re-assert the list rather than
-    # trust that it landed.
-    vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
+    # **The image is provisioned here, once, and never again.** A cut machine is a
+    # new instance to cloud-init, so a package list in the boot document is a list
+    # installed once per suite; installing it before the snapshot is the whole of
+    # this change, and it is also what puts `podman` and `pasta` on the image.
+    #
+    # `--no-install-recommends` because Recommends on `podman` is where hundreds of
+    # megabytes would otherwise appear, and `pasta` must not be left to a
+    # Recommends change — the same reason `src/guarden/userdata.py` names it
+    # explicitly.
+    #
+    # **Fatal on failure, and there is no second attempt.** The old code re-asserted
+    # eight packages with `|| true` because cloud-init silently skips a package whose
+    # install fails — snapper was missing from one golden that way, and a capability
+    # gate downstream caught it. A gate is the wrong place to find out, and the
+    # whole list is asked at once.
+    local list install
+    list=$(mktemp)
+    _image_packages "$list"
+    install=$(tr '\n' ' ' <"$list")
+    printf 'provisioning %s with %s packages\n' "$GOLDEN" "$(wc -l <"$list")"
+    vm_exec_t "$GOLDEN" "export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
-        apt-get install -y -qq --no-install-recommends
-            snapper btrfs-progs iptables iproute2 passwd uidmap curl ca-certificates || true' \
-        >/dev/null 2>&1 || true
+        apt-get install -y -qq --no-install-recommends $install" ||
+        die "$GOLDEN could not be provisioned from packages/packages.toml"
+    rm -f "$list"
+    _prove_inventory "$GOLDEN"
+
+    # LXD grows the block device; the guest has to grow the partition and the
+    # filesystem. Left undone, btrfs-convert refuses for want of headroom and
+    # the refusal reads as a conversion problem rather than a disk-size one.
+    #
+    # This runs **after** the install above because `growpart` is
+    # `cloud-guest-utils` and that is one of the packages being installed, and the
+    # install costs a few hundred megabytes of a filesystem that is only about 9 GiB
+    # to begin with — so the headroom the conversion needs is measured after both.
+    vm_exec_t "$GOLDEN" 'growpart /dev/sda 1 >/dev/null 2>&1 || true
+        resize2fs /dev/sda1 >/dev/null 2>&1 || true
+        partprobe /dev/sda 2>/dev/null || true' >/dev/null 2>&1 || true
+    printf 'image %s\n' \
+        "$(vm_exec_t "$GOLDEN" 'df -h / | awk "NR==2 {print \$2\" total, \"\$4\" free\"}"')"
 
     # Preconditions the real-host tests plant for themselves today. They are
     # planted here instead so a green run does not depend on one test having run
@@ -485,15 +495,13 @@ cmd_provision() {
     # LXD grows the block device; the guest has to grow the partition and the
     # filesystem. Left undone, btrfs-convert refuses for want of headroom and
     # the refusal reads as a conversion problem rather than a disk-size one.
-    vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y -qq cloud-guest-utils >/dev/null 2>&1 || true
-        growpart /dev/sda 1 >/dev/null 2>&1 || true
+    vm_exec_t "$GOLDEN" 'growpart /dev/sda 1 >/dev/null 2>&1 || true
         resize2fs /dev/sda1 >/dev/null 2>&1 || true
         partprobe /dev/sda 2>/dev/null || true' >/dev/null 2>&1 || true
     vm_exec_t "$GOLDEN" 'avail=$(df -Pk / | awk "NR==2 {print \$4}")
         [ "${avail:-0}" -ge 4194304 ] || {
-            echo "only ${avail}KB free on /; refusing to convert" >&2; exit 1; }' \
-        || die "$GOLDEN has less than 4GiB free on /; btrfs-convert needs headroom"
+            echo "only ${avail}KB free on /; refusing to convert" >&2; exit 1; }' ||
+        die "$GOLDEN has less than 4GiB free on /; btrfs-convert needs headroom"
 
     printf 'converting the golden root to btrfs (this reboots it twice)...\n'
     _convert "$GOLDEN"
@@ -503,8 +511,8 @@ cmd_provision() {
         $LXC delete "$GOLDEN/$SNAPSHOT" >/dev/null 2>&1 || true
     fi
     $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
-    $LXC snapshot "$GOLDEN" "$SNAPSHOT" >/dev/null \
-        || die "cannot snapshot $GOLDEN"
+    $LXC snapshot "$GOLDEN" "$SNAPSHOT" >/dev/null ||
+        die "cannot snapshot $GOLDEN"
 
     printf 'provisioned %s on pool %s (snapshot %s)\n' "$GOLDEN" "$POOL" "$SNAPSHOT"
 }
@@ -519,15 +527,7 @@ _reset() {
     if _has_snapshot "$GOLDEN"; then
         # Copying *from the snapshot* is the documented form and the cheap one:
         # on a btrfs pool it is a subvolume snapshot, not a disk copy.
-        # 4GiB per runner, not the golden's 8GiB: measured, a booted-but-idle
-        # guest costs ~1.1GB of HOST memory and dpkg peaked at 1.4GB, so 4GiB is
-        # headroom over any observed use and is what makes three parallel runners
-        # uneventful rather than watchdog-managed. Set at CUT time because LXD
-        # refuses to RAISE memory on a running instance ("Cannot increase memory
-        # size beyond boot time size"), and lowering it live works but then the
-        # boot-time size and the limit disagree.
-        $LXC copy "$GOLDEN/$SNAPSHOT" "$RUNNER" -c limits.memory=4GiB \
-            >/dev/null 2>&1 || return 1
+        $LXC copy "$GOLDEN/$SNAPSHOT" "$RUNNER" >/dev/null 2>&1 || return 1
     else
         $LXC copy "$GOLDEN" "$RUNNER" >/dev/null || return 1
     fi
@@ -535,83 +535,38 @@ _reset() {
     _wait_ready "$RUNNER" || return 1
     # **cloud-init, before the suite.** A machine cut from the golden is a new
     # instance to cloud-init, so it re-runs this harness's own user-data on every
-    # boot: `package_update: true` and nineteen packages, which is an
-    # `apt-get update` followed by an `apt-get install` holding apt's locks.
+    # boot.
     #
-    # Measured on a cut machine: the lists lock is held from 12.5 s of uptime to
-    # 23.5 s, and `_wait_ready` above has already returned by 12 s, so a suite
-    # that calls `soil packages --apply` in its first seconds loses the race and
-    # gets `E: Could not get lock /var/lib/apt/lists/lock. It is held by process
-    # N (apt-get)`. `apt-get` does not wait: two concurrent real `apt-get update`
-    # runs on this machine, one exit 0 and one exit 100 with that diagnostic,
-    # both inside five seconds.
+    # That document used to be `package_update: true` and nineteen packages, so
+    # every cut paid for an `apt-get update` followed by an `apt-get install`
+    # holding apt's locks. Measured on a cut machine: the lists lock was held from
+    # 12.5 s of uptime to 23.5 s, and `_wait_ready` above has already returned by
+    # 12 s, so a suite that calls `soil packages --apply` in its first seconds lost
+    # the race and got `E: Could not get lock /var/lib/apt/lists/lock. It is held by
+    # process N (apt-get)`. `apt-get` does not wait: two concurrent real
+    # `apt-get update` runs on this machine, one exit 0 and one exit 100 with that
+    # diagnostic, both inside five seconds.
     #
-    # **This is the harness's claim and not the product's.** The writer is this
-    # file's own user-data, so no change to `soil` can remove the race — which is
-    # exactly why `soil packages` also disables the distribution's own apt timers
-    # and why that change fixes no suite here: no timer in the list is the thing
-    # holding the lock at 12 s.
+    # It also re-enabled the distribution's firewall underneath a suite that had
+    # already disabled it: `apt-daily-upgrade.service` runs `unattended-upgrade`,
+    # whose post-invoke hook answers this machine's `/etc/ufw/ufw.conf` by running
+    # `systemctl enable ufw`, at 31.7 s of uptime. That is how `t20-firewall.sh`
+    # failed on 2026-10-03, and it was the same cause as the seven suites that lost
+    # the apt-lock race on 2026-10-01.
+    #
+    # **None of that is the product's and none of it is the harness's any more.**
+    # The packages are on the image and the document installs nothing, so the wait
+    # below returns as soon as cloud-init has finished saying so. It stays because a
+    # cut that starts a suite before cloud-init is finished is a cut whose boot
+    # state a suite cannot reason about, and because it is what
+    # `tests/lxc.sh prove` measures the claim with.
     _wait_cloud_init "$RUNNER"
     _push "$RUNNER" "$REPO" "$VM_REPO"
 }
 
-_run_suite() {
-    local name=$1 rc
-    # -T always, and with stdin closed and a wall clock. A command that reads
-    # stdin — an echo-off prompt, a tool that asks a question — otherwise
-    # blocks forever on a stream nobody is feeding, and the run stops with no
-    # failure anywhere. A suite that needs input must be given it the way
-    # `lib.sh` gives a value to `systemd-creds` — on a pipe, in the test.
-    #
-    # `--foreground` is load-bearing and was not optional. `timeout` otherwise
-    # puts its child in a **new process group**, and `lxc exec` talks to the
-    # guest agent over a session that does not survive that: the guest ran the
-    # suite to completion, exited, and the client waited on a session nobody
-    # would ever close again. The symptom was a wedge with no test process in
-    # the guest and nothing printed, which is the failure this timeout exists
-    # to report — so the timeout was causing the thing it was added to catch.
-    #
-    # **The exit code is returned rather than reduced to a boolean.** A failure
-    # must reach the ledger and must not be recorded, and the one thing that
-    # decides both is whether this suite actually passed.
-    if timeout --foreground --signal=KILL "$SUITE_TIMEOUT" \
-        $LXC exec -T "$RUNNER" --cwd "$VM_REPO" \
-        --env "PYTHONPATH=$VM_REPO/src" \
-        --env "GUARDEN_ROOT=$VM_REPO" \
-        -- bash -c "cd '$VM_REPO' && bash tests/$name" </dev/null; then
-        python3 "$CACHE_TOOL" line pass "$name"
-        return 0
-    fi
-    rc=$?
-    python3 "$CACHE_TOOL" line fail "$name"
-    if [ "$rc" -eq 137 ]; then
-        printf 'error: %s exceeded %ss and was killed; a suite that hangs reports nothing\n' \
-            "$name" "$SUITE_TIMEOUT" >&2
-    fi
-    return "$rc"
-}
-
 cmd_run() {
-    local pat=${1:-}
-    [ "$#" -gt 0 ] && shift
-
-    # Four flags and none of them about the suites: what a run shares is decided
-    # by each suite, and the flags decide what happens to a suite that says
-    # nothing.
-    local fresh=0 shared=0 reverse=0 no_cache=0
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-            --fresh) fresh=1 ;;
-            --shared) shared=1 ;;
-            --reverse) reverse=1 ;;
-            --no-cache) no_cache=1 ;;
-            *) die "unknown option for run: $1" ;;
-        esac
-        shift
-    done
-    if [ "$fresh" = 1 ] && [ "$shared" = 1 ]; then
-        die "--fresh and --shared are opposites; pass one"
-    fi
+    local pat=${1:-} file name failures=0 total=0
+    local fresh=${2:-"--fresh"}
 
     cmd_provision || exit 1
 
@@ -620,30 +575,18 @@ cmd_run() {
     # runner does not.
     trap '_teardown_runner' EXIT INT TERM
 
-    # The selected suites, in the order they will run, and for each one **the
-    # machine it will be on** — both decided here, before anything runs.
-    #
-    # `--reverse` reverses the selection rather than the machine: sharing is a
-    # claim about one suite not contaminating the next, and only running the
-    # shared ones in both orders asks the question. The machine travels with the
-    # suite through the reversal, because it is a property of the suite's place
-    # in the sharing order.
-    #
-    # Both are decided here rather than in the loop because **the cache must not
-    # change them.** A group derived from the run's own progress would make a
-    # shared suite's key a function of whether its neighbours hit or missed: a
-    # first run where three shared suites all ran numbers them 1, and a second
-    # run where the first is inherited numbers the other two 2 — so the two runs
-    # disagree about the machine they were on and the cache inherits nothing.
-    # Counted from the selection, the number is the same in every run and
-    # describes what was cut rather than what was observed.
-    #
-    # `runner` is one machine and no history, so every suite wanting its own
-    # shares that name: a green observed on one of them is a claim about the
-    # machine it ran on and nothing else.
-    local files=() groups=() frishes=() reversed=() rev_groups=() rev_frishes=()
-    local file name i group=0 slot=0 want_fresh machine
-    local overridden=0
+    # A fresh machine per test file. The tests write real /etc/guarden, real
+    # /var/lib/guarden, real users and real btrfs subvolumes now that nothing is
+    # faked, so a shared machine is not isolation — it is the next test inheriting
+    # this one's system users and deleted snapshots. Pass `--shared` to cut one
+    # machine for the whole run, which is only sound while every test still
+    # relocates the host with GUARDEN_PREFIX.
+    local shared=0
+    if [ "$fresh" != "--fresh" ]; then
+        _reset || die "cannot cut a clean $RUNNER"
+        shared=1
+    fi
+
     for file in "$REPO"/tests/t[0-9]*.sh; do
         [ -f "$file" ] || continue
         name=${file##*/}
@@ -653,162 +596,50 @@ cmd_run() {
         if _is_host_only "$name"; then
             continue
         fi
-        if [ "$shared" = 1 ]; then
-            want_fresh=0
-            machine=0
-        elif [ "$fresh" = 1 ]; then
-            want_fresh=1
-            machine="fresh-$slot"
-            _shares_machine "$file" && overridden=$((overridden + 1))
-        else
-            want_fresh=1
-            _shares_machine "$file" && want_fresh=0
-            if [ "$want_fresh" = 1 ]; then
-                machine="fresh-$slot"
-            else
-                machine="shared-$group"
-                group=$((group + 1))
-            fi
-        fi
-        files+=("$file")
-        groups+=("$machine")
-        slot=$((slot + 1))
-        frishes+=("$want_fresh")
-    done
-    if [ "$reverse" = 1 ]; then
-        for ((i = ${#files[@]} - 1; i >= 0; i--)); do
-            reversed+=("${files[$i]}")
-            rev_groups+=("${groups[$i]}")
-            rev_frishes+=("${frishes[$i]}")
-        done
-        files=("${reversed[@]}")
-        groups=("${rev_groups[@]}")
-        frishes=("${rev_frishes[@]}")
-    fi
-
-    local total=0 failures=0 cuts=0
-
-    # What this run may inherit is decided once, before the first suite. It is
-    # the golden's identity and nothing else: the tree is read per suite, by the
-    # key, from the checkout the suite is about to run against.
-    #
-    # `--no-cache` does not skip the identity, because it still records: a release
-    # gate's run is an observation like any other, and the results it observed are
-    # the best thing to leave behind. It is the consulting that is suppressed.
-    local golden_digest
-    golden_digest=$(_golden_digest)
-    if [ -z "$golden_digest" ]; then
-        printf 'note: the golden at %s carries no readable snapshot identity, so\n' "$GOLDEN"
-        printf 'note: nothing can be inherited and nothing can be recorded\n'
-    else
-        python3 "$CACHE_TOOL" prune "$golden_digest"
-    fi
-
-    # The ledger: one line per selected suite, `verdict<TAB>name`. It is the run's
-    # own record of what happened, and the summary is computed from it rather
-    # than from counters that a caller could set to anything. A ledger written
-    # somewhere it cannot be read is a run that reports nothing, so it is
-    # created up front and its directory is refused if it cannot be written.
-    local ledger
-    ledger=$(mktemp -d)/ledger
-    : >"$ledger" || die "cannot write a run ledger"
-
-    # The mode is part of the key, not a run-wide annotation, and it carries two
-    # things a run decides.
-    #
-    # **The policy**, because `--shared` and `--fresh` put a suite on a machine
-    # another suite changed, and a green observed that way is a claim about a
-    # different machine than a green observed on one of its own.
-    #
-    # **The order**, because a shared suite's machine carries the history of
-    # whatever shared suites ran on it before, and `just test-reverse` runs the
-    # same suites in the opposite order. Without the order in the key, a green
-    # observed in a reversed run would answer for the forward run's machine —
-    # the one contamination claim this repository cares most about not making,
-    # because `--reverse` exists to ask exactly that question.
-    local mode
-    case "$fresh:$shared:$reverse" in
-        1:0:0) mode=fresh ;;
-        1:0:1) mode=fresh-reversed ;;
-        0:1:0) mode=shared ;;
-        0:1:1) mode=shared-reversed ;;
-        0:0:0) mode=declared ;;
-        0:0:1) mode=declared-reversed ;;
-    esac
-
-    # One machine for the shared suites, cut once before the first of them and
-    # kept for the rest. A suite that needs one of its own closes the group: the
-    # next shared suite gets a clean machine rather than the one the fresh suite
-    # just changed.
-    local shared_open=0
-
-    for ((i = 0; i < ${#files[@]}; i++)); do
-        file=${files[$i]}
-        name=${file##*/}
         total=$((total + 1))
-        group=${groups[$i]}
-        want_fresh=${frishes[$i]}
 
-        # A hit costs nothing: no machine is cut and no suite is executed. What it
-        # costs is the claim, so the line printed is the ticket's central
-        # requirement — an inherited suite announces itself as inherited, and a
-        # line that could be read as a pass is not acceptable here.
-        #
-        # A hit does not open a shared group either. The suite it stands for did
-        # not run, so the machine the next shared suite gets is the one its group
-        # was cut as, which was decided from the selection above.
-        local key=''
-        if [ -n "$golden_digest" ]; then
-            key=$(python3 "$CACHE_TOOL" key "$golden_digest" "$file" "$mode" "$group")
-            if [ "$no_cache" = 0 ] && python3 "$CACHE_TOOL" get "$golden_digest" "$key" "$name"; then
-                printf 'inherit\t%s\n' "$name" >>"$ledger"
-                python3 "$CACHE_TOOL" line inherited "$name"
-                continue
-            fi
-        fi
-
-        if [ "$want_fresh" = 1 ]; then
+        if [ "$shared" = 0 ]; then
             if ! _reset; then
-                printf 'fail\t%s\n' "$name" >>"$ledger"
+                printf 'FAIL %s\n' "$name"
                 printf 'error: cannot cut a clean %s\n' "$RUNNER" >&2
                 failures=$((failures + 1))
-                shared_open=0
                 continue
             fi
-            cuts=$((cuts + 1))
-            shared_open=0
-        elif [ "$shared_open" = 0 ]; then
-            _reset || die "cannot cut a clean $RUNNER"
-            cuts=$((cuts + 1))
-            shared_open=1
         fi
 
-        local rc=0
-        _run_suite "$name" || rc=$?
-        if [ "$rc" -eq 0 ]; then
-            printf 'pass\t%s\n' "$name" >>"$ledger"
+        # -T always, and with stdin closed and a wall clock. A command that reads
+        # stdin — an echo-off prompt, a tool that asks a question — otherwise
+        # blocks forever on a stream nobody is feeding, and the run stops with no
+        # failure anywhere. A suite that needs input must be given it the way
+        # `lib.sh` gives a value to `systemd-creds` — on a pipe, in the test.
+        #
+        # `--foreground` is load-bearing and was not optional. `timeout` otherwise
+        # puts its child in a **new process group**, and `lxc exec` talks to the
+        # guest agent over a session that does not survive that: the guest ran the
+        # suite to completion, exited, and the client waited on a session nobody
+        # would ever close again. The symptom was a wedge with no test process in
+        # the guest and nothing printed, which is the failure this timeout exists
+        # to report — so the timeout was causing the thing it was added to catch.
+        if timeout --foreground --signal=KILL "$SUITE_TIMEOUT" \
+            $LXC exec -T "$RUNNER" --cwd "$VM_REPO" \
+            --env "PYTHONPATH=$VM_REPO/src" \
+            --env "GUARDEN_ROOT=$VM_REPO" \
+            -- bash -c "cd '$VM_REPO' && bash tests/$name" </dev/null; then
+            printf 'ok   %s\n' "$name"
         else
-            printf 'fail\t%s\n' "$name" >>"$ledger"
+            rc=$?
+            if [ "$rc" -eq 137 ]; then
+                printf 'FAIL %s\n' "$name"
+                printf 'error: %s exceeded %ss and was killed; a suite that hangs reports nothing\n' \
+                    "$name" "$SUITE_TIMEOUT" >&2
+            else
+                printf 'FAIL %s\n' "$name"
+            fi
             failures=$((failures + 1))
-            continue
-        fi
-
-        # Reached only for exit 0, and `put` refuses anything else a second time.
-        # A failure has no record, so the next run runs the suite rather than
-        # inheriting it — the whole of what makes a cached green worth anything.
-        if [ -n "$golden_digest" ]; then
-            python3 "$CACHE_TOOL" put "$golden_digest" "$key" "$name" "$mode" "$group" 0 \
-                || die "cannot record the result of $name; the cache is not writable"
         fi
     done
 
-    if [ "$fresh" = 1 ] && [ "$overridden" -gt 0 ]; then
-        printf 'note: --fresh cuts a machine per file and overrode the shared declaration of %d suite(s)\n' \
-            "$overridden"
-    fi
-    local report_args=(--ledger "$ledger" --golden "$golden_digest" --cuts "$cuts")
-    [ "$no_cache" = 1 ] && report_args+=(--no-cache)
-    python3 "$CACHE_TOOL" report "${report_args[@]}"
+    printf '\n%d suites, %d failures\n' "$total" "$failures"
     [ "$failures" -eq 0 ]
 }
 
@@ -816,6 +647,46 @@ cmd_shell() {
     cmd_provision || exit 1
     _reset || die "cannot cut a clean $RUNNER"
     exec $LXC exec "$RUNNER" --cwd / -- bash
+}
+
+# cmd_prove: the measurement ticket 200's claim is made with, and no suite can
+# make it. A suite runs after `_reset` has already waited for cloud-init, so by the
+# time a suite could ask whether apt was busy during boot the answer has been
+# waited out — the question is unanswerable from inside a suite and only from
+# here, where the cut is timed.
+#
+# It cuts a machine, records how long the cut took, and asks four things: was
+# cloud-init reached, did it install anything, are apt's locks free, and is any
+# `apt-get` still running. The per-boot marker the document writes is the fourth
+# answer from the machine's own side, so "nothing was installed" is not only this
+# script's opinion.
+cmd_prove() {
+    cmd_provision || exit 1
+    trap '_teardown_runner' EXIT INT TERM
+
+    local started elapsed
+    started=$(date +%s)
+    _reset || die "cannot cut a clean $RUNNER"
+    elapsed=$(($(date +%s) - started))
+    printf 'cut and ready in %ss\n' "$elapsed"
+
+    printf 'cloud-init   %s\n' \
+        "$(vm_exec_t "$RUNNER" 'cloud-init status --long 2>&1 | tr "\n" ";"')"
+    printf 'boot marker  %s\n' \
+        "$(vm_exec_t "$RUNNER" 'cat /var/lib/guarden-harness/BOOT 2>/dev/null || echo ABSENT')"
+    printf 'apt running  %s\n' \
+        "$(vm_exec_t "$RUNNER" 'pgrep -a apt-get 2>/dev/null || echo none')"
+    printf 'dpkg log     %s\n' \
+        "$(vm_exec_t "$RUNNER" 'tail -1 /var/log/dpkg.log 2>/dev/null || echo none')"
+    printf 'inventory    %s\n' \
+        "$(vm_exec_t "$RUNNER" 'dpkg-query -W 2>/dev/null | wc -l') packages installed"
+
+    # `_reset` already waited for cloud-init, so both locks being free here is the
+    # end of the wait rather than the whole of it. The cut's own clock is what says
+    # nothing happened during boot: 39 cuts at the old 25 s of apt is minutes, and
+    # the same 39 cuts now is what the wall clock above is for.
+    vm_exec_t "$RUNNER" 'fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock \
+        >/dev/null 2>&1 && echo "HELD" || echo free'
 }
 
 _teardown_runner() {
@@ -833,12 +704,12 @@ cmd_clean() {
     _teardown_runner
     if _exists "$GOLDEN"; then
         $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
-        $LXC delete "$GOLDEN" --force >/dev/null 2>&1 \
-            && printf 'deleted %s\n' "$GOLDEN"
+        $LXC delete "$GOLDEN" --force >/dev/null 2>&1 &&
+            printf 'deleted %s\n' "$GOLDEN"
     fi
     if $LXC storage show "$POOL" >/dev/null 2>&1; then
-        $LXC storage delete "$POOL" >/dev/null 2>&1 \
-            && printf 'deleted pool %s (%s)\n' "$POOL" "$POOL_SOURCE"
+        $LXC storage delete "$POOL" >/dev/null 2>&1 &&
+            printf 'deleted pool %s (%s)\n' "$POOL" "$POOL_SOURCE"
     fi
     printf 'clean. still present, not mine:\n'
     $LXC list 2>&1 | tail -n +2
@@ -854,14 +725,32 @@ cmd_destroy() {
 }
 
 case "${1:-run}" in
-    provision) shift; cmd_provision "$@" ;;
-    run) shift; cmd_run "$@" ;;
-    shell) shift; cmd_shell "$@" ;;
-    destroy) shift; cmd_destroy "$@" ;;
-    clean) shift; cmd_clean "$@" ;;
-    *)
-        printf 'usage: %s {provision|run [pat] [--fresh|--shared|--reverse|--no-cache]|shell|destroy|clean}\n' \
-            "$0" >&2
-        exit 2
-        ;;
+provision)
+    shift
+    cmd_provision "$@"
+    ;;
+run)
+    shift
+    cmd_run "$@"
+    ;;
+shell)
+    shift
+    cmd_shell "$@"
+    ;;
+prove)
+    shift
+    cmd_prove "$@"
+    ;;
+destroy)
+    shift
+    cmd_destroy "$@"
+    ;;
+clean)
+    shift
+    cmd_clean "$@"
+    ;;
+*)
+    printf 'usage: %s {provision|run|shell|prove|destroy|clean}\n' "$0" >&2
+    exit 2
+    ;;
 esac

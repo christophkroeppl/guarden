@@ -32,6 +32,7 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 
 export GUARDEN_PREFIX=/
 arch=$(uname -m)
+mkdir -p /etc/guarden
 
 # The one list, and the two of its entries this file is about. Read with `soil`
 # rather than out of the TOML, because the question is what the phase converges and
@@ -103,10 +104,9 @@ assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "index-url"
 # disagreement, and the two lists are meant to differ exactly there — so the
 # substrate is cut out of the document and the comparison is between the two
 # halves that are supposed to be one.
-grep -vE '^(family|install|query|conditional) |^  ' "$GUARDEN_FIXTURES/list-stdout" \
-    | sort >"$GUARDEN_FIXTURES/list-packages"
-sed -n '/^  # harness:/,$d; s/^  - //p' "$GUARDEN_FIXTURES/user-data.yaml" \
-    | sort >"$GUARDEN_FIXTURES/rendered-packages"
+grep -vE '^(family|install|query) ' "$GUARDEN_FIXTURES/list-stdout" | sort >"$GUARDEN_FIXTURES/list-packages"
+sed -n '/^  # harness:/,$d; s/^  - //p' "$GUARDEN_FIXTURES/user-data.yaml" |
+    sort >"$GUARDEN_FIXTURES/rendered-packages"
 comm -23 "$GUARDEN_FIXTURES/list-packages" "$GUARDEN_FIXTURES/rendered-packages" \
     >"$GUARDEN_FIXTURES/only-in-the-list"
 [ ! -s "$GUARDEN_FIXTURES/only-in-the-list" ] || _fail "converged but not rendered: $(tr '\n' ' ' <"$GUARDEN_FIXTURES/only-in-the-list")"
@@ -130,45 +130,47 @@ run env -u PYTHONPATH PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 assert_exit 0
 assert_stdout_has "the host carries both"
 
-# The rest of the list is not on a fresh golden, so this is the real drift and the
-# real converge. Which of them are missing is the golden's business rather than this
-# file's. Ticket 200 provisions the package list at BUILD time, so the golden
-# carries all three and every cut inherits them; the absence this used to assert was
-# true only of a golden that installed nothing, which is the golden that no longer
-# exists.
-assert_dpkg ferm
-assert_dpkg fail2ban
-assert_dpkg podman
+# **The image now ships the whole list, so the absence is created here rather than
+# inherited.** The golden is provisioned at build time (ticket 200), which is what
+# finally put a container runtime on this machine, and it makes the old claim —
+# that a fresh cut has no `ferm`, `fail2ban` or `podman` — a claim about an image
+# that no longer exists. Asserting they are absent now is a claim about `apt-get`,
+# which is the only thing the three drift lines below can be about, and it is
+# re-derived from the machine rather than remembered from a list.
+#
+# The removal is real dpkg work and the install below puts every package back, so
+# the same three are asked of the machine in both directions in one file. What this
+# does **not** do is leave the machine as it found it: the re-install is the apply's
+# job and is asserted at the end.
+apt-get remove -y ferm fail2ban podman
+assert_no_dpkg ferm
+assert_no_dpkg fail2ban
+assert_no_dpkg podman
 
 # The pinned podlet is the last item of the phase, and it is the only fetch in it,
-# so it is what decides this suite's exit codes rather than the packages.
-#
-# **The absent record is a precondition this suite establishes, not one it
-# assumes.** Thirty-eight suites export `GUARDEN_PREFIX=/` and call
-# `stage_podlet_release`, which writes this very file to the real root, so on any
-# machine where one of them ran first the record is present — and this file used to
-# assert its absence and fail, having reasoned that "this suite ran no install".
-# What that reasoning missed is that it is not the only suite on the machine. The
-# golden's `base` snapshot carries no record, so a clean cut satisfies this by
-# itself; a shared one does not, and the answer has to be the same either way.
-#
-# So it is removed rather than asserted. The `--check` below is the claim: on a
-# machine with no record the phase reports the missing fetch, and that is what this
-# asserts — not that a file some other suite may have written is not on disk.
-rm -f /etc/guarden/podlet.release /usr/lib/guarden/bin/podlet
+# so it is what decides this suite's exit codes rather than the packages. Two facts
+# about this machine make the sequence below deterministic rather than incidental.
+# `soil install` is what seeds the record from the template and this suite ran no
+# `install`, so the record is absent rather than half-filled. And being last,
+# everything before it converges first, which is what the `dpkg-query` answers
+# after the apply record.
+assert_file_missing /etc/guarden/podlet.release
+assert_file_missing /usr/lib/guarden/bin/podlet
 run soil packages --check
 assert_exit 1
+assert_stderr_has "drift: the ferm package is installed"
+assert_stderr_has "drift: the fail2ban package is installed"
+assert_stderr_has "drift: the podman package is installed"
 assert_stderr_has "drift: the pinned podlet is installed"
-assert_stderr_lacks "drift: the ferm package is installed"
 
 # **The apply converges the list and stops at the record.** One diagnostic is the
-# whole of what it said: every package in the one list is installed and the pinned
-# podlet has been fetched — `dpkg-query` is the distribution's own record of it —
-# and the phase reports nothing. Before the record was staged it exited 2 naming
-# the fetch it could not perform, which is the refusal this file also covers.
-stage_podlet_release
+# whole of what it said: the three packages were installed by this same run —
+# `dpkg-query` is the distribution's own record of that — and the one thing it
+# could not do was fetch an artefact nothing had told it how to fetch.
 run soil packages --apply
-assert_not_rejected
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "the pinned podlet record is absent"
 assert_dpkg ferm
 assert_dpkg fail2ban
 assert_dpkg podman
@@ -180,17 +182,31 @@ assert_dpkg podman
 # one-list claim is not true.
 assert_dpkg ufw
 
-# Asking again after a converge finds nothing, and **that** is the claim worth
-# making: an `--apply` that reported work it had not done, or a `--check` that could
-# not see what an `--apply` had done, would both pass a suite asserting the single
-# remaining item. This used to assert exactly one drift — the podlet — because the
-# packages were missing and the apply stopped at the fetch. Ticket 200 bakes the
-# packages in, so there is nothing left for the apply to refuse and nothing left for
-# a check to find.
+# Asking again narrows the drift to exactly one item: every package in the one list
+# holds now, and the only thing left is the one fetch. The phase is silent about
+# the packages and says which single thing it wants.
 run soil packages --check
-assert_exit 0
-assert_stderr_empty
-assert_file_exists /usr/lib/guarden/bin/podlet
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "drift: the pinned podlet is installed"
+assert_stderr_lacks "package is installed"
+
+# **And now the record is there, so the claim this block used to be the opposite of
+# becomes the claim.** This is what `soil install` seeds on a host, copied from the
+# checkout because running the `install` phase is not this suite's business — the
+# seed is a file copy and the file is the one the repository ships.
+install -m 0644 "$GUARDEN_ROOT/src/guarden/templates/podlet.release" /etc/guarden/podlet.release
+assert_file_has /etc/guarden/podlet.release "[artefacts.$arch]"
+# A host that has not fetched it reports the pinned release as not installed, which
+# is exit 1: nothing is wrong with the record, the host does not have the program
+# yet. That was the old exit-2 refusal's opposite, and it is the exit code the
+# specification gives a host rather than an input.
+run soil packages --check
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "drift: the pinned podlet is installed"
+assert_stderr_lacks "package is installed"
+assert_file_missing /usr/lib/guarden/bin/podlet
 
 # **The apply installs it, and what it installs is a program.** Not "a file
 # appeared": every published podlet artefact is an archive, so a pin filled in
@@ -234,3 +250,12 @@ assert_dpkg ufw
 # the absences above different absences.
 assert_dpkg btrfs-progs
 assert_dpkg snapper
+
+# **And the image's own new fact, which is what the removals above replaced.** A
+# golden that ships its substrate is a different machine from one that did not, and
+# the record of which is a fact about the image rather than about this phase. The
+# four `dpkg-query` answers above already ask it — the phase re-installed all of
+# them — so what is added here is the package whose absence is why the suite could
+# not reach a container before, and which no phase in this file installs.
+run pasta --version
+assert_exit 0
