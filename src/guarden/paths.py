@@ -26,7 +26,6 @@ from pathlib import Path
 
 PREFIX = Path(os.environ.get("GUARDEN_PREFIX") or "/")
 
-# /etc
 ETC = PREFIX / "etc"
 ETC_GUARDEN = ETC / "guarden"
 GUARDEN_TOML = ETC_GUARDEN / "guarden.toml"
@@ -44,7 +43,6 @@ SUBGID = ETC / "subgid"
 GROUP = ETC / "group"
 ADMIN_UNITS = ETC / "containers" / "systemd" / "users"
 
-# /var/lib/guarden
 LIB = PREFIX / "var" / "lib" / "guarden"
 SERVICES = LIB / "services"
 REGISTRY = LIB / "registry"
@@ -75,7 +73,6 @@ LIBDIR = USR_LIB_GUARDEN / "lib"
 MODULES = USR_LIB_GUARDEN / "modules"
 USR_BIN = PREFIX / "usr" / "bin"
 
-# /run and /proc
 LOCKS = PREFIX / "run" / "guarden" / "locks"
 PROC_SYS = PREFIX / "proc" / "sys"
 
