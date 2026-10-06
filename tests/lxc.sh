@@ -565,8 +565,19 @@ _reset() {
 }
 
 cmd_run() {
-    local pat=${1:-} file name failures=0 total=0
-    local fresh=${2:-"--fresh"}
+    local pat="" file name failures=0 total=0
+    local fresh="--fresh" reverse=0 no_cache=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --fresh|--shared) fresh="$1" ;;
+            --reverse) reverse=1 ;;
+            --no-cache) no_cache=1 ;;
+            --*) die "unknown option: $1" ;;
+            *) pat="$1" ;;
+        esac
+        shift
+    done
 
     cmd_provision || exit 1
 
