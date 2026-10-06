@@ -68,8 +68,7 @@ assert_file_has "$templates/guarden-creds.path" "WantedBy=multi-user.target"
 # assert_file_lacks skips comments, and the match is anchored on the `=`.
 assert_file_lacks "$templates/guarden-creds-boot.service" "LoadCredentialEncrypted="
 assert_file_lacks "$templates/guarden-creds.path" "LoadCredentialEncrypted="
-assert_file_lacks "$templates/guarden-credential-materialiser@.service" \
-    "LoadCredentialEncrypted=/etc/guarden/creds/%i/credentials.cred"
+assert_file_lacks "$templates/guarden-credential-materialiser@.service" "LoadCredentialEncrypted="
 assert_file_lacks "$templates/guarden-creds-boot.service" "GUARDEN_SERVICE"
 
 # **The boot oneshot carries no `RemainAfterExit`, and that is load-bearing

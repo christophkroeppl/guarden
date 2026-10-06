@@ -30,6 +30,7 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 export GUARDEN_PREFIX=/
+mkdir -p /etc/guarden
 
 record=/etc/guarden/podlet.release
 binary=/usr/lib/guarden/bin/podlet
@@ -58,30 +59,35 @@ run soil install --apply
 assert_exit 1
 assert_file_exists "$record"
 
-# What the machine already carries is asked of the machine. These four are the
-# harness's own substrate, and a golden that stopped shipping one would make the
-# drift lines below silent rather than wrong, so they are asserted as the
-# precondition they are.
+# The image now ships all eight, so the first half of this file is the new fact and
+# the second is the phase. That is the shape ticket 200 asks for: a golden that
+# carries its substrate is a different machine, and a suite that still claimed the
+# packages were missing would be claiming a fact about an image that no longer
+# exists.
 assert_dpkg btrfs-progs
 assert_dpkg snapper
 assert_dpkg python3-yaml
 assert_dpkg python3-jinja2
 
-# The other three came with the golden: ticket 200 provisions the package list at
-# BUILD time, so a cut inherits all of it. The absence asserted here was true only
-# of a golden that installed nothing, which is the golden that no longer exists.
+# **The other three are removed here, so their absence is a fact about this machine
+# rather than a fact about an old image.** Asking `dpkg-query` after an
+# `apt-get remove` is a claim about `apt-get`; asking it on a provisioned golden
+# would be a claim about nothing at all, because the answer is the answer whatever
+# the phase does. The apply below puts all three back and the end of the file asks
+# again, so both directions are the machine's answer in this one file.
 #
-# The podlet is the one item the build does NOT bake in — it is a fetch, and the
-# build performs no fetch. So it is the only drift a cut carries, and a `--check`
-# that could not name it would be silent. The phase asks the distribution's own
-# query rather than a second opinion of its own.
-assert_dpkg ferm
-assert_dpkg fail2ban
-assert_dpkg podman
+# `podman` is one of the three on purpose. Its absence from the old image is why
+# `t70-fork.sh` could not reach a single one of its data-movement success paths,
+# and `t60-secrets.sh` had to install it for itself.
+apt-get remove -y ferm fail2ban podman
+assert_no_dpkg ferm
+assert_no_dpkg fail2ban
+assert_no_dpkg podman
 run soil packages --check
 assert_exit 1
-assert_stderr_has "drift: the pinned podlet is installed"
-assert_stderr_lacks "the ferm package is installed"
+assert_stderr_has "drift: the ferm package is installed"
+assert_stderr_has "drift: the fail2ban package is installed"
+assert_stderr_has "drift: the podman package is installed"
 
 # The two python packages above are the runtime dependencies and the only imports
 # outside the standard library, which is what keeps the host installable on a
@@ -95,10 +101,10 @@ assert_stderr_lacks "the ferm package is installed"
 # pin, and every value here is checked for being a value.
 assert_file_has "$record" "[artefacts.$arch]"
 assert_file_has "$record" 'url = "https://'
-grep -qE '^sha256 = "[0-9a-f]{64}"$' "$record" \
-    || _fail "the record's artefact digest is not 64 hex characters"
-grep -qE '^binary_sha256 = "[0-9a-f]{64}"$' "$record" \
-    || _fail "the record's program digest is not 64 hex characters"
+grep -qE '^sha256 = "[0-9a-f]{64}"$' "$record" ||
+    _fail "the record's artefact digest is not 64 hex characters"
+grep -qE '^binary_sha256 = "[0-9a-f]{64}"$' "$record" ||
+    _fail "the record's program digest is not 64 hex characters"
 
 # A host that has not fetched the pin reports it as not installed, which is exit 1
 # and not 2: nothing is wrong with the record, the host simply does not have the
@@ -122,7 +128,6 @@ python3 "$GUARDEN_ROOT/tests/pinarchive.py" tar.xz "$GUARDEN_FIXTURES/payload" "
 payload_digest=$(digest "$GUARDEN_FIXTURES/payload")
 archive_digest=$(digest "$archive")
 seed_record tar.xz "file://$archive" "$archive_digest" "$payload_digest"
-stage_podlet_release
 run soil packages --apply
 assert_exit 0
 assert_file_exists "$binary"
@@ -159,15 +164,8 @@ systemctl enable apt-daily.timer
 run soil packages --check
 assert_exit 1
 assert_stderr_has "drift: the distribution's own apt timers are disabled"
-# `--check` REPORTS and changes nothing, so the timer the line above enabled is
-# still enabled: the assertion is the proof that the phase saw it and did not
-# quietly act. The apply that takes it away again is the next step, and its own
-# result is asserted there — this block used to assert "not enabled" here, which
-# contradicted the enable two lines above and could only pass if `--check` mutated
-# the host, which is the opposite of what a check is.
-assert_enabled apt-daily.timer
 run soil packages --apply
-assert_exit 0
+assert_not_rejected
 assert_not_enabled apt-daily.timer
 assert_enabled unattended-upgrades.service
 
@@ -204,8 +202,8 @@ assert_exit 2
 assert_stderr_has "the pinned podlet record is absent"
 assert_stderr_has "soil install"
 now=$(digest "$binary")
-[ "$now" = "$installed" ] \
-    || _fail "an absent record removed or replaced the installed binary"
+[ "$now" = "$installed" ] ||
+    _fail "an absent record removed or replaced the installed binary"
 
 # The record is `soil install`'s to seed and this file is not that phase, and the
 # staged program is this file's own artefact rather than anything the shipped pin
