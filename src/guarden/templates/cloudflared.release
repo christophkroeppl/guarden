@@ -1,0 +1,62 @@
+# The tunnel's terminator, pinned. Same shape as `podlet.release`, and the same
+# mechanism reads it: ADR-0015 renamed the fetch rather than writing a second one,
+# so a second pinned binary is a second row here and not a second implementation.
+#
+# `cloudflared` is not in any distribution's repository. The vendor publishes an
+# APT repository with its own separately-rolled signing key, and a repository's
+# contents move under guarden's pin: a pin names a url and a digest, so the
+# version in force would be the vendor's decision at install time rather than a
+# number recorded here and re-read by `soil packages --check` on every run.
+#
+# `soil packages --apply` reads this file and `soil install` seeds it from this
+# template once, never overwriting it afterwards, because an operator who edits a
+# pin owns it from then on. Empty a digest and the fetch is refused rather than
+# unpinned: there is no "latest" and no fallback.
+#
+# ## The keys
+#
+#   version          the release, for the diagnostics and for whoever reads this
+#
+#   [artefacts.<arch>]
+#     format         raw | tar.xz | zip: what the artefact IS. **`raw` here, and
+#                    not an archive**: the vendor publishes the program itself per
+#                    architecture with no extension and nothing around it, so there
+#                    is no archive to unpack and no reader that could be got
+#                    wrong. The cost is stated in ADR-0015 rather than waved
+#                    away: 40 MB against 19 MB for the `.deb`, statically linked
+#                    where the package is not, and so no distribution security
+#                    update. That is the trade `podlet` already makes, taken a
+#                    second time deliberately.
+#     url            where this architecture's artefact is
+#     sha256         of the artefact **as downloaded**, compared before anything
+#                    is installed from it
+#     binary_sha256  of the file installed *from* the artefact, re-read on every
+#                    `--check`. **With `raw` this is the same number as `sha256`
+#                    and both rows must carry it anyway**, because the field is
+#                    what every reader compares against and a reader that treats
+#                    it as optional for one format is a second set of rules
+#
+# ## What is not here
+#
+# No `384`, no `arm`, no FIPS build. A row is added per architecture this
+# project's hosts run, with its own digest read from that release, and a machine
+# the table says nothing about is refused by name rather than served somebody
+# else's bytes. `x86_64` and `aarch64` are the two the golden VM and the ARM
+# hosts use; `platform.machine()` picks the row and accepts both spellings.
+#
+# Both digests below were computed from the release artefacts this file names and
+# compared against the publisher's own SHA256 statement for the same release,
+# which is a second, independent record of the same numbers.
+version = "2026.10.0"
+
+[artefacts.x86_64]
+format = "raw"
+url = "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-linux-amd64"
+sha256 = "d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db"
+binary_sha256 = "d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db"
+
+[artefacts.aarch64]
+format = "raw"
+url = "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-linux-arm64"
+sha256 = "e6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08"
+binary_sha256 = "e6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08"

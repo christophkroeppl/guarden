@@ -678,6 +678,13 @@ def _module_add(args) -> int:
     config = config_mod.load()
     module = modules.read(args.name)
     _requirements(module, config)
+    if module.name == "tendril" and not config.tunnel_domain:
+        raise errors.GuardenError(
+            "tunnel_domain is empty in [ingress], so the tunnel is not configured; "
+            "set it to the zone delegated to the tunnel's provider before adding "
+            "the tendril module",
+            errors.REJECTED_INPUT,
+        )
     with conf.lock("modules"):
         merged = list(dict.fromkeys([*config.modules, module.name]))
         if merged != list(config.modules):

@@ -278,6 +278,14 @@ def _check(
         if not item.holds():
             drift_line(item.what)
             drifted += 1
+    if not drifted:
+        from guarden import config as config_mod
+        cfg = config_mod.load()
+        if not cfg.tunnel_domain and "tendril" not in cfg.modules:
+            sys.stderr.write(
+                "warning: tunnel_domain is empty, so the tunnel is not configured; "
+                "set it in [ingress] before adding the tendril module\n"
+            )
     return EXIT_NOT_CONVERGED if drifted else EXIT_OK
 
 

@@ -17,6 +17,12 @@ alias = ""                       # the address a rootless container reaches the 
                                  # resolves and never a firewall destination
 publication_range = [20000, 32767]
 forwarded = [ "80/tcp", "443/tcp", "443/udp" ]
+# The zone delegated to the tunnel's provider, and empty by default. Empty means
+# the tunnel is NOT configured: `weedr module add tendril` refuses to install it
+# and `soil --check` reports the absence, which is a state rather than a failure.
+# Root-owned like the alias beside it, and no manifest carries it — a repository
+# cannot choose the zone public traffic is answered in.
+tunnel_domain = ""
 
 [network]
 backend = "pasta"                # the only value v1 supports
@@ -53,24 +59,27 @@ free_limit = 0.10
 keep_last = 7
 kind = "slot"
 fork_from = ""
+expose = "edge"
 
 [[environments]]
 name = "staging"
 host_prefix = "staging."
 gated = false
 weight = 100
-free_limit = 0.20
+free_limit = "0.20"
 keep_last = 0
 kind = "slot"
 fork_from = "production"
+expose = "edge"
 
 [[environments]]
 name = "preview"
 host_prefix = "preview."
 gated = false
 weight = 10
-free_limit = 0.20
+free_limit = "0.20"
 keep_last = 0
 kind = "instance"
 fork_from = "staging"
 cap = 3
+expose = "edge"

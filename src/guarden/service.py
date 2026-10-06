@@ -283,6 +283,13 @@ def _allocate(resolved, record, manifest, config, source: Source) -> None:
         record.route_hosts[route.host] = publications.claim_host(
             route.host, resolved.track.host_prefix, holders, record.service
         )
+        # Record the destination for this route (edge or tunnel)
+        granted = overrides_mod.load(resolved.name) if resolved.name else None
+        tunnel_labels = set(granted.expose_tunnel) if granted else set()
+        track_expose = resolved.track.expose
+        record.route_destinations[route.host] = (
+            "tunnel" if route.host in tunnel_labels else track_expose
+        )
 
     if resolved.escaped_ref:
         instance = record.instances.get(resolved.escaped_ref)
