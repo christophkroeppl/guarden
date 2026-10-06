@@ -321,7 +321,7 @@ def _tracks(rows: Any, where_file: Any) -> list[Track]:
                 kind=kind,
                 fork_from=_str(row, "fork_from", where),
                 cap=_cap(row, where),
-                expose=_str(row, "expose", where),
+                expose=_str(row, "expose", where) or TRACK_DEFAULTS["expose"],
             )
         )
 
