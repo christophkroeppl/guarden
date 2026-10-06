@@ -8,17 +8,17 @@ other 38, saying so out loud rather than pretending it ran them.
 **Blocked by:** 190 (which suites share a machine), 200 (a stable golden), **and a green suite**.
 The last one is the real blocker and it is not a formality: see below.
 
-**Status:** ready-for-agent, deliberately **last**
+**Status:** complete
 
-- [ ] The key is a hash of the **golden snapshot's identity** and the **repository tree** the
+- [x] The key is a hash of the **golden snapshot's identity** and the **repository tree** the
       suite reads. If the golden is rebuilt, every cached result is invalid and the cache says so
       rather than answering from a machine that no longer exists
-- [ ] A cached suite prints something that cannot be mistaken for a fresh pass — it is
+- [x] A cached suite prints something that cannot be mistaken for a fresh pass — it is
       **inherited green, not observed** — and a full run states how many suites ran and how many
       were cached. An operator must never be able to read a cached run as a verification
-- [ ] `--no-cache` forces everything to run, and it is what a release gate uses. There is no
+- [x] `--no-cache` forces everything to run, and it is what a release gate uses. There is no
       automatic expiry: an expiry would make a run's meaning depend on a clock
-- [ ] The cache is **outside the repository** and is disposable. It is not a build artefact that
+- [x] The cache is **outside the repository** and is disposable. It is not a build artefact that
       gets committed and not a claim about the host
 
 ## Why this is last, and the condition on it
