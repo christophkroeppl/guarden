@@ -271,19 +271,28 @@ host loopback port through the alias — `sshd` on 22, a database the operator r
 anything. So the rendered `OUTPUT` set is a **default deny on the whole of loopback for every
 service uid**, with the per-publication accept rules above it, and the order is the whole of it.
 
-The deny matches `-o lo -d 127.0.0.0/8` and does not touch outbound traffic or name resolution.
-A package update and a git fetch leave on the real interface. Pasta's DNS forward is explicitly
-excluded from the loopback mapping, so a resolver on `127.0.0.53` is reached the normal way and
-not through the alias. An earlier revision of this document claimed a blanket drop "would break
-name resolution and package updates"; both were wrong, and the claim survived because the
-runbook told the operator that `iptables -S` could not see the firewall because the files were
-ferm source. Ferm compiles to iptables. The live rules are always inspectable.
+The deny matches `-d 127.0.0.0/8` and does not touch outbound traffic: a package update and
+a git fetch leave on the real interface. **It does touch name resolution, and an earlier
+revision of this document said it did not**, on the grounds that pasta's DNS forward is
+excluded from the loopback mapping. That is true of traffic from *inside* a container;
+`podman pull` is on the **host**, as the service user, its packet leaves through `OUTPUT`, and
+the deny is on the network the stub listener at `127.0.0.53` belongs to. Measured on a real
+machine by reading the deny's own packet counter across one UDP send from a service uid to
+`127.0.0.53:53` — it moved, 0 then 1 — so the resolver was unreachable from every service uid
+and **no first deploy of a new workload could complete.** spec §7.6 renders the one accept that
+fixes it: `127.0.0.53` port 53, `udp` and `tcp`, owner-matched to service uids, above the deny,
+and nothing else on loopback (ADR-0015). The claim survived because the runbook told the
+operator that `iptables -S` could not see the firewall because the files were ferm source.
+Ferm compiles to iptables. The live rules are always inspectable.
 
 **There is no `[loopback] allow` table.** A table whose whole content is a destination would be a
 second way to grant one beside the publication set, and two ways to grant a thing are two ways
 for it to be wrong. `overrides.toml` is `[ports]`, `[firewall]`, `[retention]`, `[groups]` and
 `[mounts]`, and the `[firewall]` one is different in kind: it holds the **names** of rules a
-manifest asked for, not destinations (§2.5). Making that daemon a service is still the right
+manifest asked for, not destinations (§2.5). The stub resolver's accept is different in kind
+again: it is **one** destination guarden derives from the host rather than a key an operator
+fills in, so adding another is a change to the code and to the spec rather than a configuration
+change (ADR-0015). Making that daemon a service is still the right
 answer for a host loopback port that is not a publication — a granted rule is the door for the
 cases where it is not possible, and it is opened by root on purpose.
 

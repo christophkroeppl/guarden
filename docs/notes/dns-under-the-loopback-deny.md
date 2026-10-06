@@ -1,7 +1,10 @@
 # Does a service uid reach the stub resolver under the loopback deny?
 
-**Status: open, and now reproduced with the render fixed. Measured twice, same
-message. Do not "fix" this by loosening the deny without a decision.**
+**CLOSED 2026-10-05 by ADR-0015, ticket 260.** The deny is the cause, measured as
+below, and the answer is one owner-matched accept for `127.0.0.53:53` above the
+deny for `udp` and `tcp`. **The canonical statements are ADR-0015 and spec §7.6**
+and this note is not one of them; it records how the answer was found. The
+measurements below are unchanged and are what the decision rests on.
 
 **Update 2026-10-05 (ticket 240 landed, `caa414d`→`13a76a9`).** The probe below that
 "created no service, so `30-services.conf` did not exist" is no longer needed to see
@@ -20,8 +23,8 @@ measured and only remaining blocker between that suite and green.**
     127.0.0.1:38904->127.0.0.53:53: write: operation not permitted
 
 `write: operation not permitted` on a UDP send is the kernel refusing it, and
-127.0.0.53 is systemd-resolved's stub listener on loopback. spec 7.6 (lines
-2078-2086) argues the loopback deny "does not touch name resolution" because
+127.0.0.53 is systemd-resolved's stub listener on loopback. spec 7.6 argued the
+loopback deny "does not touch name resolution" because
 **pasta** excludes its DNS forward from the loopback mapping. That argument is
 about traffic from inside a container. This is the HOST: podman's pull runs as
 the service user, and the packet goes out through `OUTPUT`, which jumps to
@@ -81,9 +84,10 @@ sends one UDP packet to 127.0.0.53. If the counter moves, the deny is the cause.
 
 ## The decision, when it is made
 
-There is no `[loopback] allow` table, and there must not be one: a table whose
-whole content is a destination is a second way to grant a destination beside the
-publication set (spec 7.6). If DNS turns out to be blocked, the answer is not a
-new table — it is either the stub resolver being moved off loopback, or pasta's
-exclusion being extended to the host path the pull takes. Both are design
-decisions and belong in an ADR.
+**Made: ADR-0015, 2026-10-05.** There is no `[loopback] allow` table, and there must
+not be one: a table whose whole content is a destination is a second way to grant a
+destination beside the publication set (spec 7.6). The answer was therefore never a
+new table — it is **one** rendered accept, for the one resolver the host already
+runs, above the deny, owner-matched to service uids and derived from guarden's
+knowledge of the host rather than from configuration. ADR-0015 carries the
+distinction from ADR-0013's removed table and what it costs.

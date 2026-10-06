@@ -163,6 +163,16 @@ def admin_uid(config) -> int:
     return accounts[config.admin_user][0]
 
 
+def service_uids() -> set[int]:
+    """Every deployed service's uid, from the registry and nowhere else."""
+    uids: set[int] = set()
+    for name in registry.names():
+        record = registry.load(name)
+        if record is not None and record.uid:
+            uids.add(record.uid)
+    return uids
+
+
 def edge_uids() -> set[int]:
     """Every service an enabled module declares ingress for, by uid.
 
@@ -336,6 +346,13 @@ def render(config, grants: list[Grant]) -> str:
         "",
         f"chain {OUTPUT_CHAIN} {{",
         *accept_lines(config),
+        # The stub resolver, with the per-publication accepts and above the granted
+        # rules — guarden's own accepts first, then what an admin granted, then the
+        # single default deny last. `service_uids()` is the registry's uids and
+        # nothing else: `users.passwd_entries()` would sweep in `guarden`, `hose`,
+        # `operator` and every package's system user, and a rule meant for a service
+        # would become a host-wide one.
+        *rules.resolver_lines(service_uids()),
         # A granted rule renders ABOVE the deny and never after it: position is
         # guarden's, and a grant that landed below a default deny would be
         # unreachable while still appearing in the file.

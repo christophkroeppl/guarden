@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # A service-requested firewall rule, end to end at the CLI seam
-# (ticket 180, spec 7.7, ADR-0013).
+# (ticket 180, spec 7.7, ADR-0013), and the one accept guarden renders without
+# anybody asking: the host's stub resolver (ticket 260, spec 7.6, ADR-0015).
 #
 # The subject is the four load-bearing rules and the order they hold in. A
 # request installs nothing; the grant is a root verb on no sudoers rule; the
@@ -9,6 +10,18 @@
 # asking for one line get one rule carrying both names. Each of those is
 # asserted here as a fact about the rendered file rather than about a code
 # path, because that is where a claim like "the deny is still last" is true.
+#
+# **The stub resolver's accept is the opposite case and is asserted the same
+# way.** It is not a request and not a grant: guarden renders it from the host
+# it is running on, so no repository, no `overrides.toml` and no verb can add or
+# remove one. What makes it safe to render unconditionally is that it names ONE
+# address and ONE port, owner-matched to service uids — and that is asserted, in
+# both directions: the accept is above the deny and in force, and a service uid
+# still cannot reach anything else on loopback. The negative is the one that
+# matters here. Every other rule in this file is somebody's grant; this one is
+# the widest thing guarden renders unasked, and a render that widened it to
+# `127.0.0.0/8`, to another port, or to another uid would pass every positive
+# assertion above and quietly turn the default deny into decoration.
 #
 # What this file does **not** assert is the honest limit of a grant: that a
 # granted rule matching `-o lo` and accepting really does reopen loopback for
@@ -32,6 +45,7 @@ ingress=/etc/guarden/firewall/20-ingress-nat.conf
 
 cleanup() {
     rm -rf "$registry/tunnel-staging.toml" "$registry/relay-staging.toml" \
+        "$registry/shelf-staging.toml" \
         "$overrides/tunnel-staging" "$overrides/relay-staging" "$conf" "$ingress"
 }
 trap cleanup EXIT
@@ -293,3 +307,197 @@ drop_line=$(grep -n -- "jump DROP" "$conf" | tail -1 | cut -d: -f1)
 last_accept=$(grep -n -- "jump ACCEPT" "$conf" | tail -1 | cut -d: -f1)
 [ "$last_accept" -lt "$drop_line" ] \
     || _fail "an accept landed after the deny"
+
+# --- the stub resolver's accept (ticket 260, spec 7.6, ADR-0015) -----------
+
+# Everything above is somebody's grant. This is the one accept guarden renders
+# with nobody asking, and the four things that make that safe are asserted here:
+# it is rendered, it is above the deny, it is owner-matched to service uids, and
+# a service uid still cannot reach anything else on loopback.
+#
+# The uid is read from the account the ingest created rather than written down,
+# because the rule names the uid the registry allocated: a number typed into
+# this test would be satisfied by a render that never read anything.
+svc_uid=$(getent passwd tunnel-staging | cut -d: -f3)
+[ -n "$svc_uid" ] || _fail "tunnel-staging has no uid, so no rule can name it"
+svc_home=/var/lib/guarden/services/tunnel-staging/home
+
+# **The policy is in force before anything is asserted about it.** `soil
+# firewall --apply` is what installs `guarden-firewall.service` and the two
+# files of soil's own half, and the mutator's `load_set` only warns rather than
+# failing when the unit is absent — so without this the counters below are read
+# off a ruleset that does not exist and every measurement is vacuous. Starting
+# it is the point at which the three files are assembled into one policy.
+run soil firewall --apply
+assert_not_rejected
+run systemctl start guarden-firewall.service
+assert_exit 0
+assert_active guarden-firewall.service
+
+# **Read the deny out of the table that HOLDS it.** ferm invokes `iptables` by
+# name, so `update-alternatives` decides which table was written, and on this
+# golden `/usr/sbin/iptables` is `iptables-nft` while guarden's rules are in
+# `iptables-legacy` — reading through `iptables` looks for a chain that is not
+# there, and `iptables-nft` says so explicitly. (ticket 270 owns the fix.)
+run iptables-legacy -S guarden-svc
+assert_exit 0
+assert_stdout_has "127.0.0.0/8"
+assert_stdout_has "DROP"
+
+# **It is rendered, on both protocols.** systemd-resolved's stub listens on udp
+# and tcp 53, and udp is the protocol a pull actually uses; a render carrying
+# only one would leave the host path broken in the way the ticket found it.
+assert_file_has "$conf" \
+    "mod owner uid-owner $svc_uid daddr 127.0.0.53 proto udp dport 53 jump ACCEPT;"
+assert_file_has "$conf" \
+    "mod owner uid-owner $svc_uid daddr 127.0.0.53 proto tcp dport 53 jump ACCEPT;"
+
+# **The exact address, and the exact port.** Both halves of "narrow" are
+# load-bearing rather than one of them implying the other, so each is counted on
+# its own. A render that widened this to the loopback network — the thing being
+# denied — or to another port on the resolver would pass every positive
+# assertion above.
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE 'jump ACCEPT;.*127\.0\.0\.0/8' || true)" = 0 ] \
+    || _fail "an accept matches the whole loopback network, which is the deny itself"
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner $svc_uid daddr 127\.0\.0\.53 proto (udp|tcp) dport 53 jump ACCEPT;\$" || true)" = 2 ] \
+    || _fail "the resolver accepts are not exactly two rules at 127.0.0.53 port 53"
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE "^[[:space:]]+daddr 127\.0\.0\.53 proto (udp|tcp) dport [0-9]+ jump ACCEPT;\$" || true)" = 0 ] \
+    || _fail "a resolver accept carries no owner match, so any uid could use it"
+
+# **Above the deny, and the deny is still last.** Position is guarden's for
+# these accepts as it is for the granted rules above: an accept below the single
+# deny matches no packet while still appearing in the file.
+drop_line=$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -n 'jump DROP;' | tail -1 | cut -d: -f1)
+[ -n "$drop_line" ] || _fail "the loopback deny is not in the rendered set at all"
+resolver_line=$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -n "daddr 127.0.0.53" | tail -1 | cut -d: -f1)
+[ "$resolver_line" -lt "$drop_line" ] \
+    || _fail "the resolver accept is at line $resolver_line and the deny at $drop_line"
+last_accept=$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -n 'jump ACCEPT;' | tail -1 | cut -d: -f1)
+[ "$last_accept" -lt "$drop_line" ] \
+    || _fail "an accept landed after the deny, at line $last_accept"
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -c 'daddr 127.0.0.0/8 jump DROP;')" = 1 ] \
+    || _fail "the loopback deny is not the single last rule"
+
+# **Owner-matched to service uids, and to no one else.** The deny itself names no
+# uid — that is what makes it a default deny — so a uid outside the accept set is
+# refused `127.0.0.53` exactly as it is refused every publication. `guarden` and
+# `operator` are the two uids on a converged guarden host that are not service
+# uids and are not meant to reach the stub this way: images are pulled as the
+# service user, which is the path this accept exists for.
+for uid in $(getent passwd guarden operator | cut -d: -f3); do
+    [ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+        | grep -cE "^[[:space:]]+mod owner uid-owner $uid daddr 127\.0\.0\.53 " || true)" = 0 ] \
+        || _fail "uid $uid is not a service uid and the resolver accept covers it"
+done
+
+# A second service, and the resolver's accepts are per uid rather than written
+# out once. `shelf` is the plainest fixture in the tree — a compose service with
+# one route and no credential — so the ingest below is about the uid and nothing
+# else.
+stage_poke shelf 9f2c1ab
+run weedr service ingest shelf-staging --from poke shelf@9f2c1ab
+assert_exit 0
+shelf_uid=$(getent passwd shelf-staging | cut -d: -f3)
+[ -n "$shelf_uid" ] || _fail "shelf-staging was ingested and has no uid"
+assert_file_has "$conf" \
+    "mod owner uid-owner $shelf_uid daddr 127.0.0.53 proto udp dport 53 jump ACCEPT;"
+assert_file_has "$conf" \
+    "mod owner uid-owner $shelf_uid daddr 127.0.0.53 proto tcp dport 53 jump ACCEPT;"
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner $svc_uid daddr 127\.0\.0\.53 " || true)" = 2 ] \
+    || _fail "a second service changed the first service's resolver accepts"
+
+# A grant cannot reach the resolver either. This rule is rendered from the host
+# rather than asked for, so it is in the set whatever any manifest says and no
+# `overrides.toml` holds its address.
+assert_file_lacks "$overrides/tunnel-staging/overrides.toml" "127.0.0.53"
+
+# --- the deny still works: the negative that matters -----------------------
+
+# Everything above read a file. This measures the running kernel ruleset, which
+# is the only way the claim "the deny does not touch the rest of loopback" can be
+# true or false — and it is the claim the whole ticket rests on, because the
+# defect was never a spelling in the render.
+svc_send() {
+    run_in "$svc_home" setpriv --reuid=tunnel-staging --regid=tunnel-staging \
+        --clear-groups env -u OLDPWD HOME="$svc_home" PWD="$svc_home" \
+        sh -c "printf '\x00\x00' | nc -u -w1 $1 $2" || true
+}
+
+# **The stub is actually listening**, or a counter that stays put proves nothing:
+# a packet to a port nothing holds is refused for being unanswered rather than
+# by the rule under test, and this suite would then be measuring the wrong thing.
+# `ss` prints the address with its scope as `127.0.0.53%lo:53`, so the port is
+# matched rather than the bare address-and-port pair a filter would guess.
+run ss -lun
+assert_exit 0
+assert_stdout_has "127.0.0.53%lo:53"
+
+# `iptables -nvx -L` prints `pkts bytes target prot opt in out source destination`,
+# so the DROP rule's counter is the first field and its destination is
+# `127.0.0.0/8`. One function, so the readings cannot differ in how they were
+# taken.
+deny_packets() {
+    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
+        | awk '$3 == "DROP" && $NF ~ /^127\.0\.0\.0\/8/ {print $1; exit}'
+}
+
+# **The negative, and it is the important one here.** A service uid sending to
+# `127.0.0.1` — the address every publication lives on, and the address the
+# resolver's exemption names as itself — is dropped by this very rule.
+# `127.0.0.53` is exempted; `127.0.0.1` is not, and neither is any port other than
+# 53 on the exempted address. A counter that does not move here is the accept
+# widened into the loopback network, which is every positive assertion above
+# failing to notice.
+before=$(deny_packets)
+[ -n "$before" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"
+svc_send 127.0.0.1 53
+after_other=$(deny_packets)
+[ "$after_other" != "$before" ] \
+    || _fail "a service uid reached 127.0.0.1:53; the deny does not hold on the rest of loopback"
+
+# The same address on a port the stub does not listen on, so "one address" and
+# "one port" are both load-bearing rather than one implying the other.
+svc_send 127.0.0.53 22
+after_port=$(deny_packets)
+[ "$after_port" != "$after_other" ] \
+    || _fail "a service uid reached 127.0.0.53:22; the accept is not limited to port 53"
+
+# **And the positive, read off the same counter.** The accept is above the deny,
+# so a service uid's datagram to `127.0.0.53:53` must NOT move the deny's packet
+# count. A counter that moves here is exactly the defect ADR-0015 was written
+# for, reproduced rather than fixed: `podman pull` as this uid cannot resolve a
+# name, and no first deploy of a new workload can complete.
+svc_send 127.0.0.53 53
+after_resolver=$(deny_packets)
+printf 'RESOLVER_DENY_COUNTER=%s\n' "$after_resolver" >&2
+[ "$after_resolver" = "$after_port" ] \
+    || _fail "a service uid's datagram to 127.0.0.53:53 was dropped by the deny: the accept is not in force"
+
+# A uid that is not a service uid is refused even at the resolver, because the
+# deny names no uid and the accept names this one. `guarden` is the account the
+# unprivileged programs run as, so this is the shape of any future verb's
+# refusal rather than a hypothetical.
+run_in /tmp setpriv --reuid=guarden --regid=guarden --clear-groups \
+    env -u OLDPWD sh -c "printf '\x00\x00' | nc -u -w1 127.0.0.53 53" || true
+after_other_uid=$(deny_packets)
+[ "$after_other_uid" != "$after_resolver" ] \
+    || _fail "uid guarden reached 127.0.0.53:53, so the accept is not owner-matched"
+
+# The deny is last, once more, with the resolver accepts and two services on the
+# box — the invariant every one of the above depends on.
+drop_line=$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -n 'jump DROP;' | tail -1 | cut -d: -f1)
+last_accept=$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -n 'jump ACCEPT;' | tail -1 | cut -d: -f1)
+[ "$last_accept" -lt "$drop_line" ] \
+    || _fail "an accept landed after the deny once the resolver accepts were in"
+
+# The resolver's rule reaches no other file. `10-framework.conf` and
+# `20-ingress-nat.conf` are soil's and each of the three files has exactly one
+# writer, so a resolver accept in any of them would be a second writer.
+assert_file_lacks "$conf" "chain INPUT"
+assert_file_lacks "$ingress" "127.0.0.53"
+assert_file_lacks /etc/guarden/firewall/10-framework.conf "127.0.0.53"

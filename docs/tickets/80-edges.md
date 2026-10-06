@@ -43,10 +43,13 @@ paths is ticket 40, and both are needed before the edge is complete.
       branches do not contend for a port, they are each handed one, and the edge is pointed at the
       instance it meant
 - [ ] **The loopback is closed to service uids by default.** The `OUTPUT` set is a default deny on
-      `-o lo -d 127.0.0.0/8` for every service uid, with the per-publication accepts above it.
-      The deny does not touch outbound traffic, and pasta's DNS forward is explicitly excluded
-      from the loopback mapping, so the earlier justification about name resolution and package
-      updates was false. A container cannot reach `sshd` on 22, and there is no `[loopback] allow`
+      `-d 127.0.0.0/8` for every service uid, with the per-publication accepts above it.
+      The deny does not touch outbound traffic, so the old justification about package updates was
+      false — but its name-resolution half turned out to be **true**, because pasta's DNS
+      exclusion is about traffic from inside a container and `podman pull` is on the host as the
+      service user, through `OUTPUT`. One owner-matched accept for `127.0.0.53:53` over `udp` and
+      `tcp` renders above the deny for exactly that reason (ADR-0015, spec §7.6). A container
+      cannot reach `sshd` on 22, and there is no `[loopback] allow`
       table: a table whose whole content is a destination is a second way to grant one beside the
       publication set. A service needing a host loopback port which is not a publication needs
       that daemon to be a service — the default answer, and ticket 180 is the door for the cases

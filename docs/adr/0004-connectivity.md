@@ -77,10 +77,14 @@ instance it meant. ADR-0006 covers the two kinds separately, because they are go
 different rules.
 
 The drop set is **all of loopback for every service uid**, not only the published ports — a
-default deny on `-o lo -d 127.0.0.0/8` with the per-publication accepts above it. The earlier
+default deny on `-d 127.0.0.0/8` with the per-publication accepts above it. The earlier
 version policed each publication and left the rest alone, on the stated grounds that a blanket
-drop "would break name resolution and package updates inside their containers"; both are wrong,
-pasta excludes DNS from the loopback mapping and package updates are outbound. The edge's uid is
+drop "would break name resolution and package updates inside their containers". The package-
+update half was wrong — package updates are outbound. **The name-resolution half was right, for
+the wrong layer**: pasta excludes DNS from the *loopback mapping*, which is a claim about a
+container's own packets, and `podman pull` is on the host as the service user, through
+`OUTPUT`. That claim was corrected and answered by ADR-0015, which renders one accept for the
+host's stub resolver above the deny. The edge's uid is
 deliberately permitted, by uid, to reach every allocated route publication,
 because reaching the container is the edge's entire job. A compromised edge can therefore reach
 anything routed to it, and the blast radius of that compromise is the routed surface.
@@ -102,15 +106,18 @@ consumers and the admin, not the edge. No service ever binds a non-loopback addr
 no private-versus-public grant to get wrong and no second mechanism beside this one. The
 repository still cannot make a grant; the administrator still can.
 
-**The loopback is closed to the service uids by default, and the publications are the only way
-in.** The earlier version policed each publication and left everything else alone, which meant
+**The loopback is closed by default, and the publications are the only way in.** The earlier
+version policed each publication and left everything else alone, which meant
 that because pasta maps the gateway, any container could open a connection to any host loopback
-port — `sshd` on 22 included. The rendered set is a default deny on `-o lo -d 127.0.0.0/8` for
+port — `sshd` on 22 included. The rendered set is a default deny on `-d 127.0.0.0/8` for
 every service uid, with the accept rules above it. The stated objection was that a blanket drop
-would break name resolution and package updates, and both are wrong: pasta excludes DNS from the
-loopback mapping, and package updates are outbound. The objection was believed partly because
-the runbook claimed the live ruleset was not inspectable. It is — ferm compiles to iptables, and
-`iptables-save -t nat` is how you check.
+would break name resolution and package updates. Package updates are outbound and are untouched.
+**The name-resolution half was right and was measured to be so**: pasta excludes DNS from the
+loopback mapping, which is a claim about a container's own packets, and `podman pull` runs on
+the **host** as the service user through `OUTPUT`, where the deny is. ADR-0015 answers it with
+one owner-matched accept for `127.0.0.53:53` above the deny, and nothing else on loopback. The
+objection was believed partly because the runbook claimed the live ruleset was not
+inspectable. It is — ferm compiles to iptables, and `iptables-save -t nat` is how you check.
 
 The golden VM proves the isolation claim the only way it can be proven: from a service that
 did not declare the edge, the connection fails; from one that did, it succeeds.

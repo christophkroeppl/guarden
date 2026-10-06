@@ -12,16 +12,30 @@ The translation into ferm is a total function of the accepted shape, one ferm
 keyword per accepted option, and the tables here are the only place either
 half is written. `manifest` validates through `parse` and the mutator renders
 through `ferm_line`, so the shape that was checked is the shape that is written.
+
+The one rule here that is not a request is `resolver_lines`: the accept the host
+itself needs for its own stub resolver (spec §7.6, ADR-0015). It is a rendered
+accept in the mutator's dialect, drawn from guarden's knowledge of the host and
+from no configuration, and no key anywhere adds one.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from guarden import errors
 
 DEFAULT_CHAIN = "guarden-svc"
+
+# systemd-resolved's stub listener. One address, not the loopback network the
+# default deny covers, and one port on both protocols because the stub listens on
+# both — ADR-0015.
+RESOLVER_ADDRESS = "127.0.0.53"
+RESOLVER_PORT = 53
+RESOLVER_PROTOCOLS = ("udp", "tcp")
+
 # The chains guarden renders, and the only two a request may name. `guarden-in`
 # is soil's skeleton in 10-framework.conf and `guarden-svc` is the mutator's own
 # in 30-services.conf; growing this set is a change to spec 7.7.
@@ -162,6 +176,24 @@ class Request:
             words += list(match.values)
         words += [self.jump, self.target]
         return " ".join(words) + ";"
+
+
+def resolver_lines(uids: Iterable[int]) -> list[str]:
+    """The stub resolver's accepts, one line per uid and per protocol.
+
+    `podman pull` runs on the host as the service user, so its DNS packet leaves
+    through `OUTPUT` and meets the default deny — pasta's exclusion from the
+    loopback mapping is about traffic from *inside* a container and says nothing
+    about this path (spec §7.6, ADR-0015). One address, one port, both
+    protocols, owner-matched to service uids like every other accept, and no key
+    anywhere that adds another.
+    """
+    return [
+        f"    mod owner uid-owner {uid} daddr {RESOLVER_ADDRESS} "
+        f"proto {protocol} dport {RESOLVER_PORT} jump ACCEPT;"
+        for uid in sorted(set(uids))
+        for protocol in RESOLVER_PROTOCOLS
+    ]
 
 
 def validate_name(value: object, where: str) -> str:

@@ -2151,6 +2151,9 @@ with the accept rules above it. Order is the whole of it: accepts first, then on
 filter OUTPUT
   -A guarden-svc -d 127.0.0.1 --dport <pub> -m owner --uid-owner <allowed-uid> -j ACCEPT
   ... one per (publication, allowed uid) ...
+  -A guarden-svc -d 127.0.0.53 -p udp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
+  -A guarden-svc -d 127.0.0.53 -p tcp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
+  ... one per service uid, the host's stub resolver and nothing else ...
   -A guarden-svc -d 127.0.0.0/8 -j DROP
 
 **There is no interface match, and `-o lo` was removed from this example as
@@ -2176,22 +2179,53 @@ API, and for a granted public port the service itself, its declared consumers an
 (§7.4). The service's **own** publication is in the set, or a service could not be reached by
 the edge that is supposed to reach it.
 
-**This is what the deny must not be confused with.** The drop is on `-o lo -d 127.0.0.0/8`, and
-it does not touch outbound traffic: a package update, a git fetch and a call to the outside world
-leave on the real interface and are unaffected. It does not touch name resolution either, because
-pasta's DNS forward is explicitly excluded from the loopback mapping ("traffic identified as DNS,
-originally directed to the `--map-host-loopback` address … is not translated to loopback, but
-rather handled in the same way as if specified as `--dns-forward`"). An earlier revision of this
-document justified leaving loopback open on the grounds that a blanket drop "would break name
-resolution and package updates". Both were wrong, and the claim survived because nobody ran
-`iptables -S`; `docs/sysadmin.md` used to say the firewall files were ferm source and that
-`iptables -S` "shows you nothing", which is not true.
+**The host's own stub resolver is the one destination that is not a publication, and it is
+rendered as an accept like every other.** systemd-resolved's stub listens on `127.0.0.53`
+port 53, over **both** protocols, so a service uid carries two accepts for it — `udp` and
+`tcp` — exactly as it carries an accept per publication, with the same owner match and above
+the same deny. **The address is `127.0.0.53` and never `127.0.0.0/8`**, and the port is 53 and
+nothing else, so every other loopback destination and every other port on that one are still
+refused. The uid set is the service uids and no other: the rule cannot be widened by a
+manifest, an `overrides.toml`, a module or a poke, and there is no key that adds one. It is
+drawn from guarden's knowledge of what the host runs rather than from configuration, so it is
+not the `[loopback] allow` table ADR-0013 removed — see ADR-0015 for that distinction, which
+is the whole of what makes this rule safe to render unconditionally.
+
+**This is what the deny must not be confused with.** The drop is on `-d 127.0.0.0/8`, and
+it does not touch outbound traffic: a package update, a git fetch and a call to the outside
+world leave on the real interface and are unaffected. **It did touch name resolution, and an
+earlier revision of this document claimed it did not.** The claim rested on pasta's exclusion
+of its DNS forward from the loopback mapping ("traffic identified as DNS, originally directed
+to the `--map-host-loopback` address … is not translated to loopback, but rather handled in the
+same way as if specified as `--dns-forward`"), and that is true — **of traffic from inside a
+container.** `podman pull` is not inside a container: it runs on the host as the service user,
+the packet leaves through `OUTPUT`, `OUTPUT` jumps to `guarden-svc`, and the deny is on
+`127.0.0.0/8`, which contains the resolver. Measured on a real machine by reading the deny's
+own packet counter across one UDP send from a service uid to `127.0.0.53:53`:
+
+```
+DENY_COUNTER_BEFORE=0
+DENY_COUNTER_AFTER=1
+```
+
+So the resolver was unreachable from every service uid and **no first deploy of a new
+workload could complete**, which is a much larger claim than the sentence it replaced was.
+An even earlier revision of this document justified leaving loopback open on the grounds that
+a blanket drop "would break name resolution and package updates". The package-update half was
+wrong and the name-resolution half turned out to be right for the wrong reason and the wrong
+layer; both claims are gone, and the resolver accept above is the measured answer. The claim
+survived as long as it did because nobody ran `iptables -S`; `docs/sysadmin.md` used to say
+the firewall files were ferm source and that `iptables -S` "shows you nothing", which is not
+true.
 
 **There is no `[loopback] allow` table, and the reason is the rule, not the name.** A key whose
 whole content is "this destination" is a second way to grant a destination beside the publication
 set, and two ways to grant one thing are two ways for it to be wrong. §7.7's `[firewall] allow`
 is not that: it names rules a repository asked for by name and carries no destination of its own,
 so it cannot become a way to reach a loopback port without somebody typing that rule in full.
+**Nor is the stub resolver's accept above:** it is one destination guarden derives from the host
+it is running on, and adding a second one is a change to the code and to this spec rather than a
+key an admin fills in (ADR-0015).
 
 **A service that needs a host loopback port which is not a publication should make that daemon a
 service**, and that stays the default answer. It is a default rather than a prohibition now,
@@ -2274,11 +2308,13 @@ grant is the rule, and a rule that matches more than its author expected matches
 expected. That is the honest limit and it is stated in `SECURITY.md` §2.5 and ADR-0013 rather
 than discovered.
 
-**Where it lands.** guarden's own accepts first, then the granted rules, then the single default
-deny — **last**, always. Position is guarden's and not the request's: a request carries no
+**Where it lands.** guarden's own accepts first — the per-publication accepts and the stub
+resolver's (§7.6) — then the granted rules, then the single default deny — **last**, always.
+Position is guarden's and not the request's: a request carries no
 position field, so a grant can never be rendered into a part of the chain where the default deny
 has already matched, and the invariant that every accept precedes the single deny survives a
-grant.
+grant. **A grant may not replace the resolver's accept either**, because the resolver's accepts
+are rendered from the host rather than asked for and are in the set whatever any manifest says.
 
 **Deduplication is by content, and the count is by name.** Two services whose manifests ask for
 the same rule line produce **one** rule in `30-services.conf`, carrying the names of both, because
