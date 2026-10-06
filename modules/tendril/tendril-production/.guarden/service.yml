@@ -1,0 +1,16 @@
+# The tunnel, as a service: one user, one home, one unit directory.
+#
+# No ingress, and that is the whole claim rather than an omission. It declares
+# no ports because it binds none: the tunnel establishes an outbound connection
+# and the public side connects *through* it to nothing the kernel forwards, so
+# there is no `PublishPort`, no publication of its own, and no `nat PREROUTING`
+# DNAT for it. `20-ingress-nat.conf` is byte-identical before and after this
+# module is added — the assertion that distinguishes it from the edge, and the
+# reason `api` is not set either: it is not a control surface, because no
+# loopback publication of its own exists to be one.
+#
+# No volumes: the tunnel's configuration is rendered by `roots` into
+# `/var/lib/guarden/tunnel/ingress/`, and the credential is a podman secret.
+# There is nothing in the service's own tree worth a snapshot.
+project: tendril
+units: .guarden/quadlet/
