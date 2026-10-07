@@ -3,7 +3,7 @@
 Ticket 220. This is the only module in guarden that makes an HTTP request to a
 service vendor, and it is deliberately thin: **the record and the projection are
 guarden's, and this copies the projection to the vendor.** It decides nothing.
-The document it sends is the one `share.reconcile` rendered and wrote to
+The document it renders is the one `share.reconcile` wrote to
 `/var/lib/guarden/share/projection.json`; if the two could disagree, the file an
 operator reads would be a second, quieter opinion.
 
@@ -13,7 +13,7 @@ they are stated here rather than only in a suite:
 - **Adds before removes.** Every live hostname's policy is upserted first, and
   only then are the policies of hostnames that no longer have a live issuance
   deleted. So there is no window in which an address that should reach the route
-  cannot. It is a whole-policy write, so the union is in force in one act.
+  cannot. A policy is written whole, so the union is in force in one act.
 - **A failed call changes nothing locally.** The record and the projection stay
   exactly where they are and one `warning:` names the endpoint and the vendor's
   error. The applied digest is not written, so the next reconcile retries.
@@ -22,6 +22,14 @@ they are stated here rather than only in a suite:
   `/etc/guarden/share.api-token`, `0600 root`; its name and the scopes it needs
   are in `guarden.toml`'s `[share]` table, where an operator audits what a leaked
   one would reach.
+
+**This path is the ticket's operator acceptance step and nothing here fakes it.**
+The endpoints, the ids and the request shape are read from the vendor's own
+reference; whether `session_duration` is accepted on a create or only set in the
+dashboard is the one open question the reference does not settle, and it is
+settled by an operator against a real account. If the vendor refuses the field,
+the call fails, the local record is untouched and the warning names it — which is
+the correct outcome for a projection that could not be delivered.
 """
 
 from __future__ import annotations
@@ -43,6 +51,16 @@ ONE_TIME_PIN_ID = "699d98642c564d2e855e9661899b7252"
 APPLIED = "applied"
 UNCONFIGURED = "unconfigured"
 FAILED = "failed"
+
+# Every policy this module creates is named `<PREFIX><hostname>`, so the list
+# call can find guarden's own policies and leave an operator's hand-made ones
+# alone. A reconciler that deleted every policy on the application would remove
+# access somebody configured by hand and never wrote in guarden's record.
+NAME_PREFIX = "guarden share "
+
+
+def policy_name(hostname: str) -> str:
+    return f"{NAME_PREFIX}{hostname}"
 
 
 def endpoint(config, suffix: str = "") -> str:
@@ -66,25 +84,10 @@ def token() -> str | None:
     return value or None
 
 
-def _policy_body(policy: dict) -> str:
-    return json.dumps(
-        {
-            "name": policy["name"],
-            "decision": policy["decision"],
-            "session_duration": policy["session_duration"],
-            "include": [{"email": {"email": email}} for email in policy["include_emails"]],
-            "require": [{"login_method": {"id": ONE_TIME_PIN_ID}}],
-        },
-        separators=(",", ":"),
-    )
-
-
-def _request(url: str, method: str, body: str | None) -> tool.Result:
+def _curl(url: str, method: str, body: str | None) -> tool.Result:
     """One vendor request, with the token on stdin and never on the argv."""
     config_file = (
-        'header = "Authorization: Bearer '
-        + (token() or "")
-        + '"\n'
+        'header = "Authorization: Bearer ' + (token() or "") + '"\n'
         'header = "Content-Type: application/json"\n'
         f'url = "{url}"\n'
         f'request = "{method}"\n'
@@ -96,6 +99,19 @@ def _request(url: str, method: str, body: str | None) -> tool.Result:
     )
 
 
+def _policy_body(policy: dict) -> str:
+    return json.dumps(
+        {
+            "name": policy_name(policy["hostname"]),
+            "decision": policy["decision"],
+            "session_duration": policy["session_duration"],
+            "include": [{"email": {"email": email}} for email in policy["include_emails"]],
+            "require": [{"login_method": {"id": ONE_TIME_PIN_ID}}],
+        },
+        separators=(",", ":"),
+    )
+
+
 def _failure(what: str, url: str, result: tool.Result) -> str:
     detail = errors.oneline(result.stderr.strip() or result.stdout.strip()) or str(
         result.returncode
@@ -104,6 +120,30 @@ def _failure(what: str, url: str, result: tool.Result) -> str:
         f"the vendor would not {what} at {url}: {detail}; the record and the projection are "
         f"unchanged and the next reconcile will retry"
     )
+
+
+def _existing(config) -> tuple[dict[str, str] | None, tool.Result | None]:
+    """Every policy of this application, as `name -> id`, or `None` and the failure.
+
+    Read whole and once, so the upsert knows which of guarden's policies already
+    exist and their ids — a `PUT` to a policy's own endpoint is an update and a
+    `POST` to the collection is a create, and the difference is an id.
+    """
+    url = endpoint(config)
+    result = _curl(url, "GET", None)
+    if not result.ok:
+        return None, result
+    try:
+        document = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None, result
+    found: dict[str, str] = {}
+    for entry in document.get("result") or []:
+        name = entry.get("name")
+        identifier = entry.get("id")
+        if isinstance(name, str) and isinstance(identifier, str):
+            found[name] = identifier
+    return found, None
 
 
 def apply(config, policies: list[dict], gone: list[str]) -> tuple[str, list[str]]:
@@ -137,18 +177,41 @@ def apply(config, policies: list[dict], gone: list[str]) -> tuple[str, list[str]
             )
         ]
 
+    existing, listing_failure = _existing(config)
+    if existing is None:
+        url = endpoint(config)
+        return FAILED, [
+            _failure(
+                "list the policies of the application",
+                url,
+                listing_failure or tool.Result(("curl",), 1, "", "the list call did not answer"),
+            )
+        ]
+
     lines: list[str] = []
     for policy in policies:
-        url = endpoint(config)
-        result = _request(url, "POST", _policy_body(policy))
+        body = _policy_body(policy)
+        name = policy_name(policy["hostname"])
+        held = existing.get(name)
+        if held is None:
+            url, method = endpoint(config), "POST"
+        else:
+            url, method = endpoint(config, f"/{held}"), "PUT"
+        result = _curl(url, method, body)
         if not result.ok:
             lines.append(_failure(f"accept the policy for {policy['hostname']}", url, result))
             return FAILED, lines
-        lines.append(f"projected {policy['hostname']} to {len(policy['include_emails'])} emails")
+        lines.append(
+            f"{'updated' if held else 'created'} {policy['hostname']} "
+            f"with {len(policy['include_emails'])} emails"
+        )
 
     for hostname in gone:
-        url = endpoint(config)
-        result = _request(url, "DELETE", None)
+        held = existing.get(policy_name(hostname))
+        if held is None:
+            continue
+        url = endpoint(config, f"/{held}")
+        result = _curl(url, "DELETE", None)
         if not result.ok:
             lines.append(_failure(f"withdraw the policy for {hostname}", url, result))
             return FAILED, lines
