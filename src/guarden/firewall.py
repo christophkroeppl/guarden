@@ -379,9 +379,6 @@ def render(config, grants: list[Grant]) -> str:
     # ports forwarded onto one container are one accept at INPUT, not two.
     for protocol, publication in sorted({(g.protocol, g.publication) for g in grants}):
         lines.append(f"    proto {protocol} dport {publication} jump ACCEPT;")
-    # The operator's shell reaches every publication from the box itself. A health
-    # check, a smoke test and a diagnostic all run as root, and the reply to a
-    # loopback connection arrives on INPUT, not OUTPUT.
     lines.append(f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp dport 1:65535 jump ACCEPT;")
     lines += [
         "}",
@@ -403,10 +400,6 @@ def render(config, grants: list[Grant]) -> str:
         "}",
         "",
         f"chain {OUTPUT_CHAIN} {{",
-        # The operator's shell reaches every publication. A health check, a smoke
-        # test and a diagnostic all run as root, and the deny below would stop them
-        # before they reached the service. This is the one uid that is granted
-        # loopback by default, because it is the uid the box is administered from.
         f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp dport 1:65535 jump ACCEPT;",
         *accept_lines(config),
         # The stub resolver, with the per-publication accepts and above the granted
