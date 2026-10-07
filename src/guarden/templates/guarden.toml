@@ -31,6 +31,31 @@ pasta_options = [ "--map-gw" ]   # the complete set; --no-map-gw is refused
 [build]
 lanes = 1
 
+# The time-bounded grants that reach a tunnel route. Root-owned: a repository
+# cannot set any of it, and `weedr share` is on no sudoers rule.
+#
+#   max         the longest a `--until` may be. There is no spelling of "never",
+#               and a grant above this is refused naming the value. Guarden's own
+#               duration syntax: <number><unit> terms, units s m h d w.
+#   account     the Cloudflare account id the reconciler projects onto
+#   app         the Access application id whose policies are the projection
+#   token_name  the name of the API token, read from /etc/guarden/share.api-token
+#               (0600 root). The *value* is never in this file.
+#   scopes      what that token needs, recorded here so an operator can audit
+#               what a leaked one would reach. The reconciler is the only thing
+#               that calls the vendor.
+#
+# `session_duration` on every projected policy is `max`, converted to the vendor's
+# Go duration syntax (days become hours: `7d` -> `168h`). See
+# docs/notes/220-session-duration-decision.md for why it is a constant and not the
+# time remaining on each grant.
+[share]
+max = "168h"
+account = ""
+app = ""
+token_name = "share"
+scopes = [ "Access: Apps and Policies Write" ]
+
 [modules]
 enabled = ["gate", "homepage"]
 

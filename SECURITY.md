@@ -225,6 +225,37 @@ and accepting does reopen loopback for exactly the match it names.** The deny is
 line of the chain and every other part of the loopback posture is unchanged; this is the one
 door in, and it is opened by a person with root on purpose (ADR-0013, spec §7.7).
 
+### 2.5b The tunnel and a shared grant: a third way in, and guarden answers for it
+
+A **tunnel** (ADR-0015) is a second terminator and it is **egress-only**: it dials out and is
+reached by nobody, binds no port and appears in no forwarding rule, so it adds no ingress path
+and the firewall's ingress set is unchanged by its existence. A route on a track whose `expose`
+is `tunnel` is therefore reached *through* the tunnel and not on the public edge.
+
+Getting somebody to such a route is `weedr share issue`, and it is deliberately priced as a
+**grant**: it is on no sudoers rule, `hose` cannot reach it, and no deploy path does either. The
+record of who may reach what is guarden's — one file per issuance under
+`/var/lib/guarden/share/`, `0750 root:guarden`, holding an **absolute** deadline — and the
+vendor's Access policy is a **projection** of that record, never the record. Deleting a policy by
+hand in the Cloudflare dashboard makes no local issuance live, and `weedr share reconcile` puts
+it back.
+
+**The limit is the reconciler timer, and it is stated rather than implied.** An Access policy has
+no `expir*` field, so removing the address from the policy is the act that ends a grant, and it is
+`weedr share reconcile` — a root-owned timer, every ten minutes — that removes it. **If that
+timer stops, an expired grant's address stays in the policy.** A live session still ends when
+`session_duration` expires (guarden sets it to `[share] max`), but the customer can sign in again
+while the email remains. This is the same class of failure as a stopped mark reconciler: the
+record is correct and the vendor has drifted, and `systemctl is-active
+guarden-share-reconcile.timer` is the first thing to check.
+
+**A leaked API token reaches exactly one application's Access policies.** The token is read from
+`/etc/guarden/share.api-token` (`0600 root`) and is the only thing in guarden that calls the
+vendor; `[share] scopes` in `guarden.toml` records what it needs (`Access: Apps and Policies
+Write`) so an operator can audit what a leaked one would reach. It can rewrite the policies of
+the one application named by `[share] app`. It **cannot** mint, extend or revoke a grant on its
+own: those are `weedr share` verbs, they are on no sudoers rule, and a poke cannot reach them.
+
 ### 2.6 What a service can reach
 
 Two layers, with their exact limits.

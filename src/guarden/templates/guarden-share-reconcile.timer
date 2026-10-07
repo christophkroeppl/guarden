@@ -1,0 +1,17 @@
+[Unit]
+Description=frequent Access-policy reconciliation, so an expiry is enforced near its deadline
+Requires=guarden-share-reconcile.service
+
+[Timer]
+# A grant expires at an arbitrary moment, so the reconciler has to run often
+# enough that "expired" and "removed from the policy" are close together. Ten
+# minutes is the resolution an operator gets: a grant is never more than ten
+# minutes past its deadline, and never early. `Persistent` matters here for the
+# same reason — a box that was off across a deadline reconciles on the next boot
+# rather than waiting for the next tick.
+OnCalendar=*:0/10
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

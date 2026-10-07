@@ -43,6 +43,9 @@ from guarden import (
 )
 from guarden import config as config_mod
 from guarden import hosttool as h
+from guarden import (
+    share as share_mod,
+)
 
 EDGE_GROUP = "edge"
 EDGE_MODE = 0o2750
@@ -89,6 +92,13 @@ FIREWALL = (
 
 PIN = (("sync", "recompute the snapper marks from the pin files and the registries"),)
 
+SHARE = (
+    ("issue", "record a time-bounded grant to reach a tunnel route"),
+    ("revoke", "end one issuance immediately"),
+    ("list", "every issuance, live, expired and revoked, with its deadline"),
+    ("reconcile", "recompute the vendor's Access policies from the record"),
+)
+
 MODULE = (
     ("list", "the enabled modules and the available ones"),
     ("add", "install a module's services, groups and grants"),
@@ -109,6 +119,7 @@ GROUPS = (
     ("secret", "the values a service's containers are given", SECRET),
     ("port", "the public ports an admin has granted", PORT),
     ("pin", "the privileged bridge into snapper", PIN),
+    ("share", "the time-bounded grants that reach a tunnel route", SHARE),
     ("module", "the shipped bundles of services and shared programs", MODULE),
     ("firewall", "the firewall rules a service asks for", FIREWALL),
     ("project", "repositories, their refs and their poke keys", PROJECT),
@@ -122,7 +133,9 @@ Not on the guarden sudoers rule, and not reachable from a deploy:
 `weedr port open`, `weedr port close`, `weedr firewall open`,
 `weedr firewall close`, `weedr service purge`,
 `weedr service rollback`, `weedr module add`, `weedr project add`,
-`weedr project grant`, `weedr project revoke`.
+`weedr project grant`, `weedr project revoke`, and every `weedr share`
+verb. A customer-facing grant is safe to have precisely because a poke
+can deploy to a preview and cannot mint, extend or revoke access to one.
 """
 
 
@@ -240,6 +253,23 @@ def build_parser() -> argparse.ArgumentParser:
     cli.add_json(top["module"]["verbs"]["list"])
     for verb in ("add", "remove"):
         top["module"]["verbs"][verb].add_argument("name", metavar="NAME", help="the module")
+
+    share_issue = top["share"]["verbs"]["issue"]
+    _add_service_name(share_issue, "the service, or one instance, whose route is shared")
+    share_issue.add_argument(
+        "email", metavar="EMAIL", help="the address the customer signs in with"
+    )
+    share_issue.add_argument(
+        "--until",
+        metavar="DURATION",
+        required=True,
+        help="how long the grant lasts, as `<number><unit>` (`7d`, `12h30m`); there is no "
+        "spelling of \"never\"",
+    )
+    top["share"]["verbs"]["revoke"].add_argument(
+        "id", metavar="ID", help="the issuance to end, as `weedr share list` prints it"
+    )
+    cli.add_json(top["share"]["verbs"]["list"])
 
     cli.add_json(top["project"]["verbs"]["list"])
     project_add = top["project"]["verbs"]["add"]
@@ -663,6 +693,68 @@ def _pin_sync(args) -> int:
     return 0
 
 
+def _share_issue(args) -> int:
+    """Record one issuance. Every refusal happens before anything is written."""
+    config = config_mod.load()
+    now = int(time.time())
+    issuance = share_mod.issue(args.name, args.email, args.until, config, now)
+    sys.stdout.write(
+        f"issued {issuance.id} for {issuance.email} until "
+        f"{share_mod.rfc3339(issuance.deadline)}\n"
+    )
+    for host in issuance.hosts:
+        sys.stdout.write(f"  {host}\n")
+    sys.stdout.write(
+        "the vendor's policy is a projection of this record; `weedr share reconcile` puts it "
+        "in force\n"
+    )
+    return 0
+
+
+def _share_revoke(args) -> int:
+    issuance, changed = share_mod.revoke(args.id, int(time.time()))
+    if issuance is None:
+        raise errors.GuardenError(
+            f"there is no issuance {args.id!r}; `weedr share list` names the ones this host holds",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if not changed:
+        sys.stdout.write(f"{issuance.id} was already revoked\n")
+        return 0
+    sys.stdout.write(f"revoked {issuance.id} for {issuance.email}\n")
+    sys.stdout.write("`weedr share reconcile` removes the address from the vendor's policy\n")
+    return 0
+
+
+def _share_list(args) -> int:
+    now = int(time.time())
+    entries = share_mod.listing(share_mod.load_all(), now)
+    if args.json:
+        sys.stdout.write(json.dumps({"issuances": entries}, separators=(",", ":")) + "\n")
+        return 0
+    if not entries:
+        sys.stdout.write("no issuances; nothing has been granted access to a tunnel route\n")
+        return 0
+    for entry in entries:
+        hosts = ", ".join(entry["hosts"])
+        sys.stdout.write(
+            f"{entry['id']}  {entry['state']}  {entry['email']}  {hosts}  "
+            f"until {entry['deadline']}\n"
+        )
+    return 0
+
+
+def _share_reconcile(args) -> int:
+    del args
+    config = config_mod.load()
+    code, out, warnings = share_mod.reconcile(config, int(time.time()))
+    for line in out:
+        sys.stdout.write(f"{line}\n")
+    for line in warnings:
+        sys.stderr.write(f"{line}\n")
+    return code
+
+
 def _module_list(args) -> int:
     config = config_mod.load()
     listing = modules.listing(config)
@@ -1048,6 +1140,10 @@ HANDLERS = {
     "weedr module add": _module_add,
     "weedr module remove": _module_remove,
     "weedr pin sync": _pin_sync,
+    "weedr share issue": _share_issue,
+    "weedr share revoke": _share_revoke,
+    "weedr share list": _share_list,
+    "weedr share reconcile": _share_reconcile,
 }
 
 

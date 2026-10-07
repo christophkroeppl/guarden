@@ -153,28 +153,33 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
 
 ## The grant: temporary, revocable, and guarden's to answer for
 
-- [ ] **A grant is an issuance, and an issuance always expires.** `weedr share issue <name>[/<ref>]
+- [x] **A grant is an issuance, and an issuance always expires.** `weedr share issue <name>[/<ref>]
       <email> --until <duration>`; `--until` is **required** and refusing a value above a
       root-owned maximum. There is no spelling of "never", because a grant that cannot be
-      time-bounded is a grant whose expiry is somebody's memory
-- [ ] An issuance is recorded in the mutator's own state with an **absolute** expiry computed at
+      time-bounded is a grant whose expiry is somebody's memory. The maximum is `[share] max` in
+      `guarden.toml`, `168h` by default; the duration grammar is guarden's own
+      (`<number><unit>`, `s m h d w`) in `src/guarden/durations.py`
+- [x] An issuance is recorded in the mutator's own state with an **absolute** expiry computed at
       issue time. A root-owned wall clock that can move backwards must not be able to extend a
-      grant, so the stored value is the deadline and not a duration
-- [ ] `weedr share issue` on a route whose destination is `edge` is **exit `2`** naming the route
+      grant, so the stored value is the deadline and not a duration. One file per issuance under
+      `/var/lib/guarden/share/`, `0750 root:guarden`, named by its id
+- [x] `weedr share issue` on a route whose destination is `edge` is **exit `2`** naming the route
       and its destination. There is no `--via tunnel` flag: which terminator carries a route is
       configuration, and a flag that chose it would be a second place
-- [ ] `weedr share revoke <id>` ends one issuance immediately and is **not** undone by a
+- [x] `weedr share revoke <id>` ends one issuance immediately and is **not** undone by a
       redeploy, a re-render, a reboot, or a `weedr module add`. `weedr share list [--json]` shows
       live, expired and revoked issuances with their absolute deadlines, so "who can see this right
       now" is one command
-- [ ] **The vendor's Access policy is a projection of the issuances, never the record.** The
+- [x] **The vendor's Access policy is a projection of the issuances, never the record.** The
       union of live issuances for a hostname is written as one `Allow` policy with
       `Include Emails [live emails]` and `Require Login Methods [One-time PIN]`. `weedr share
       reconcile` recomputes it from the local record and is idempotent, adds before it removes,
       and **stops rather than clearing anything when its own state is unreadable** — the same
       posture as `weedr pin sync`, for the same reason: an unreadable state must never be
-      indistinguishable from an empty one
-- [ ] **Expiry is enforced by that reconciler on a root-owned timer, not by the vendor.** An
+      indistinguishable from an empty one. The projection is rendered to
+      `/var/lib/guarden/share/projection.json` before any vendor call, so it is a file a suite can
+      assert without a real account
+- [x] **Expiry is enforced by that reconciler on a root-owned timer, not by the vendor.** An
       Access policy has **no `expir*` key at all** — the policies API schema carries none, and the
       schema was searched for `expir`, `expires`, `expires_at`, `expiration`, `ttl`, `valid_until`
       and `not_after` with zero hits across all four response objects. **But the second half of
@@ -183,26 +188,36 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       valid", which is a browser-login duration — so "the only durable-duration primitive is a
       service token" is false. See `docs/notes/cloudflare-session-duration-exists.md`. The design
       is unchanged: a session duration bounds one authenticated session, it cannot remove an
-      address from the policy, and removing the email is still the act that ends a grant. What
-      changes is that the ticket must stop claiming the field does not exist, and must decide what
-      `session_duration` is — a second, shorter bound under guarden's deadline, or left at the
-      vendor's default. So "expires in seven days" is guarden's timer removing the email from the
-      policy, and a stopped timer means the grant outlives its deadline. That is stated in the
-      runbook as the failure it is
-- [ ] **The reconciler holds the Cloudflare API token and is the only thing that calls the vendor.**
+      address from the policy, and removing the email is still the act that ends a grant. **Decided:
+      `session_duration` is set to `[share] max`**, converted to the vendor's Go syntax (`7d` ->
+      `168h`) — a second, shorter bound under guarden's deadline. A deadline-derived value would
+      change on every run and could never be idempotent; see
+      `docs/notes/220-session-duration-decision.md`. So "expires in seven days" is guarden's timer
+      removing the email from the policy, and a stopped timer means the grant outlives its
+      deadline. That is stated in the runbook and in `SECURITY.md` as the failure it is. The timer
+      is `guarden-share-reconcile.timer`, every ten minutes, enabled only with the `tendril` module
+- [x] **The reconciler holds the Cloudflare API token and is the only thing that calls the vendor.**
       It needs an API token with the narrowest scopes that work, named in this ticket, and the
       scopes are recorded next to the token's name in `guarden.toml` so an operator can audit what
-      a leaked token would reach
-- [ ] **A failed API call leaves the local record and warns.** The grant is refused with a
+      a leaked token would reach. The token value is read from `/etc/guarden/share.api-token`,
+      `0600 root`, and is never an argv; `[share] token_name` and `[share] scopes` record the name
+      and the scopes (`Access: Apps and Policies Write`)
+- [x] **A failed API call leaves the local record and warns.** The grant is refused with a
       `warning:` naming the endpoint and the vendor's error rather than being recorded as issued,
       because an issuance that exists locally and not at the vendor is a grant the operator
-      believes is closed and is not
+      believes is closed and is not. A call that was attempted and refused is exit `1` and the
+      projection is not marked applied, so the next reconcile retries. A host with no `[share]
+      account`/`app` or no token is a **state**, not a failure: it warns and exits `0`
 - [ ] **`weedr module remove tendril` removes every tunnel route from the edge, and deletes the
       Access application**, so removing the module cannot leave a hostname in Cloudflare proxying
-      to a box that no longer answers
-- [ ] `hose` cannot reach `weedr share`. The sudoers rule is unchanged by this ticket, which is the
+      to a box that no longer answers. **Not done**: `module remove` today removes the module's
+      services and re-renders the firewall, and the tunnel's routes leave with the service's
+      `routes.toml` slice — but the Access application and its policies are not deleted, and that
+      needs a vendor call. Left as the follow-on it is
+- [x] `hose` cannot reach `weedr share`. The sudoers rule is unchanged by this ticket, which is the
       whole reason a customer-facing grant is safe to have: a poke can deploy to a preview and
-      cannot mint, extend, or revoke access to one
+      cannot mint, extend, or revoke access to one. `weedr share` is on no sudoers rule at all, and
+      the `hose --help` surface names no share verb
 
 ## Customer experience — asserted, not assumed
 

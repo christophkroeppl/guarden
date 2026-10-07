@@ -1,0 +1,16 @@
+[Unit]
+Description=recompute the vendor's Access policies from the issuance record
+Documentation=file:///usr/share/doc/guarden/
+# A root reconciler: the record is guarden's, the projection is recomputed from
+# it, and the vendor's policy is a copy of that projection. It is what expires a
+# grant — the vendor has no expiry field, so removing the address from the policy
+# is the act that ends one, and this is the thing that removes it.
+#
+# **This is the unit whose stopping matters.** If it stops, an issuance that
+# expired still has its email in the policy, and a live session still ends when
+# `session_duration` does but the customer can re-authenticate while the email
+# remains. That is the failure the runbook states.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/guarden/bin/weedr share reconcile

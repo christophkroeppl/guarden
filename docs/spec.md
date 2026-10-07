@@ -66,7 +66,7 @@ the line and both `--check` and `--apply` go through it, so the two modes cannot
 
 `--json` is available on exactly these verbs, and on no other: `weedr service list`, `weedr
 service status`, `weedr secret list`, `weedr port list`, `weedr firewall list`, `weedr module
-list`, `weedr project list`, `weedr project keys`, `stakes list`, `stakes query`, `furrow queue
+list`, `weedr project list`, `weedr project keys`, `weedr share list`, `stakes list`, `stakes query`, `furrow queue
 list`, `furrow status`. `--json` on a write verb, and `--json` on a verb not in this list, is
 exit `2`.
 
@@ -84,6 +84,7 @@ change to this table and not a compatible addition.
 | `weedr module list` | `enabled`, `available` — each a list of module names |
 | `weedr project list` | `projects` — one object per project, each with `name`, `repository`, `environments` |
 | `weedr project keys` | `project`, `keys` — one object per key with `type`, `fingerprint`, `added` |
+| `weedr share list` | `issuances` — one object per issuance with `id`, `service`, `ref` (null on a slot track), `hosts`, `email`, `state` (`live` \| `expired` \| `revoked`), `issued`, `deadline`, `revoked` (null unless revoked). The deadlines are **absolute**, and a state is derived from them and the clock rather than stored |
 | `stakes list` | `pins` — one object per pin with `id`, `service`, `volume`, `number`, `note`, `marked` |
 | `stakes query` | one object: `id`, `service`, `volume`, `number`, `note`, `marked` — **and nothing snapper holds.** See below |
 | `furrow queue list` | `requests` — one object per request with `service`, `ref`, `sha`, `state`, `lane`, `weight`, `queued_at` |
@@ -234,6 +235,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/var/lib/guarden/shared/dashboard/` | `0755` | `guarden:guarden` | `weedr module add homepage`. **World-readable, and that is the point** — the dashboard is an ordinary service in neither group, and the design keeps two groups, so `2750 guarden:<reader-group>` is not available. The content is merged widget output: UI configuration, no secret, and it is the public face of the box anyway |
 | `/var/lib/guarden/edge/dynamic/` | `2750` | `guarden:edge` | `weedr module add gate` — **not** `roots`, which cannot set a group it is not in |
 | `/var/lib/guarden/stakes/` | `0770` | `root:guarden` | `soil storage` |
+| `/var/lib/guarden/share/` | `0750` | `root:guarden` | `soil storage`. The issuance record: one file per issuance, and the rendered projection the reconciler copies to the vendor |
 | `/var/lib/guarden/queue/` | `0770` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/soil/` | `0750` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/staging/` | `0755` | `root:root` | `soil storage`. **Nobody creates a subdirectory here at run time** |
@@ -324,6 +326,21 @@ pasta_options = [ "--map-gw" ]   # the complete set guarden will run pasta with.
 
 [build]
 lanes = 1                        # concurrent builds; 1 is the default and the recommendation
+
+[share]                          # the time-bounded grants that reach a tunnel route (ticket 220).
+                                 # Root-owned, and no repository sets any of it.
+max = "168h"                     # the longest a `weedr share issue --until` may be. Guarden's own
+                                 # duration syntax: <number><unit> terms, units s m h d w. There
+                                 # is no spelling of "never", and a grant above this is refused.
+                                 # It is also the `session_duration` on every projected vendor
+                                 # policy, converted to the vendor's Go syntax (7d -> 168h) — a
+                                 # second, shorter bound under guarden's own deadline.
+account = ""                     # the Cloudflare account id the reconciler projects onto
+app = ""                         # the Access application id whose policies are the projection
+token_name = "share"             # the API token's name, read from /etc/guarden/share.api-token,
+                                 # 0600 root. The *value* is never in this file
+scopes = [ "Access: Apps and Policies Write" ]   # what that token needs, recorded so an operator
+                                 # can audit what a leaked one would reach
 
 # [zram]                          # a compressed swap device. ABSENT by default, and
                                  # its absence is the default rather than a value:
@@ -1371,6 +1388,16 @@ container key, and the verb's argument was left matching nothing. The registry's
 against one shape.
 
 weedr pin sync                 # the privileged bridge into snapper (ADR-0007)
+
+weedr share issue <name[/ref]> <email> --until <duration>   # record a time-bounded grant to a
+                                         # tunnel route. --until is required and there is no
+                                         # spelling of "never"; a value above [share] max is
+                                         # refused. A route whose destination is `edge` is exit 2
+                                         # naming the route and its destination. Not on any
+                                         # sudoers rule.
+weedr share revoke <id>                  # end one issuance immediately
+weedr share list [--json]                # live, expired and revoked, with their deadlines
+weedr share reconcile                    # recompute the vendor's Access policies from the record
 
 weedr module list [--json]
 weedr module add <name>

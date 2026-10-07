@@ -32,13 +32,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from guarden import conf, errors, paths, zram
+from guarden import conf, durations, errors, paths, zram
 
 SLOT = "slot"
 INSTANCE = "instance"
 KINDS = (SLOT, INSTANCE)
 
-TOP_LEVEL_KEYS = {"host", "ingress", "network", "build", "modules", "zram", "environments"}
+TOP_LEVEL_KEYS = {
+    "host",
+    "ingress",
+    "network",
+    "build",
+    "modules",
+    "zram",
+    "environments",
+    "share",
+}
 TRACK_KEYS = {
     "name",
     "host_prefix",
@@ -63,6 +72,21 @@ TRACK_DEFAULTS = {
     "expose": "edge",
 }
 NETWORK_KEYS = {"backend", "pasta_options"}
+
+# `[share]` is the root-owned table the issuance family reads and no repository
+# can write. `max` is the longest a grant may last and the one value an operator
+# decides; `account` and `app` name the vendor side the reconciler projects onto,
+# and `token_name`/`scopes` are the audit trail for the API token — the token's
+# *value* is never in this file, only the name of the file it is read from and the
+# scopes it needs, so an operator can see what a leaked one would reach.
+SHARE_KEYS = {"max", "account", "app", "token_name", "scopes"}
+SHARE_DEFAULTS = {
+    "max": "168h",
+    "account": "",
+    "app": "",
+    "token_name": "share",
+    "scopes": ["Access: Apps and Policies Write"],
+}
 
 # spec 3.1: pasta is the only backend v1 supports, and slirp4netns is refused
 # rather than degraded to. A rootless container on slirp4netns has a gateway that
@@ -95,6 +119,17 @@ class Track:
 
 
 @dataclass(frozen=True)
+class Share:
+    """The `[share]` table: the bound on a grant, and the vendor side it reaches."""
+
+    max_seconds: int
+    account: str
+    app: str
+    token_name: str
+    scopes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Config:
     path: str
     domain: str
@@ -106,6 +141,7 @@ class Config:
     modules: tuple[str, ...]
     lanes: int
     tracks: tuple[Track, ...]
+    share: Share
     backend: str = BACKEND
     pasta_options: tuple[str, ...] = ("--map-gw",)
     zram: zram.Zram | None = None
@@ -193,10 +229,12 @@ def load(path: Any = None) -> Config:
     network = document.get("network", {})
     build = document.get("build", {})
     modules = document.get("modules", {})
+    share = document.get("share", {})
     for table, name, keys in (
         (host, "host", {"domain", "interface", "admin_user"}),
         (ingress, "ingress", {"alias", "tunnel_domain", "publication_range", "forwarded"}),
         (network, "network", NETWORK_KEYS),
+        (share, "share", SHARE_KEYS),
         (build, "build", {"lanes"}),
         (modules, "modules", {"enabled"}),
     ):
@@ -231,9 +269,40 @@ def load(path: Any = None) -> Config:
         modules=tuple(enabled),
         lanes=_int(build, "lanes", f"{where_file} [build]"),
         tracks=tuple(tracks),
+        share=_share(share, where_file),
         backend=_backend(network, where_file),
         pasta_options=_pasta_options(network, where_file),
         zram=zram.knob(document, str(where_file)),
+    )
+
+
+def _share(table: dict, where_file: Any) -> Share:
+    """`[share] max`, and the vendor side it names.
+
+    `max` is a duration in guarden's own syntax and is the one value an operator
+    decides: a `--until` above it is refused. It is converted to seconds **here**
+    and stored that way, because a duration is what a person types and a number
+    is what a comparison uses, and the two must not be re-derived at each call
+    site. A value that is not a duration is exit `2`: it is a line a person wrote
+    in a root-owned file, and the grammar is the rule the table states.
+    """
+    where = f"{where_file} [share]"
+    raw = table.get("max", SHARE_DEFAULTS["max"])
+    if not isinstance(raw, str):
+        raise _type_error(str(where_file), "share.max", "a duration")
+    maximum = durations.parse(raw, f"{where} max")
+    token_name = table.get("token_name", SHARE_DEFAULTS["token_name"])
+    if not isinstance(token_name, str):
+        raise _type_error(str(where_file), "share.token_name", "a string")
+    scopes = table.get("scopes", SHARE_DEFAULTS["scopes"])
+    if not isinstance(scopes, list) or not all(isinstance(item, str) for item in scopes):
+        raise _type_error(str(where_file), "share.scopes", "a list of strings")
+    return Share(
+        max_seconds=maximum,
+        account=_str(table, "account", where),
+        app=_str(table, "app", where),
+        token_name=token_name,
+        scopes=tuple(scopes),
     )
 
 

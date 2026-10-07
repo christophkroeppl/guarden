@@ -1250,6 +1250,69 @@ is only ever created here. A host with no edge module has no `edge` group, and
 
 ---
 
+## Reaching a tunnel route: `weedr share`
+
+A route on a track whose `expose` is `tunnel` is reached through the tunnel and
+is not public on the edge. Getting somebody to it is a **grant**, and a grant is
+an issuance that always expires.
+
+```sh
+weedr share issue routed-staging alice@example.com --until 7d
+weedr share list [--json]
+weedr share revoke <id>
+weedr share reconcile
+```
+
+`--until` is required and there is no spelling of "never": a grant that cannot be
+time-bounded is a grant whose expiry is somebody's memory. The value is
+`<number><unit>` terms — `12h30m`, `7d` — and a value above the root-owned
+`[share] max` in `guarden.toml` is refused. `weedr share issue` against a route
+whose destination is `edge` is exit 2 naming the route: the edge is public
+already, and there is deliberately no `--via` flag, because which terminator
+carries a route is configuration.
+
+**The record is guarden's, and the vendor's Access policy is a projection of it.**
+One file per issuance lives in `/var/lib/guarden/share/`, holding an **absolute**
+deadline computed at issue time. `weedr share reconcile` recomputes the union of
+the live issuances per hostname into one `Allow` policy, writes it to
+`/var/lib/guarden/share/projection.json`, and copies it to Cloudflare. It runs on
+`guarden-share-reconcile.timer`, every ten minutes, and it is enabled only on a
+host that has the `tendril` module.
+
+**If that timer stops, a grant outlives its deadline.** The vendor has no expiry
+field, so removing the address from the policy is the act that ends a grant and it
+is this reconciler that removes it. A live session still ends when
+`session_duration` expires — guarden sets it to `[share] max` — but the customer
+can sign in again while the email is still in the policy. Check the timer first
+when a revoked grant still works:
+
+```sh
+systemctl is-enabled guarden-share-reconcile.timer
+systemctl is-active guarden-share-reconcile.timer
+weedr share list                 # is the record what you expect?
+```
+
+**What a leaked API token would allow.** The reconciler holds one token, read
+from `/etc/guarden/share.api-token` (`0600 root`), and it is the only thing that
+calls the vendor. `guarden.toml`'s `[share] scopes` records what that token
+needs — `Access: Apps and Policies Write` — so an operator can see what a leaked
+one would reach. It can rewrite the Access policies of the one application named
+by `[share] app`, and nothing else. It cannot mint, extend or revoke a grant on
+its own: those are `weedr share` verbs, on no sudoers rule, and `hose` cannot
+reach them.
+
+**A failed vendor call changes nothing locally.** The record and the projection
+stay where they are and one `warning:` names the endpoint and the vendor's error;
+the reconciler exits `1` and the next tick retries. A host with no `[share]
+account`/`app` or no token is a **state**, not a failure: it warns and exits `0`.
+
+The live path — a browser on a phone with no client reaching the route, a second
+browser without the grant refused, and the grant still refused after `weedr share
+revoke` — needs a real Cloudflare account and a delegated zone, and is an
+operator acceptance step. `just test` does not depend on it.
+
+---
+
 ## When nothing makes sense
 
 1. `weedr service status <name>` — the registry record, its edges, its ports, its snapshots.
