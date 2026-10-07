@@ -6,7 +6,7 @@ Image=docker.io/library/traefik:v3.2
 Exec=--providers.file.directory=/etc/guarden/edge
 Exec=--providers.file.watch=true
 Exec=--entryPoints.web.address=:80
-Exec=--entryPoints.web.http.redirections.entrypoint.to=https
+Exec=--entryPoints.web.http.redirections.entrypoint.to=websecure
 Exec=--entryPoints.websecure.address=:443
 Exec=--entryPoints.websecure.http3
 Exec=--entryPoints.api.address=:8080

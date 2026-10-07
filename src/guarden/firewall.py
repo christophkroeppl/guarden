@@ -399,6 +399,11 @@ def render(config, grants: list[Grant]) -> str:
         "}",
         "",
         f"chain {OUTPUT_CHAIN} {{",
+        # The operator's shell reaches every publication. A health check, a smoke
+        # test and a diagnostic all run as root, and the deny below would stop them
+        # before they reached the service. This is the one uid that is granted
+        # loopback by default, because it is the uid the box is administered from.
+        f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp dport 1:65535 jump ACCEPT;",
         *accept_lines(config),
         # The stub resolver, with the per-publication accepts and above the granted
         # rules — guarden's own accepts first, then what an admin granted, then the
