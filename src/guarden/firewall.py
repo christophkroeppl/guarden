@@ -379,7 +379,7 @@ def render(config, grants: list[Grant]) -> str:
     # ports forwarded onto one container are one accept at INPUT, not two.
     for protocol, publication in sorted({(g.protocol, g.publication) for g in grants}):
         lines.append(f"    proto {protocol} dport {publication} jump ACCEPT;")
-    lines.append(f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp dport 1:65535 jump ACCEPT;")
+    lines.append(f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp jump ACCEPT;")
     lines += [
         "}",
     ]
@@ -400,7 +400,7 @@ def render(config, grants: list[Grant]) -> str:
         "}",
         "",
         f"chain {OUTPUT_CHAIN} {{",
-        f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp dport 1:65535 jump ACCEPT;",
+        f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp jump ACCEPT;",
         *accept_lines(config),
         # The stub resolver, with the per-publication accepts and above the granted
         # rules — guarden's own accepts first, then what an admin granted, then the
