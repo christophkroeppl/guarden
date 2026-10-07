@@ -212,12 +212,62 @@ def route_publications(record) -> set[str]:
     return {route.container for route in manifest.routes}
 
 
+def tunnel_uids() -> set[int]:
+    """Every service the tunnel module ships, by uid.
+
+    Read the same way `edge_uids` reads the edge, and for the same reason: what
+    the tunnel is is what the configuration says, not a name in this program.
+    An empty set is a host with no tunnel and not an error.
+    """
+    try:
+        host = config_mod.load()
+    except errors.GuardenError:
+        return set()
+    found: set[int] = set()
+    for module in host.modules:
+        try:
+            shipped = modules_mod.read(module)
+        except errors.GuardenError:
+            continue
+        for entry in shipped.services:
+            if entry.ingress:
+                continue
+            record = registry.load(entry.name)
+            if record is not None:
+                found.add(record.uid)
+    return found
+
+
+def tunnel_publications(record) -> set[str]:
+    """The publication names of this service's routes the tunnel carries.
+
+    A route's destination is a track's `expose` and a service's root-owned
+    `[expose] tunnel`, and the mutator recorded it per route host, so the answer
+    is the registry's rather than a second reading of the track here. A route the
+    registry says nothing about is an edge route: it was ingested before the
+    field existed, and the edge's own accept already covers it.
+    """
+    path = paths.manifest_in_home(record.service)
+    if not path.is_file():
+        return set()
+    try:
+        manifest = manifest_mod.read(path)
+    except errors.GuardenError:
+        return set()
+    return {
+        route.container
+        for route in manifest.routes
+        if record.route_destinations.get(route.host) == "tunnel"
+    }
+
+
 def accept_lines(config) -> list[str]:
     """One line per `(publication, allowed uid)`, services in name order.
 
     A publication's accept set is: the service itself, the uid of every consumer
     that declared an edge to it **on that publication**, the edge's uid for every
-    route publication, and `host.admin_user` alone on the API. The API replaces
+    route publication, the tunnel's uid for every route publication the tunnel
+    carries, and `host.admin_user` alone on the API. The API replaces
     the whole set, because it is a control surface and the edge's own uid is not
     an answer to "who may see it".
 
@@ -229,9 +279,11 @@ def accept_lines(config) -> list[str]:
     variable can never be built from two different answers.
     """
     edge = edge_uids()
+    tunnel = tunnel_uids()
     everything = [record for record in (registry.load(n) for n in registry.names())
                   if record is not None]
     routed = {record.service: route_publications(record) for record in everything}
+    tunnelled = {record.service: tunnel_publications(record) for record in everything}
     consumers = consumer_uids(everything)
     admin: int | None = None
 
@@ -248,6 +300,8 @@ def accept_lines(config) -> list[str]:
                 uids = {record.uid} | claimants.get(port, set())
                 if record.uid in edge or name in routed.get(record.service, set()):
                     uids |= edge
+                if name in tunnelled.get(record.service, set()):
+                    uids |= tunnel
             for uid in sorted(uids):
                 allowed.setdefault(port, set()).add(uid)
         for port in sorted(allowed):

@@ -179,9 +179,31 @@ assert_exit 0
 assert_file_exists "$tunnel_config"
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
 
-# The loopback deny is unchanged by any of this: the tunnel is one more service
-# uid, closed to loopback by exactly the same rule as every other, and it fronts
-# no publication so it adds no accept of its own.
+# The loopback deny still applies to the tunnel's uid: it is one more service
+# uid, closed to loopback by exactly the same rule as every other, and being the
+# thing that reaches the publications is an explicit accept ABOVE the deny rather
+# than a gap in it.
 services=$GUARDEN_PREFIX/etc/guarden/firewall/30-services.conf
 assert_file_exists "$services"
 assert_file_has "$services" "127.0.0.0/8"
+
+# **The tunnel's uid is granted the publication it fronts, and nothing else.**
+# Without this the route is in the tunnel's config and reachable by nobody: the
+# deny stops the tunnel's uid before it reaches the service, so a tunnel-declared
+# route 404s at the tunnel rather than answering.
+tunnel_uid=$(getent passwd tendril-production | cut -d: -f3)
+[ -n "$tunnel_uid" ] || _fail "the tendril service user has no uid"
+routed_publication=$(sed -n 's/^publication = //p' \
+    "$GUARDEN_PREFIX/var/lib/guarden/shared/routed-staging/routes.toml" | head -n 1)
+[ -n "$routed_publication" ] || _fail "routed-staging holds no publication"
+
+grant="uid-owner $tunnel_uid daddr 127.0.0.1 proto tcp dport $routed_publication"
+grep -vE '^[[:space:]]*#' "$services" | grep -qF "$grant" \
+    || _fail "the tunnel's uid is not granted the publication it fronts: $grant"
+
+# And the accept is above the deny, because a grant that lands below a default
+# deny is unreachable while still appearing in the file.
+grant_line=$(grep -nF "$grant" "$services" | head -n 1 | cut -d: -f1)
+deny_line=$(grep -nF 'daddr 127.0.0.0/8 jump DROP' "$services" | head -n 1 | cut -d: -f1)
+[ -n "$grant_line" ] && [ -n "$deny_line" ] && [ "$grant_line" -lt "$deny_line" ] \
+    || _fail "the tunnel's accept is not above the deny (grant line $grant_line, deny line $deny_line)"
