@@ -379,15 +379,6 @@ def render(config, grants: list[Grant]) -> str:
     # ports forwarded onto one container are one accept at INPUT, not two.
     for protocol, publication in sorted({(g.protocol, g.publication) for g in grants}):
         lines.append(f"    proto {protocol} dport {publication} jump ACCEPT;")
-    # The stub resolver's reply accepts. The query goes out through OUTPUT (where
-    # the per-uid accept lives), but the reply arrives on INPUT — systemd-resolved
-    # sends it, not the service uid, so the owner match never fires. Without these
-    # the reply falls through to INPUT's DROP and the resolver times out.
-    for protocol in rules.RESOLVER_PROTOCOLS:
-        lines.append(
-            f"    saddr {rules.RESOLVER_ADDRESS} "
-            f"proto {protocol} sport {rules.RESOLVER_PORT} jump ACCEPT;"
-        )
     lines += [
         "}",
     ]

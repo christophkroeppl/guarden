@@ -179,7 +179,8 @@ class Request:
 
 
 def resolver_lines(uids: Iterable[int]) -> list[str]:
-    """The stub resolver's query accepts, one line per uid and per protocol.
+    """The stub resolver's accepts, one line per uid and per protocol, and the
+    reply accepts beside them.
 
     `podman pull` runs on the host as the service user, so its DNS query leaves
     through `OUTPUT` and meets the default deny — pasta's exclusion from the
@@ -188,17 +189,27 @@ def resolver_lines(uids: Iterable[int]) -> list[str]:
     protocols, owner-matched to service uids like every other accept, and no key
     anywhere that adds another.
 
-    The **reply** accepts are NOT here. They live in `guarden-in` (the INPUT
-    chain), because the reply arrives on INPUT — systemd-resolved sends it, not
-    the service uid, so the owner match never fires. Putting them in OUTPUT
-    would match nothing and the resolver would time out.
+    **The reply accept belongs here, in `OUTPUT`, and not in `INPUT`.** The
+    query is sent by the service uid, so it carries the owner match. The reply
+    is sent by systemd-resolved, not the service uid, so no owner match can
+    fire on it — and because both endpoints are local, the reply is locally
+    generated and traverses `OUTPUT` before it is ever delivered to `INPUT`,
+    where it meets the same default deny. An accept by source address alone is
+    the whole of it: only the resolver holds `127.0.0.53:53`, and a loopback
+    source cannot be forged from a service uid.
     """
-    return [
+    lines = [
         f"    mod owner uid-owner {uid} daddr {RESOLVER_ADDRESS} "
         f"proto {protocol} dport {RESOLVER_PORT} jump ACCEPT;"
         for uid in sorted(set(uids))
         for protocol in RESOLVER_PROTOCOLS
     ]
+    lines += [
+        f"    saddr {RESOLVER_ADDRESS} "
+        f"proto {protocol} sport {RESOLVER_PORT} jump ACCEPT;"
+        for protocol in RESOLVER_PROTOCOLS
+    ]
+    return lines
 
 
 def validate_name(value: object, where: str) -> str:
