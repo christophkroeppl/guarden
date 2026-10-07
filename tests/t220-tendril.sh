@@ -203,7 +203,7 @@ grep -vE '^[[:space:]]*#' "$services" | grep -qF "$grant" \
 
 # And the accept is above the deny, because a grant that lands below a default
 # deny is unreachable while still appearing in the file.
-grant_line=$(grep -vnF "$grant" "$services" | head -n 1 | cut -d: -f1)
-deny_line=$(grep -vnF 'daddr 127.0.0.0/8 jump DROP' "$services" | head -n 1 | cut -d: -f1)
+grant_line=$(grep -nF "$grant" "$services" | head -n 1 | cut -d: -f1)
+deny_line=$(grep -nF 'daddr 127.0.0.0/8 jump DROP' "$services" | head -n 1 | cut -d: -f1)
 [ -n "$grant_line" ] && [ -n "$deny_line" ] && [ "$grant_line" -lt "$deny_line" ] \
     || _fail "the tunnel's accept is not above the deny (grant line $grant_line, deny line $deny_line)"
