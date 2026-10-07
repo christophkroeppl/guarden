@@ -58,6 +58,19 @@ DASHBOARD = SHARED / "dashboard"
 TUNNEL = LIB / "tunnel"
 TUNNEL_CONFIG = TUNNEL / "config.yml"
 
+# The issuance record: one file per issuance, named by its id. It is not a
+# ledger — nothing aggregates it — and the projection the reconciler writes to
+# the vendor is recomputed from it on every run. The store is `0750 root:guarden`
+# like the registry, because it describes who may reach what and only root writes
+# it.
+SHARE = LIB / "share"
+
+# The Cloudflare API token the share reconciler holds, root-owned and unreadable
+# by any service user. The value is never in `guarden.toml`; that file records the
+# token's *name* and the scopes beside it, so an operator can audit what a leaked
+# token would reach.
+SHARE_TOKEN = ETC_GUARDEN / "share.api-token"
+
 # /usr/lib/guarden and /usr/bin, spec 2's FHS rows.
 #
 # Guarden's own files live under /usr/lib/guarden, which is root-owned and never

@@ -50,6 +50,7 @@ STORAGE_DIRECTORIES = (
     (("var", "lib", "guarden", "registry"), 0o750, "root", "guarden"),
     (("var", "lib", "guarden", "shared"), 0o750, "root", "guarden"),
     (("var", "lib", "guarden", "stakes"), 0o770, "root", "guarden"),
+    (("var", "lib", "guarden", "share"), 0o750, "root", "guarden"),
     (("var", "lib", "guarden", "queue"), 0o770, "root", "guarden"),
     (("var", "lib", "guarden", "soil"), 0o750, "root", "guarden"),
     (("var", "lib", "guarden", "staging"), 0o755, "root", "root"),
@@ -225,7 +226,16 @@ UNITS = (
     "guarden-pin-sync.service",
     "guarden-pin-sync.timer",
     "guarden-pins.path",
+    "guarden-share-reconcile.service",
+    "guarden-share-reconcile.timer",
 )
+
+# The one module whose presence makes the share reconciler's timer meaningful. A
+# host with no tunnel has no route a grant could name, so enabling the timer there
+# would be a unit that runs every ten minutes to warn that `[share]` is unset —
+# the ambient diagnostic `be4e498` removed for `tunnel_domain`. The units are
+# installed everywhere (the tree ships them) and **enabled** only with the module.
+SHARE_MODULE = "tendril"
 
 
 # --------------------------------------------------------------------------
@@ -2116,7 +2126,26 @@ def units_items() -> list[Item]:
             ],
         )
     )
+    # The share reconciler runs only on a host that has the tunnel module: a
+    # grant names a tunnel route, and a host with no tunnel has no such route. The
+    # module is read from `[modules] enabled` here rather than passed in, because
+    # `soil units` is a phase an operator runs on its own and it has to converge
+    # the same host `soil --apply` would.
+    if SHARE_MODULE in _enabled_modules():
+        items.append(
+            Item(
+                "the share reconciler is enabled, or an expiry waits for a reboot",
+                lambda: h.run(
+                    "systemctl", "is-enabled", "guarden-share-reconcile.timer"
+                ).line == "enabled",
+                _enable_share_reconciler,
+            )
+        )
     return items
+
+
+def _enable_share_reconciler() -> None:
+    h.run_or_die("systemctl", "enable", "--now", "guarden-share-reconcile.timer")
 
 
 # --------------------------------------------------------------------------
