@@ -1274,8 +1274,7 @@ def _rendered_rules_readable(family: str | None = None) -> bool:
     run — so this holds only on a positive answer and the unit item reports the
     rest.
     """
-    argv = packagelist.variant_argv("report", family)
-    return h.run(*argv, "-S", "guarden-in").ok
+    return h.run("iptables", "-S", "guarden-in").ok
 
 
 def _firewall_applied(family: str | None = None) -> bool:
