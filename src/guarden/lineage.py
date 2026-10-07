@@ -448,12 +448,6 @@ def _swap(
         for volume in _bulk(target):
             volumes.create_bulk(resolved.name, volume.name, owner, escaped)
             swap.made.append(paths.volume(resolved.name, volume.kind, volume.name, escaped))
-        # **Inside** the try, because a fork that cannot start what it just built
-        # has not succeeded, and a fork that fails leaves nothing behind. The start
-        # used to sit below this `except`, so a target whose unit would not load
-        # exited with the volumes moved aside and the tree half-swapped — the one
-        # outcome ticket 70 names as a failure (spec §8.3).
-        service.start_units(resolved.name, escaped)
     except BaseException:
         _undo(swap, resolved, escaped)
         raise
