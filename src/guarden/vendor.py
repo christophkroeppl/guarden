@@ -172,8 +172,8 @@ def apply(config, policies: list[dict], gone: list[str]) -> tuple[str, list[str]
     if token() is None:
         return UNCONFIGURED, [
             errors.warn(
-                f"{paths.SHARE_TOKEN} holds no API token, so the projection was not sent; "
-                f"nothing local has changed"
+                f"no API token is planted for {config.share.token_name!r} at "
+                f"{paths.SHARE_TOKEN}, so the projection was not sent; nothing local has changed"
             )
         ]
 
