@@ -67,14 +67,18 @@ _mkdir_guaranteen() {
 }
 
 # _capture <command...>: run one command, keep what it said and what it returned.
+#
+# `|| rc=$?` rather than `if ... then ... else rc=$?; fi`: a command killed by a
+# signal does not return an exit status, so the `if` guard never runs and `set -e`
+# ends the script on the spot — before any assertion can print. That is why a
+# failure here is silent: no `error:` line, no captured output, just a stop.
 _capture() {
     _mkdir_guaranteen
     local rc=0
-    if "$@" >"$GUARDEN_STDOUT" 2>"$GUARDEN_STDERR"; then
-        rc=0
-    else
-        rc=$?
-    fi
+    # A subshell isolates signals: if the command is killed by SIGPIPE (curl
+    # getting its connection closed early), the subshell dies but the parent
+    # shell survives to record the exit code and captured output.
+    ("$@" >"$GUARDEN_STDOUT" 2>"$GUARDEN_STDERR") || rc=$?
     GUARDEN_EXIT=$rc
     # A pristine copy, because a helper that reads the captured output — `assert_json`
     # most of all — replaces it, and the next assertion about the same run needs

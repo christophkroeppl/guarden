@@ -179,21 +179,37 @@ class Request:
 
 
 def resolver_lines(uids: Iterable[int]) -> list[str]:
-    """The stub resolver's accepts, one line per uid and per protocol.
+    """The stub resolver's accepts: outbound per-uid, inbound unowned.
 
-    `podman pull` runs on the host as the service user, so its DNS packet leaves
+    `podman pull` runs on the host as the service user, so its DNS query leaves
     through `OUTPUT` and meets the default deny — pasta's exclusion from the
     loopback mapping is about traffic from *inside* a container and says nothing
-    about this path (spec §7.6, ADR-0015). One address, one port, both
-    protocols, owner-matched to service uids like every other accept, and no key
-    anywhere that adds another.
+    about this path (spec §7.6, ADR-0015).
+
+    The **query** is owner-matched to service uids like every other accept: the
+    sender is the service user, and the uid restriction is what keeps a service
+    from reaching a resolver it was not granted.
+
+    The **reply** is not owner-matched. systemd-resolved sends it, not the
+    service uid, so `owner uid-owner` never matches it and the reply falls
+    through to the default deny — the query goes out (the counter moves) and
+    the reply never returns (the resolver times out). The reply is accepted by
+    source address alone: only a service uid can send a query to the resolver
+    (the OUTPUT deny prevents anyone else from reaching it), so the source of a
+    reply is always the resolver that answered a granted query.
     """
-    return [
+    lines = [
         f"    mod owner uid-owner {uid} daddr {RESOLVER_ADDRESS} "
         f"proto {protocol} dport {RESOLVER_PORT} jump ACCEPT;"
         for uid in sorted(set(uids))
         for protocol in RESOLVER_PROTOCOLS
     ]
+    lines += [
+        f"    saddr {RESOLVER_ADDRESS} "
+        f"proto {protocol} sport {RESOLVER_PORT} jump ACCEPT;"
+        for protocol in RESOLVER_PROTOCOLS
+    ]
+    return lines
 
 
 def validate_name(value: object, where: str) -> str:

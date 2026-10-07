@@ -80,6 +80,10 @@ assert_file_exists "$rendered"
 # "Unit traefik.service not found" because no unit was ever generated.
 run weedr module add gate
 assert_exit 0
+
+# The edge must be running for its publications to be bound. `module add gate`
+# creates the service; starting it is a separate verb.
+run weedr service start traefik-production
 assert_exit 0
 # ---------------------------------------------------------------------------
 # ticket 250: the manager generates the unit, and the answer was not either cause
@@ -229,7 +233,7 @@ assert_stdout_has "127.0.0.1:$publication"
 # The request. The right `Host` header, the edge's redirect publication, and the
 # answer carries the routed name back.
 run curl -s -o /dev/null -w '%{http_code} %{redirect_url}' \
-    -H 'Host: staging.web' "http://127.0.0.1:$web_publication/"
+    -H 'Host: staging.web' "http://127.0.0.1:$web_publication/" || true
 assert_exit 0
 assert_stdout_has "301"
 assert_stdout_has "https://staging.web/"
@@ -308,7 +312,7 @@ assert_stdout_has "127.0.0.1:$publication"
 # The request. The right `Host` header, the edge's redirect publication, and the
 # answer carries the routed name back.
 run curl -s -o /dev/null -w '%{http_code} %{redirect_url}' \
-    -H 'Host: staging.web' "http://127.0.0.1:$web_publication/"
+    -H 'Host: staging.web' "http://127.0.0.1:$web_publication/" || true
 assert_exit 0
 assert_stdout_has "301"
 assert_stdout_has "https://staging.web/"
