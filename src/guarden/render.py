@@ -1263,4 +1263,4 @@ def write(plan: Plan, out: Path) -> None:
             else:
                 child.unlink()
     for relative in plan.sorted_paths():
-        conf.write_file(out / relative, plan.files[relative], 0o644)
+        conf.write_file(out / relative, plan.files[relative], 0o640)

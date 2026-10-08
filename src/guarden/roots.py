@@ -105,7 +105,7 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
 def write(service: str, body: str) -> None:
     if not body:
         return
-    conf.write_file(paths.EDGE_DYNAMIC / file_name(service), body, 0o644)
+    conf.write_file(paths.EDGE_DYNAMIC / file_name(service), body, 0o640)
 
 
 def render_tunnel(routes: list[dict], config) -> str:
@@ -134,7 +134,7 @@ def write_tunnel(body: str) -> None:
     if not body:
         return
     paths.TUNNEL.mkdir(parents=True, exist_ok=True)
-    conf.write_file(paths.TUNNEL_CONFIG, body, 0o644)
+    conf.write_file(paths.TUNNEL_CONFIG, body, 0o640)
 
 
 def sweep(written: set[str]) -> list[str]:
@@ -272,7 +272,7 @@ def sync() -> int:
     for service, body in plan:
         write(service, body)
     if auth_body is not None:
-        conf.write_file(paths.EDGE_DYNAMIC / FORWARD_AUTH, auth_body, 0o644)
+        conf.write_file(paths.EDGE_DYNAMIC / FORWARD_AUTH, auth_body, 0o640)
         written.add(FORWARD_AUTH)
     if tunnel_body:
         write_tunnel(tunnel_body)

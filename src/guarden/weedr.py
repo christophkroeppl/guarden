@@ -72,6 +72,8 @@ SERVICE = (
     ("build", "podman build, as the service user"),
 )
 
+PROGRAM_GROUP = "guarden"
+
 SECRET = (
     ("set", "plant a value, encrypted, with the terminal's echo off"),
     ("list", "the key names and whether each is set; never a value"),
@@ -780,11 +782,13 @@ def _module_add(args) -> int:
     with conf.lock("modules"):
         merged = list(dict.fromkeys([*config.modules, module.name]))
         if merged != list(config.modules):
+            gid = users.group_id(PROGRAM_GROUP)
             conf.write_file(
                 paths.GUARDEN_TOML,
                 h.set_string_list(paths.GUARDEN_TOML.read_text(encoding="utf-8"), "modules",
                                   "enabled", merged),
-                0o644,
+                0o640,
+                (0, gid),
             )
         # Re-read under the lock: `soil install` writes this file too, and a
         # merge from a copy read before the lock was taken would drop whatever
@@ -981,11 +985,13 @@ def _remove_module(config, module: modules.Module) -> None:
     """
     remaining = [name for name in config.modules if name != module.name]
     with conf.lock("modules"):
+        gid = users.group_id(PROGRAM_GROUP)
         conf.write_file(
             paths.GUARDEN_TOML,
             h.set_string_list(paths.GUARDEN_TOML.read_text(encoding="utf-8"), "modules",
                               "enabled", remaining),
-            0o644,
+            0o640,
+            (0, gid),
         )
     if module.name in config_mod.load().modules:
         raise errors.GuardenError(

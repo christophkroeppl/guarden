@@ -411,6 +411,9 @@ guarden_prefix() {
 # stage_config <fixture>: the environment table under test.
 stage_config() {
     cp "$GUARDEN_ROOT/fixtures/$1" "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+    getent group guarden >/dev/null 2>&1 || groupadd --system guarden
+    chmod 0640 "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+    chown root:guarden "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
 }
 
 # ensure_accounts: the guarden and operator accounts every suite that installs or

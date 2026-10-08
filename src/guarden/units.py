@@ -26,7 +26,7 @@ GUARDEN_GROUP = "guarden"
 LOOM = paths.BIN / "loom"
 SHARED_MODE = 0o750
 SHARED_FILE_MODE = 0o640
-UNIT_MODE = 0o644
+UNIT_MODE = 0o640
 
 
 def render_dir(service: str, escaped_ref: str | None = None) -> Path:

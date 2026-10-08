@@ -55,7 +55,7 @@ REVOKED = "revoked"
 
 STORE_MODE = 0o750
 RECORD_MODE = 0o640
-PROJECTION_MODE = 0o644
+PROJECTION_MODE = 0o640
 
 PROJECTION = paths.SHARE / "projection.json"
 APPLIED = paths.SHARE / "applied"

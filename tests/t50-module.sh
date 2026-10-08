@@ -41,6 +41,8 @@ run soil packages --apply
 assert_not_rejected
 run soil install --apply
 assert_not_rejected
+assert_mode /etc/guarden/guarden.toml 640
+assert_owner /etc/guarden/guarden.toml "root:guarden"
 assert_file_exists /usr/lib/guarden/modules/gate/module.toml
 assert_file_exists /usr/lib/guarden/modules/gate/traefik-production/.guarden/service.yml
 
@@ -68,6 +70,8 @@ assert_file_lacks /etc/guarden/guarden.toml "nosuchmodule"
 run weedr module add gate
 assert_exit 0
 assert_file_has /etc/guarden/guarden.toml 'enabled = ["gate"]'
+assert_mode /etc/guarden/guarden.toml 640
+assert_owner /etc/guarden/guarden.toml "root:guarden"
 
 # The edge is a service, like any other: its own user, its own home, a uid the
 # host's own user database allocated, and a distinct delegated range.

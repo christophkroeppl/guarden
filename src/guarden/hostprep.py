@@ -33,7 +33,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
-from guarden import errors, packagelist, paths, zram
+from guarden import conf, errors, packagelist, paths, users, zram
 from guarden import hosttool as h
 from guarden.hosttool import Item, hostpath, lock
 
@@ -1885,7 +1885,8 @@ def _invoking_user() -> str:
 
 def _seed_config() -> None:
     with lock("modules"):
-        h.write_file(h.config_path(), h.template("guarden.toml"), 0o644)
+        gid = users.group_id(PROGRAM_GROUP)
+        conf.write_file(h.config_path(), h.template("guarden.toml"), 0o640, (0, gid))
 
 
 def _enabled_modules() -> list[str]:
@@ -1919,10 +1920,12 @@ def _seed_modules(selection: list[str]) -> None:
     """
     with lock("modules"):
         merged = list(dict.fromkeys([*_enabled_modules(), *selection]))
-        h.write_file(
+        gid = users.group_id(PROGRAM_GROUP)
+        conf.write_file(
             h.config_path(),
             h.set_string_list(_read_text(h.config_path()), "modules", "enabled", merged),
-            0o644,
+            0o640,
+            (0, gid),
         )
 
 
@@ -1936,10 +1939,12 @@ def _record_admin_user(user: str) -> None:
     # share `[modules] enabled`, so a write re-reads under the lock rather than
     # trusting what it saw before it.
     with lock("modules"):
-        h.write_file(
+        gid = users.group_id(PROGRAM_GROUP)
+        conf.write_file(
             h.config_path(),
             h.set_string_key(_read_text(h.config_path()), "host", "admin_user", user),
-            0o644,
+            0o640,
+            (0, gid),
         )
 
 
@@ -2197,10 +2202,12 @@ def alias_probe() -> int:
         return 1
 
     with lock("modules"):
-        h.write_file(
+        gid = users.group_id(PROGRAM_GROUP)
+        conf.write_file(
             h.config_path(),
             h.set_string_key(_read_text(h.config_path()), "ingress", "alias", gateway),
-            0o644,
+            0o640,
+            (0, gid),
         )
     return 0
 
