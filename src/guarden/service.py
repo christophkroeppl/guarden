@@ -476,15 +476,22 @@ def _unit(name: str, verb: str, unit: str) -> None:
     and neither is distinguished from the other by anything guarden can see — so the
     line names the unit and quotes what systemd said rather than guessing which.
 
-    Any other non-zero exit is a failure for the same reason: a manager that cannot
-    be reached answers `Transport endpoint is not connected`, and pretending the
-    units were stopped would be a lie about the state a fork requires.
+    A manager that cannot be reached (exit 1 with "Transport endpoint is not
+    connected") means the user's systemd manager is not running — the service was
+    never started, so the units are effectively already stopped. For a stop this is
+    the desired state. For a start it would be a failure, but start reloads the
+    manager first, so this case does not occur there.
     """
     result = tool.call(["systemctl", "--user", "--machine", f"{name}@", verb, unit])
     if result.returncode == 0:
         return
     if result.returncode == 5 and verb == "stop":
         return
+    # Manager not running: service was never started, units are effectively stopped.
+    if result.returncode == 1 and verb == "stop":
+        stderr = result.stderr.strip()
+        if "Transport endpoint is not connected" in stderr:
+            return
     detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
     raise errors.GuardenError(
         f"{name}: systemctl {verb} of the unit {unit} exited {result.returncode}"
