@@ -124,16 +124,15 @@ a new ADR that supersedes it. The short version:
   from `443/tcp`, so the edge's ingress is three rules, not two. No unprivileged process binds
   anything below 1024 and no program gains a capability. `REDIRECT` does not work here: it
   rewrites the destination to the incoming interface's own address, and the edge listens only on
-  loopback. **`ferm` is the firewall guarden runs and `ufw` is the one it displaces — guarden does
-  not use `ufw`, and disabling it is as much a part of installation as installing `ferm`:** `ufw`
-  is a declared package for two narrow reasons, it is the unit guarden turns off and the one the
-  dead-man timer re-enables to hand a locked-out operator their shell back, and **no `ufw` rule
-  is ever written, read or reconciled on a guarden host.** Every service's rules come from the
-  same ferm render, whether a module installed it, a poke deployed it or an operator typed the
-  command. "Disabled" means
-  *not enabled* — `ufw.service` can be `static`, and on a host without the package
-  `is-enabled` answers "No such file or directory", so a check demanding one exact state word
-  reports drift forever on a minimal image.
+  loopback. **ferm is the only firewall. ufw is not installed.** guarden runs **ferm** and nothing
+  else. `ufw` is **uninstalled** by installation and is **not** in any package list, on any family,
+  for any reason. If a change, a suite or a golden image appears to need `ufw` present, the change
+  is wrong — fix the change. No `ufw` rule is ever written, read or reconciled on a guarden host,
+  and the dead-man failsafe does not re-enable it: it opens the firewall directly by stopping
+  `guarden-firewall.service` and clearing guarden's own chains. Accept the weaker failsafe
+  knowingly: it can open the firewall but **cannot restore the previous ruleset**, because there is
+  no previous ruleset to restore. Every service's rules come from the same ferm render, whether a
+  module installed it, a poke deployed it or an operator typed the command.
 - **A forwarded port is a `PREROUTING` DNAT and nothing else. There is no masquerade.** An
   earlier revision of these documents required a `nat POSTROUTING` masquerade per forwarded port
   and claimed that without it the forwarding set "delivers exactly nothing while everything on the
@@ -416,8 +415,9 @@ Rules that hold for every test:
   in its own file, never a heredoc inside a shell script.
 - Runtime dependencies are **distribution packages** installed by `soil`: `python3-yaml`,
   `python3-jinja2`, and the ones `packages/packages.toml` lists per family — including `ferm`,
-  which is the firewall guarden runs, and `ufw`, which is the one it disables and is declared
-  only so the dead-man timer can hand it back. No `pip install` at deploy time, no wheels
+  which is the firewall guarden runs. **`ufw` is not among them and must never be added**: it is
+  uninstalled, and the dead-man timer opens the firewall without it. No `pip install` at deploy
+  time, no wheels
   checked in. A fetch from outside a distribution repository is deliberate and rare: each is a
   **pinned artefact** whose version and two SHA256s are recorded in this repository and verified
   on install — `podlet`, and (ADR-0015) the tunnel's `cloudflared`. No vendor repository, ever:
@@ -473,8 +473,9 @@ When implementing a ticket:
 - **Do not run guarden's programs or tests on the development machine, and do not download
   anything onto it.** Both belong in the throwaway VM, and both are in "Test seam" above for a
   reason that cost real cleanup time.
-- **Do not add a second firewall manager, and do not write a `ufw` rule — or read or reconcile
-  one — anywhere.** The host firewall is `ferm` and `ufw` is the unit guarden disables. Do not
+- **Do not add a second firewall manager, do not write a `ufw` rule — or read or reconcile
+  one — anywhere, and do not put `ufw` back in any package list.** The host firewall is `ferm`
+  and `ufw` is **uninstalled**. Do not
   give a service its own firewall tool, and do not put a grant's rule text in a root-owned file
   the repository can influence: `[firewall] allow` holds names, and the rule behind a name lives
   in the manifest that asked for it.
