@@ -1093,6 +1093,7 @@ def _routes(
             "target": f"{context.service}:{ports[route.container][0]}" if context and
             route.container in ports else "",
             "destination": "tunnel" if route.host in tunnel_labels else track_expose,
+            "ref": context.instance if context and context.instance else "",
         }
         for route in document.routes
     ]

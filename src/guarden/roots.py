@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from guarden import cli, conf, edgeconf, errors, paths, registry, render
+from guarden import cli, conf, edgeconf, errors, names, paths, registry, render
 from guarden import config as config_mod
 from guarden import modules as modules_mod
 
@@ -114,6 +114,9 @@ def render_tunnel(routes: list[dict], config) -> str:
     Only routes whose destination is `tunnel` are rendered. The catch-all is
     `http_status:404` and is last, so a hostname in the tunnel's zone that no
     service claims is a 404 from the tunnel rather than a default page.
+
+    Preview instances on the tunnel are published at preview.<tunnel_domain>/<ref>
+    as a path on one host (same shape as preview.$DOMAIN/<ref>).
     """
     if not config.tunnel_domain:
         return ""
@@ -125,9 +128,23 @@ def render_tunnel(routes: list[dict], config) -> str:
         for route in routes
         if route.get("destination") == "tunnel"
     ]
-    if not rows:
+
+    previews = []
+    if config.tunnel_domain:
+        for service_name, entries in slices().items():
+            for route in entries:
+                if route.get("destination") == "tunnel" and route.get("ref"):
+                    # This is a tunnel route for a preview instance
+                    escaped_ref = names.systemd_escape(route["ref"])
+                    previews.append({
+                        "hostname": f"preview.{config.tunnel_domain}",
+                        "service": f"http://{route.get('target', '')}",
+                        "path": f"/{escaped_ref}",
+                    })
+
+    if not rows and not previews:
         return ""
-    return render.render_template(TUNNEL_TEMPLATE, rows=rows)
+    return render.render_template(TUNNEL_TEMPLATE, rows=rows, previews=previews)
 
 
 def write_tunnel(body: str) -> None:

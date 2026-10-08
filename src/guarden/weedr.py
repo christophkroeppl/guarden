@@ -1044,6 +1044,18 @@ def _module_remove(args) -> int:
         except errors.GuardenError as failure:
             sys.stderr.write(failure.report("weedr") + "\n")
             return failure.code
+
+    # If removing the tendril module, delete the Access application
+    if module.name == "tendril":
+        from guarden import vendor as vendor_mod
+        status, lines = vendor_mod.delete_application(config)
+        for line in lines:
+            if status == vendor_mod.FAILED:
+                sys.stderr.write(line + "\n")
+                return errors.HOST_NOT_AS_ASSUMED
+            else:
+                sys.stdout.write(line + "\n")
+
     _remove_module(config, module)
     remaining = config_mod.load()
     firewall.print_diff(firewall.install(remaining))

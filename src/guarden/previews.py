@@ -91,6 +91,18 @@ def _parse(value: str):
         return None
 
 
+def is_url_safe(ref: str) -> bool:
+    """RFC 3986 unreserved characters only.
+
+    A ref must contain only unreserved characters (ALPHA/DIGIT/"-"/"."/"_"/"~")
+    to avoid percent-encoding in the tunnel's path space. This is stricter than
+    URL-safe because percent-encoded refs that differ only by encoding would
+    collide after decoding (e.g., 'feature%2Fx' and 'feature/x').
+    """
+    unreserved = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    return all(c in unreserved for c in ref)
+
+
 def escaped(resolved) -> str:
     """The instance's directory key, from the raw ref and never shown to a caller."""
     return str(names.systemd_escape(str(resolved.ref)))
@@ -104,6 +116,13 @@ def admit(resolved, record, now: str) -> list[str]:
     rather than racing the count. `registry` is taken first because that is the
     order every other holder in this package takes it in.
     """
+    if resolved.ref and not is_url_safe(resolved.ref):
+        raise errors.GuardenError(
+            f"ref {resolved.ref!r} is not URL-safe; a preview ref must contain only "
+            f"alphanumeric characters, '-', '.', '_', and '~' (RFC 3986 unreserved)",
+            errors.REJECTED_INPUT,
+        )
+
     cap = resolved.track.cap
     if cap is None or cap < 1:
         raise errors.GuardenError(
@@ -191,7 +210,7 @@ def instance_of(resolved, record):
     if resolved.track.kind != "instance":
         raise errors.GuardenError(
             f"{resolved.name} is on track {resolved.track.name!r}, which is kind "
-            f'"{resolved.track.kind}", so it has no instances'
+            f"\"{resolved.track.kind}\", so it has no instances"
         )
     instance = record.instances.get(escaped(resolved))
     if instance is None:

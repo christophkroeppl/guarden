@@ -99,6 +99,36 @@ def _curl(url: str, method: str, body: str | None) -> tool.Result:
     )
 
 
+def delete_application(config) -> tuple[str, list[str]]:
+    """Delete the Access application from Cloudflare.
+
+    Called when the tendril module is removed. Returns (status, lines).
+    """
+    if not config.share.account or not config.share.app:
+        return UNCONFIGURED, [
+            errors.warn(
+                "share.account or share.app is empty in [share], so the Access application "
+                "cannot be deleted; nothing local has changed"
+            )
+        ]
+    if token() is None:
+        return UNCONFIGURED, [
+            errors.warn(
+                f"no API token is planted for {config.share.token_name!r} at "
+                f"{paths.SHARE_TOKEN}, so the Access application was not deleted; "
+                f"nothing local has changed"
+            )
+        ]
+
+    url = f"{API_BASE}/accounts/{config.share.account}/access/apps/{config.share.app}"
+    result = _curl(url, "DELETE", None)
+    if not result.ok:
+        return FAILED, [
+            _failure("delete the Access application", url, result)
+        ]
+    return APPLIED, ["deleted Access application"]
+
+
 def _policy_body(policy: dict) -> str:
     return json.dumps(
         {

@@ -7,4 +7,11 @@ ingress:
   - hostname: "{{ route.hostname }}"
     service: "{{ route.service }}"
 {% endfor %}
+# Preview instances: published at preview.<tunnel_domain>/<ref>
+# The ref is taken raw and escaped internally so it cannot collide.
+{% for preview in previews %}
+  - hostname: "{{ preview.hostname }}"
+    service: "{{ preview.service }}"
+    path: "{{ preview.path }}"
+{% endfor %}
   - service: http_status:404

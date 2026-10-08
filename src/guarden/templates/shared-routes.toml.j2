@@ -1,11 +1,11 @@
-{#
-  The route slice `roots` reads from /var/lib/guarden/shared/<service>/routes.toml.
+{# The route slice `roots` reads from /var/lib/guarden/shared/<service>/routes.toml.
 
   `target` is `<name>:<publication>` — the service's own name, with no suffix
   and no alias (spec 7.3) — and `host` is the name the mutator allocated from
   the manifest's label and the track's root-owned host_prefix. A repository
   cannot claim a name outside host.domain: it only ever gets a label.
   `destination` is `edge` or `tunnel` — where this route is published.
+  `ref` is the instance ref for preview instances, empty for slot tracks.
 #}
 # Rendered by loom. The mutator installs this read-only; `roots` reads it.
 service = "{{ service }}"
@@ -21,4 +21,5 @@ label = "{{ route.label }}"
 auth = {{ "true" if route.auth else "false" }}
 target = "{{ route.target }}"
 destination = "{{ route.destination }}"
+ref = "{{ route.ref }}"
 {% endfor %}
