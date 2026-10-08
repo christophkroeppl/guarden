@@ -4,10 +4,6 @@ Documentation=file:///usr/share/doc/guarden/
 After=network-pre.target
 Wants=network-pre.target
 Before=sshd.service
-# The distribution's own firewall is disabled by soil firewall, not merely
-# bypassed: two policies on one box is one too many, and the dead-man timer's
-# effect is to put the distribution's back.
-Conflicts=ufw.service
 ConditionPathExists=/etc/guarden/firewall/10-framework.conf
 
 [Service]

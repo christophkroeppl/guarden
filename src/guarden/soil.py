@@ -43,14 +43,8 @@ phases, in order: {", ".join(PHASES)}
 
   soil <phase> --check      report drift, change nothing, exit 1 with the word "drift"
   soil <phase> --apply      converge
-  soil firewall --apply --deadman   arm the lockout timer for this run
   soil --check              every phase
   soil list                 the phases and what each owns
-
---deadman is the firewall's alone: it arms a timer whose effect is to open the
-firewall, so it is never something a converge does on its own. The armed timer
-is fifteen minutes, fires by stopping ferm and putting the distribution's own
-firewall back, is one-shot, and a plain `soil firewall --apply` disarms it.
 
 GUARDEN_PREFIX moves every host path soil touches under one directory. It is a
 test seam: the fast harness points it at a scratch directory, and on a host it
@@ -61,8 +55,22 @@ touches.
 """
 
 
+class _Parser(argparse.ArgumentParser):
+    """argparse's own errors are a usage block plus a line; the contract is one.
+
+    A rejected input is one diagnostic line, `error:`-prefixed, naming the thing
+    it is about, and exit 2 -- so an unrecognised flag has to come out the same
+    way. Nothing calls `error()` for a successful run, so this changes only what
+    a bad call prints.
+    """
+
+    def error(self, message: str) -> None:
+        error(message)
+        raise SystemExit(EXIT_REJECTED)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="soil",
         description="The host converger.",
         epilog=EPILOG,
@@ -78,11 +86,6 @@ def build_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="report drift, change nothing")
     mode.add_argument("--apply", action="store_true", help="converge")
-    parser.add_argument(
-        "--deadman",
-        action="store_true",
-        help="arm the lockout timer for this run; `soil firewall --apply --deadman` only",
-    )
     packages = parser.add_argument_group("package list", "where the one list lives")
     packages.add_argument(
         "--list",
@@ -204,12 +207,12 @@ def _render_user_data(path: str, family: str | None) -> int:
 
 
 def _collect(
-    phases: list[str], deadman: bool, family: str | None = None,
+    phases: list[str], family: str | None = None,
     modules: list[str] | None = None,
 ) -> list[Item]:
     items: list[Item] = []
     for phase in phases:
-        items.extend(hostprep.items_for(phase, deadman, family, modules))
+        items.extend(hostprep.items_for(phase, family, modules))
     return items
 
 
@@ -247,7 +250,7 @@ def _prepare(phase: str, family: str | None) -> tuple[bool, int | None]:
 
 
 def _check(
-    phases: list[str], deadman: bool, family: str | None = None,
+    phases: list[str], family: str | None = None,
     modules: list[str] | None = None,
 ) -> int:
     # A host whose family the list carries no row for is **exit 2**, naming the
@@ -260,7 +263,7 @@ def _check(
     # stack trace. `--apply` does not need the same guard: it calls `prepare_for`
     # before this phase's items and `_prepare` already answers 2 for it.
     try:
-        items = _collect(phases, deadman, family, modules)
+        items = _collect(phases, family, modules)
     except packagelist.UnknownFamily as exc:
         return _reject(str(exc))
     except errors.GuardenError as exc:
@@ -282,7 +285,7 @@ def _check(
 
 
 def _apply(
-    phases: list[str], deadman: bool, family: str | None = None,
+    phases: list[str], family: str | None = None,
     modules: list[str] | None = None,
 ) -> int:
     unmet = 0
@@ -291,7 +294,7 @@ def _apply(
         if reject is not None:
             return reject
         try:
-            phase_items = hostprep.items_for(phase, deadman, family, modules)
+            phase_items = hostprep.items_for(phase, family, modules)
         except packagelist.UnknownFamily as exc:
             return _reject(str(exc))
         except errors.GuardenError as exc:
@@ -334,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
         return _reject(str(exc))
 
     if args.command == "list":
-        if args.check or args.apply or args.deadman or args.family or args.render_user_data:
+        if args.check or args.apply or args.family or args.render_user_data:
             return _reject("soil list takes no mode.")
         if modules:
             return _reject("--modules is `soil install`'s.")
@@ -345,8 +348,6 @@ def main(argv: list[str] | None = None) -> int:
     # `packages` command because that is the phase that owns the list, and the
     # renderer reads the same file the phase converges.
     if args.list or args.render_user_data:
-        if args.deadman:
-            return _reject("--deadman is `soil firewall --apply`'s alone.")
         if args.command not in (None, "packages"):
             return _reject("--list and --render-user-data are `soil packages`'s.")
         if args.list and args.render_user_data:
@@ -364,22 +365,18 @@ def main(argv: list[str] | None = None) -> int:
         return _reject("--modules is `soil install`'s.")
 
     if args.command is None:
-        if args.deadman:
-            return _reject("--deadman is `soil firewall --apply`'s alone.")
         if not (args.check or args.apply):
             return _reject("one of --check or --apply is required.")
         if args.check:
-            return _check(list(PHASES), False, modules=modules)
-        return _apply(list(PHASES), False, modules=modules)
+            return _check(list(PHASES), modules=modules)
+        return _apply(list(PHASES), modules=modules)
 
-    if args.deadman and not (args.command == "firewall" and args.apply):
-        return _reject("--deadman is `soil firewall --apply`'s alone.")
     if not (args.check or args.apply):
         return _reject("one of --check or --apply is required.")
 
     if args.check:
-        return _check([args.command], args.deadman, modules=modules)
-    return _apply([args.command], args.deadman, modules=modules)
+        return _check([args.command], modules=modules)
+    return _apply([args.command], modules=modules)
 
 
 if __name__ == "__main__":

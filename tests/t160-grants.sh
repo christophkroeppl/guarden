@@ -310,11 +310,11 @@ assert_file_lacks "$ingress" "dport 8443"
 assert_file_lacks "$ingress" "guarden-in"
 assert_file_lacks "$conf" "20007"
 
-# The dead-man timer still restores firewall access, and a grant cannot disable
-# it. The timer is armed by `soil firewall --apply --deadman` alone and its
-# effect is to stop the firewall service and put the distribution's own back, so
-# a grant naming either in its own file would be reaching for a failsafe it does
-# not own. INPUT is soil's skeleton and a grant renders nothing into it.
+# A grant reaches none of the structural guarantees. SSH is in 00-ssh.conf, a
+# root-owned seed-once file outside the services file entirely, and INPUT is
+# soil's skeleton: a grant renders nothing into either, so no manifest can move
+# the SSH accept or disable a failsafe. There is no failsafe to disable --
+# guarden has none -- but nothing here may claim one, either.
 assert_file_lacks "$conf" "ufw"
 assert_file_lacks "$conf" "deadman"
 assert_file_lacks "$conf" "chain INPUT"

@@ -65,11 +65,6 @@ assert_exit 0
 cp "$GUARDEN_STDOUT" "$GUARDEN_FIXTURES/list-stdout"
 assert_stdout_has "family   debian"
 assert_stdout_has "python3-yaml"
-# `ufw` is a dependency for two reasons and is not optional: it is the unit
-# guarden turns off and the one the dead-man timer re-enables to hand a locked-out
-# operator their shell back. A failsafe naming a package the host lacks is not a
-# failsafe, so the list carries it and this asserts it is in the list.
-assert_stdout_has "ufw"
 # A family the table has no row for is exit 2 and names the families it does have,
 # because a host on an unknown family would otherwise install nothing and report
 # that as success.
@@ -185,13 +180,6 @@ assert_stderr_has "the pinned podlet record is absent"
 assert_dpkg ferm
 assert_dpkg fail2ban
 assert_dpkg podman
-# `ufw` is named rather than folded into the three absences above because those
-# three were asked of the machine and this one was not: what is asserted is that it
-# is installed afterwards, whichever starting state the golden had. It is in the
-# list for the two reasons `packages.toml` gives — the unit guarden turns off and
-# the one the dead-man timer hands back — and it converges with the rest or the
-# one-list claim is not true.
-assert_dpkg ufw
 
 # Asking again narrows the drift to exactly one item: every package in the one list
 # holds now, and the only thing left is the one fetch. The phase is silent about
@@ -254,7 +242,6 @@ assert_stderr_empty
 assert_dpkg ferm
 assert_dpkg fail2ban
 assert_dpkg podman
-assert_dpkg ufw
 
 # The harness's own substrate is on the golden and is a precondition rather than a
 # claim, so it is asserted as one: a golden that stopped shipping one would make

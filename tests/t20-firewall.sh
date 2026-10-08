@@ -32,50 +32,39 @@ interface=$(ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i ==
 
 
 
-# The drill this file performs fires fifteen minutes after it arms the timer and
-# puts ufw back, which in a throwaway machine is an INPUT chain that drops the
-# guest's own traffic. It is disarmed here rather than only at the end of the
-# file, so a failure half way through does not leave it armed. The seeded module
-# and registry entry go with it: a service registry entry that outlives the test
-# is a phantom service on every file that runs after this one.
-disarm() {
-    systemctl disable --now guarden-firewall-deadman.timer >/dev/null 2>&1 || :
+# The seeded module and registry entry go on exit: a service registry entry
+# that outlives the test is a phantom service on every file that runs after
+# this one. There is no timer to stop, because guarden has no lockout failsafe.
+cleanup() {
     rm -f /usr/lib/guarden/modules/gate/module.toml \
         /var/lib/guarden/registry/traefik-production.toml
 }
-trap disarm EXIT
+trap cleanup EXIT
 
-# This file owns the phase's starting state: a fresh distribution's firewall is
-# installed and running, because two policies on one box is one too many and the
-# phase has to turn it off rather than route around it. The machine is left in
-# the converged state rather than put back, because a host that has had this
-# phase run and still carries ufw is a host nobody converged.
-#
+# This file owns the phase's starting state: a fresh distribution has no
+# firewall installed (ufw is not installed by guarden). The machine is left in
+# the converged state rather than put back.
+
 # **The distribution's own apt timers are off first, and that is a precondition
-# rather than tidiness.** `apt-daily-upgrade.service` runs `unattended-upgrade`,
-# whose post-invoke hook answers this machine's `/etc/ufw/ufw.conf` by running
-# `systemctl enable ufw` — measured on this golden at uptime 27.7 s for the
+# rather than tidiness.** On a host with ufw installed, `apt-daily-upgrade.service`
+# runs `unattended-upgrade`, whose post-invoke hook answers `/etc/ufw/ufw.conf` by
+# running `systemctl enable ufw` — measured on this golden at uptime 27.7 s for the
 # service and 30.2 s for the `systemctl enable`, with the symlink created at
-# 31.2 s and `ufw.service` started at 31.7 s. So a host whose timers are armed
-# cannot hold the state this phase converges, and a suite that asserted the
-# converged state on one was racing a timer rather than testing the phase.
-#
-# `soil packages` is what turns them off, on a guarden host and before this phase
-# ever runs — spec 6.1's `packages` item, the same rule and the same "not enabled
-# is enough" answer it applies to `snapper-cleanup.timer` — and `t20-packages.sh`
-# is where that converge is asserted. This suite drives the firewall phase without
-# the packages phase, so it plants the precondition the way
-# `t20-storage.sh` plants the `guarden` group, and says so.
+# 31.2 s and `ufw.service` started at 31.7 s. Since ufw is no longer installed by
+# guarden, this specific race is historical, but the timers are still disabled
+# because any packaging timer running on its own schedule is another writer of the
+# state this phase converges. `soil packages` turns them off — spec 6.1's
+# `packages` item, the same rule and the same "not enabled is enough" answer it
+# applies to `snapper-cleanup.timer` — and `t20-packages.sh` is where that converge
+# is asserted. This suite drives the firewall phase without the packages phase, so
+# it plants the precondition the way `t20-storage.sh` plants the `guarden` group,
+# and says so.
 for timer in apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer; do
     systemctl disable --now "$timer" >/dev/null 2>&1 || :
 done
 assert_not_enabled apt-daily.timer
 assert_not_enabled apt-daily-upgrade.timer
 assert_not_enabled dpkg-db-backup.timer
-
-run systemctl enable --now ufw.service
-assert_exit 0
-assert_enabled ufw.service
 
 stage_podlet_release
 run soil packages --apply
@@ -84,16 +73,16 @@ run soil install --apply
 assert_not_rejected
 run soil firewall --check
 assert_exit 1
-assert_stderr_has "drift: the distribution's own firewall is disabled"
+# `soil install` does not converge the firewall phase, so at this point nothing
+# the phase owns exists yet and every one of its items reports drift. Asserting
+# one that is genuinely absent is what proves the check is about this phase.
+assert_stderr_has "drift: 10-framework.conf carries the skeleton"
 
 run soil firewall --apply
 assert_exit 0
-assert_not_enabled ufw.service
-assert_inactive ufw.service
 assert_file_exists /etc/guarden/firewall/10-framework.conf
 assert_file_exists /etc/guarden/firewall/20-ingress-nat.conf
 assert_file_exists /etc/systemd/system/guarden-firewall.service
-assert_file_exists /etc/systemd/system/guarden-firewall-deadman.timer
 
 # 10-framework.conf is the skeleton, and it carries the ingress interface's
 # route_localnet because that is the whole requirement for the forwarding to
@@ -164,33 +153,45 @@ assert_rule_count /etc/guarden/firewall/20-ingress-nat.conf 3
 # 30-services.conf is the mutator's, and this phase does not write it.
 assert_file_missing /etc/guarden/firewall/30-services.conf
 
-# The dead-man timer is armed only by the flag, and it lasts fifteen minutes and
-# opens the firewall when it fires: stopping ferm and putting the
-# distribution's own firewall back is the only posture that is reliably "you can
-# ssh back in".
-run soil firewall --apply --deadman
-assert_exit 0
-assert_active guarden-firewall-deadman.timer
-assert_file_has /etc/systemd/system/guarden-firewall-deadman.timer "OnActiveSec=15min"
-assert_file_has /etc/systemd/system/guarden-firewall-deadman.service \
-    "stop guarden-firewall.service"
-assert_file_has /etc/systemd/system/guarden-firewall-deadman.service \
-    "enable --now ufw.service"
+# There is no lockout failsafe and no timer. SSH access is guaranteed
+# structurally instead: 00-ssh.conf is root-owned and seed-once, its accept is
+# the first rule of its own chain, and `soil firewall --apply` refuses to load
+# any ruleset in which that is not true (t150-ssh-accept.sh). So there is
+# nothing to arm, nothing to disarm, and no timer left running by a failure.
+assert_file_missing /etc/systemd/system/guarden-firewall-deadman.timer
+assert_file_missing /etc/systemd/system/guarden-firewall-deadman.service
+assert_file_lacks /etc/systemd/system/guarden-firewall.service "Conflicts=ufw"
 
-# An armed timer is drift for a plain check, because a timer that outlives its
-# drill is a surprise rather than a safety net, and nothing about it is the state
-# a converge should leave behind.
-run soil firewall --check
+# A plain apply converges the firewall and leaves it up. This is the assertion
+# that used to fail: the old failsafe's timer Required a unit whose only action
+# was `systemctl stop guarden-firewall.service`, and that unit's ExecStop runs
+# `ferm -F` -- so disarming the timer opened the firewall and every plain
+# converge left the box with no rules. The unit is settled before it is read:
+# its ExecStop blocks on `ferm -F`, so a restart spends real time deactivating
+# and an immediate read sees the intermediate state rather than the outcome.
+wait_settled guarden-firewall.service
+assert_active guarden-firewall.service
+run sh -c "iptables -S guarden-in"
+assert_exit 0
+
+# The service is stoppable, and stopping it tears guarden's own chains down
+# rather than merely going inactive -- that is what `ferm -F` is for -- and
+# starting it again puts them back.
+run systemctl stop guarden-firewall.service
+wait_settled guarden-firewall.service
+assert_inactive guarden-firewall.service
+run sh -c "iptables -S guarden-in"
 assert_exit 1
-assert_stderr_has "drift: the dead-man timer is not armed"
-
-# And a plain apply disarms it, so it cannot be left armed.
-run soil firewall --apply
+run sh -c "iptables -S guarden-svc"
+assert_exit 1
+run systemctl start guarden-firewall.service
+wait_settled guarden-firewall.service
+assert_active guarden-firewall.service
+run sh -c "iptables -S guarden-in"
 assert_exit 0
-assert_inactive guarden-firewall-deadman.timer
+
 run soil firewall --check
 assert_exit 0
 
-# The machine is left converged: ufw disabled, the phase's own files in place, and
-# the dead-man timer stopped by the plain apply above -- and stopped again by the
-# trap if this file failed before it got there.
+# The machine is left converged: the phase's own files in place, the firewall
+# running, and no timer to disarm because there is none.

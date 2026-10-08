@@ -945,3 +945,22 @@ stage_podlet_release() {
 # created them dies on a KeyError that names neither the cause nor the fix. 38
 # suites had their own copy of this; one call here is the whole of it.
 ensure_accounts
+
+# wait_settled <unit>: block until a unit is neither activating nor deactivating.
+# guarden-firewall.service is Type=oneshot with RemainAfterExit=yes, and its
+# ExecStop runs `ferm -F`, which blocks while it flushes the chains. A restart
+# therefore spends real time in deactivating, and an assertion that reads the
+# state the instant the call returns sees 'deactivating' rather than 'active'.
+# That is a race in the caller, not a fault in the unit.
+wait_settled() {
+    local unit="$1" state i
+    for i in $(seq 1 300); do
+        state=$(systemctl show -p ActiveState --value "$unit" 2>/dev/null || true)
+        case "$state" in
+            activating | deactivating | reloading) ;;
+            *) return 0 ;;
+        esac
+        sleep 0.1
+    done
+    _fail "unit $unit is still '$state' after 30s"
+}

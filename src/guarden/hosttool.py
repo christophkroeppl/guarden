@@ -62,8 +62,8 @@ def drift_line(what: str) -> None:
 
     **`what` is the converged state, so the line has to say which side of it the
     host is on.** An `Item` describes the state that holds once the phase has
-    converged — "the ferm package is installed", "the dead-man timer is not
-    armed" — and the bare `drift: <that sentence>` reads as a claim about the
+    converged — "the ferm package is installed", "10-framework.conf carries the
+    skeleton" — and the bare `drift: <that sentence>` reads as a claim about the
     present. An operator reading `error: drift: the ferm package is installed`
     cannot tell whether `ferm` is fine and something else is wrong, or whether
     `ferm` is missing and needs installing, and the two want opposite actions.

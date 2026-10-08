@@ -1189,33 +1189,8 @@ def sysctl_items() -> list[Item]:
 # firewall
 # --------------------------------------------------------------------------
 
-DISTRIBUTION_FIREWALL_UNITS = ("ufw.service",)
-
-
-def _distribution_firewall_disabled() -> bool:
-    """The distribution's own firewall is not in charge.
-
-    "Disabled" is not the only answer that means guarden owns the box. A unit
-    that is `static` cannot be enabled or disabled at all, and a unit that is
-    not installed answers `is-enabled` with "No such file or directory" rather
-    than any state word. ufw IS a dependency guarden installs — spec 6.1 — so
-    the failsafe and the dead-man timer can rely on the unit being there, but on
-    a family whose package list does not name it the unit is simply absent, and
-    demanding the literal word `disabled` made the phase report drift forever on
-    exactly the hosts it was written for.
-    """
-    for unit in DISTRIBUTION_FIREWALL_UNITS:
-        if h.run("systemctl", "is-enabled", unit).line in ("enabled", "enabled-runtime"):
-            return False
-    return True
-
-
-def _deadman_armed() -> bool:
-    return h.run("systemctl", "is-active", "guarden-firewall-deadman.timer").line == "active"
-
-
-# The chain the framework's skeleton declares on every host, and the one a
-# readability check can ask about before any service exists.
+                                                                          
+                                                            
 FRAMEWORK_CHAIN = "guarden-in"
 
 # What `iptables --version` prints for each variant. Measured on the golden:
@@ -1364,8 +1339,8 @@ def _ingress_nat(interface: str, ingress: list[tuple[str, str, str]]) -> str:
 def _framework(interface: str) -> str:
     return "\n".join(
         [
-            "# Written by soil firewall. The ferm skeleton: the policy baseline, the",
-            "# dead-man timer and the ingress interface's route_localnet.",
+            "# Written by soil firewall. The ferm skeleton: the policy baseline and",
+            "# the ingress interface's route_localnet.",
             "#",
             "# The per-service filter set and any service's own forwarding are in",
             "# 30-services.conf, which the mutator writes and which is disjoint from",
@@ -1396,34 +1371,26 @@ def _framework(interface: str) -> str:
             "    jump DROP;",
             "}",
             "",
-            "# The dead-man timer is 10-framework's business because it is the",
-            "# framework's safety net: armed only by `soil firewall --apply",
-            "# --deadman`, fifteen minutes, and it stops this service and puts the",
-            "# distribution's own firewall back so ssh answers again. The unit is",
-            "# guarden-firewall-deadman.timer and the effect is in its service.",
+            "# There is no lockout failsafe and no timer. SSH access is guaranteed",
+            "# structurally instead: 00-ssh.conf is root-owned and seed-once, its",
+            "# accept is the first rule of its own chain, and --apply refuses to load",
+            "# any ruleset in which that is not true.",
         ]
     ) + "\n"
 
 
-def firewall_items(deadman: bool, family: str | None = None) -> list[Item]:
+def firewall_items(family: str | None = None) -> list[Item]:
     config = h.read_config(h.config_path()) or h.shipped_config()
     interface = h.ingress_interface(config)
     items: list[Item] = [
-        Item(
-            "the distribution's own firewall is disabled",
-            _distribution_firewall_disabled,
-            lambda: [h.run("systemctl", "disable", "--now", unit)
-                     for unit in DISTRIBUTION_FIREWALL_UNITS],
-        ),
         *[
             h.text_item(f"/{unit} is installed", hostpath(*SYSTEMD_DIR, unit),
                         _template(unit), 0o644)
-            for unit in ("guarden-firewall.service", "guarden-firewall-deadman.service",
-                         "guarden-firewall-deadman.timer")
+            for unit in ("guarden-firewall.service",)
         ],
         h.text_item(
-            "10-framework.conf carries the skeleton, the dead-man timer and the "
-            "ingress interface's route_localnet",
+            "10-framework.conf carries the skeleton and the ingress interface's "
+            "route_localnet",
             hostpath(*FIREWALL_DIR, "10-framework.conf"),
             _framework(interface),
         ),
@@ -1452,25 +1419,6 @@ def firewall_items(deadman: bool, family: str | None = None) -> list[Item]:
         ),
     ]
 
-    if deadman:
-        items.append(
-            Item(
-                "the dead-man timer is armed for fifteen minutes",
-                _deadman_armed,
-                lambda: h.run_or_die("systemctl", "start", "guarden-firewall-deadman.timer"),
-            )
-        )
-    else:
-        # A plain apply disarms it. An armed timer opens the firewall in fifteen
-        # minutes, and one that outlives its drill is a surprise rather than a
-        # safety net.
-        items.append(
-            Item(
-                "the dead-man timer is not armed, because a plain apply never arms it",
-                lambda: not _deadman_armed(),
-                lambda: h.run("systemctl", "stop", "guarden-firewall-deadman.timer"),
-            )
-        )
     return items
 
 
@@ -2156,7 +2104,7 @@ PHASES = ("packages", "storage", "sysctl", "firewall", "install", "units")
 
 
 def items_for(
-    phase: str, deadman: bool = False, family: str | None = None,
+    phase: str, family: str | None = None,
     modules: list[str] | None = None,
 ) -> list[Item]:
     if phase == "packages":
@@ -2166,7 +2114,7 @@ def items_for(
     if phase == "sysctl":
         return sysctl_items()
     if phase == "firewall":
-        return firewall_items(deadman, family)
+        return firewall_items(family)
     if phase == "install":
         return install_items(modules)
     if phase == "units":
@@ -2182,7 +2130,7 @@ def what_for(phase: str) -> str:
         "storage": "btrfs layout, the snapper value set, root and home, the cleanup timer",
         "sysctl": "route_localnet on the ingress interface, IPv6 off, the port threshold, "
                   "and vm.swappiness when this host asked for a zram device",
-        "firewall": "ferm, fail2ban, 10-framework.conf, 20-ingress-nat.conf, the dead-man timer",
+        "firewall": "ferm, fail2ban, 10-framework.conf, 20-ingress-nat.conf",
         "install": "guarden into /usr/lib/guarden, the two program users, the alias probe, "
                    "and the zram device when this host asked for one",
         "units": "the system units of the unprivileged programs",

@@ -93,17 +93,14 @@ install = ["apt-get", "install", "-y"]
 query = ["dpkg-query", "-W", "-f=${db:Status-Status}"]
 installed = "installed"
 update = ["apt-get", "update"]
-# `ufw` is here on purpose and is not optional. guarden installs `ferm` and takes
-# the box's firewall over from `ufw`, so `ufw` is a dependency for two reasons:
-# it is the unit guarden disables, and it is what the dead-man timer re-enables
-# to hand an operator their shell back. A failsafe that names a package the host
-# does not have is not a failsafe.
-#
-# The other two families name no distribution firewall, and their
-# `DISTRIBUTION_FIREWALL_UNITS` is still the Debian name, so on Fedora and Arch
-# guarden installs no firewall manager to displace and the phase's "distribution
-# firewall is not in charge" check passes trivially. Naming the real unit for
-# each family is not done yet; see the list of what is left.
+# `ufw` was removed from guarden. guarden's host firewall is **ferm**. `ufw` was
+# the unit guarden disabled and the one the dead-man timer re-enabled to hand an
+# operator their shell back. Both reasons die with the uninstall: the first because
+# there is no distribution firewall to displace, the second because the dead-man
+# timer now opens the firewall directly by flushing guarden's own chains — it
+# cannot restore the previous ruleset, and that is accepted, not an oversight.
+# The Fedora and Arch families never listed `ufw`, so `DISTRIBUTION_FIREWALL_UNITS`
+# (which named the Debian unit) was meaningless on those families anyway.
 #
 # **`variant` is the only iptables answer a family states, and only Debian
 # states one.** It is a subtable rather than a bare key so the name and the two
@@ -135,7 +132,6 @@ packages = [
     "btrfs-progs",
     "snapper",
     "ferm",
-    "ufw",
     "fail2ban",
     "podman",
     "python3-yaml",

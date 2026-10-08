@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # soil is the only program with two modes (spec 6.1). Every phase takes
 # `--check` and `--apply`, `soil --check` is every phase, and `soil list` names
-# them. `--deadman` is the firewall's alone, because what it arms is a timer
-# whose effect is to open the firewall.
+# them. guarden has no lockout failsafe, so there is no flag that arms one.
 #
 # This file is the interface, not the converges: that every phase accepts both
 # modes and that a phase which exists never rejects its own name. What a phase
@@ -41,11 +40,13 @@ assert_stdout_has "install"
 assert_stdout_has "units"
 assert_stdout_lines 6
 
-# The armed-timer form is accepted as written; the same flag anywhere else is a
-# rejected input, not a silently ignored one.
-run soil firewall --apply --deadman
-assert_not_rejected
+# guarden has no lockout failsafe, so the flag that armed it is gone. It is a
+# rejected input wherever it appears -- a silently ignored one would let a
+# caller believe a failsafe was in force when nothing of the sort exists.
 stage_podlet_release
+run soil firewall --apply --deadman
+assert_exit 2
+assert_one_diagnostic "error:"
 run soil packages --apply --deadman
 assert_exit 2
 assert_one_diagnostic "error:"
