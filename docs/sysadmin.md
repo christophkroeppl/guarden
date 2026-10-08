@@ -478,17 +478,18 @@ Every read verb takes `--json`: `weedr service list`, `weedr service status`, `w
 
 ## Ports and the firewall
 
-**The firewall on this box is `ferm`.** guarden does not use `ufw`: `soil packages` installs both,
-`soil firewall --apply` disables `ufw`, and no `ufw` rule is ever written or reconciled. If you
-find a `ufw` rule, something outside guarden put it there.
+**The firewall on this box is `ferm`.** guarden does not use `ufw` and `ufw` is not installed on
+a guarden host. `soil packages` installs `ferm`; `ufw` is uninstalled. No `ufw` rule is ever
+written or reconciled. If you find a `ufw` rule, something outside guarden put it there.
 
 ```sh
-systemctl is-enabled ufw     # not enabled: that is what "disabled" means on a guarden host
 ferm --version
 ```
 
-`ufw` is present only so that the dead-man timer can hand it back to you, and it is what that
-timer restores when it fires. It is the failsafe, never the firewall.
+The dead-man timer does not re-enable `ufw`. When it fires it stops `guarden-firewall.service`
+and clears guarden's own chains. That failsafe is strictly weaker — it can open the firewall but
+**cannot restore the previous ruleset**, because there is no previous ruleset to restore. The
+next `soil firewall --apply` takes the box back over.
 
 ```sh
 weedr port list
@@ -760,11 +761,10 @@ soil firewall --apply             # disarm: converge without arming
   `soil install --apply` before touching a rule, because the lockout drill is the one control
   that gets you back in
 - **Lasts** fifteen minutes. `systemctl list-timers | grep -i deadman` shows what is left.
-- **Does**, when it fires: stops `ferm` and re-enables `ufw`, so ssh answers
-  again. `ufw` is one of the packages `soil packages` installs, so the unit is always there.
-  Nothing is rolled back, and `ufw` does not become guarden's firewall: the point is to get a
-  shell back, not to undo the rules, and the next `soil firewall --apply` takes the box back
-  over
+- **Does**, when it fires: stops `guarden-firewall.service` and clears guarden's own chains.
+  `ufw` is not installed and the timer does not re-enable it — there is no `ufw` unit. Nothing
+  is rolled back, and the point is to get a shell back, not to undo the rules. The next
+  `soil firewall --apply` takes the box back over
 - **Disarms** by firing (it is one-shot) or by a plain `soil firewall --apply`. Neither leaves it
   armed past the drill, so you cannot forget about it and find it live in three weeks.
 

@@ -74,9 +74,8 @@ _Avoid_: ingress, opening, endpoint
 **ferm**:
 The firewall guarden runs, and the only one on the host. Every rule in `/etc/guarden/firewall/`
 is a ferm stanza, for every service however it was deployed, and `iptables-save` reads what ferm
-compiled them into. `ufw` is a declared package for exactly two reasons: it is the unit
-`soil firewall` disables, and it is the one the dead-man timer hands back to a locked-out
-operator. **guarden never writes, reads or reconciles a `ufw` rule.**
+compiled them into. `ufw` is uninstalled on a guarden host. **guarden never writes, reads or
+reconciles a `ufw` rule.**
 _Avoid_: ufw, netfilter, nftables (as a second engine), iptables (it is the target, not the
 engine)
 

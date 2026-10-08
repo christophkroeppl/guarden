@@ -95,8 +95,7 @@ The general lesson is in §5: a design tested only against a web application is 
 ## 5. What shaped the design
 
 Five constraints. Four eliminated a plausible-looking option, which is why the system is as
-small as it is; the fifth says which firewall this host runs, which was ambiguous for as long as
-`ufw` was on the package list.
+small as it is; the fifth says which firewall this host runs.
 
 **A distinction that lives in a string is not a distinction.** A prefix on a name, a field
 nobody reads, a convention in a manifest: each has to be checked twice, and a check that is
@@ -123,12 +122,12 @@ ports instead of the whole host being granted the capability. Each of these has 
 mechanism in the spec and a named limit in `SECURITY.md` (ADR-0003, 0005, 0006).
 
 **One firewall engine, installed by displacing the other one.** The host firewall is `ferm` and
-there is no second manager anywhere on the box. `soil packages` installs `ferm` **and** `ufw`,
-and `soil firewall --apply` disables `ufw` — both acts are part of installation, because a
-package list that mentions `ufw` reads either way and only one reading is true. `ufw` survives
-only as the posture the dead-man timer hands back to a locked-out operator (ADR-0013). Every
-service's rules come from the same render whichever way it was deployed, so there is no
-per-service firewall to keep in step with the host's.
+there is no second manager anywhere on the box. `soil packages` installs `ferm`; `ufw` is
+uninstalled during installation. The dead-man timer does not re-enable `ufw` — it stops
+`guarden-firewall.service` and clears guarden's own chains. That failsafe is strictly weaker: it
+can open the firewall but cannot restore the previous ruleset, because there is no previous
+ruleset to restore. Every service's rules come from the same render whichever way it was deployed,
+so there is no per-service firewall to keep in step with the host's.
 
 **A test that cannot fail is worse than no test.** The harness is a real machine — a throwaway
 LXD VM cut from a golden snapshot, with the real tools and no fakes anywhere (ADR-0014) — and it
@@ -142,7 +141,7 @@ repository kept paying for the difference.
 
 | layer | programs | privilege | job |
 |---|---|---|---|
-| host | `soil` | root | packages, btrfs and snapper, sysctl, the ferm firewall framework and `ufw` disabled, ingress forwarding, dead-man, install |
+|| host | `soil` | root | packages, btrfs and snapper, sysctl, the ferm firewall framework, ingress forwarding, dead-man, install ||
 | control | `weedr` | root | the only mutator: identities, service roots, state volumes, units, credentials, ports, snapshots, forks, rollbacks |
 | render | `loom` | unprivileged | manifest plus registry to units, host entries, environment, credential requests |
 | render | `roots` | unprivileged | the edge's route configuration |

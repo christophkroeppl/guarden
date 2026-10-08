@@ -86,21 +86,21 @@ There is no PyPI and no wheel on either path. Every package is a distribution pa
 thing fetched from outside a distribution repository is a pinned `podlet` release whose SHA256 is
 recorded in this repository.
 
-### The firewall is `ferm`, and `ufw` is installed so it can be turned off
+### The firewall is `ferm`; `ufw` is uninstalled
 
-guarden does not use `ufw`. It installs `ferm` and it **disables** the distribution's own
-firewall manager, and disabling it is as much a part of `soil firewall --apply` as installing
-`ferm` is. No `ufw` rule is ever written, read or reconciled on a guarden host: every rule in
-`/etc/guarden/firewall/` is a ferm stanza, whatever installed the service it belongs to — a
-module's service, a poke's service, or one you created by hand. There is exactly one firewall on
-the box and it is ferm.
+guarden does not use `ufw`. It installs `ferm` and `ufw` is **not on the box** — it is removed
+during installation. No `ufw` rule is ever written, read or reconciled on a guarden host: every
+rule in `/etc/guarden/firewall/` is a ferm stanza, whatever installed the service it belongs to —
+a module's service, a poke's service, or one you created by hand. There is exactly one firewall
+on the box and it is ferm.
 
-`ufw` is on the package list for exactly two reasons, and it is worth knowing both: it is the
-unit guarden displaces, and it is what the dead-man timer hands back if a rule change locks you
-out. `ufw` is therefore the failsafe, never the firewall.
+The dead-man timer does **not** re-enable `ufw`. It opens the firewall directly: it stops
+`guarden-firewall.service` and clears guarden's own chains. That failsafe is strictly weaker —
+it can open the firewall but **cannot restore the previous ruleset**, because there is no
+previous ruleset to restore. An operator who triggers it gets their shell back, not their rules.
 
 ```sh
-systemctl is-enabled ufw      # not enabled -- that is what "guarden does not use ufw" means
+ferm --version                # the firewall engine on this host
 ls /etc/guarden/firewall/     # what guarden intends: three ferm files
 iptables-save                 # what the host is actually running
 ```

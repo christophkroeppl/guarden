@@ -333,14 +333,14 @@ service which did not declare an edge cannot connect to one.
 
 ### 2.7 Ingress without a capability
 
-**The host firewall is `ferm`, and `ufw` is a package guarden disables.** `soil packages`
-installs `ferm` and `ufw`; `soil firewall --apply` turns `ufw` off, and `--check` reports drift if
-it is ever enabled again. No `ufw` rule is written, read or reconciled anywhere in guarden, so
-there is no path by which a service, a module or a poke reaches `ufw` — the one place the word
-appears at runtime is the dead-man timer's effect, which stops `ferm` and re-enables `ufw` so a
-locked-out operator gets their shell back. Every other rule on the host, for every service
-however it was deployed, is in one ferm ruleset, and that ruleset is inspectable with
-`iptables-save` because ferm compiles to iptables (ADR-0013).
+**The host firewall is `ferm`. `ufw` is uninstalled on a guarden host.** `soil packages`
+installs `ferm`; `ufw` is removed during installation. No `ufw` rule is written, read or
+reconciled anywhere in guarden. The dead-man timer does not re-enable `ufw` — it stops
+`guarden-firewall.service` and clears guarden's own chains. That failsafe is strictly weaker:
+it can open the firewall but cannot restore the previous ruleset, because there is no previous
+ruleset to restore. Every other rule on the host, for every service however it was deployed, is
+in one ferm ruleset, and that ruleset is inspectable with `iptables-save` because ferm compiles
+to iptables (ADR-0013).
 
 No unprivileged process on the host may bind a port below 1024, and no process is granted a
 capability. `soil firewall` writes `20-ingress-nat.conf` with address translation for 80/tcp,
