@@ -16,12 +16,10 @@ converges and is idempotent. `soil` creates no service identity.
       `storage` installs a oneshot because it has daily work of its own; `packages` has none,
       because nothing in guarden installs packages on a schedule. `unattended-upgrades.service`
       stays enabled — it is an operator's security decision, not this phase's
-- [ ] `soil packages` installs the distribution packages: btrfs-progs, snapper, ferm, ufw, fail2ban,
-      podman, and `python3-yaml` and `python3-jinja2`. **`ufw` is a dependency, not an
-      optional extra, and guarden does not use it** — it is the unit guarden displaces and the
-      one the dead-man timer hands back to a locked-out operator, so `soil firewall --apply`
-      disabling it is as much a part of installation as installing `ferm`. **No `ufw` rule is
-      ever written, read or reconciled**: `ferm` is the only firewall on the box
+- [ ] `soil packages` installs the distribution packages: btrfs-progs, snapper, ferm, fail2ban,
+      podman, and `python3-yaml` and `python3-jinja2`. **`ufw` is not installed** — it was
+      removed from the package list (see 2026-10-08 revision). `ferm` is the only firewall on
+      the box and no `ufw` rule is ever written, read or reconciled.
 - [ ] **`podlet` is the one fetch from outside a distribution repository.** Its version and
       SHA256 are recorded in the repository and verified on install. That is deliberate, it is
       the only third-party binary, and it is the only exception to "distribution packages only"
@@ -48,7 +46,7 @@ converges and is idempotent. `soil` creates no service identity.
       the convention into a checked fact. Both are reported and neither is corrected — guarden
       does not undo a sysctl an operator set on purpose — and either one puts the box outside
       this design
-- [ ] `soil firewall` disables `ufw`, installs ferm and fail2ban and
+- [ ] `soil firewall` installs ferm and fail2ban and
       `guarden-firewall.service`, installs the dead-man timer, writes `10-framework.conf`, and
       **writes `20-ingress-nat.conf` — the edge's three forwarding rules, from the enabled
       modules' declared ingress.** It owns the
@@ -61,11 +59,13 @@ converges and is idempotent. `soil` creates no service identity.
       matches no packet in either direction. `route_localnet` on the ingress interface is the
       whole requirement, and the golden-VM check asks for it explicitly
 - [ ] **The dead-man timer is armed only by an explicit `--deadman` flag, never by a plain
-      apply.** It lasts fifteen minutes; when it fires it stops `ferm` and re-enables `ufw`,
-      so ssh answers again. It names `ufw` because `packages` installed it. "Disabled" means
-      *not enabled*: `ufw.service` can be `static`, and without the package `is-enabled` answers
-      "No such file or directory". It is one-shot and disarms itself, and a plain
-      `soil firewall --apply` disarms it too, so it cannot be left armed past the drill
+      apply.** It lasts fifteen minutes; when it fires it stops `ferm` and opens the firewall
+      directly by clearing guarden's own chains, so ssh answers again. The failsafe is strictly
+      weaker: it opens the firewall but **cannot restore the previous ruleset**, because there is
+      no previous ruleset to restore — every service's rules come from the same ferm render,
+      whether a module installed it, a poke deployed it or an operator typed the command. It is
+      one-shot and disarms itself, and a plain `soil firewall --apply` disarms it too, so it
+      cannot be left armed past the drill
 - [ ] `soil install` copies guarden's programs, templates and systemd units into
       `/usr/lib/guarden` root-owned, **creates the `guarden` and `hose` users**, **creates the
       `guarden` group** so every `root:guarden` path — the registry, every `overrides.toml` and

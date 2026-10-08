@@ -70,8 +70,8 @@ something the host owns (ADR-0013, spec §7.7).
 
 ## What this ticket does not do
 
-- It does not add a second firewall engine. `ferm` is the host firewall and `ufw` is the unit
-  `soil firewall` disables; nothing here writes, reads or reconciles a `ufw` rule
+- It does not add a second firewall engine. `ferm` is the host firewall; `ufw` is not
+  installed. Nothing here writes, reads or reconciles a `ufw` rule
 - It does not let a service bind, forward or publish anything. A grant is a rule, and a rule is
   not a destination: a service needing a host loopback port that is not a publication still
   needs that daemon to be a service wherever that is possible

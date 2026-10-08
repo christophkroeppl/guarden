@@ -86,7 +86,7 @@ firewall's *table* was inherited from `update-alternatives` rather than stated. 
 
 ## The fix, and its KISS shape
 
-Declare it, the way `ferm` and `ufw` are declared:
+Declare it, the way `ferm` is declared:
 
 ```toml
 packages = [ ..., "podman", "passt", ... ]
