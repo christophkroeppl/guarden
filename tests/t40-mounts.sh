@@ -116,7 +116,7 @@ assert_exit 0
 assert_file_missing "$overrides/plain-staging/overrides.toml"
 
 # The renderer writes no firewall rule of its own: a grant is a translation the
-# mutator renders into `30-services.conf`. Everything a render produced is under
+# mutator renders into `50-services.conf`. Everything a render produced is under
 # `--out`, in the three directories the mutator installs from, and the whole set
 # is listed on stdout — which is where that claim is asserted, in t40-render.
-assert_file_missing "$GUARDEN_PREFIX/etc/guarden/firewall/30-services.conf"
+assert_file_missing "$GUARDEN_PREFIX/etc/guarden/firewall/50-services.conf"

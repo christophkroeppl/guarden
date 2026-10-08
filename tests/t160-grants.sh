@@ -3,7 +3,7 @@
 #
 # The subject is the mechanism, and the mechanism is one DNAT and nothing else:
 # `weedr port open` writes the admin's grant into the root-owned overrides.toml,
-# renders 30-services.conf whole, and the rendered rule translates the public
+# renders 50-services.conf whole, and the rendered rule translates the public
 # port onto a loopback publication the service already holds. **There is no
 # POSTROUTING masquerade anywhere in this file**, and every absence below is
 # asserted rather than assumed: a masquerade written as
@@ -30,7 +30,7 @@ export GUARDEN_PREFIX=/
 registry=/var/lib/guarden/registry
 overrides=/etc/guarden/services
 tree=/var/lib/guarden/services
-conf=/etc/guarden/firewall/30-services.conf
+conf=/etc/guarden/firewall/50-services.conf
 ingress=/etc/guarden/firewall/20-ingress-nat.conf
 
 cleanup() {
@@ -110,7 +110,7 @@ assert_json services.1.granted "[]"
 assert_json services.1.pending "[8333,8443]"
 assert_json_missing services.0.uid
 
-# A requested port with no grant is simply not forwarded, and 30-services.conf
+# A requested port with no grant is simply not forwarded, and 50-services.conf
 # does not exist at all: nothing has been granted, so there is nothing to render.
 # The container comes up without the port rather than with it half-working.
 assert_file_missing "$conf"
@@ -159,7 +159,7 @@ assert_one_diagnostic "error:"
 # readable in the terminal that made the change.
 run weedr port open peer-staging 8333/tcp
 assert_exit 0
-assert_stdout_has "30-services.conf"
+assert_stdout_has "50-services.conf"
 assert_stdout_has "127.0.0.1:20133"
 assert_file_exists "$overrides/peer-staging/overrides.toml"
 assert_file_has "$overrides/peer-staging/overrides.toml" 'open = ["8333/tcp"]'
@@ -220,7 +220,7 @@ run weedr port open relay-staging 8443/tcp
 assert_exit 0
 assert_file_has "$conf" "127.0.0.1:20133"
 assert_file_has "$conf" "127.0.0.1:20135"
-[ "$(dnat_count)" = 2 ] || _fail "30-services.conf carries $(dnat_count) DNAT rules, expected 2"
+[ "$(dnat_count)" = 2 ] || _fail "50-services.conf carries $(dnat_count) DNAT rules, expected 2"
 
 # A rule two services asked for renders once. Deduplication is a property of the
 # set: the render is a pure function of the union, so re-running a grant already
@@ -297,7 +297,7 @@ run weedr port close peer-staging 8333/tcp
 assert_exit 0
 assert_stdout_has "not granted"
 
-# `30-services.conf` is disjoint from `20-ingress-nat.conf`: the edge's three
+# `50-services.conf` is disjoint from `20-ingress-nat.conf`: the edge's three
 # forwarding rules are soil's, and a grant cannot reach that file or the
 # publication behind them.
 seed "$ingress" \
@@ -328,5 +328,5 @@ assert_stderr_has "ghost-staging"
 
 # The grant is the admin's file and the admin's act: nothing was written inside
 # the service's own tree, which is 0700 to the service and holds no firewall.
-assert_file_missing "$tree/peer-staging/30-services.conf"
-assert_file_missing "$tree/relay-staging/30-services.conf"
+assert_file_missing "$tree/peer-staging/50-services.conf"
+assert_file_missing "$tree/relay-staging/50-services.conf"

@@ -183,7 +183,7 @@ assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging
 # uid, closed to loopback by exactly the same rule as every other, and being the
 # thing that reaches the publications is an explicit accept ABOVE the deny rather
 # than a gap in it.
-services=$GUARDEN_PREFIX/etc/guarden/firewall/30-services.conf
+services=$GUARDEN_PREFIX/etc/guarden/firewall/50-services.conf
 assert_file_exists "$services"
 assert_file_has "$services" "127.0.0.0/8"
 

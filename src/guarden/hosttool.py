@@ -37,7 +37,7 @@ PROBE_IMAGE = "localhost/guarden-probe"
 
 MODE_DIR = 0o755
 MODE_DIR_GROUP = 0o770
-MODE_CONFIG = 0o644
+MODE_CONFIG = 0o640
 
 
 def hostpath(*parts: str) -> Path:

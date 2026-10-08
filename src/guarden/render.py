@@ -826,7 +826,7 @@ def _publications(
 
     Every one is a **loopback** publication, written `PublishPort=<address>:<pub>:<port>`.
     A granted public port never appears here at all — it becomes a `PREROUTING`
-    DNAT onto one of these, written by the mutator into `30-services.conf` — so
+    DNAT onto one of these, written by the mutator into `50-services.conf` — so
     nothing in a rendered unit binds a non-loopback address (spec 7.5).
     """
     wanted: dict[str, int] = {}

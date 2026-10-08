@@ -47,6 +47,7 @@ TOP_LEVEL_KEYS = {
     "zram",
     "environments",
     "share",
+    "firewall",
 }
 TRACK_KEYS = {
     "name",
@@ -87,6 +88,15 @@ SHARE_DEFAULTS = {
     "token_name": "share",
     "scopes": ["Access: Apps and Policies Write"],
 }
+
+# `[firewall]` is the root-owned table for admin firewall configuration.
+# `admin_dropin` controls whether the 30-admin.conf drop-in file is installed.
+# When enabled (default), the file is managed by soil and may be edited by an admin.
+FIREWALL_KEYS = {"admin_dropin"}
+FIREWALL_DEFAULTS = {
+    "admin_dropin": True,
+}
+
 
 # spec 3.1: pasta is the only backend v1 supports, and slirp4netns is refused
 # rather than degraded to. A rootless container on slirp4netns has a gateway that
@@ -130,6 +140,13 @@ class Share:
 
 
 @dataclass(frozen=True)
+class Firewall:
+    """The `[firewall]` table: admin firewall configuration."""
+
+    admin_dropin: bool
+
+
+@dataclass(frozen=True)
 class Config:
     path: str
     domain: str
@@ -142,6 +159,7 @@ class Config:
     lanes: int
     tracks: tuple[Track, ...]
     share: Share
+    firewall: Firewall
     backend: str = BACKEND
     pasta_options: tuple[str, ...] = ("--map-gw",)
     zram: zram.Zram | None = None
@@ -230,11 +248,13 @@ def load(path: Any = None) -> Config:
     build = document.get("build", {})
     modules = document.get("modules", {})
     share = document.get("share", {})
+    firewall = document.get("firewall", {})
     for table, name, keys in (
         (host, "host", {"domain", "interface", "admin_user"}),
         (ingress, "ingress", {"alias", "tunnel_domain", "publication_range", "forwarded"}),
         (network, "network", NETWORK_KEYS),
         (share, "share", SHARE_KEYS),
+        (firewall, "firewall", FIREWALL_KEYS),
         (build, "build", {"lanes"}),
         (modules, "modules", {"enabled"}),
     ):
@@ -270,6 +290,7 @@ def load(path: Any = None) -> Config:
         lanes=_int(build, "lanes", f"{where_file} [build]"),
         tracks=tuple(tracks),
         share=_share(share, where_file),
+        firewall=_firewall(firewall, where_file),
         backend=_backend(network, where_file),
         pasta_options=_pasta_options(network, where_file),
         zram=zram.knob(document, str(where_file)),
@@ -304,6 +325,15 @@ def _share(table: dict, where_file: Any) -> Share:
         token_name=token_name,
         scopes=tuple(scopes),
     )
+
+
+def _firewall(table: dict, where_file: Any) -> Firewall:
+    """`[firewall] admin_dropin`, controls the admin drop-in file."""
+    where = f"{where_file} [firewall]"
+    value = table.get("admin_dropin", FIREWALL_DEFAULTS["admin_dropin"])
+    if not isinstance(value, bool):
+        raise _type_error(str(where_file), "firewall.admin_dropin", "a boolean")
+    return Firewall(admin_dropin=value)
 
 
 def _backend(table: dict, where_file: Any) -> str:

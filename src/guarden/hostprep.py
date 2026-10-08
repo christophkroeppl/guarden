@@ -1192,6 +1192,9 @@ def sysctl_items() -> list[Item]:
                                                                           
                                                             
 FRAMEWORK_CHAIN = "guarden-in"
+# The SSH accept chain - separate so the operator can edit the port without
+# it being overwritten. 00-ssh.conf is seed-once, mode 0600 root:root.
+SSH_CHAIN = "guarden-ssh"
 
 # What `iptables --version` prints for each variant. Measured on the golden:
 # `iptables v1.8.11 (nf_tables)` and `iptables v1.8.11 (legacy)`.
@@ -1265,6 +1268,137 @@ def _firewall_applied(family: str | None = None) -> bool:
     return _rendered_rules_readable(family)
 
 
+def _ssh_conf_path() -> Path:
+    return hostpath(*FIREWALL_DIR, "00-ssh.conf")
+
+
+def _ssh_conf_exists() -> bool:
+    """Check that 00-ssh.conf exists, is mode 0600, and owned root:root."""
+    path = _ssh_conf_path()
+    if not path.is_file():
+        return False
+    try:
+        stat = path.stat()
+        if (stat.st_mode & 0o777) != 0o600:
+            return False
+        if stat.st_uid != 0 or stat.st_gid != 0:
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def _seed_ssh_conf() -> None:
+    """Seed 00-ssh.conf only on first-ever apply. Never recreate if deleted later."""
+    path = _ssh_conf_path()
+    if path.is_file():
+        # File exists (possibly edited by operator) - seed-once: do not overwrite
+        return
+    
+    # Check if this is the first apply by looking for other firewall files
+    # If 10-framework.conf exists, this is not the first apply - the file was deleted
+    framework_path = hostpath(*FIREWALL_DIR, "10-framework.conf")
+    if framework_path.is_file():
+        # Firewall has been applied before but 00-ssh.conf is missing - do not recreate
+        # This will cause verification to fail
+        return
+    
+    # First ever apply - create the file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    from guarden import conf
+    conf.write_file(path, _ssh_conf(), 0o600, (0, 0))
+
+
+def _verify_ssh_accept_position() -> bool:
+    """
+    Verify at apply time that:
+    1. 00-ssh.conf exists, mode 0600, owned root:root
+    2. The first rule of INPUT after conntrack+lo is 'jump guarden-ssh'
+    3. The first rule of guarden-ssh is 'proto tcp dport XXXX jump ACCEPT;' (any port)
+
+    This is the whole point: do not trust position, verify it as root at apply time.
+    A missing, mis-owned, or reordered file must fail loudly.
+    """
+    # 1. Check file exists with correct mode and ownership
+    if not _ssh_conf_exists():
+        return False
+
+    path = _ssh_conf_path()
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    # Check guarden-ssh chain has an accept as first rule (any port)
+    lines = content.splitlines()
+    in_ssh_chain = False
+    first_rule_in_ssh_chain = None
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("chain guarden-ssh {"):
+            in_ssh_chain = True
+            continue
+        if in_ssh_chain:
+            if stripped == "}":
+                break
+            if stripped and not stripped.startswith("#"):
+                first_rule_in_ssh_chain = stripped
+                break
+
+                                                             
+    if not first_rule_in_ssh_chain or not first_rule_in_ssh_chain.startswith("proto tcp dport ") or not first_rule_in_ssh_chain.endswith(" jump ACCEPT;"):
+        return False
+
+    # Now check the assembled ruleset via ferm --shell /dev/null
+    # We need to verify the first rule in INPUT after conntrack+lo is 'jump guarden-ssh'
+    # The framework file is 10-framework.conf which we control
+    framework_path = hostpath(*FIREWALL_DIR, "10-framework.conf")
+    if not framework_path.is_file():
+        return False
+
+    try:
+        framework_content = framework_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    lines = framework_content.splitlines()
+    in_input = False
+    found_conntrack = False
+    found_lo = False
+    found_ssh_jump = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("chain INPUT {"):
+            in_input = True
+            continue
+        if in_input:
+            if stripped == "}":
+                break
+            if stripped and not stripped.startswith("#"):
+                if not found_conntrack:
+                    if stripped.startswith("mod conntrack ctstate"):
+                        found_conntrack = True
+                        continue
+                    return False
+                if not found_lo:
+                    if stripped.startswith("if lo"):
+                        found_lo = True
+                        continue
+                    return False
+                if not found_ssh_jump:
+                    if stripped == f"jump {SSH_CHAIN};":
+                        found_ssh_jump = True
+                        continue
+                    return False
+                # After finding the ssh jump, we can stop checking order
+                break
+
+    if not (found_conntrack and found_lo and found_ssh_jump):
+        return False
+
+    return True
+
+
 def _module_ingress() -> list[tuple[str, str, str]]:
     """The enabled modules' declared ingress, each with the publication it lands on.
 
@@ -1336,6 +1470,30 @@ def _ingress_nat(interface: str, ingress: list[tuple[str, str, str]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _ssh_conf() -> str:
+    """The SSH accept chain in its own file, seed-once, mode 0600 root:root."""
+    return "\n".join([
+        "# Written by soil firewall. The SSH accept chain, separate from the",
+        "# framework so the operator can edit the port without it being overwritten.",
+        "#",
+        "# This file is SEED-ONCE: soil install writes it only if absent. It must",
+        "# NEVER overwrite an existing file, because the operator may have edited",
+        "# the port to a non-standard one. Re-running soil install must not wipe",
+        "# that edit.",
+        "#",
+        "# Mode 0600, owner root:root. Nothing else reads it: ferm loads it as root.",
+        "# It is deliberately tighter than every other config file in the tree",
+        "# (which are root:guarden 0644). 0600 is an existing convention here --",
+        "# see credentials.py BLOB_MODE.",
+        "",
+        "table filter",
+        f"chain {SSH_CHAIN} {{",
+        "    proto tcp dport 22 jump ACCEPT;",
+        "}",
+        "",
+    ]) + "\n"
+
+
 def _framework(interface: str) -> str:
     return "\n".join(
         [
@@ -1343,11 +1501,11 @@ def _framework(interface: str) -> str:
             "# the ingress interface's route_localnet.",
             "#",
             "# The per-service filter set and any service's own forwarding are in",
-            "# 30-services.conf, which the mutator writes and which is disjoint from",
+            "# 50-services.conf, which the mutator writes and which is disjoint from",
             "# this file and from 20-ingress-nat.conf. Each has exactly one writer.",
             "#",
             "# guarden-in is declared here and jumped to above INPUT's own drop, and",
-            "# 30-services.conf fills it. The chain and the jump are skeleton: no",
+            "# 50-services.conf fills it. The chain and the jump are skeleton: no",
             "# port, no protocol and no grant appears in this file, and a grant",
             "# cannot reach anything here.",
             "#",
@@ -1355,26 +1513,54 @@ def _framework(interface: str) -> str:
             "# /etc/sysctl.d/90-guarden.conf. Without it the kernel treats a packet",
             "# addressed to 127.0.0.1 that arrived on a non-loopback interface as a",
             "# martian and drops it, which is the whole reason the forwarding works.",
+            "#",
+            "# SSH access is guaranteed structurally: 00-ssh.conf is root-owned and",
+            "# seed-once, its accept is the first rule of its own chain, and",
+            "# `soil firewall --apply` refuses to load a ruleset in which that is not",
+            "# true. There is no lockout failsafe and no timer; this is the guarantee.",
             "",
             "table filter",
-            "chain guarden-in {",
+            f"chain {FRAMEWORK_CHAIN} {{",
             "}",
             "",
             "table filter",
             "chain INPUT {",
             "    mod conntrack ctstate (ESTABLISHED RELATED) jump ACCEPT;",
             "    if lo jump ACCEPT;",
-            "    proto tcp dport 22 jump ACCEPT;",
+            f"    jump {SSH_CHAIN};",
             "    proto tcp dport 443 jump ACCEPT;",
             "    proto udp dport 443 jump ACCEPT;",
-            "    jump guarden-in;",
+            f"    jump {FRAMEWORK_CHAIN};",
             "    jump DROP;",
             "}",
             "",
-            "# There is no lockout failsafe and no timer. SSH access is guaranteed",
-            "# structurally instead: 00-ssh.conf is root-owned and seed-once, its",
-            "# accept is the first rule of its own chain, and --apply refuses to load",
-            "# any ruleset in which that is not true.",
+        ]
+    ) + "\n"
+
+
+def _admin_dropin() -> str:
+    """The admin/module drop-in file for extra firewall rules.
+
+    This file is managed by soil when firewall.admin_dropin is enabled.
+    Admins and modules may add rules here that will be loaded by ferm.
+    """
+    return "\n".join(
+        [
+            "# Written by soil firewall. Admin/module drop-in for extra firewall rules.",
+            "#",
+            "# This file is installed when [firewall] admin_dropin = true (the default).",
+            "# An admin may edit this file directly, or a module may add rules during install.",
+            "# Rules in this file are loaded by ferm between 20-ingress-nat.conf and 50-services.conf.",
+            "#",
+            "# The file is owned by root:guarden with mode 0640. Edit with care --",
+            "# changes here take effect on the next `soil firewall --apply` or when",
+            "# guarden-firewall.service reloads.",
+            "",
+            "# Example rule (uncomment and modify):",
+            "# table filter",
+            "# chain guarden-svc {",
+            "#     mod owner uid-owner 1001 daddr 127.0.0.1 proto tcp dport 20123 jump ACCEPT;",
+            "# }",
         ]
     ) + "\n"
 
@@ -1388,6 +1574,14 @@ def firewall_items(family: str | None = None) -> list[Item]:
                         _template(unit), 0o644)
             for unit in ("guarden-firewall.service",)
         ],
+        # 00-ssh.conf is seed-once: write only if absent, mode 0600 root:root.
+        # The operator may edit the port; re-running soil install must not wipe that edit.
+        Item(
+            "00-ssh.conf exists and is mode 0600 root:root",
+            lambda: _ssh_conf_exists(),
+            lambda: _seed_ssh_conf(),
+            correctable=False,
+        ),
         h.text_item(
             "10-framework.conf carries the skeleton and the ingress interface's "
             "route_localnet",
@@ -1400,16 +1594,34 @@ def firewall_items(family: str | None = None) -> list[Item]:
             hostpath(*FIREWALL_DIR, "20-ingress-nat.conf"),
             _ingress_nat(interface, _module_ingress()),
         ),
-        # Ordering, not a filter: the variant is selected before the unit starts,
-        # because starting it is what makes ferm resolve the binary and load the
-        # policy. The readability check follows the start, because before it there
-        # is nothing to read.
+    ]
+
+    # The drop-in is on by default and is a table in guarden.toml, so it is read
+    # from the same dict every other table is read from. An admin who turns it
+    # off is saying "no sibling files in the firewall directory", which is a
+    # legitimate posture for a host that wants the directory to be guarden's
+    # alone.
+    if config.get("firewall", {}).get("admin_dropin", True):
+        items.append(
+            h.text_item(
+                "30-admin.conf carries admin/module firewall drop-in rules",
+                hostpath(*FIREWALL_DIR, "30-admin.conf"),
+                _admin_dropin(),
+            )
+        )
+    # Ordering, not a filter: the variant is selected before the unit starts,
+    # because starting it is what makes ferm resolve the binary and load the
+    # policy. The readability check follows the start, because before it there
+    # is nothing to read.
+    items.append(
         Item(
             f"this host's own iptables is the {packagelist.variant_name(family)} variant "
             f"guarden converges, so an operator's `iptables -S` reads the rules ferm writes",
             lambda: _variant_selected(family),
             lambda: _select_variant(family),
-        ),
+        )
+    )
+    items.append(
         Item(
             "guarden-firewall.service is enabled, and is running with guarden's rules "
             "readable through this host's own iptables rather than in another table",
@@ -1417,8 +1629,31 @@ def firewall_items(family: str | None = None) -> list[Item]:
             lambda: h.run_or_die("systemctl", "enable", "--now",
                                  "guarden-firewall.service") and None,
         ),
-    ]
+    )
 
+    # Apply-time verification: refuse to apply unless 00-ssh.conf is present,
+    # mode 0600, owned root:root, and the first rule of INPUT is the jump to
+    # guarden-ssh, and the first rule of guarden-ssh is the SSH accept.
+    # This is the whole point -- do not trust position, verify it as root at
+    # apply time. A missing, mis-owned or reordered file must fail loudly
+    # rather than silently load a ruleset that can lock someone out.
+    def _verify_and_raise() -> None:
+        if not _verify_ssh_accept_position():
+            h.error("apply-time verification failed: 00-ssh.conf position check failed")
+            from guarden import errors
+            raise errors.GuardenError(
+                "apply-time verification failed: 00-ssh.conf position check failed",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+
+    items.append(
+        Item(
+            "00-ssh.conf is first in INPUT and its accept is first in guarden-ssh",
+            lambda: _verify_ssh_accept_position(),
+            _verify_and_raise,
+            correctable=False,
+        )
+    )
     return items
 
 

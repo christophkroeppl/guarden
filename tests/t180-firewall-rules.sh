@@ -40,7 +40,7 @@ export GUARDEN_PREFIX=/
 
 registry=/var/lib/guarden/registry
 overrides=/etc/guarden/services
-conf=/etc/guarden/firewall/30-services.conf
+conf=/etc/guarden/firewall/50-services.conf
 ingress=/etc/guarden/firewall/20-ingress-nat.conf
 
 cleanup() {
@@ -139,7 +139,7 @@ assert_exit 0
 assert_stdout_lines 1
 assert_json rules.0.rule '"-p udp --dport 51820 -j ACCEPT"'
 assert_json rules.0.chain '"guarden-svc"'
-assert_json rules.0.file '"/etc/guarden/firewall/30-services.conf"'
+assert_json rules.0.file '"/etc/guarden/firewall/50-services.conf"'
 assert_json rules.0.granted false
 assert_json rules.0.requested_by.0.service '"tunnel-staging"'
 assert_json rules.0.requested_by.0.name '"wireguard-peer"'
@@ -175,7 +175,7 @@ assert_stderr_has "ghost-staging"
 # renders whole, prints the diff and installs, all under the `firewall` lock.
 run weedr firewall open tunnel-staging wireguard-peer
 assert_exit 0
-assert_stdout_has "30-services.conf"
+assert_stdout_has "50-services.conf"
 assert_stdout_has "51820"
 assert_file_exists "$overrides/tunnel-staging/overrides.toml"
 assert_file_has "$overrides/tunnel-staging/overrides.toml" '[firewall]'

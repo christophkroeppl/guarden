@@ -87,10 +87,9 @@ assert_file_exists /etc/systemd/system/guarden-firewall.service
 # 10-framework.conf is the skeleton, and it carries the ingress interface's
 # route_localnet because that is the whole requirement for the forwarding to
 # work at all.
-assert_file_has /etc/guarden/firewall/10-framework.conf \
-    "route_localnet is scoped to $interface"
+assert_file_has /etc/guarden/firewall/10-framework.conf "route_localnet is scoped to $interface"
 assert_file_has /etc/guarden/firewall/10-framework.conf "/etc/sysctl.d/90-guarden.conf"
-assert_file_has /etc/guarden/firewall/10-framework.conf "30-services.conf"
+assert_file_has /etc/guarden/firewall/10-framework.conf "50-services.conf"
 
 # A host with no edge installed has no ingress: a module that has not been added
 # contributes nothing and no publication is invented.
@@ -150,8 +149,8 @@ assert_file_lacks /etc/guarden/firewall/10-framework.conf "DNAT"
 # no rule -- and the three rules above are the only ones in the file.
 assert_rule_count /etc/guarden/firewall/20-ingress-nat.conf 3
 
-# 30-services.conf is the mutator's, and this phase does not write it.
-assert_file_missing /etc/guarden/firewall/30-services.conf
+# 50-services.conf is the mutator's, and this phase does not write it.
+assert_file_missing /etc/guarden/firewall/50-services.conf
 
 # There is no lockout failsafe and no timer. SSH access is guaranteed
 # structurally instead: 00-ssh.conf is root-owned and seed-once, its accept is

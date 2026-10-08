@@ -78,7 +78,7 @@ assert_file_has "$edge_unit" "AddHost=routed-staging:192.0.2.1"
 
 # The edge is allowed to dial the publication, by uid, and nobody else is: the
 # owner, the edge, and the declared consumers — and this service declared none.
-services=/etc/guarden/firewall/30-services.conf
+services=/etc/guarden/firewall/50-services.conf
 assert_file_has "$services" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $publication jump ACCEPT;"
 assert_file_has "$services" \

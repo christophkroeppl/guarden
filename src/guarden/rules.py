@@ -38,7 +38,7 @@ RESOLVER_PROTOCOLS = ("udp", "tcp")
 
 # The chains guarden renders, and the only two a request may name. `guarden-in`
 # is soil's skeleton in 10-framework.conf and `guarden-svc` is the mutator's own
-# in 30-services.conf; growing this set is a change to spec 7.7.
+# in 50-services.conf; growing this set is a change to spec 7.7.
 GRANTABLE_CHAINS = (DEFAULT_CHAIN, "guarden-in")
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")

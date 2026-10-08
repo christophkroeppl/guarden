@@ -191,7 +191,7 @@ assert_file_lacks "$nat" "SNAT"
 assert_file_lacks "$nat" "jump DNAT"
 
 # The intra-host rule set: accepts above one drop, and the drop carries no uid.
-services=/etc/guarden/firewall/30-services.conf
+services=/etc/guarden/firewall/50-services.conf
 # spec 7.6's loopback deny is `daddr 127.0.0.0/8 jump DROP;` and carries NO
 # interface match: `ip route get 127.0.0.1` answers `local 127.0.0.1 dev lo`, so
 # the destination already scopes the interface. `-o lo` was removed from the
@@ -217,7 +217,7 @@ assert_file_has "$services" \
 drop_line=$(grep -vE '^[[:space:]]*(#|$)' "$services" | grep -n 'jump DROP;' | tail -1 | cut -d: -f1)
 accept_line=$(grep -vE '^[[:space:]]*(#|$)' "$services" | grep -n 'jump ACCEPT;' | tail -1 | cut -d: -f1)
 [ "$drop_line" -gt "$accept_line" ] \
-    || _fail "the loopback drop is not the last rule in 30-services.conf"
+    || _fail "the loopback drop is not the last rule in 50-services.conf"
 run grep 'jump DROP;' "$services"
 assert_exit 0
 assert_stdout_lacks "uid-owner"

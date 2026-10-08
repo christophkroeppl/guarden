@@ -1,4 +1,4 @@
-"""`/etc/guarden/firewall/30-services.conf`: the mutator's half, and its only writer.
+"""`/etc/guarden/firewall/50-services.conf`: the mutator's half, and its only writer.
 
 Two things live in this file and they are both spec 7.6/7.5: the nat rules that
 forward a granted public port onto a service's loopback publication, and the
@@ -28,8 +28,10 @@ from guarden import manifest as manifest_mod
 from guarden import modules as modules_mod
 from guarden import overrides as overrides_mod
 
-SERVICES_CONF = paths.FIREWALL / "30-services.conf"
-SERVICES_MODE = 0o644
+from guarden.hosttool import warn
+
+SERVICES_CONF = paths.FIREWALL / "50-services.conf"
+SERVICES_MODE = 0o640
 UNIT = "guarden-firewall.service"
 UNIT_PATH = ("etc", "systemd", "system", UNIT)
 INPUT_CHAIN = "guarden-in"
@@ -434,14 +436,27 @@ def granted_rule_lines() -> list[str]:
 
 
 def installed() -> str:
-    if not SERVICES_CONF.is_file():
+    """Read all .conf files in the firewall directory, in lexical order.
+    
+    Only root-owned files are loaded; non-root files are skipped with a warning.
+    """
+    firewall_dir = paths.FIREWALL
+    if not firewall_dir.is_dir():
         return ""
-    try:
-        return SERVICES_CONF.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise errors.GuardenError(
-            f"{SERVICES_CONF} could not be read: {exc.strerror}", errors.HOST_NOT_AS_ASSUMED
-        ) from exc
+    out = []
+    for conf_file in sorted(firewall_dir.glob("*.conf")):
+        try:
+            # Check ownership - skip files not owned by root
+            stat = conf_file.stat()
+            if stat.st_uid != 0:
+                warn(f"skipping non-root-owned firewall file: {conf_file.name} (uid={stat.st_uid})")
+                continue
+            out.append(conf_file.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise errors.GuardenError(
+                f"{conf_file} could not be read: {exc.strerror}", errors.HOST_NOT_AS_ASSUMED
+            ) from exc
+    return "\n".join(out)
 
 
 def load_set() -> None:
