@@ -262,7 +262,9 @@ assert_exit 0
 assert_stdout_has "/var/lib/guarden/edge/dynamic"
 assert_stdout_has "ro"
 assert_supplementary_group traefik-production edge
-assert_mode /var/lib/guarden/edge/dynamic 2750# **The manager generates it.** Both causes ticket 250 set out to separate are
+assert_mode /var/lib/guarden/edge/dynamic 2750
+
+# **The manager generates it.** Both causes ticket 250 set out to separate are
 # refuted by measurement, and so is the premise:
 #
 # - The runtime directory EXISTS and is owned by the service uid, so "nothing gives
