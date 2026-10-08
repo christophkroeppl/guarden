@@ -94,14 +94,15 @@ rule in `/etc/guarden/firewall/` is a ferm stanza, whatever installed the servic
 a module's service, a poke's service, or one you created by hand. There is exactly one firewall
 on the box and it is ferm.
 
-The dead-man timer does **not** re-enable `ufw`. It opens the firewall directly: it stops
-`guarden-firewall.service` and clears guarden's own chains. That failsafe is strictly weaker —
-it can open the firewall but **cannot restore the previous ruleset**, because there is no
-previous ruleset to restore. An operator who triggers it gets their shell back, not their rules.
+SSH access is guaranteed structurally: `00-ssh.conf` in `/etc/guarden/firewall/` is root-owned
+and seed-once (written only if absent, so an operator's port edit survives reinstall). Its
+accept is the first rule of its own `guarden-ssh` chain, and `INPUT`'s first rule after
+conntrack and lo is `jump guarden-ssh;`. `soil firewall --apply` refuses (exit 1, installs
+nothing) unless all of these hold.
 
 ```sh
 ferm --version                # the firewall engine on this host
-ls /etc/guarden/firewall/     # what guarden intends: three ferm files
+ls /etc/guarden/firewall/     # what guarden intends: 00-ssh.conf, 10-framework.conf, 20-ingress-nat.conf, 30-admin.conf, 50-services.conf
 iptables-save                 # what the host is actually running
 ```
 
@@ -603,13 +604,10 @@ furrow queue list
 
 The runbook is [`docs/sysadmin.md`](docs/sysadmin.md). It also says how to re-converge after
 editing a manifest — `weedr service ingest <name> --from poke <project>@<sha>`, which is idempotent and is the
-reconcile command — and how to get back in if the firewall locks you out. The dead-man timer is
-not always running. It is armed only by `soil firewall --apply --deadman`, it lasts fifteen
-minutes, and when it fires it stops `ferm` and re-enables the distribution firewall, which
-leaves you able to ssh back in. (That is the canonical statement of what it does; the spec §6.1 says the same thing in the words
-a program needs and the runbook links here.) It disarms itself when it fires, and a plain
-`soil firewall --apply` without the flag disarms it too, so an armed timer cannot outlive the
-drill.
+reconcile command — and how SSH access is guaranteed structurally. The structural guarantee
+means SSH is never locked out: `00-ssh.conf` is root-owned and seed-once, its accept is the
+first rule of its own chain, and `soil firewall --apply` refuses to load a ruleset where that
+is not true.
 
 ---
 

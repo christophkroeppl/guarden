@@ -9,6 +9,8 @@ restore the previous ruleset, because there is no previous ruleset. Nothing in g
 or reconciles a `ufw` rule, and there is no path by which a service, a module or a poke gets one.
 
 > **Revised 2026-10-08:** `ufw` is uninstalled rather than disabled; the dead-man failsafe no longer names it and cannot restore a previous ruleset (there is none). The original text stated `soil packages` installs both and `soil firewall --apply` turns `ufw` off — that was reversed by the decision in commit 07f76db.
+>
+> **Revised 2026-10-08:** The dead-man failsafe has been removed entirely. SSH access is now guaranteed structurally: `00-ssh.conf` in `/etc/guarden/firewall/` is root-owned and seed-once (written only if absent), its accept is the first rule of its own `guarden-ssh` chain, and `INPUT`'s first rule after conntrack and lo is `jump guarden-ssh;`. `soil firewall --apply` refuses (exit 1, installs nothing) unless all of these hold. The firewall file layout is now `00-ssh.conf`, `10-framework.conf`, `20-ingress-nat.conf`, `30-admin.conf` (optional), `50-services.conf` (renamed from `30-services.conf`). Every root-owned `.conf` loads in lexical order.
 
 Everything else about that firewall was already decided in ADR-0006, and none of this changes
 it: a rule set is rendered whole from a union of grants, deduplicated by construction, printed

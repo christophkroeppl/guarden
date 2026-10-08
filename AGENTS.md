@@ -128,11 +128,11 @@ a new ADR that supersedes it. The short version:
   else. `ufw` is **uninstalled** by installation and is **not** in any package list, on any family,
   for any reason. If a change, a suite or a golden image appears to need `ufw` present, the change
   is wrong — fix the change. No `ufw` rule is ever written, read or reconciled on a guarden host,
-  and the dead-man failsafe does not re-enable it: it opens the firewall directly by stopping
-  `guarden-firewall.service` and clearing guarden's own chains. Accept the weaker failsafe
-  knowingly: it can open the firewall but **cannot restore the previous ruleset**, because there is
-  no previous ruleset to restore. Every service's rules come from the same ferm render, whether a
-  module installed it, a poke deployed it or an operator typed the command.
+  and the structural guarantee replaces the dead-man failsafe: SSH access is guaranteed by
+  `00-ssh.conf` (root:root 0600, seed-once), its accept is the first rule of its own `guarden-ssh`
+  chain, and `INPUT`'s first rule after conntrack and lo is `jump guarden-ssh;`. `soil firewall
+  --apply` refuses (exit 1) unless all of these hold. Every service's rules come from the same
+  ferm render, whether a module installed it, a poke deployed it or an operator typed the command.
 - **A forwarded port is a `PREROUTING` DNAT and nothing else. There is no masquerade.** An
   earlier revision of these documents required a `nat POSTROUTING` masquerade per forwarded port
   and claimed that without it the forwarding set "delivers exactly nothing while everything on the
@@ -317,7 +317,7 @@ never bound.
 Two properties follow from the mechanism and are worth stating because they look like bugs:
 
 - Locally generated traffic does not traverse PREROUTING, so a health check, a smoke test and
-  the lockout drill address `127.0.0.1:<publication>` and not the public host name. This is also
+  the structural verification address `127.0.0.1:<publication>` and not the public host name. This is also
   why an on-box check cannot tell you that forwarding works: both a correct and a broken forward
   pass it.
 - There is no hairpin NAT, so a machine on the same local network cannot reach the box by its
@@ -416,7 +416,7 @@ Rules that hold for every test:
 - Runtime dependencies are **distribution packages** installed by `soil`: `python3-yaml`,
   `python3-jinja2`, and the ones `packages/packages.toml` lists per family — including `ferm`,
   which is the firewall guarden runs. **`ufw` is not among them and must never be added**: it is
-  uninstalled, and the dead-man timer opens the firewall without it. No `pip install` at deploy
+  uninstalled, and the structural guarantee replaces the dead-man failsafe. No `pip install` at deploy
   time, no wheels
   checked in. A fetch from outside a distribution repository is deliberate and rare: each is a
   **pinned artefact** whose version and two SHA256s are recorded in this repository and verified

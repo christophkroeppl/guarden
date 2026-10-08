@@ -57,7 +57,7 @@ port, the file, the line. A deploy that succeeds with warnings exits `0`.
 
 **A drift line carries the requirement and the fact, in that order.** An item describes the
 state that holds once the phase has converged — `the ferm package is installed`, and also
-`the dead-man timer is not armed`, whose converged state is itself a negative — so
+`the SSH accept is first in its chain`, whose converged state is itself a negative — so
 `error: drift: <that sentence>` reads as a claim about the present, and an operator cannot
 tell from it whether the thing is fine or missing. The line is one line, prefixed, carries the
 word `drift`, quotes the requirement whole and says the host does not meet it. The requirement
@@ -139,14 +139,16 @@ to it.
   projects.d/<project>.toml            a per-project copy, which wins over the file above
   services/<name>/overrides.toml       admin grants: ports, firewall rules, retention, groups, mounts
   edge/auth-provider                   the auth module's marker, read by roots
-  firewall/10-framework.conf           ferm skeleton, dead-man timer, the interface's
-                                       route_localnet. Written by soil. The policy baseline:
-                                       no grant reaches this file and nothing in it is ever a
-                                       service's
+  firewall/00-ssh.conf                 SSH accept: root:root 0600, seed-once, its own chain,
+                                       first rule in INPUT after conntrack and lo. Written by soil.
+  firewall/10-framework.conf           ferm skeleton, the interface's route_localnet. Written by soil.
+                                       The policy baseline: no grant reaches this file and nothing in
+                                       it is ever a service's
   firewall/20-ingress-nat.conf         the edge's three forwarding rules. Written by soil,
                                        and by nothing else -- a module change converges it by
                                        calling `soil firewall --apply`, not by writing it
-  firewall/30-services.conf            the whole uid-matched filter set, any service's own
+  firewall/30-admin.conf               admin/module drop-in (optional). Written by soil.
+  firewall/50-services.conf            the whole uid-matched filter set, any service's own
                                        forwarding rules, and any service's own granted firewall
                                        rules (§7.7). Written by the mutator.
   creds/<name>/<KEY>.cred              systemd-credential blobs, mode 0600
@@ -1181,7 +1183,6 @@ and not something a compromised workflow key can ask for.
 ```
 soil <phase> --check      # report drift, change nothing, exit 1 with the word "drift"
 soil <phase> --apply      # converge
-soil firewall --apply --deadman   # arm the lockout timer for this run; see below
 soil --check              # every phase
 soil list                 # the phases and what each owns
 ```
@@ -1254,22 +1255,19 @@ still converge and the run still exits `1`.
   checks, in `--check`, that
   `ingress.alias` still matches the address the default route resolves to (§6.1).
 - `firewall` installs ferm and fail2ban and
-  `guarden-firewall.service`, installs the dead-man timer with its arm, duration, effect and
-  disarm, writes `10-framework.conf`, and writes `20-ingress-nat.conf` from the enabled
-  modules' declared ingress. It owns the framework and the edge's forwarding; the mutator owns
-  `30-services.conf`, any service's own forwarding and any service's own granted firewall rules
-  (§7.7). The two files are disjoint, and each is written by exactly one program.
+  `guarden-firewall.service`, writes `00-ssh.conf` — the SSH accept rule, root:root 0600, seed-once,
+  its own `guarden-ssh` chain with the accept as the first rule, and the INPUT jump as the first
+  rule after conntrack and lo — writes `10-framework.conf`, writes `30-admin.conf` (optional),
+  and writes `20-ingress-nat.conf` from the enabled modules' declared ingress. It owns the
+  framework, the SSH accept, the admin drop-in and the edge's forwarding; the mutator owns
+  `50-services.conf`, any service's own forwarding and any service's own granted firewall rules
+  (§7.7). The files are disjoint and each is written by exactly one program.
 
-  **The dead-man timer is armed only by `--deadman`, and a plain `--apply` never arms it.** It
-  is fifteen minutes after which **`guarden-firewall.service` is stopped and guarden's own chains
-  are cleared** — the firewall is opened directly; there is no previous ruleset to restore. The
-  failsafe is **strictly weaker**: it can open the firewall but cannot restore the previous
-  ruleset, because there is no previous ruleset. It exists so that an operator who has just
-  locked themselves out can get back in. The flag is named here because the runbook
-  told operators to use it while the interface did not define it, and a `soil` written to this
-  spec would have rejected the one command that gets someone back in. Arming it is also the
-  operator saying "I have another way in": the effect of the timer is to open the firewall, so
-  arming it is a deliberate act and not something a converge should do on its own.
+  **`soil firewall --apply` refuses (exit 1, installs nothing) unless all of:** `00-ssh.conf` exists,
+  is 0600 root:root, its accept is the first rule in `guarden-ssh`, and the INPUT jump to
+  `guarden-ssh` is the first rule after conntrack and lo. This is the structural guarantee that
+  replaces the dead-man timer: SSH access is guaranteed by the filesystem and rule order, not by a
+  timer that opens the firewall.
 - `install` copies guarden's programs, templates and units into `/usr/lib/guarden` root-owned,
   creates the `guarden` and `hose` users **and the `guarden` group** — which is load-bearing,
   because the registry, every `overrides.toml` and all of `/etc/guarden` are `root:guarden` and
@@ -2144,7 +2142,7 @@ belonging to another service is a fourth kind of rule, in a different file, and 
 needs no forwarding rule at all.
 
 Two consequences an operator must know. Locally generated traffic does not traverse
-`PREROUTING`, so a health check, a smoke test or the lockout drill **must** target
+`PREROUTING`, so a health check, a smoke test or the structural verification **must** target
 `127.0.0.1:<publication>` and not the public name. And there is no hairpin translation, so
 another machine on a local network cannot reach the box by its public name.
 

@@ -49,10 +49,10 @@ grant, and the repository still cannot make one.
       with the diff printed before installation, so two mutations in a row cannot install out of
       order and duplicate rules cannot exist. **A rule two services requested renders once** —
       deduplication is a property of the set, and ticket 180 adds the next kind of member to it
-- [ ] Removing a grant removes the forwarding rule, and `weedr port list` shows the port closed- [ ] **`30-services.conf` is disjoint from `20-ingress-nat.conf`.** The edge's three forwarding
+- [ ] Removing a grant removes the forwarding rule, and `weedr port list` shows the port closed- [ ] **`50-services.conf` is disjoint from `20-ingress-nat.conf`.** The edge's three forwarding
       rules are written by `soil firewall` from the enabled modules' declared ingress; a service's
       own granted forwarding is written by the mutator. Each file has exactly one writer
-- [ ] The dead-man timer still restores firewall access, and a grant cannot disable it
+- [ ] The structural SSH guarantee still holds, and a grant cannot disable it
 - [ ] On the golden VM: **a granted public port answers from off the box**, an undeclared port
       does not, and no unprivileged process on the box can bind below 1024. The request cannot
       come from the box itself: locally generated traffic does not traverse PREROUTING, which is

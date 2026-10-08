@@ -47,25 +47,25 @@ converges and is idempotent. `soil` creates no service identity.
       does not undo a sysctl an operator set on purpose — and either one puts the box outside
       this design
 - [ ] `soil firewall` installs ferm and fail2ban and
-      `guarden-firewall.service`, installs the dead-man timer, writes `10-framework.conf`, and
-      **writes `20-ingress-nat.conf` — the edge's three forwarding rules, from the enabled
+      `guarden-firewall.service`, writes `00-ssh.conf` — the SSH accept rule, root:root 0600, seed-once,
+      its own `guarden-ssh` chain with the accept as the first rule, and the INPUT jump as the first
+      rule after conntrack and lo — writes `10-framework.conf`, writes `30-admin.conf` (optional),
+      and **writes `20-ingress-nat.conf` — the edge's three forwarding rules, from the enabled
       modules' declared ingress.** It owns the
-      framework and the edge's forwarding; the mutator owns `30-services.conf` and any service's
-      own forwarding. The two files are disjoint and each is written by exactly one program
+      framework, the SSH accept, the admin drop-in and the edge's forwarding; the mutator owns
+      `50-services.conf` and any service's own forwarding. The files are disjoint and each is
+      written by exactly one program
 - [ ] **No `nat POSTROUTING` rule is emitted, and that is the correct output rather than a
       missing one.** A `PREROUTING` DNAT to `127.0.0.1` makes the packet local, so it goes to
       `INPUT` and never reaches `POSTROUTING`, and conntrack rewrites the reply's source to the
       public address the client dialled. A masquerade written as `-d 127.0.0.1 --dport <pub>`
       matches no packet in either direction. `route_localnet` on the ingress interface is the
       whole requirement, and the golden-VM check asks for it explicitly
-- [ ] **The dead-man timer is armed only by an explicit `--deadman` flag, never by a plain
-      apply.** It lasts fifteen minutes; when it fires it stops `ferm` and opens the firewall
-      directly by clearing guarden's own chains, so ssh answers again. The failsafe is strictly
-      weaker: it opens the firewall but **cannot restore the previous ruleset**, because there is
-      no previous ruleset to restore — every service's rules come from the same ferm render,
-      whether a module installed it, a poke deployed it or an operator typed the command. It is
-      one-shot and disarms itself, and a plain `soil firewall --apply` disarms it too, so it
-      cannot be left armed past the drill
+- [ ] **`soil firewall --apply` refuses (exit 1, installs nothing) unless all of:**
+      `00-ssh.conf` exists, is 0600 root:root, its accept is first in `guarden-ssh`, and the
+      INPUT jump to `guarden-ssh` is the first rule after conntrack and lo. This is the
+      structural guarantee that replaces the dead-man timer: SSH access is guaranteed by the
+      filesystem and rule order, not by a timer that opens the firewall
 - [ ] `soil install` copies guarden's programs, templates and systemd units into
       `/usr/lib/guarden` root-owned, **creates the `guarden` and `hose` users**, **creates the
       `guarden` group** so every `root:guarden` path — the registry, every `overrides.toml` and
@@ -123,8 +123,8 @@ converges and is idempotent. `soil` creates no service identity.
 - [ ] `getent passwd` and `getent group` show that `soil install` created only the `guarden` and
       `hose` users and the `guarden` group — no service user, no service directory, no state
       volume, no snapper configuration for anything guarden does not own
-- [ ] The lockout drill exists: arming the timer, then breaking the firewall, gets an operator
-      back in without the provider's console
+- [ ] The structural verification exists: `soil firewall --check` reports drift against the
+      SSH guarantee, and `soil firewall --apply` refuses to install a ruleset that breaks it
 - [ ] On the golden VM: `net.ipv4.ip_unprivileged_port_start` reads `1024` after
       `soil sysctl --apply`, and an unprivileged process fails to bind a port below 1024. Set it
       to `0` first and confirm `--check` reports the drift, because a host that ships `0` is the

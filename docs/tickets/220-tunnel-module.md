@@ -143,7 +143,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
 - [x] **The loopback deny still applies to the tunnel's uid.** The tunnel is one more service uid
       and is closed to loopback by exactly the same rule as every other; being the thing that
       reaches the publications is an explicit uid accept above the deny, not a gap in it
-- [ ] The dead-man timer still restores firewall access, and a tunnel grant cannot disable it: the
+- [ ] The structural SSH guarantee still holds, and a tunnel grant cannot disable it: the
       tunnel is egress-only, so it can neither lock an operator out nor be locked out
 - [x] **`cloudflared` runs as a service like every other** — a `[Container]` unit in its own user
       manager, nothing in `/etc/guarden` it can write, and a restart of the edge does not restart
@@ -269,7 +269,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       a real Cloudflare account and a real delegated zone and no fake can stand in for it: a
       browser on a phone with no client installed reaches a staging route, a second browser with no
       access is refused, and the grant is still refused after `weedr share revoke` with no redeploy
-      and no restart. `just test` does not depend on it, exactly as the lockout drill and the
+      and no restart. `just test` does not depend on it, exactly as the structural verification and the
       reboot phase do not
 - [ ] `docs/sysadmin.md` and `SECURITY.md` gain the section: what the tunnel can and cannot reach,
       what happens to every issuance when the reconciler timer stops, and what a leaked API token

@@ -123,11 +123,12 @@ mechanism in the spec and a named limit in `SECURITY.md` (ADR-0003, 0005, 0006).
 
 **One firewall engine, installed by displacing the other one.** The host firewall is `ferm` and
 there is no second manager anywhere on the box. `soil packages` installs `ferm`; `ufw` is
-uninstalled during installation. The dead-man timer does not re-enable `ufw` — it stops
-`guarden-firewall.service` and clears guarden's own chains. That failsafe is strictly weaker: it
-can open the firewall but cannot restore the previous ruleset, because there is no previous
-ruleset to restore. Every service's rules come from the same render whichever way it was deployed,
-so there is no per-service firewall to keep in step with the host's.
+uninstalled during installation. SSH access is guaranteed structurally: `00-ssh.conf` in
+`/etc/guarden/firewall/` is root-owned and seed-once, its accept is the first rule of its own
+`guarden-ssh` chain, and `INPUT`'s first rule after conntrack and lo is `jump guarden-ssh;`.
+`soil firewall --apply` refuses (exit 1) unless all of these hold. Every service's rules come
+from the same render whichever way it was deployed, so there is no per-service firewall to keep
+in step with the host's.
 
 **A test that cannot fail is worse than no test.** The harness is a real machine — a throwaway
 LXD VM cut from a golden snapshot, with the real tools and no fakes anywhere (ADR-0014) — and it
@@ -139,9 +140,9 @@ repository kept paying for the difference.
 
 ## 6. Architecture
 
-| layer | programs | privilege | job |
-|---|---|---|---|
-|| host | `soil` | root | packages, btrfs and snapper, sysctl, the ferm firewall framework, ingress forwarding, dead-man, install ||
+|| layer | programs | privilege | job ||
+||---|---|---|---|
+|| host | `soil` | root | packages, btrfs and snapper, sysctl, the ferm firewall framework, ingress forwarding, SSH guarantee, install ||
 | control | `weedr` | root | the only mutator: identities, service roots, state volumes, units, credentials, ports, snapshots, forks, rollbacks |
 | render | `loom` | unprivileged | manifest plus registry to units, host entries, environment, credential requests |
 | render | `roots` | unprivileged | the edge's route configuration |
@@ -306,7 +307,7 @@ that snapshot is a candidate. It is a per-snapshot operator decision, it is reco
 `chattr -i` reverses it.
 
 **Nothing is forwarded back into the box from itself.** Locally generated traffic does not
-traverse PREROUTING, so a health check, a smoke test or the lockout drill has to address
+traverse PREROUTING, so a health check, a smoke test or the structural verification has to address
 `127.0.0.1:<publication>` rather than the public host name. There is also no hairpin NAT, so a
 machine on the same local network cannot reach the box by its public name. Accepted: the box is
 reached from the internet, and neither case is a path guarden needs.

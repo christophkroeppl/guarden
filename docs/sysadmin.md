@@ -109,14 +109,30 @@ totals, the marked, the oldest, the newest, and the effective `NUMBER_LIMIT` and
 `NUMBER_LIMIT_IMPORTANT` come from `weedr service list --json`, which is a root read. Poll that
 one for disk and snapshot counts; poll `stakes` for what is pinned and why.
 
-### the lockout drill
+### structural SSH guarantee
+
+SSH access is guaranteed structurally: `00-ssh.conf` in `/etc/guarden/firewall/` is root-owned
+and seed-once (written only if absent, so an operator's port edit survives reinstall). Its
+accept is the first rule of its own `guarden-ssh` chain, and `INPUT`'s first rule after
+conntrack and lo is `jump guarden-ssh;`. `soil firewall --apply` **refuses** (exit 1, installs
+nothing) unless all of: the file exists, is 0600 root:root, its accept is first in
+`guarden-ssh`, and the INPUT jump is first.
+
+If you are editing a rule and want to verify the guarantee holds, run `soil firewall --check`.
+It reports drift against the requirement and changes nothing.
+
+The firewall file layout is now:
 
 ```
-soil firewall --apply --deadman     # arm the timer before you touch a rule
+00-ssh.conf         root:root 0600, seed-once, the SSH accept
+10-framework.conf   soil's skeleton
+20-ingress-nat.conf soil's PREROUTING DNAT per forwarded port
+30-admin.conf       admin/module drop-in (new, optional)
+50-services.conf    the mutator's uid-matched set (renamed from 30-services.conf)
 ```
 
-If ferm cuts you off, wait for the timer, or use the provider's console. The timer's arm,
-duration, effect and disarm are under **Ports and the firewall** below.
+Every root-owned `.conf` is loaded in lexical order. Non-root files are skipped with a warning.
+`0640` is the default mode for config files under `/etc/guarden`; `00-ssh.conf` stays `0600`.
 
 ### compressed swap, if you asked for it
 
@@ -350,9 +366,11 @@ The rest of the host, and where to look when a path is not what you expected:
 | `/usr/lib/guarden/` | guarden's own files, root-owned, never written by a deploy |
 | `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Three writers, all under the `modules` lock and all through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else; `soil install` writes the measured `ingress.alias` and seeds `[modules] enabled` from cloud-init. Two share `[modules] enabled`, so a write re-reads the file under the lock rather than trusting what it saw before it |
 | `/etc/guarden/services/<name>/overrides.toml` | admin grants: ports, firewall rules, retention, groups, mounts |
-| `/etc/guarden/firewall/10-framework.conf` | ferm skeleton, dead-man timer, the interface's `route_localnet` — written by `soil firewall`. No grant reaches this file |
+| `/etc/guarden/firewall/00-ssh.conf` | SSH accept: root:root 0600, seed-once, its own `guarden-ssh` chain, first rule in INPUT after conntrack and lo — written by `soil firewall` |
+| `/etc/guarden/firewall/10-framework.conf` | ferm skeleton, the interface's `route_localnet` — written by `soil firewall`. No grant reaches this file |
 | `/etc/guarden/firewall/20-ingress-nat.conf` | the edge's three forwarding rules, from the enabled modules' declared ingress — written by `soil firewall`. Each is a `PREROUTING` DNAT and nothing else |
-| `/etc/guarden/firewall/30-services.conf` | the whole uid-matched filter set, any service's own forwarding and any service's own granted firewall rules, same shape — written by the mutator, under the `firewall` lock |
+| `/etc/guarden/firewall/30-admin.conf` | admin/module drop-in (optional) — written by `soil firewall` |
+| `/etc/guarden/firewall/50-services.conf` | the whole uid-matched filter set, any service's own forwarding and any service's own granted firewall rules, same shape — written by the mutator, under the `firewall` lock |
 | `/etc/guarden/creds/<name>/<KEY>.cred` | one systemd-credential blob per key, `0600 root` |
 | `/etc/apt/apt.conf.d/80guarden-snapper` | the `DPkg::Pre-Invoke` hook that snapshots `root` before every package transaction |
 | `/etc/snapper/configs/<service>-<vol>` | written by soil and converged to the fixed value set |
@@ -486,10 +504,12 @@ written or reconciled. If you find a `ufw` rule, something outside guarden put i
 ferm --version
 ```
 
-The dead-man timer does not re-enable `ufw`. When it fires it stops `guarden-firewall.service`
-and clears guarden's own chains. That failsafe is strictly weaker — it can open the firewall but
-**cannot restore the previous ruleset**, because there is no previous ruleset to restore. The
-next `soil firewall --apply` takes the box back over.
+SSH access is guaranteed structurally: `00-ssh.conf` in `/etc/guarden/firewall/` is root-owned
+and seed-once (written only if absent, so an operator's port edit survives reinstall). Its
+accept is the first rule of its own `guarden-ssh` chain, and `INPUT`'s first rule after
+conntrack and lo is `jump guarden-ssh;`. `soil firewall --apply` **refuses** (exit 1, installs
+nothing) unless all of: the file exists, is 0600 root:root, its accept is first in
+`guarden-ssh`, and the INPUT jump is first.
 
 ```sh
 weedr port list
@@ -553,7 +573,7 @@ a property of the whole path, and only a request from a second machine demonstra
 The firewall's job inside the host is to stop a service *connecting* to a publication it did not
 declare an edge for, not to stop a service *listening* on a port of its own choosing — nothing
 polices that at runtime. Public access for HTTP is the edge's job, and it is a grant like any
-other. `soil firewall` owns the rest: ssh, the dead-man timer, fail2ban.
+other. `soil firewall` owns the rest: ssh, fail2ban.
 
 ### a service asking for a rule of its own
 
@@ -727,7 +747,7 @@ Two consequences that look like faults:
 
 - **Check the edge on its publication, not on the public host name.** Locally generated traffic
   does not traverse PREROUTING, so a request the box makes to its own public address never
-  reaches the forwarding rules. A health check, a smoke test and the lockout drill all need the
+  reaches the forwarding rules. A health check, a smoke test and the structural verification all need the
   loopback address, and the only hairpin there is not.
 - **There is no hairpin NAT.** A laptop on the same local network cannot reach the box by its
   public name. That is expected, and reaching the box from there is an ssh port, not 443.
@@ -745,31 +765,6 @@ weedr port list | grep -i traefik
 Disabling it instead — removing `api.dashboard` and `api.insecure` from the edge's static
 configuration — is the other acceptable answer, and the module owns the choice: no manifest can
 turn it on and no grant can forward it.
-
-### the dead-man timer
-
-The timer is not always running, and it is the thing that saves you from a bad firewall apply.
-
-```sh
-soil firewall --apply --deadman    # arm: 15 minutes, then it lets you back in
-soil firewall --apply             # disarm: converge without arming
-```
-
-- **Armed** only by the explicit `--deadman` flag, which is part of `soil firewall`'s interface
-  in the spec. A plain `soil firewall --apply` never arms it. If your `soil` rejects the flag
-  with a usage error, it is not the spec's `soil` and the timer is not installed — re-run
-  `soil install --apply` before touching a rule, because the lockout drill is the one control
-  that gets you back in
-- **Lasts** fifteen minutes. `systemctl list-timers | grep -i deadman` shows what is left.
-- **Does**, when it fires: stops `guarden-firewall.service` and clears guarden's own chains.
-  `ufw` is not installed and the timer does not re-enable it — there is no `ufw` unit. Nothing
-  is rolled back, and the point is to get a shell back, not to undo the rules. The next
-  `soil firewall --apply` takes the box back over
-- **Disarms** by firing (it is one-shot) or by a plain `soil firewall --apply`. Neither leaves it
-  armed past the drill, so you cannot forget about it and find it live in three weeks.
-
-If it has already fired and you still cannot get in, use the provider's console and
-`systemctl stop ferm`.
 
 ---
 

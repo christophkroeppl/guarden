@@ -335,12 +335,12 @@ service which did not declare an edge cannot connect to one.
 
 **The host firewall is `ferm`. `ufw` is uninstalled on a guarden host.** `soil packages`
 installs `ferm`; `ufw` is removed during installation. No `ufw` rule is written, read or
-reconciled anywhere in guarden. The dead-man timer does not re-enable `ufw` — it stops
-`guarden-firewall.service` and clears guarden's own chains. That failsafe is strictly weaker:
-it can open the firewall but cannot restore the previous ruleset, because there is no previous
-ruleset to restore. Every other rule on the host, for every service however it was deployed, is
-in one ferm ruleset, and that ruleset is inspectable with `iptables-save` because ferm compiles
-to iptables (ADR-0013).
+reconciled anywhere in guarden. SSH access is guaranteed structurally: `00-ssh.conf` in
+`/etc/guarden/firewall/` is root-owned and seed-once, its accept is the first rule of its own
+`guarden-ssh` chain, and `INPUT`'s first rule after conntrack and lo is `jump guarden-ssh;`.
+`soil firewall --apply` refuses (exit 1) unless all of these hold. Every other rule on the
+host, for every service however it was deployed, is in one ferm ruleset, and that ruleset is
+inspectable with `iptables-save` because ferm compiles to iptables (ADR-0013).
 
 No unprivileged process on the host may bind a port below 1024, and no process is granted a
 capability. `soil firewall` writes `20-ingress-nat.conf` with address translation for 80/tcp,

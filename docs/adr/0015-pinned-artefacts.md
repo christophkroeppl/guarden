@@ -33,8 +33,8 @@ hostname, and the edge's catch-all 404 stays last.
 **And the thing that would make it a door is refused:** a grant is an issuance with an
 **absolute** expiry, the vendor's Access policy is a **projection** of guarden's own
 record and never the record, expiry is enforced by a **root-owned reconciler on a
-root-owned timer** and not by the vendor, and the dead-man timer still restores
-firewall access — a tunnel grant cannot disable it.
+root-owned timer** and not by the vendor, and the structural SSH guarantee still holds
+— a tunnel grant cannot disable it.
 
 ## Part two — where the binary comes from
 
