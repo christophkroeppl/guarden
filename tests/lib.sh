@@ -19,8 +19,11 @@
 #
 # `set -e` is on so that a failed assertion ends the test file where it failed
 # rather than being outvoted by the assertions after it.
-
-set -euo pipefail
+#
+# `set -E` (errtrace) makes the ERR trap fire inside function bodies. Without it,
+# a failure in `run` or `_capture` ends the suite silently because the trap never
+# runs there — exactly the symptom ticket 262 describes.
+set -Eeuo pipefail
 
 # A suite that dies on a command rather than on an assertion has said nothing at
 # all, and the line it died on is the whole of what is missing. `set -e` is what
@@ -105,6 +108,7 @@ run() {
     else
         _capture "$program" "$@"
     fi
+    return "$GUARDEN_EXIT"
 }
 
 # run_in <dir> <program> [args...]: run a command from a directory the target user
