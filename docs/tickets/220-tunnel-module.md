@@ -21,6 +21,20 @@ the service's own secret store, preview-instance publication, URL-unsafe ref ref
 runbook, and the customer-facing acceptance criteria. Ticket restored 2026-10-08 after being
 removed on the mistaken belief that the tendril module discharged it.
 
+**Since then `c949878` closed four of them**, verified green in the VM: a preview ref is RFC
+3986 unreserved or it is refused with exit 2 naming the ref, so two refs cannot collide after
+percent-decoding; `weedr module remove tendril` deletes the Access application and fails closed
+with `UNCONFIGURED` rather than claiming a success it did not achieve; preview instances are
+published at a path built from the escaped ref; and the tendril service carries a
+`TUNNEL_CREDENTIAL` schema entry, `0600` and never rendered into a unit.
+
+**19 boxes are still unticked and each needs its own work.** An agent reported several done in
+prose and the boxes were not ticked, because the assertions do not exist. In particular
+**"the structural SSH guarantee still holds and a tunnel grant cannot disable it" is UNTESTED**:
+`guarden-ssh` and `00-ssh.conf` appear in `t150-ssh-accept.sh`, `t160-grants.sh` and
+`t20-firewall.sh`, and in no tunnel suite. Nothing asserts that a tunnel grant leaves the SSH
+accept first.
+
 **Blocked by:** 50 (the edge), 80 (declared edges), 150 (the auth module) — all landed.
 
 ## The decision this ticket rests on
