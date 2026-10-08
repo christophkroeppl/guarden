@@ -161,7 +161,7 @@ assert_file_has "$unit" "Volume=/var/lib/guarden/edge/dynamic:/etc/guarden/edge:
 # One job each: `web` redirects, `websecure` terminates TLS, `api` serves the
 # control surface. An entrypoint doing both the redirect and TLS is refused, and
 # the refusal is exit 2 naming it.
-assert_file_has "$unit" "--entryPoints.web.http.redirections.entrypoint.to=https"
+assert_file_has "$unit" "--entryPoints.web.http.redirections.entrypoint.to=websecure"
 assert_file_has "$unit" "--entryPoints.websecure.http3"
 assert_file_has "$unit" "--entryPoints.api.http.api.insecure=true"
 

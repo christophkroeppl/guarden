@@ -379,7 +379,6 @@ def render(config, grants: list[Grant]) -> str:
     # ports forwarded onto one container are one accept at INPUT, not two.
     for protocol, publication in sorted({(g.protocol, g.publication) for g in grants}):
         lines.append(f"    proto {protocol} dport {publication} jump ACCEPT;")
-    lines.append(f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp jump ACCEPT;")
     lines += [
         "}",
     ]
