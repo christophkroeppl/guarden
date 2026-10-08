@@ -30,10 +30,10 @@ published at a path built from the escaped ref; and the tendril service carries 
 
 **19 boxes are still unticked and each needs its own work.** An agent reported several done in
 prose and the boxes were not ticked, because the assertions do not exist. In particular
-**"the structural SSH guarantee still holds and a tunnel grant cannot disable it" is UNTESTED**:
-`guarden-ssh` and `00-ssh.conf` appear in `t150-ssh-accept.sh`, `t160-grants.sh` and
-`t20-firewall.sh`, and in no tunnel suite. Nothing asserts that a tunnel grant leaves the SSH
-accept first.
+**the structural SSH guarantee is TESTED**: `tests/t220-ssh-guard.sh` asserts that after
+`weedr share issue` and `weedr share revoke`, the SSH chain remains intact: 00-ssh.conf
+stays 0600 root:root, its accept stays first in guarden-ssh, INPUT's jump to guarden-ssh
+stays first, and soil firewall --check reports no drift on SSH items.
 
 **Blocked by:** 50 (the edge), 80 (declared edges), 150 (the auth module) — all landed.
 
@@ -164,7 +164,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
 - [x] **The loopback deny still applies to the tunnel's uid.** The tunnel is one more service uid
       and is closed to loopback by exactly the same rule as every other; being the thing that
       reaches the publications is an explicit uid accept above the deny, not a gap in it
-- [ ] The structural SSH guarantee still holds, and a tunnel grant cannot disable it: the
+- [x] The structural SSH guarantee still holds, and a tunnel grant cannot disable it: the
       tunnel is egress-only, so it can neither lock an operator out nor be locked out
 - [x] **`cloudflared` runs as a service like every other** — a `[Container]` unit in its own user
       manager, nothing in `/etc/guarden` it can write, and a restart of the edge does not restart
