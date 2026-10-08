@@ -1,15 +1,14 @@
 # ferm is the firewall, and a service may ask for a rule but never install one
 
 guarden's host firewall is `ferm`, in whole. There is no second firewall manager on the box: no
-`ufw` rule, no firewalld zone, no hand-written nftables table kept in step. `soil packages`
-installs `ferm` and also installs `ufw`, and `soil firewall --apply` turns `ufw` off. Both acts
-belong to installation, because "guarden uses ufw" and "guarden does not use ufw" are both
-readings someone will take from a package list, and only the second is true. `ufw` is a declared
-package for two narrow reasons: it is the unit guarden displaces, and it is the posture the
-dead-man timer hands back to an operator who has just locked themselves out — a failsafe that
-names a package the host does not have is not a failsafe. Nothing in guarden ever writes, reads
-or reconciles a `ufw` rule, and there is no path by which a service, a module or a poke gets
-one.
+`ufw` rule, no firewalld zone, no hand-written nftables table kept in step. **`ufw` is uninstalled
+by installation and is not in any package list, on any family, for any reason.** The dead-man failsafe
+does not re-enable `ufw`; it opens the firewall directly by stopping `guarden-firewall.service` and
+clearing guarden's own chains. The failsafe is strictly weaker: it can open the firewall but cannot
+restore the previous ruleset, because there is no previous ruleset. Nothing in guarden ever writes, reads
+or reconciles a `ufw` rule, and there is no path by which a service, a module or a poke gets one.
+
+> **Revised 2026-10-08:** `ufw` is uninstalled rather than disabled; the dead-man failsafe no longer names it and cannot restore a previous ruleset (there is none). The original text stated `soil packages` installs both and `soil firewall --apply` turns `ufw` off — that was reversed by the decision in commit 07f76db.
 
 Everything else about that firewall was already decided in ADR-0006, and none of this changes
 it: a rule set is rendered whole from a union of grants, deduplicated by construction, printed

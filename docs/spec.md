@@ -1209,10 +1209,9 @@ still converge and the run still exits `1`.
   `apt-daily-upgrade` and `dpkg-db-backup` — then refreshes the package index from
   the family's own `update` argv in
   `packages/packages.toml`, then** installs the distribution packages: btrfs-progs, snapper,
-  ferm, ufw, fail2ban, podman, and `python3-yaml` and `python3-jinja2`. `ufw` is a dependency and
-  not an optional extra: guarden installs `ferm` and takes the box's firewall over from `ufw`, so
-  `ufw` is both the unit it disables and the one the dead-man timer re-enables. A failsafe that
-  names a package the host does not have is not a failsafe. It also fetches **pinned artefacts**
+  ferm, fail2ban, podman, and `python3-yaml` and `python3-jinja2`. `ufw` is **uninstalled** by
+  installation and is **not** in any package list, on any family, for any reason. The host firewall
+  is `ferm` and nothing else. It also fetches **pinned artefacts**
   from outside a distribution repository, and each one is an exception to "distribution packages
   only" that is deliberate: a **url** and **two SHA256s** — the artefact's, verified before
   anything is unpacked out of it, and the program's, re-read on every `--check` because the
@@ -1254,35 +1253,19 @@ still converge and the run still exits `1`.
   default establishes the invariant, and lowering it is the thing that is refused. It also
   checks, in `--check`, that
   `ingress.alias` still matches the address the default route resolves to (§6.1).
-- `firewall` disables `ufw`, installs ferm and fail2ban and
+- `firewall` installs ferm and fail2ban and
   `guarden-firewall.service`, installs the dead-man timer with its arm, duration, effect and
   disarm, writes `10-framework.conf`, and writes `20-ingress-nat.conf` from the enabled
   modules' declared ingress. It owns the framework and the edge's forwarding; the mutator owns
   `30-services.conf`, any service's own forwarding and any service's own granted firewall rules
   (§7.7). The two files are disjoint, and each is written by exactly one program.
 
-  **`ferm` is the firewall guarden runs and `ufw` is the one it displaces, and that sentence is
-  the whole of the relationship.** "Installs a firewall" and "disables the distribution's one"
-  are two separate acts and both belong here: guarden installs `ferm` and turns `ufw` off, and
-  **no `ufw` rule is ever written, read or reconciled on this host** — `ufw` is present so that
-  it can be turned off, and because the dead-man timer below hands it back. Every service's rules
-  come from the same render, whichever way it was deployed: a module's service, a poked service
-  and a service an operator created by hand are indistinguishable to the firewall, because there
-  is one engine and one render.
-
-  "Disabled" means *not enabled*, not the literal word
-  `disabled`: `ufw.service` is a `static` unit on some builds, and on a host where the package is
-  absent `systemctl is-enabled` answers "No such file or directory", and a check that demands one
-  exact word reports drift forever on precisely the minimal images this is written for. The same
-  rule applies to every unit guarden expects not to be running.
-
   **The dead-man timer is armed only by `--deadman`, and a plain `--apply` never arms it.** It
-  is fifteen minutes after which **`ferm` is stopped and `ufw` is re-enabled** — the state the
-  box was in before guarden touched it, which is the only posture
-  that is reliably "you can ssh back in" — and it exists so that an operator
-  who has just locked themselves out can get back in. It names `ufw` precisely because
-  `packages` installed it, so the failsafe cannot depend on a package that might be missing. The
-  flag is named here because the runbook
+  is fifteen minutes after which **`guarden-firewall.service` is stopped and guarden's own chains
+  are cleared** — the firewall is opened directly; there is no previous ruleset to restore. The
+  failsafe is **strictly weaker**: it can open the firewall but cannot restore the previous
+  ruleset, because there is no previous ruleset. It exists so that an operator who has just
+  locked themselves out can get back in. The flag is named here because the runbook
   told operators to use it while the interface did not define it, and a `soil` written to this
   spec would have rejected the one command that gets someone back in. Arming it is also the
   operator saying "I have another way in": the effect of the timer is to open the firewall, so
