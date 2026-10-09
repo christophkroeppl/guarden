@@ -3,16 +3,5 @@ Description=the edge
 
 [Container]
 Image=docker.io/library/traefik:v3.2
-Exec=--providers.file.directory=/etc/guarden/edge
-Exec=--providers.file.watch=true
-Exec=--entrypoints.web.address=:80
-Exec=--entrypoints.web.http.redirections.entrypoint.to=websecure
-Exec=--entrypoints.websecure.address=:443
-Exec=--entrypoints.websecure.http3
-Exec=--entrypoints.api.address=:8080
-Exec=--entrypoints.api.http.api=true
-Exec=--entrypoints.api.http.api.dashboard=true
-Exec=--entrypoints.api.http.api.insecure=true
-Exec=--accesslog=true
-Exec=--log.level=INFO
+Exec=--providers.file.directory=/etc/guarden/edge --providers.file.watch=true --entrypoints.web.address=:80 --entrypoints.web.http.redirections.entrypoint.to=websecure --entrypoints.websecure.address=:443 --entrypoints.websecure.http3 --entrypoints.api.address=:8080 --entrypoints.api.http.api=true --entrypoints.api.http.api.dashboard=true --entrypoints.api.http.api.insecure=true --accesslog=true --log.level=INFO
 Volume=/var/lib/guarden/edge/dynamic:/etc/guarden/edge:ro

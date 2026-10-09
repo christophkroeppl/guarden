@@ -8,8 +8,5 @@ Image=docker.io/cloudflare/cloudflared:2026.10.0
 # route — which is why `roots` renders into this directory and not into a
 # service's own tree.
 Volume=/var/lib/guarden/tunnel:/etc/cloudflared:ro
-Exec=tunnel
-Exec=--config
-Exec=/etc/cloudflared/config.yml
-Exec=run
+Exec=tunnel --config /etc/cloudflared/config.yml run
 Secret=TUNNEL_CREDENTIAL,type=file
