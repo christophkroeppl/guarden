@@ -137,3 +137,57 @@ than measuring. One proposed a security-model change on an unconfirmed hypothesi
 diagnosed a flag-casing bug that the suite's own passing assertions disprove. Both were
 recorded here rather than merged, which is the only reason the next agent inherits facts
 instead of three confident wrong answers.
+## Solved in two steps: conntrack, then a missing router on the web entrypoint
+
+**Step one, merged (`519903c`):** the conntrack accept. `t50-slice` stopped timing out.
+
+**Step two, measured after the fix.** With the connection established, the edge answers:
+
+```
+$ curl -s -i -H 'Host: staging.web' http://127.0.0.1:20001/
+HTTP/1.1 404 Not Found
+```
+
+A 404, not a redirect. The rendered route file explains it:
+
+```yaml
+routers:
+  routed-staging-web:
+    rule: "Host(`staging.web`)"
+    entryPoints:
+      - websecure          <-- the suite curls the web entrypoint
+    service: routed-staging-web
+```
+
+**No router is bound to `web`, so traefik has nothing to match there and 404s.** The
+suite expects a 301, which only `http.redirections.entrypoint` produces, and that
+redirection is configured on the `web` entrypoint.
+
+So the defect is that the renderer attaches a router to `websecure` when the
+service is reachable on `web`. `edgeconf.py:22` parses the module's
+`--entryPoints.<name>.…` flags with a case-sensitive regex, so which entrypoints
+exist, and the redirection between them, comes from the gate module's quadlet
+flags rather than from the router the renderer writes per route.
+
+**This corrects an earlier refutation in this ticket.** A previous agent claimed
+Traefik v3.2 ignores `--entryPoints` in PascalCase, and I refuted it by showing
+all three entrypoints bound. That refutation stands — the ports do bind. What the
+agent was reaching for is adjacent and real: guarden's own `edgeconf` regex *is*
+case-sensitive, and the entrypoint a router lands on is not a property anyone
+asserts.
+
+## What it needs
+
+A decision, not a patch: **is a route published on `web` as well as `websecure`,
+or only on `websecure` with `web` carrying nothing but the entrypoint redirect?**
+
+- If `web` is redirect-only, the renderer must not attach routers to it, and the
+  suite's expectation of a 301 from `web` is right — so the fix is to stop
+  emitting the router's `entryPoints: [websecure]` when the route was declared for
+  the web entrypoint, or to attach it to both.
+- If routes should serve on both, the renderer's per-route entrypoint needs to
+  come from the manifest rather than from a module-level default.
+
+Whichever is chosen, an assertion should pin it: today nothing states which
+entrypoints a route is published on, which is why this reached a test failure
+instead of a decision.
