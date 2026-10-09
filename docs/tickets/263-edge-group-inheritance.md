@@ -714,3 +714,63 @@ So: not exonerated after all, and the isolation I just did is narrower than it
 looks. What is now certain is that `:443` and `:8080` are unbound in the container
 that guarden launches, and that a hand-launched traefik with the same
 declarations binds all three. The variable that differs is the publish list.
+
+## ROOT CAUSE FOUND: publishing one host port as both TCP and UDP kills the container
+
+The `--publish` measurement, run. Replicating guarden's exact list on a throwaway
+container:
+
+```
+$ podman run --publish 127.0.0.1:20002:443 \
+               --publish 127.0.0.1:20002:443/udp traefik:v3.2 ...
+Error: pasta failed with exit code 1:
+Listen failed for HOST TCP port 127.0.0.1/20002: Address already in use
+Couldn't listen on requested TCP ports
+```
+
+**The container does not start at all.** One host port published twice -- once TCP,
+once UDP -- is a request pasta cannot satisfy, because its host-side listener is a
+single TCP socket. So the edge container never ran, and everything observed after
+that (one socket, empty log, 404) was a container that had failed rather than a
+traefik that mis-bound.
+
+Where the pair comes from: `519903c` added HTTP/3, and the ingress list renders
+
+```
+--publish 127.0.0.1:20001:80
+--publish 127.0.0.1:20002:443
+--publish 127.0.0.1:20002:443/udp      <-- HTTP/3, same host port as the line above
+--publish 127.0.0.1:20000:8080
+```
+
+**The spec calls 80, 443 and 443/udp "three forwarding rules, not two" and treats
+them as independent.** They are independent as *kernel* rules and not independent as
+*pasta* publishes, because a publication names a host-side socket and the host side
+has one socket per port. That is the same shape as the masquerade error this
+repository has already refuted once: three rules on paper, one socket in practice.
+
+**So the earlier reading was wrong in an important way.** I had concluded that
+traefik binds only the first declared entrypoint, and reproduced it "with quadlet
+out of the picture". That reproduction carried the same publish pair, so it
+reproduced the failure rather than the fault. The single-publish run binding all
+three ports is the control that matters, and it is what points here.
+
+**Two candidate fixes:**
+
+- **Publish the UDP one with a distinct host port.** `443/udp` needs its own
+  publication, and the ingress table already carries the numbers, so this is a
+  rendering decision about which host port each kernel rule maps to.
+- **Publish both from one line**: podman accepts
+  `--publish 127.0.0.1:20002:443` plus a protocol-suffixed *container* port on
+  the same host port only if pasta can share the listener, which this error says
+  it cannot.
+
+The first is the one the design already implies, and it needs the ingress list to
+name a host port per rule rather than sharing one. **The spec says the rules are
+disjoint; the renderer currently gives them the same host port.**
+
+Whichever is chosen, the assertion belongs where it is cheap: `soil firewall
+--apply` and the renderer should refuse a publication list that names one host
+port twice, because the failure is silent -- pasta's message goes to stderr of a
+container that then does not exist, and the symptom is a 404 from a service that
+was never started.
