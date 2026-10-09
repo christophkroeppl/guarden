@@ -377,3 +377,56 @@ What is left is a runtime difference: what traefik binds inside the container,
 what its log says, and whether pasta's publication mapping reaches the port the
 unit declares. That is a run-with-the-container-up question and it needs an
 agent, which the daily quota is currently refusing.
+
+## THE REAL CAUSE: quadlet keeps only the LAST `Exec=` line
+
+Measured with the container held up, so the argv is readable:
+
+```
+$ podman inspect traefik-production-traefik --format "{{.Path}}|{{.Args}}"
+/entrypoint.sh|[--log.level=INFO]
+```
+
+**Every `--entrypoints.*` flag is gone.** Only `--log.level=INFO` survived, and it is
+the last `Exec=` line in the file. The generated unit says the same:
+
+```
+$ grep '^ExecStart' /run/user/994/systemd/generator/traefik.service | tr ' ' '\n' \
+    | grep -E 'entrypoints|accesslog|log.level'
+--log.level=INFO
+```
+
+while the `.container` it was generated from is complete and correct:
+
+```
+Exec=--providers.file.directory=/etc/guarden/edge
+Exec=--providers.file.watch=true
+Exec=--entrypoints.web.address=:80
+Exec=--entrypoints.web.http.redirections.entrypoint.to=websecure
+... (eleven lines)
+Exec=--accesslog=true
+Exec=--log.level=INFO
+```
+
+**So the spelling fix was necessary and is not sufficient.** Correct flags that
+quadlet discards are still no flags. Traefik ran on pure defaults, bound its
+default `:80`, and answered 404 because no entrypoint and no redirect existed —
+which is precisely the behaviour observed, and why `podman ps` showed it "Up"
+while every request 404'd.
+
+**This invalidates part of what I recorded above.** I claimed the redirection "is
+applied from the flag" on the strength of a direct `podman run`. That was true of
+my hand-written command and false of what guarden actually produces. The two
+differ only in that mine was one command line and guarden's is eleven `Exec=`
+lines, which quadlet reads as one.
+
+**The question is now narrow and answerable:** does quadlet treat `Exec=` as
+last-wins, or is `Exec=` not the key that appends arguments at all? The traefik
+image's own `/entrypoint.sh` is what ends up on `Path`, and the flags may need to
+be `Entrypoint=` or `Cmd=` rather than `Exec=`. Nothing in guarden asserts which,
+and every service that passes flags to an image with its own entrypoint has the
+same shape.
+
+This is the third defect in this ticket and none of the three would have been
+found by a suite that only checked whether a port was bound: they all leave the
+port bound.
