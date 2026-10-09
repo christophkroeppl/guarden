@@ -468,6 +468,35 @@ def refuse_directives(source: Source) -> None:
                 )
 
 
+def check_exec(unit: unitsource.Unit, origin: str) -> None:
+    """Refuse a `.container` that sets `Exec=` more than once.
+
+    **Quadlet keeps only the last `Exec=` line.** The accumulating form has never
+    been implemented upstream — podman#24901 is an open feature request for it —
+    so several lines collapse to one in silence: the container starts on fewer
+    arguments than the source asked for and looks misconfigured.
+
+    **One line carrying a space-separated list is the supported form, and this
+    does not refuse it.** The generator splits an unquoted value on whitespace and
+    the process receives one argv token per argument; measured by running the
+    generator by hand on both shapes. An earlier version of this check refused that
+    shape too, from a reading of `\\x20` that mistook systemd's *quoting* marker for
+    an inability to split, and it would have refused every working unit here.
+
+    What the emitter must not do is quote the value: `format_line` emits `Exec=`
+    unquoted for this reason, because a quoted list arrives as ONE token that the
+    process discards whole.
+    """
+    values = unit.get("Container", "Exec")
+    if len(values) > 1:
+        raise errors.GuardenError(
+            f"{origin} sets `Exec=` {len(values)} times, and quadlet keeps only the "
+            f"last one (podman#24901): the container would run on fewer arguments "
+            f"than this file asks for, without a word. Put the arguments on one "
+            f"line, space-separated."
+        )
+
+
 def check_containers(document: manifest_mod.Manifest, source: Source) -> None:
     """`routes:`, `ports:` and `widgets:` name a container the unit source
     defines. Both sides are input, so this is exit `2` naming the manifest and the
@@ -765,6 +794,8 @@ def build(
     plan = Plan(warnings=list(source.warnings))
     refuse_directives(source)
     check_containers(document, source)
+    for container, unit in source.units.items():
+        check_exec(unit, f"{source.origin}: {container}")
     mounts = check_volumes(document, source)
     check_mount_paths(mounts, source, context)
 
