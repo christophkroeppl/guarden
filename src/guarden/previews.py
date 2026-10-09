@@ -92,15 +92,30 @@ def _parse(value: str):
 
 
 def is_url_safe(ref: str) -> bool:
-    """RFC 3986 unreserved characters only.
+    """A ref is a PATH of unreserved segments.
 
-    A ref must contain only unreserved characters (ALPHA/DIGIT/"-"/"."/"_"/"~")
-    to avoid percent-encoding in the tunnel's path space. This is stricter than
-    URL-safe because percent-encoded refs that differ only by encoding would
-    collide after decoding (e.g., 'feature%2Fx' and 'feature/x').
+    spec 5.2 and ticket 220: a ref is taken raw and the escaping is internal,
+    so a ref may contain `/` -- `feature/x` is a preview of feature's x branch
+    and `names.systemd_escape` already maps it to `feature\x2dx`, distinct from
+    `feature-x`. Refusing `/` here would refuse the feature, and two suites
+    assert both refs get their own directory.
+
+    What must not happen is a ref whose **decoded** form is ambiguous: a `%`
+    would let `feature%2Fx` and `feature/x` be the same path after decoding.
+    So `%` is refused and every other character is allowed to be a raw path
+    segment, with `.` and `..` refused whole because they are directory
+    traversal rather than a name.
+
+    What this does NOT settle is the regex question in ticket 264 -- a path is
+    safe in a URL and still a metacharacter in cloudflared's ingress. That is
+    handled by quoting and anchoring at render time, not here.
     """
-    unreserved = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-    return all(c in unreserved for c in ref)
+    if not ref or "%" in ref:
+        return False
+    segments = ref.split("/")
+    return all(
+        segment not in ("", ".", "..") for segment in segments
+    )
 
 
 def escaped(resolved) -> str:
@@ -118,8 +133,8 @@ def admit(resolved, record, now: str) -> list[str]:
     """
     if resolved.ref and not is_url_safe(resolved.ref):
         raise errors.GuardenError(
-            f"ref {resolved.ref!r} is not URL-safe; a preview ref must contain only "
-            f"alphanumeric characters, '-', '.', '_', and '~' (RFC 3986 unreserved)",
+            f"ref {resolved.ref!r} is not a usable path; a preview ref is segments "
+            f"separated by '/', and may not be empty, '.', '..', or contain '%'",
             errors.REJECTED_INPUT,
         )
 
