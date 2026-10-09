@@ -971,3 +971,46 @@ carries `entryPoints:` in the camelCase traefik's file format wants.
 
 Item 3 is what stops the fifth recurrence of exactly this bug, and it is
 independent of items 1 and 2.
+
+## The `check_exec` refusal is correct and cannot land alone: reverted
+
+`35f05a0` added the refusal, mutation-tested both branches, and was green on
+`t50-module`. **It broke three suites that were green**, and I did not run them
+before committing:
+
+```
+t220-tendril    was green at c949878 -> exit 2, refused
+t220-share      was green            -> FAIL
+t220-ssh-guard  was green            -> FAIL
+```
+
+```
+error: …/tendril-production.container has one `Exec=` holding 4 arguments, and
+quadlet passes the line through unparsed: the process receives ONE argv token…
+```
+
+The check is right about both modules — that is why they are refused. **But a
+correct refusal that lands before the thing it refuses is fixed trades one red
+suite for four**, and `t50-slice` stays red either way. Reverted as `fdc32d5` and
+re-verified: `t220-tendril` green.
+
+**This is the ordering that was wrong, and it is the second time this ticket has
+had it.** The refusal and the fix are one change, in this order:
+
+1. Move the gate module's configuration into `/etc/guarden/edge/` — all nine
+   `--entrypoints.*`, both `--providers.file.*`, out of argv and into a rendered
+   file the provider already reads.
+2. Move tendril's four arguments the same way (`cloudflared` takes its config in
+   argv and has no file provider to fall back on, so this one needs a different
+   shape — an entrypoint script, or `PodmanArgs=`).
+3. **Then** land the refusal, which is what stops the sixth occurrence.
+
+Landing it first is what made it look landable: it went green on the one suite
+that exercises the edge and nobody checked the suites that exercise the tunnel.
+
+**What the check is worth, recorded so it is not lost:** it turns a silent
+runtime failure — container up, default port bound, empty log, 404 from a service
+that was configured for something else — into an exit-2 render refusal naming the
+file, the shape and the remedy. That is the difference this whole ticket needed
+from the first commit, and it should land with the fixes rather than instead of
+them.
