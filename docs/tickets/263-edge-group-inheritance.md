@@ -430,3 +430,41 @@ same shape.
 This is the third defect in this ticket and none of the three would have been
 found by a suite that only checked whether a port was bound: they all leave the
 port bound.
+
+## Measured again from the generated unit, with the container up
+
+```
+$ grep '^ExecStart' /run/user/994/systemd/generator/traefik.service | tr ' ' '\n' | grep -E '^--'
+--name --replace --rm --cgroups=split --add-host --network --sdnotify=conmon
+--publish --publish --publish --publish --log.level=INFO
+```
+
+Podman's own flags, then **`--log.level=INFO` and nothing else**. `--log.level=INFO`
+is the last `Exec=` line in the `.container`. Every earlier line — the providers,
+the accesslog, and all nine `--entrypoints.*` — is gone.
+
+**This is a quadlet `Exec=` semantic, not a guarden bug and not a traefik one.**
+The `.container` file guarden writes is complete and correct; the generator
+consumes `Exec=` as a single last-wins argument rather than as an accumulating
+list.
+
+**The blast radius is every service in the system**, not the edge. Any rendered
+container that passes more than one argument to an image has the same shape, and
+every one of them is running on fewer arguments than guarden asked for. Nothing
+in guarden asserts it, because nothing in guarden can see it: the flags are
+dropped between the `.container` and the `ExecStart`, and both files are
+correct.
+
+That is why three suites could check ports, files, ownership and mounts and all
+of them pass while the edge serves nothing.
+
+**Two candidate fixes, and one thing to establish first:**
+
+- Does quadlet document `Exec=` as last-wins, or is `Entrypoint=` / `Cmd=` the
+  key that appends? The traefik image carries its own `/entrypoint.sh`, which
+  lands on `Path` in the generated unit, so the arguments have to be appended
+  after it rather than replacing it.
+- Whatever the key, an assertion belongs on the GENERATED unit: that the number
+  of `--` arguments guarden wrote is the number the generator emitted. That
+  catches this class for every service at once, and it is checkable without a
+  container running.
