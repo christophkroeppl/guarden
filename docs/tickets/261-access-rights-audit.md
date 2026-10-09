@@ -29,3 +29,51 @@
 - `UNIT_MODE = 0o644` in `units.py` is for **systemd unit files** which systemd may read as a non-root user in some paths; that is a separate decision and not in scope for this ticket
 - A full audit of every file guarden writes has not been done — this ticket tracks doing it
 - The change from `0644` to `0640` in `hosttool.py:40` (`MODE_CONFIG`) is the first step; this ticket finishes the job
+## Follow-on found by the full gate: t130-paths, and what it says about the group ordering
+
+`a9d18bc` routed `guarden.toml`'s three writers through
+`conf.write_file(..., (0, users.group_id(PROGRAM_GROUP)))`. `t130-paths.sh` fails
+with
+
+```
+error: /tmp/.../usr/lib/guarden/bin/soil did not appear
+error: failed at line 254: return 1 (exit 1)
+```
+
+Line 254 is `assert_file_exists` in `tests/lib.sh`, not a line in the suite. The
+directories `bin/ lib/ modules/ templates/` are all created and all **empty**, so
+install built the tree and populated none of it.
+
+Running it by hand names the real failure, and it is a traceback rather than a
+diagnostic:
+
+```
+guarden.errors.GuardenError: the guarden group does not exist in
+/tmp/inst/etc/group; `soil install` creates it
+```
+
+**The ordering is correct and is not the bug.** `install_items` puts "the guarden
+group exists" first (hostprep.py:1978) and the three `group_id` callers run at
+2003, 2119 and 2127 — after it. So a real install creates the group before
+anything asks for its gid.
+
+What is true is narrower and worth stating: **`group_id` raises rather than
+returning, on any path where the group does not yet exist.** That is the right
+behaviour for a program that runs after install, and the wrong behaviour for a
+function a test can call against a tree where install has not run. The suite
+stages a scratch host and calls the items in a context where the group is
+absent, so it gets the raise.
+
+Two readings, and the difference matters:
+
+- **The test is wrong** — it asserts the tree is populated without arranging for
+  the group, and the fix is to have the suite ensure the account first, which
+  `ensure_accounts` in `tests/lib.sh` already does for other suites.
+- **The code is too strict** — an item that writes `root:guarden` should be able
+  to say "the group is not there yet" rather than raise, so a converge that
+  creates the group in the same run can still write its files.
+
+The second is the better shape for a converge, and it is also what
+`a9d18bc` should have done rather than assuming the group is always present.
+Not fixed here: it needs the reading chosen first, and the suite failure is a
+symptom of the decision rather than the thing to patch.
