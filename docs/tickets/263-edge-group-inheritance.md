@@ -774,3 +774,53 @@ Whichever is chosen, the assertion belongs where it is cheap: `soil firewall
 port twice, because the failure is silent -- pasta's message goes to stderr of a
 container that then does not exist, and the symptom is a 404 from a service that
 was never started.
+
+## The exact line, and the comment that asserts the opposite
+
+`render.py:707`, in `_publications` / the edge publication walk:
+
+```python
+for endpoint, port, protocol in modules_mod.read(module).ingress_for(service):
+    publication = record.publication.get(endpoint)
+    if publication is None:
+        continue
+    suffix = "/udp" if protocol == "udp" else ""
+    out.append(f"{LOOPBACK}:{publication}:{port}{suffix}")
+```
+
+**`record.publication` is keyed by ENDPOINT, not by (endpoint, protocol).** So
+`web:80` and `websecure:443` -- both of which are the `websecure` endpoint as far
+as the registry is concerned -- resolve to the same publication, and the list
+comes out:
+
+```
+127.0.0.1:20001:80
+127.0.0.1:20002:443
+127.0.0.1:20002:443/udp     <-- same publication, different protocol
+127.0.0.1:20000:8080
+```
+
+And the docstring at :686 states the belief that produced it:
+
+> `/udp` rides on the line because a forwarded udp port is a different protocol
+> from the same number over tcp.
+
+**That is true of the kernel and false of pasta.** A `PublishPort` names a
+host-side socket; pasta's host listener for a port is one TCP socket, so the same
+host port twice is unsatisfiable and the container does not start. The comment is
+the reasoning that made this look correct, which is why it survived a review and
+then a firewall suite.
+
+**Two fixes, and the second is the one that matters.**
+
+1. **The registry allocates per (endpoint, protocol)**, so `443/udp` gets its own
+   publication number. The ingress table already carries per-rule numbers, so the
+   numbers exist; they are simply keyed the wrong way.
+2. **The renderer refuses a publication list naming one host port twice.** That
+   is the check that would have caught this regardless of which key is chosen, it
+   is cheap, and it is the same shape as the refusal guarden already makes for
+   duplicate grants.
+
+Fix 1 without fix 2 leaves the trap: the next contributor who adds a protocol
+suffix re-creates it. Fix 2 without fix 1 leaves the edge unable to serve HTTP/3.
+Both, and the refusal is the durable half.
