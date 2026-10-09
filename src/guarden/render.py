@@ -722,6 +722,46 @@ def ingress_ports(service: str) -> list[str]:
 # --- the render --------------------------------------------------------------
 
 
+def check_publish_ports(unit: unitsource.Unit) -> None:
+    """Refuse a `PublishPort` list that names one host port twice.
+
+    A publication names a **host-side** socket, and pasta's host listener for a
+    port is a single TCP socket. Asking for the same host port twice -- once for
+    tcp and once for udp, which is exactly what an edge declaring `443` and
+    `443/udp` produces -- is unsatisfiable, and pasta answers by refusing to
+    start:
+
+        Error: pasta failed with exit code 1:
+        Listen failed for HOST TCP port 127.0.0.1/20002: Address already in use
+
+    **The container then does not exist at all**, so the failure surfaces as a 404
+    from a service that was never started, with pasta's message on the stderr of a
+    process nobody is left to read. That is why this is refused at render time
+    rather than diagnosed at deploy time.
+
+    `80/443/443/udp` are three forwarding rules and are meant to be independent --
+    as *kernel* rules. They are not independent as publications, and the render
+    cannot produce one publication per protocol because `service._wanted`
+    deliberately allocates one number per endpoint name.
+    """
+    seen: dict[str, str] = {}
+    for line in unit.get("Container", "PublishPort"):
+        parts = line.split(":")
+        if len(parts) < 3:
+            continue
+        host = ":".join(parts[:2])
+        previous = seen.get(host)
+        if previous is not None:
+            raise errors.GuardenError(
+                f"{host} is published twice ({previous} and {line}), and pasta "
+                f"gives a host port one TCP listener: the container would not "
+                f"start. A tcp/udp pair needs one publication each, and "
+                f"`ingress.publication_range` is where a second number comes from.",
+                errors.REJECTED_INPUT,
+            )
+        seen[host] = line
+
+
 def build(
     directory: Path, document: manifest_mod.Manifest, source: Source, context: Context | None
 ) -> Plan:
@@ -921,6 +961,7 @@ def _container_unit(
             if line not in published:
                 published.append(line)
         unit.put("Container", "PublishPort", published)
+    check_publish_ports(unit)
     requests = _secret_requests(document, schema)
     if requests:
         unit.put("Container", "Secret", requests)
