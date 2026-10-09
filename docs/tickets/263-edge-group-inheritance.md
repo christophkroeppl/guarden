@@ -284,3 +284,47 @@ never in effect.
 
 The first part alone makes the suites pass. The second is what makes the next
 miss visible, and it is the difference between a fix and a patch.
+
+## Post-fix state: the flags arrive correct, the redirect still does not fire
+
+Measured after `408f898`, inside the VM after `t50-slice` has run its install:
+
+```
+$ grep -h 'entrypoints\.' /usr/lib/guarden/modules/gate/traefik-production/.guarden/quadlet/traefik.container
+Exec=--entrypoints.web.address=:80
+Exec=--entrypoints.web.http.redirections.entrypoint.to=websecure
+Exec=--entrypoints.websecure.address=:443
+```
+
+**The corrected flags reach the installed module.** That rules out the first of
+the three possibilities — the install does copy the source guarden ships, and it
+is the corrected one.
+
+So the remaining question is the second: does traefik v3.2 apply
+`http.redirections.entrypoint` from `--entrypoints.web.http.redirections.entrypoint.to`?
+
+I could not answer it by hand. Two attempts to run traefik directly with the
+flags failed for reasons of my own making — the first put pasta's `-t` mapping
+before the image, so podman read the mapping as the image name; the second hit a
+registry lookup on 127.0.0.1 for the same reason. Getting it right needs a
+careful command, and a wrong one teaches nothing.
+
+**What would settle it**, for whoever has a VM and a working command:
+
+```sh
+podman run --rm -p 20001:80 docker.io/library/traefik:v3.2 \
+  --entrypoints.web.address=:80 \
+  --entrypoints.web.http.redirections.entrypoint.to=websecure
+# then, from the host:
+curl -sI -H 'Host: anything.example' http://127.0.0.1:20001/
+```
+
+A `301` means the flag works and something else is wrong at the install. A `404`
+means v3.2 does not apply it from this shape, and the fix is a different
+spelling or a dynamic-config block rather than a flag rename.
+
+One thing already established that makes this worth chasing rather than parking:
+`--entrypoints.api.address=:8080` was ignored for the whole time the module
+shipped PascalCase, so the edge's API has never been on the publication guarden
+advertises. The spelling fix corrects that whatever the redirect turns out to
+need.
