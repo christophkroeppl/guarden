@@ -62,3 +62,39 @@ escaped `feature\x2dx` becomes `feature-x` and collides with escaped `feature/x`
 - Both asserted in a suite that **fails when the fix is reverted** — re-introduce the raw `.`
   and confirm red, then restore. A guard that only passes on current state catches nothing.
 - `t220-tendril.sh` green on `develop` with no branch applied.
+## Follow-on: `slices()` cannot see an instance at all
+
+The escaping fix is on `fix/t264-preview-path`. It cannot pass its own test,
+because **no preview instance ever reaches `render_tunnel`.**
+
+Measured in the VM: the suite's `weedr service ingest routed-preview/feature-x`
+does create a real instance —
+
+    /var/lib/guarden/services/routed-preview/instances/feature\x2dx/
+
+— with its own unit directory and its own rendered units. So the test is not
+creating a slot and the instance is not missing.
+
+The defect is in `roots.slices()`:
+
+```python
+for directory in sorted(path for path in paths.SHARED.iterdir() if path.is_dir()):
+    routes = conf.read_toml(directory / "routes.toml").get("routes") or []
+```
+
+It iterates `SHARED/*` — one level — and reads each service's **slot**
+`routes.toml`. An instance's routes live at
+`SHARED/<service>/instances/<escaped-ref>/routes.toml`, one level deeper, and
+this loop never visits it.
+
+**So `render_tunnel` has no path to a preview instance regardless of what any
+test does.** Every preview published on the tunnel today carries a hostname
+and no path, which means the first preview route in the file wins every
+request under it — the collision ticket 264 exists to close, arriving by a
+different route than the one it was filed for.
+
+The fix is for `slices()` to walk instances as well as slots, keyed so a
+caller can tell them apart, and for `render_tunnel` to use each instance's own
+ref. That is a change to what the edge's route configuration means, so it
+wants an ADR: today a service has one route slice, and after this it has one
+per instance.
