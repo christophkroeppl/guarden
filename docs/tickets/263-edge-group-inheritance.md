@@ -238,3 +238,49 @@ is ignored, and I refuted that by showing all three entrypoints bound. The
 refutation stands. What was adjacent and real is that guarden's own regex is
 case-sensitive, so a lowercase spelling would be silently invisible to
 `edgeconf` — a second way for a rename to break silently.
+
+## SOLVED: traefik v3.2 ignores `--entryPoints`, and so did I
+
+`podman run --rm docker.io/library/traefik:v3.2 --help | grep -c entryPoints` in the
+VM:
+
+    --entrypoints.<name>.http.redirections.entrypoint.to  (Default: "")
+    ...
+    41
+
+**41 lowercase `entrypoints` flags. Zero `entryPoints`.**
+
+Every flag in the gate module is PascalCase:
+
+```
+Exec=--entryPoints.web.address=:80
+Exec=--entryPoints.web.http.redirections.entrypoint.to=websecure
+Exec=--entryPoints.websecure.address=:443
+Exec=--entryPoints.api.address=:8080
+```
+
+so traefik ignores all of them and runs on its defaults. **The first agent to work
+this ticket was right and I refuted it wrongly.** My refutation was that all three
+publications appeared bound — and they were, but on traefik's DEFAULT entrypoints,
+not the ones guarden asked for. `:80` is both the requested web address and traefik's
+default, which is why the coincidence looked like success. `:8080` and `:443` were
+never configured at all.
+
+**And guarden cannot see it.** `edgeconf.ARGUMENT` is
+`^--entryPoints\.(?P<name>[A-Za-z0-9_-]+)\.(?P<rest>.+)$` — case-sensitive, matching
+guarden's own spelling rather than traefik's. So `roots._entrypoints` reads
+`web`, `websecure` and `api` out of flags the edge never received, and the
+entrypoint redirect it deliberately excludes from routing is a flag that was
+never in effect.
+
+**The fix is two parts, and the second is the one that stops it recurring.**
+
+1. The gate module's quadlet source uses lowercase `--entrypoints.*`.
+2. `edgeconf.ARGUMENT` matches what traefik actually accepts, so a flag traefik
+   would ignore is refused at read time with a diagnostic naming it, rather than
+   read as a declaration. A spelling the vendor does not recognise is not a
+   declaration; treating it as one is how this stayed invisible while every
+   suite that checked a bound port saw it pass.
+
+The first part alone makes the suites pass. The second is what makes the next
+miss visible, and it is the difference between a fix and a patch.
