@@ -77,3 +77,38 @@ The second is the better shape for a converge, and it is also what
 `a9d18bc` should have done rather than assuming the group is always present.
 Not fixed here: it needs the reading chosen first, and the suite failure is a
 symptom of the decision rather than the thing to patch.
+
+### Narrowed further: `group_id` reads a staged `/etc/group` that install never writes
+
+`paths.py:43` is `GROUP = ETC / "group"` and `ETC = PREFIX / "etc"`, so it honours
+`GUARDEN_PREFIX`. That is right for reading a staged tree and wrong for asking
+the kernel a question.
+
+`install_items` creates the group with `h.run_or_die("groupadd", "--system",
+PROGRAM_GROUP)` — which writes the **real** `/etc/group`. But `group_id` reads
+`$GUARDEN_PREFIX/etc/group`. Under a scratch prefix:
+
+```
+$ GUARDEN_PREFIX=/tmp/i4 soil install --apply
+guarden.errors.GuardenError: the guarden group does not exist in
+/tmp/i4/etc/group; `soil install` creates it
+```
+
+The group exists on the host the whole time — `getent group guarden` answers
+`guarden:x:986:` — and install created it there. `group_id` is looking in the
+staged tree for a file that nothing in install ever writes, because `groupadd`
+cannot be staged.
+
+**So the two are asking different questions.** `groupadd` answers "does this
+host have the group", which `getent` answers truthfully. `group_id` asks "does
+the staged tree name it", which nothing maintains.
+
+The fix is to make `group_id` ask the host — `grp.getgrnam(name).gr_gid` — rather
+than parsing `$GUARDEN_PREFIX/etc/group`. A gid is a property of the system, not
+of the tree a test stages; reading it out of a file copy is what makes the two
+disagree. The file exists to be *read* by programs that need the mapping, and
+using it as the source of truth for a live lookup is the inversion.
+
+That is a small change with a real blast radius — `group_id` is used by every
+`root:guarden` write `a9d18bc` introduced — so it wants the suites that assert
+ownership run against it before it lands, not after.
