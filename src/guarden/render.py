@@ -725,24 +725,19 @@ def ingress_ports(service: str) -> list[str]:
 def check_publish_ports(unit: unitsource.Unit) -> None:
     """Refuse a `PublishPort` list that names one host port twice.
 
-    A publication names a **host-side** socket, and pasta's host listener for a
-    port is a single TCP socket. Asking for the same host port twice -- once for
-    tcp and once for udp, which is exactly what an edge declaring `443` and
-    `443/udp` produces -- is unsatisfiable, and pasta answers by refusing to
-    start:
+    A publication names a **host-side** socket. `pasta` has one listener per
+    protocol, `--tcp-ports` and `--udp-ports`, so the same host port on both
+    protocols is a **valid** request -- verified, with the edge's own list of four
+    publishes including `443` and `443/udp` on one host port, which starts and
+    serves. What pasta cannot do is bind the *same* host port twice *on one
+    protocol*, and that is what this refuses.
 
-        Error: pasta failed with exit code 1:
-        Listen failed for HOST TCP port 127.0.0.1/20002: Address already in use
-
-    **The container then does not exist at all**, so the failure surfaces as a 404
-    from a service that was never started, with pasta's message on the stderr of a
-    process nobody is left to read. That is why this is refused at render time
-    rather than diagnosed at deploy time.
-
-    `80/443/443/udp` are three forwarding rules and are meant to be independent --
-    as *kernel* rules. They are not independent as publications, and the render
-    cannot produce one publication per protocol because `service._wanted`
-    deliberately allocates one number per endpoint name.
+    **Measured, after I got it wrong.** I first believed a host port could not be
+    published for both protocols, from `Listen failed for HOST TCP port
+    127.0.0.1/20002: Address already in use`. That error was from a *reproduction*
+    in which the second publish had lost its `/udp` suffix, not from guarden's
+    output. Keying this on (host, protocol) rather than on host alone is the whole
+    difference between refusing a working configuration and catching a real one.
     """
     seen: dict[str, str] = {}
     for line in unit.get("Container", "PublishPort"):
@@ -750,16 +745,17 @@ def check_publish_ports(unit: unitsource.Unit) -> None:
         if len(parts) < 3:
             continue
         host = ":".join(parts[:2])
-        previous = seen.get(host)
+        protocol = "udp" if parts[-1].endswith("/udp") else "tcp"
+        previous = seen.get(f"{host}/{protocol}")
         if previous is not None:
             raise errors.GuardenError(
-                f"{host} is published twice ({previous} and {line}), and pasta "
-                f"gives a host port one TCP listener: the container would not "
-                f"start. A tcp/udp pair needs one publication each, and "
-                f"`ingress.publication_range` is where a second number comes from.",
+                f"{host} is published twice over {protocol} ({previous} and "
+                f"{line}), and pasta binds one listener per protocol per port: "
+                f"the container would not start. Publishing one host port on both "
+                f"tcp and udp is fine; publishing it twice on one protocol is not.",
                 errors.REJECTED_INPUT,
             )
-        seen[host] = line
+        seen[f"{host}/{protocol}"] = line
 
 
 def build(
