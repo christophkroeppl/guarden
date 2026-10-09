@@ -507,3 +507,48 @@ regardless of which key is chosen: **count the `--` arguments guarden emitted
 and count them again in the generated `ExecStart`; they must match.** That is
 checkable with no container running, and it is the only thing that would have
 caught this.
+
+## After 8392a18: the flags reach the process, and it still binds only :80
+
+The chain is now verified end to end, in this order:
+
+```
+$ podman top traefik-production-traefik
+traefik traefik --providers.file.directory=/etc/guarden/edge
+  --providers.file.watch=true --entrypoints.web.address=:80
+  --entrypoints.web.http.redirections.entrypoint.to=websecure
+  --entrypoints.websecure.address=:443 --entrypoints.websecure.http3
+  --entrypoints.api.address=:8080 --entrypoints.api.http.api=true ... --log.level=INFO
+```
+
+**All eleven arguments are in the process.** And yet:
+
+```
+$ podman exec traefik-production-traefik ... /proc/net/tcp{,6}  (LISTEN, 0A)
+00000000000000000000000000000000:0050
+```
+
+One socket. Port 80 only. `:443` and `:8080` are absent even though both are
+declared, and the log is empty. **So `--entrypoints.websecure.address=:443` is
+being accepted and then not bound**, which is a different question from whether
+the flag arrived -- and it is the one that matters now.
+
+I could not settle it by running traefik standalone, and the reason is
+environmental rather than diagnostic: the root store has no traefik image and
+cannot reach a registry.
+
+```
+$ podman run --rm docker.io/library/traefik:v3.2 ...
+Error: unable to copy from source docker://traefik:v3.2: ... lookup
+registry-1.docker.io on 127.0.0.53:53: write: operation not permitted
+```
+
+Two earlier "container exited immediately" results were this, not a config error,
+and I should have read them as such instead of treating them as findings.
+
+**Where the two fixes stand.** 408f898 (spelling) and 8392a18 (one Exec= line)
+are both correct and both verified in the argv. Neither is sufficient on its own.
+The question they have narrowed to is: does traefik v3.2 bind `:443` and `:8080`
+when they are declared on the command line, and if not, what does it require --
+a `ListenAddress`, an `EntryPoint` block in the file provider, or something else
+that a CLI flag alone does not do.
