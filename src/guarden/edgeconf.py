@@ -19,7 +19,15 @@ from pathlib import Path
 
 from guarden import conf, errors, names, paths, registry, unitsource, users
 
-ARGUMENT = re.compile(r"^--entryPoints\.(?P<name>[A-Za-z0-9_-]+)\.(?P<rest>.+)$")
+ARGUMENT = re.compile(r"^--entrypoints\.(?P<name>[A-Za-z0-9_-]+)\.(?P<rest>.+)$")
+
+# Traefik v3.2 spells this flag `--entrypoints`, all lowercase: `traefik --help`
+# carries 41 of them and no `--entryPoints`. A capital P is not a flag traefik
+# recognises, and an unrecognised flag is not a declaration -- it is ignored. That
+# is how the gate module's nine PascalCase flags went unread: every entrypoint
+# still parsed from guarden's own (wrong) spelling, every port still bound on
+# traefik's defaults, and every suite that checked a bound port passed.
+MISSPELLED = re.compile(r"^--entryPoints\.")
 ADDRESS = re.compile(r"^:(?P<port>\d+)$")
 
 # `/etc/guarden/edge/auth-provider`: the one file connecting the auth module to
@@ -57,6 +65,13 @@ def entrypoints(unit: unitsource.Unit, where: str) -> dict[str, Entrypoint]:
     for argument in _arguments(unit):
         match = ARGUMENT.match(argument)
         if match is None:
+            if MISSPELLED.match(argument):
+                raise errors.GuardenError(
+                    f"{where}: {argument.split('=')[0]} is spelled with a capital P, and traefik "
+                    f"does not recognise it -- `traefik --help` lists `--entrypoints`, lowercase. "
+                    f"An ignored flag is not a declaration: traefik would run on its default "
+                    f"entrypoints and this file would claim the ones it asked for."
+                )
             continue
         name = match["name"]
         rest = match["rest"]
@@ -76,7 +91,7 @@ def entrypoints(unit: unitsource.Unit, where: str) -> dict[str, Entrypoint]:
             "http.api.insecure",
         ):
             # **Compared on the key, not the whole argument.** `_arguments`
-            # yields `--entryPoints.api.http.api=true` whole, so testing
+            # yields `--entrypoints.api.http.api=true` whole, so testing
             # `rest` for equality never matched a flag that carries a value and
             # the API entrypoint parsed with `api=False`. `http.api` is the flag
             # that *enables* the API; dashboard and insecure only configure it
@@ -89,7 +104,7 @@ def entrypoints(unit: unitsource.Unit, where: str) -> dict[str, Entrypoint]:
         address = ADDRESS.match(value)
         if address is None:
             raise errors.GuardenError(
-                f"{where}: --entryPoints.{match['name']}.address={value!r}, and a traefik "
+                f"{where}: --entrypoints.{match['name']}.address={value!r}, and a traefik "
                 f"entrypoint address is `:<port>` inside a container"
             )
         found[match["name"]].port = int(address["port"])
@@ -102,7 +117,7 @@ def api_port(found: dict[str, Entrypoint], where: str) -> int | None:
 
     A module declares `api = true` and the source says where; spec 3.6's key set
     has no port in it and the module must not grow one, so the entrypoint that
-    carries `--entryPoints.<name>.http.api` is the answer.
+    carries `--entrypoints.<name>.http.api` is the answer.
     """
     serving = [entry for entry in found.values() if entry.api]
     if len(serving) > 1:
