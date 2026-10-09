@@ -53,6 +53,58 @@ A timeout rather than a 404 is the load-bearing observation. A route that does n
 router that does not exist, still produces an HTTP answer. A timeout means the SYN went
 somewhere that did not answer.
 
+## THE CAUSE — found by counter, not by reading
+
+The agent's turn ended with a tool still pending, so this came out of its transcript rather
+than a summary. It is right, and it is verifiable in the render:
+
+```
+chain guarden-svc {
+    mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;
+    <per-publication accepts>
+    <resolver accepts>
+    <granted rules>
+    daddr 127.0.0.0/8 jump DROP;
+}
+```
+
+**There is no conntrack accept in this chain.** `INPUT` has
+`mod conntrack ctstate (ESTABLISHED RELATED) jump ACCEPT`; `guarden-svc`, the OUTPUT chain,
+does not — `grep -n 'conntrack' src/guarden/firewall.py src/guarden/rules.py` finds one hit
+and it is a comment.
+
+The path, as measured:
+
+1. root's SYN leaves through OUTPUT, jumps to `guarden-svc`, and is accepted by
+   `uid-owner 0 daddr 127.0.0.1 proto tcp`. The request gets through.
+2. **The SYN-ACK comes back from pasta as uid 994** (traefik-production), also through OUTPUT,
+   also through `guarden-svc`.
+3. It matches no accept — the per-publication accepts name service and edge uids, and root's
+   rule names uid 0 — and falls to `daddr 127.0.0.0/8 jump DROP`.
+4. The client sees **no reply**, which is exit 28.
+
+**A reply packet's destination is an ephemeral port on loopback, so it is always inside the
+deny's range.** The deny is correct for a service uid reaching a publication it did not ask
+for; it is wrong for the far side of a connection that was just permitted.
+
+This is why the failure is a *timeout* and not a 404, and why every attempt to fix it from
+inside the container failed: nothing inside the container was ever wrong. The edge listened,
+the routes loaded, the file was readable. The reply never reached it.
+
+## The fix, and why it is narrow
+
+Add a conntrack accept to the top of `guarden-svc`, above root's rule:
+
+```
+mod conntrack ctstate (ESTABLISHED RELATED) jump ACCEPT;
+```
+
+This is narrow in the way that matters — it accepts only traffic belonging to a connection
+that already exists, so it cannot be used to open a new path. It is also **required by the
+existing design and merely missing**: `INPUT` has carried that rule from the first commit,
+and a uid-matched output chain without it drops the reply half of every permitted connection.
+Any service-to-service call that leaves a service uid is affected today, not only the edge.
+
 ## Where that leaves it
 
 Candidates, none yet excluded:
