@@ -1070,3 +1070,56 @@ Where the quotes come from is the thing to find, because `edgeconf._arguments`
 does `str(value).split()`, which suggests the value was already one string by the
 time it was read. `unitsource` may be re-quoting a value that contains spaces when
 it round-trips the unit. That is the actual bug and it is small.
+
+## THE ROOT CAUSE: the edge container cannot read its own dynamic config
+
+The log, read as root from the journal, says it outright -- and it has been saying
+it since the beginning of this ticket:
+
+```
+ERR Cannot start the provider *file.Provider error="unable to read directory
+/etc/guarden/edge: open /etc/guarden/edge: permission denied"
+```
+
+Traefik **starts**, binds its default `:80`, fails to read the directory its
+routes come from, and therefore serves nothing. That is the 404. Not the exit
+point spelling, not the `Exec=` quoting, not the publish list -- those were real
+defects on the way and none of them was this one.
+
+**Measured, all in one VM:**
+
+| check | result |
+|---|---|
+| `ls -ld /var/lib/guarden/edge/dynamic` | `drwxr-s--- guarden edge` (2750) |
+| `id traefik-production` | `uid=994 gid=982 groups=982,981(edge)` |
+| host user reads the file | **yes** (`cat` succeeds) |
+| container with `--group-add 981` | **permission denied** |
+| container with `--group-add keep-groups` | **provider loads** |
+
+**Why the plain gid does not work, and `keep-groups` does.** `/etc/subgid` is
+`traefik-production:231072:65536`, so container gids map into `231072-296607` and
+the host gid `981` is outside every mapping the user has. `--group-add 981` adds
+*container* gid 981, which resolves to host gid `232053` and matches nothing on
+disk. There is no gid number the container can be given that reaches the host's
+`edge` group; the only mechanism that carries it is `keep-groups`, which passes
+the user's own supplementary groups through.
+
+**So the earlier reading -- "route permissions and group membership were correct"
+-- was wrong.** The group membership is correct *for the host user* and
+unreachable *for the container*, and the two are not the same claim.
+
+**Two candidate fixes, and this is a security-model decision:**
+
+1. **`GroupAdd=keep-groups` on the edge's own unit only.** Narrower than the
+   blanket form that was rejected: the edge's user is in exactly `traefik-production`
+   and `edge`, so what passes through is the one group the design already gave it.
+   It is still a change to the security model and AGENTS.md wants an ADR.
+2. **Change the ownership of `/var/lib/guarden/edge/dynamic`** so the mapped uid
+   can read it -- e.g. group `traefik-production`, or a mode that admits uid 994.
+   No `keep-groups`, but it widens what that directory admits and it must keep
+   `guarden:edge` readable for `roots`.
+
+Option 1 is the smaller change and the one that matches the design's intent --
+the edge user is *supposed* to be in the edge group; the container simply loses
+that fact in the uid mapping. It should not land without the ADR AGENTS.md asks
+for, and that is a decision for the operator rather than a commit.
