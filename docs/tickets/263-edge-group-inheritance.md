@@ -1014,3 +1014,59 @@ that was configured for something else — into an exit-2 render refusal naming 
 file, the shape and the remedy. That is the difference this whole ticket needed
 from the first commit, and it should land with the fixes rather than instead of
 them.
+
+## CORRECTED AND SETTLED: the generator DOES split one `Exec=` line. My conclusion was wrong.
+
+Ran the quadlet user generator by hand, exactly as systemd runs it, with output
+directories named (it demands three):
+
+```
+$ QUADLET_UNIT_DIRS=/tmp/gq5/units podman-user-generator out/normal out/early out/late
+ExecStart=/usr/bin/podman run --name systemd-%N --replace --rm ... -d \
+    docker.io/library/traefik:v3.2 \
+    --entrypoints.web.address=:80 --entrypoints.websecure.address=:443 \
+    --entrypoints.api.address=:8080 --log.level=INFO
+```
+
+**Four separate flags, split on whitespace.** A single `Exec=` line carrying
+space-separated flags is exactly the right form, and always was.
+
+Verified end to end with a container that reports what it was handed:
+
+```
+Cmd: ["sh","-c","echo z; for a in one two three; do echo T=$a; done"]
+logs: z / T=one / T=two / T=three
+```
+
+Three argv tokens, script intact.
+
+**And here is what misled me.** A `QUOTED` value is one token, because the quotes
+are systemd's:
+
+```
+Exec="--entrypoints.web.address=:80 --entrypoints.websecure.address=:443"
+  ->  traefik:v3.2 "--entrypoints.web.address=:80\x20--entrypoints.websecure.address=:443"
+```
+
+The `\x20` is systemd escaping **inside a quoted segment** -- it is the marker of
+"this is one token", not the marker of "quadlet cannot split". I read it as the
+latter, and reported the opposite of the truth in `8392a18` and `9c7dd11`.
+
+**So the whole chain of conclusions was wrong from `8392a18` onward:**
+
+| claimed | actually |
+|---|---|
+| one line = one argv token | one line = N tokens split on whitespace |
+| `\x20` proves quadlet jams it together | `\x20` proves the segment was QUOTED |
+| no `Exec=` form can carry several arguments | the ordinary unquoted form does |
+| config must move to a file provider | it must not; that plan is unnecessary |
+
+**The real defect is a pair of quotes.** The generated unit for the edge carries
+`"--providers.file.directory=... --entrypoints... --log.level=INFO"` as ONE quoted
+argument, so traefik receives a single unrecognised flag and discards it. Removing
+the quotes -- one `Exec=` line, plain space-separated, unquoted -- fixes it.
+
+Where the quotes come from is the thing to find, because `edgeconf._arguments`
+does `str(value).split()`, which suggests the value was already one string by the
+time it was read. `unitsource` may be re-quoting a value that contains spaces when
+it round-trips the unit. That is the actual bug and it is small.
