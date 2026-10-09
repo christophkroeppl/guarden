@@ -824,3 +824,51 @@ then a firewall suite.
 Fix 1 without fix 2 leaves the trap: the next contributor who adds a protocol
 suffix re-creates it. Fix 2 without fix 1 leaves the edge unable to serve HTTP/3.
 Both, and the refusal is the durable half.
+
+## Correction: fix 1 was wrong. The design is deliberate, and the renderer is the defect.
+
+I proposed "the registry allocates per (endpoint, protocol)". Reading the
+allocator says otherwise. `publications.allocate` allocates **one number per
+name**, and `service._wanted` builds that name list by discarding the protocol:
+
+```python
+# service.py:253
+for endpoint, _, _ in module.ingress_for(entry.name):
+    if endpoint not in out:
+        out.append(endpoint)
+```
+
+The `_` is the protocol. So `web:80` and `websecure:443/udp` are the name
+`websecure`, one publication, by construction -- and the docstring at :237 says so:
+"The containers that get a publication, in a fixed order."
+
+**One publication per endpoint is the design, not an oversight.** Changing the key
+to (endpoint, protocol) would also change what the firewall emits, because six
+consumers read `record.publication` by endpoint name:
+
+```
+edges.py:155      provider.publication.get(container)
+firewall.py:114   record.publication.get(container)
+firewall.py:565   record.publication.get("api")
+render.py:706     record.publication.get(endpoint)
+render.py:712     record.publication.get(API)
+report.py:122     record.publication.get("api")
+```
+
+`firewall.py:114` is the DNAT rule, so the DNAT set would grow a second rule per
+udp protocol. That is a spec change -- the spec says 80, 443 and 443/udp are
+three forwarding rules and I read that as three *kernel* rules -- not a bug fix.
+Proposing it as the obvious fix was wrong.
+
+**What is left is therefore narrow and entirely in the renderer:** one
+`PublishPort` per publication, which means the udp ingress entry cannot be
+published on the same host port as its tcp sibling. Either pasta is asked for a
+form that expresses both protocols on one host port, or the renderer refuses the
+combination with a diagnostic naming it.
+
+**And the refusal is the part that is not optional.** `soil` cannot silently emit
+a list that makes a container fail to start. The check belongs next to the
+`PublishPort` write at render.py:916 -- parse the lines it is about to write,
+refuse a host port that appears twice, and say which endpoint and protocol
+collided. That check is correct regardless of which of the two fixes above wins,
+and it is the only thing here that would have caught this before a VM run.
