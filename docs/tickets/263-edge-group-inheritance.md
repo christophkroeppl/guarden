@@ -552,3 +552,64 @@ The question they have narrowed to is: does traefik v3.2 bind `:443` and `:8080`
 when they are declared on the command line, and if not, what does it require --
 a `ListenAddress`, an `EntryPoint` block in the file provider, or something else
 that a CLI flag alone does not do.
+
+## SOLVED: quadlet does not split a single `Exec=` line either
+
+Comparing the suite's container with a hand-written one, in the same VM, same
+store, same flags:
+
+```
+$ podman inspect traefik-production-traefik --format '{{json .Args}}'
+["--providers.file.directory=/etc/guarden/edge --providers.file.watch=true
+ --entrypoints.web.address=:80 ... --log.level=INFO"]
+
+$ podman inspect dbg --format '{{json .Args}}'
+["--entrypoints.web.address=:80","--entrypoints.websecure.address=:443",
+ "--entrypoints.api.address=:8080",
+ "--entrypoints.web.http.redirections.entrypoint.to=websecure","--log.level=DEBUG"]
+```
+
+**Five separate argv tokens in one, and ONE token in the other.** The suite's is a
+single string with spaces in it. Traefik therefore receives one argument it does
+not recognise, discards the lot, and runs on its defaults -- which is why it binds
+only :80, and why the log is empty.
+
+And the hand-written run answers the earlier question:
+
+```
+$ podman exec dbg ... /proc/net/tcp{,6}   (LISTEN)
+00000000000000000000000000000000:1F90   # 8080
+00000000000000000000000000000000:0050   # 80
+00000000000000000000000000000000:01BB   # 443
+```
+
+**Three sockets, all three entrypoints bound.** So v3.2 does bind `:443` and
+`:8080` from command-line flags. That question is closed; the flags were always
+right.
+
+**So the mechanism is neither of the two I assumed.** Not "last Exec= wins" (that
+is real, and it is what collapsed eleven lines to one) and not "quadlet
+unescapes \x20" (it does not). It is that **guarden has no way to express more
+than one argument at all**, because the only key that would accumulate is the one
+podman has never implemented (#24901), and the key that does work passes the line
+through unparsed.
+
+The quadlet key that carries a real argv list is `Command=`, which exists in
+this podman binary. With `Command=--entrypoints.web.address=:80
+--entrypoints.websecure.address=:443` the values are still one string unless
+quadlet splits on whitespace, and **that is the one measurement left**: whether
+`Command=` splits, and if not, what form does. Four candidates, in order of
+likelihood: `Command=` with a shell-like quoted list, `Exec=` per argument with
+podman's `EnvironmentFile=`-style escaping, the file provider's `entryPoints:`
+block in dynamic config (which is camelCase and is what traefik's own docs use),
+or a wrapper `PodmanArgs=`.
+
+**The file provider is the one I would reach for**, because the rendered dynamic
+config already exists, already carries `entryPoints:` in the correct case, and is
+already the file traefik is told to read. Moving the entrypoint declarations from
+the command line into `/etc/guarden/edge/` would delete this class of problem
+rather than work around it.
+
+The assertion is unchanged and still the thing that would have caught all three:
+count the `--` arguments guarden emitted, count them again in the generated
+`ExecStart`, and require they match.
