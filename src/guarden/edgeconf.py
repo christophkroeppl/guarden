@@ -30,6 +30,16 @@ ARGUMENT = re.compile(r"^--entrypoints\.(?P<name>[A-Za-z0-9_-]+)\.(?P<rest>.+)$"
 MISSPELLED = re.compile(r"^--entryPoints\.")
 ADDRESS = re.compile(r"^:(?P<port>\d+)$")
 
+# The entrypoint traefik serves an insecure API on, by traefik's own decision
+# rather than guarden's: `--api.insecure` is documented as "Activate API directly
+# on the entryPoint named traefik". There is no flag that names another one.
+API_ENTRYPOINT = "traefik"
+
+# `entrypoints.<name>.http.api` and its children. Not fields in traefik v3 --
+# traefik answers `failed to decode configuration from flags: field not found,
+# node: api` and refuses to start -- so they are refused here rather than parsed.
+API_NOT_A_FIELD = ("http.api", "http.api.dashboard", "http.api.insecure")
+
 # `/etc/guarden/edge/auth-provider`: the one file connecting the auth module to
 # `roots`. The middleware is defined in a file of its own rather than inside
 # every rendered route file, because a route with no `auth:` must render byte for
@@ -62,7 +72,16 @@ def _arguments(unit: unitsource.Unit) -> list[str]:
 def entrypoints(unit: unitsource.Unit, where: str) -> dict[str, Entrypoint]:
     """The entrypoints one unit declares, keyed by name, in first-seen order."""
     found: dict[str, Entrypoint] = {}
+    insecure_api = False
     for argument in _arguments(unit):
+        flag, _, value = argument.partition("=")
+        if flag == "--api.insecure":
+            # Top-level, and the only flag that decides *where* the API is served:
+            # "Activate API directly on the entryPoint named traefik". A bare
+            # `--api.insecure` is enabled, which is why only an explicit false
+            # turns it off.
+            insecure_api = value.strip().lower() not in ("false", "0")
+            continue
         match = ARGUMENT.match(argument)
         if match is None:
             if MISSPELLED.match(argument):
@@ -85,18 +104,22 @@ def entrypoints(unit: unitsource.Unit, where: str) -> dict[str, Entrypoint]:
             entry.redirect = True
         elif key == "http3":
             entry.http3 = True
-        elif key in (
-            "http.api",
-            "http.api.dashboard",
-            "http.api.insecure",
-        ):
-            # **Compared on the key, not the whole argument.** `_arguments`
-            # yields `--entrypoints.api.http.api=true` whole, so testing
-            # `rest` for equality never matched a flag that carries a value and
-            # the API entrypoint parsed with `api=False`. `http.api` is the flag
-            # that *enables* the API; dashboard and insecure only configure it
-            # once enabled.
-            entry.api = True
+        elif key in API_NOT_A_FIELD:
+            # **`entrypoints.<name>.http.api` is not a traefik field in v3.** It
+            # was never one, and it went unnoticed while every flag arrived as a
+            # single unparsed token that traefik discarded whole. Once the flags
+            # arrived properly traefik refused to start at all:
+            #
+            #   failed to decode configuration from flags: field not found, node: api
+            #
+            # So a unit source that asks for it is refused rather than read as a
+            # declaration, exactly like the capital-P spelling above.
+            raise errors.GuardenError(
+                f"{where}: --entrypoints.{name}.{key} is not a traefik field, and traefik "
+                f"refuses to start on it (`field not found, node: api`). The API is top-level: "
+                f"`--api=true --api.dashboard=true --api.insecure=true`, and `--api.insecure` "
+                f"serves it on the entrypoint named {API_ENTRYPOINT!r}."
+            )
     for argument, value in _address_pairs(unit):
         match = ARGUMENT.match(argument)
         if match is None or match["rest"] != "address":
@@ -108,6 +131,15 @@ def entrypoints(unit: unitsource.Unit, where: str) -> dict[str, Entrypoint]:
                 f"entrypoint address is `:<port>` inside a container"
             )
         found[match["name"]].port = int(address["port"])
+    if insecure_api:
+        entry = found.get(API_ENTRYPOINT)
+        if entry is None:
+            raise errors.GuardenError(
+                f"{where}: `--api.insecure` serves the traefik API on the entrypoint named "
+                f"{API_ENTRYPOINT!r}, and this unit declares no such entrypoint, so the API's "
+                f"publication would forward to a port nothing answers on"
+            )
+        entry.api = True
     check(found, where)
     return found
 
@@ -117,7 +149,8 @@ def api_port(found: dict[str, Entrypoint], where: str) -> int | None:
 
     A module declares `api = true` and the source says where; spec 3.6's key set
     has no port in it and the module must not grow one, so the entrypoint that
-    carries `--entrypoints.<name>.http.api` is the answer.
+    `--api.insecure` serves the API on is the answer -- the one named
+    `traefik`, because that name is traefik's choice and no flag overrides it.
     """
     serving = [entry for entry in found.values() if entry.api]
     if len(serving) > 1:

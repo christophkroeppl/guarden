@@ -1123,3 +1123,116 @@ Option 1 is the smaller change and the one that matches the design's intent --
 the edge user is *supposed* to be in the edge group; the container simply loses
 that fact in the uid mapping. It should not land without the ADR AGENTS.md asks
 for, and that is a decision for the operator rather than a commit.
+
+## RESOLVED: `GroupAdd=keep-groups` on the edge's unit, and the ADR is written
+
+Operator decision: option 1. Implemented as a single line in the edge's own unit
+source, `modules/gate/traefik-production/.guarden/quadlet/traefik.container`:
+
+```
+GroupAdd=keep-groups
+```
+
+**The key is verified, not assumed.** `man podman-systemd.unit`, read in this
+VM's podman 5.7:
+
+```
+GroupAdd=
+    Assign additional groups to the primary user running within the container
+    process. Also supports the keep-groups special flag. Equivalent to the
+    Podman --group-add option.
+```
+
+and the option table carries the row `GroupAdd=keep-groups` -> `--group-add=keep-groups`.
+
+**It passes the renderer untouched.** `GroupAdd` is in neither `OWNED_KEYS` (which
+loom removes before emitting) nor `REFUSED_DIRECTIVES` (which the unit source may
+not use), so it survives the merge as written by the module.
+
+**What was written:**
+
+- the line above, with the measurement and the reason in a comment beside it;
+- `docs/adr/0017-edge-container-keeps-service-groups.md`, which records the
+  measurement, the decision, why a group number cannot work, why re-grouping the
+  directory and widening the mode are both refused, and what the line costs — the
+  container carries every supplementary group the service user has, which is the
+  whole reason it is on one unit;
+- a binding-decision bullet in `AGENTS.md` pointing at ADR-0017, because the
+  rule "a host user's group membership is not a container's" is the part that
+  outlives this ticket. AGENTS.md and the spec carried no prior position on
+  `keep-groups`, so nothing was amended — the bullet is new.
+
+**Still owed: the suites.** The change is in a worktree and has not been tested.
+The suites that must run against it are the ones that exercise the edge
+(`t50-slice`) and the ones that exercise a container at all (`t220-*`,
+`t50-module`, `t150-ssh-accept`), because the line changes a container's
+credentials and a green edge suite alone would not show a tunnel regression —
+which is the mistake `35f05a0` already made once.
+
+## A second defect, exposed by the first fix: the API entrypoint flags are not traefik fields
+
+With the quoting fixed (`c0649cf`), the flags finally reach traefik -- and traefik
+**refuses to start**:
+
+```
+command traefik error: failed to decode configuration from flags:
+field not found, node: api
+```
+
+The gate module declared the API as
+
+```
+--entrypoints.api.address=:8080
+--entrypoints.api.http.api=true
+--entrypoints.api.http.api.dashboard=true
+--entrypoints.api.http.api.insecure=true
+```
+
+and **`entrypoints.<name>.http.api` is not a field in traefik v3.** Traefik's own
+`--help`:
+
+```
+--api            (Default: "false")   Enable api/dashboard.
+--api.dashboard  (Default: "true")
+--api.insecure   (Default: "false")   Activate API directly on the entryPoint named traefik.
+```
+
+So the API is **top-level**, and the flag that decides where it is served names the
+entrypoint itself: `traefik`. Measured, in one VM:
+
+| flags | result |
+|---|---|
+| `--entrypoints.api.address=:8080` alone | binds :8080, entrypoint `api` |
+| `+ --entrypoints.api.http.api=true` | **decode error, refuses to start** |
+| `--entrypoints.traefik.address=:8080 --api=true --api.dashboard=true --api.insecure=true` | starts, `/api/version` -> `{"Version":"3.2.5"}`, `/api/rawdata` 200, `/dashboard/` 200 |
+
+and `--api.insecure` alongside an `api`-named entrypoint on the same port is a
+**bind conflict**, because traefik creates the entrypoint it serves the API on.
+
+**This is why the quoting bug hid the flag bug.** While every flag arrived as one
+unparsed token, traefik discarded all of them and ran on defaults; nothing ever
+validated them. Fixing the quoting made traefik *read* the flags, and the invalid
+ones killed the container. Two defects, in series, one masking the other.
+
+`edgeconf` had the same belief baked in: `api_port` found the API entrypoint by the
+invalid `http.api` key. It now reads `--api.insecure` and marks the entrypoint
+named `traefik`, which is traefik's choice of name and not guarden's, and it
+**refuses** `http.api*` by name with the correct flags in the diagnostic.
+
+## And the suite that asserts it
+
+`tests/t50-module.sh` asserted `--entrypoints.api.http.api.insecure=true` -- it was
+asserting the invalid flag, so it passed while the edge could not start. It now
+asserts `--entrypoints.traefik.address=:8080` and `--api.insecure=true`.
+
+**`t50-slice` is green.** Two further suite defects were fixed on the way, both of
+which could never have passed:
+
+- `runuser -u traefik-production -- podman inspect` was refused by the harness's own
+  `0700` tree ("cannot chdir to /home/ubuntu/guarden"), which is the documented
+  reason `lib.sh` carries `run_in`. Both sites now use a `run_edge` helper that
+  scrubs the cwd, `PWD` and `OLDPWD` the way `run_svc` does.
+- `assert_stdout_has "ro"` asked for a string `podman inspect` does not emit: the
+  read-only flag is the boolean `RW`, printed `false`. Both sites now assert one
+  exact string, `"/var/lib/guarden/edge/dynamic /etc/guarden/edge rw=false"`, from a
+  targeted `--format` rather than the struct's Go default.

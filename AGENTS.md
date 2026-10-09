@@ -84,6 +84,14 @@ a new ADR that supersedes it. The short version:
 - Connectivity is one loopback namespace. A declared edge produces an `AddHost=` entry in the
   consumer's own units, a uid-matched firewall rule and a per-consumer credential. There is no
   shared podman network, no name map, and no per-group address space.
+- **A host user's group membership is not a container's.** A rootless container's group numbers are
+  translated through `/etc/subgid`, so container group `981` means host group `232053`, and no
+  `--group-add <gid>` reaches a host group that sits below the window — the number to name does not
+  exist. The edge reads `/var/lib/guarden/edge/dynamic/`, which is `guarden:edge 2750` and stays
+  that way, so **the edge's own unit carries `GroupAdd=keep-groups` and it is the only unit that
+  does** (ADR-0017). The blanket form stays refused: a service holding `[groups] add` grants would
+  carry every one of them into its container, and a second service that needs to read a directory
+  it does not own needs its own decision rather than this one.
 - **The loopback is closed to service uids by default, and the publications are the only way in.**
   The rendered `OUTPUT` set is a default deny on `-o lo -d 127.0.0.0/8` for every service uid,
   with the per-publication accept rules above it. Pasta maps the gateway, so otherwise any

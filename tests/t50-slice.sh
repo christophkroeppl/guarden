@@ -103,6 +103,18 @@ run_svc() {
         XDG_RUNTIME_DIR="$runtime" "$@"
 }
 
+# The same scrub for the edge's own service user. `podman inspect` is refused by
+# the harness's own 0700 root tree before podman does any work -- "cannot chdir to
+# /home/ubuntu/guarden: Permission denied" -- so the cwd has to be one this user
+# can enter, and the shell's PWD/OLDPWD have to stop pointing at the suite's.
+edge_home=/var/lib/guarden/services/traefik-production/home
+edge_runtime=/run/user/"$(id -u traefik-production)"
+run_edge() {
+    run_in "$edge_home" setpriv --reuid=traefik-production --regid=traefik-production \
+        --clear-groups env -u OLDPWD HOME="$edge_home" PWD="$edge_home" \
+        XDG_RUNTIME_DIR="$edge_runtime" "$@"
+}
+
 # The manager is asked to reload, and what it produced is the claim. A user manager
 # writes its generators' output to `$XDG_RUNTIME_DIR/systemd/generator{,.late}`.
 run_svc systemctl --user daemon-reload
@@ -256,11 +268,16 @@ assert_file_has "$rendered" 'Host(`staging.web`)'
 
 # The edge is a reader of that directory and nothing more: the container's own
 # user is in `edge`, and the mount it reads through is read-only.
-run runuser -u traefik-production -- podman inspect --format '{{.Mounts}}' \
+# **`RW=false` is how podman says read-only here.** Asking for the struct with
+# `{{.Mounts}}` prints its Go fields, where the read-only flag is the boolean
+# `RW` and the string "ro" appears nowhere -- so an assertion for "ro" could
+# never pass, and one exact string covering source, destination and read-only
+# is stronger than two loose ones anyway.
+run run_edge podman inspect \
+    --format '{{range .Mounts}}{{.Source}} {{.Destination}} rw={{.RW}}{{end}}' \
     traefik-production-traefik
 assert_exit 0
-assert_stdout_has "/var/lib/guarden/edge/dynamic"
-assert_stdout_has "ro"
+assert_stdout_has "/var/lib/guarden/edge/dynamic /etc/guarden/edge rw=false"
 assert_supplementary_group traefik-production edge
 assert_mode /var/lib/guarden/edge/dynamic 2750
 
@@ -337,10 +354,15 @@ assert_file_has "$rendered" 'Host(`staging.web`)'
 
 # The edge is a reader of that directory and nothing more: the container's own
 # user is in `edge`, and the mount it reads through is read-only.
-run runuser -u traefik-production -- podman inspect --format '{{.Mounts}}' \
+# **`RW=false` is how podman says read-only here.** Asking for the struct with
+# `{{.Mounts}}` prints its Go fields, where the read-only flag is the boolean
+# `RW` and the string "ro" appears nowhere -- so an assertion for "ro" could
+# never pass, and one exact string covering source, destination and read-only
+# is stronger than two loose ones anyway.
+run run_edge podman inspect \
+    --format '{{range .Mounts}}{{.Source}} {{.Destination}} rw={{.RW}}{{end}}' \
     traefik-production-traefik
 assert_exit 0
-assert_stdout_has "/var/lib/guarden/edge/dynamic"
-assert_stdout_has "ro"
+assert_stdout_has "/var/lib/guarden/edge/dynamic /etc/guarden/edge rw=false"
 assert_supplementary_group traefik-production edge
 assert_mode /var/lib/guarden/edge/dynamic 2750

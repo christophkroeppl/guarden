@@ -2,6 +2,26 @@
 Description=the edge
 
 [Container]
+# The edge reads its routes from `/etc/guarden/edge`, which is
+# `/var/lib/guarden/edge/dynamic` on the host: `guarden:edge 2750`. The service
+# user is in the `edge` group and can read it.
+#
+# **The container cannot, and this is why the line below exists.** A rootless
+# container's group numbers are translated through `/etc/subgid`
+# (`traefik-production:231072:65536`), so container group `981` means host group
+# `232053` and never host group `981`. No `--group-add <gid>` reaches the host's
+# `edge` group, because `981` sits outside every window that user has. Traefik
+# then starts, binds its default `:80`, fails to read its own provider
+# directory, and serves nothing:
+#
+#   ERR Cannot start the provider *file.Provider
+#   error="unable to read directory /etc/guarden/edge: permission denied"
+#
+# `keep-groups` is the one mechanism that carries the user's own supplementary
+# groups into the container, undoing the translation for them. It is on this
+# unit and not on every unit: the edge is the service that reads a directory it
+# does not own, and this user holds exactly two groups. ADR-0017.
+GroupAdd=keep-groups
 Image=docker.io/library/traefik:v3.2
-Exec=--providers.file.directory=/etc/guarden/edge --providers.file.watch=true --entrypoints.web.address=:80 --entrypoints.web.http.redirections.entrypoint.to=websecure --entrypoints.websecure.address=:443 --entrypoints.websecure.http3 --entrypoints.api.address=:8080 --entrypoints.api.http.api=true --entrypoints.api.http.api.dashboard=true --entrypoints.api.http.api.insecure=true --accesslog=true --log.level=INFO
+Exec=--providers.file.directory=/etc/guarden/edge --providers.file.watch=true --entrypoints.web.address=:80 --entrypoints.web.http.redirections.entrypoint.to=websecure --entrypoints.websecure.address=:443 --entrypoints.websecure.http3 --entrypoints.traefik.address=:8080 --api=true --api.dashboard=true --api.insecure=true --accesslog=true --log.level=INFO
 Volume=/var/lib/guarden/edge/dynamic:/etc/guarden/edge:ro

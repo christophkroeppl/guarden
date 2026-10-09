@@ -162,12 +162,19 @@ assert_file_lacks "$unit" "$web_publication:$web_publication"
 # has any business writing it in.
 assert_file_has "$unit" "Volume=/var/lib/guarden/edge/dynamic:/etc/guarden/edge:ro"
 
-# One job each: `web` redirects, `websecure` terminates TLS, `api` serves the
+# One job each: `web` redirects, `websecure` terminates TLS, `traefik` serves the
 # control surface. An entrypoint doing both the redirect and TLS is refused, and
 # the refusal is exit 2 naming it.
+#
+# **The API entrypoint is named `traefik` because traefik names it.** `--api.insecure`
+# is documented as "Activate API directly on the entryPoint named traefik" and no
+# flag overrides the name. It is not `api`: `--entrypoints.api.http.api` is not a
+# traefik v3 field at all, and traefik refuses to start on it
+# (`field not found, node: api`) -- which is what this assertion used to require.
 assert_file_has "$unit" "--entrypoints.web.http.redirections.entrypoint.to=websecure"
 assert_file_has "$unit" "--entrypoints.websecure.http3"
-assert_file_has "$unit" "--entrypoints.api.http.api.insecure=true"
+assert_file_has "$unit" "--entrypoints.traefik.address=:8080"
+assert_file_has "$unit" "--api.insecure=true"
 
 # The shared slice `roots` reads is installed, and the order target is in the
 # system path podman's generator looks in.
