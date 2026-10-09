@@ -137,6 +137,33 @@ def refusals() -> None:
         == 'Environment="A=hello world"',
         "a quotable key quotes its value",
     )
+    # **`Exec=` is never quoted, and one quoted argument is refused.** A quoted
+    # value collapses to a SINGLE argv token, which the process receives as one
+    # unrecognised flag and discards -- measured by running the quadlet generator
+    # by hand. A quoted *segment* is a different thing and must survive: that is
+    # how one argument holds a space, and the generator emits it correctly.
+    check(
+        unitsource.format_line("Exec", "--a=1 --b=2", Path("/tmp/web.container"))
+        == "Exec=--a=1 --b=2",
+        "an Exec= argument list stays unquoted",
+    )
+    check(
+        unitsource.format_line("Exec", 'sh -c "echo hi"', Path("/tmp/web.container"))
+        == 'Exec=sh -c "echo hi"',
+        "an Exec= argument with a quoted segment is left alone",
+    )
+    check(
+        unitsource.format_line("Exec", '--flag="a b"', Path("/tmp/web.container"))
+        == 'Exec=--flag="a b"',
+        "an Exec= flag with a quoted tail is left alone",
+    )
+    try:
+        unitsource.format_line("Exec", '"--a=1 --b=2"', Path("/tmp/web.container"))
+    except errors.GuardenError as exc:
+        check(exc.code == 2, f"a wholly quoted Exec=: exit {exc.code}, expected 2")
+        check("SINGLE argv token" in exc.message, "a wholly quoted Exec= names the reason")
+    else:
+        FAILURES.append("a wholly quoted Exec=: accepted")
 
 
 def dropping() -> None:
