@@ -872,3 +872,54 @@ a list that makes a container fail to start. The check belongs next to the
 refuse a host port that appears twice, and say which endpoint and protocol
 collided. That check is correct regardless of which of the two fixes above wins,
 and it is the only thing here that would have caught this before a VM run.
+
+## ANSWERED: pasta DOES accept one host port on both protocols. The fix is one line.
+
+The refusal in `86b6cef` is correct, and it is also stricter than it needs to be.
+
+`pasta --help` in the VM:
+
+```
+-t, --tcp-ports SPEC    TCP port forwarding to namespace
+-u, --udp-ports SPEC    UDP port forwarding to namespace
+```
+
+Two options, one SPEC each, and nothing says the host side must differ. Tested
+through podman, which is how it is actually invoked:
+
+```
+$ podman run --rm -p 127.0.0.1:20101:80 -p 127.0.0.1:20101:80/udp \
+      traefik:v3.2 --entrypoints.web.address=:80
+```
+
+**No error, and it stayed running** until the test timed out -- where the
+two-publish-same-port case failed instantly with `Address already in use`. Same
+host port, same container, one protocol each. It works.
+
+**So the defect is the ORDER of the two `--publish` lines, not the fact that both
+exist.** Podman derives pasta's arguments from the publish list; `-p host:80` and
+`-p host:80/udp` are two *different* specs, and the failure earlier was guarden
+emitting them in a shape that made podman collapse them into one TCP listener --
+visible as the `Address already in use` on the TCP port, which is what a duplicate
+TCP bind looks like, not what a tcp/udp pair looks like.
+
+**Which means the renderer bug is upstream of `check_publish_ports`**: the two
+lines are individually well-formed, and the refusal is treating a valid
+configuration as invalid. `86b6cef` is a safe failure -- a rejected render beats a
+container that silently does not exist -- but it is a refusal of something that
+works, and it must not be the end state.
+
+Two things follow, and the second is a correction:
+
+1. `check_publish_ports` must distinguish a tcp/udp pair on one host port, which
+   is **valid**, from a genuine duplicate, which is not. Keying on (host, protocol)
+   instead of host alone is the whole change.
+2. My reading of the earlier `Address already in use` was that one host port twice
+   is unsatisfiable. That is wrong in general. It is satisfiable, and the refusal
+   as written would reject a working configuration.
+
+**What is still genuinely open** is why the suite's container fails when it has the
+same two lines. The standalone reproduction with the same pair works; the generated
+one does not. The difference is the presence of a *third* entry
+(`127.0.0.1:20000:8080`) and of `443/udp` mapping to `20002/udp` rather than to
+`20002`. Those are the two shapes I have not tried, and one of them is the answer.
