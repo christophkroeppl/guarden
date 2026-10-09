@@ -191,3 +191,50 @@ or only on `websecure` with `web` carrying nothing but the entrypoint redirect?*
 Whichever is chosen, an assertion should pin it: today nothing states which
 entrypoints a route is published on, which is why this reached a test failure
 instead of a decision.
+
+## Narrowed again: the render is correct, the redirect is not firing
+
+The question this ticket raised — publish on `web` as well as `websecure`? — is
+**answered by the code, and the answer is no.**
+
+`roots._entrypoints` (roots.py:309) reads the entrypoints from the edge's own
+shipped unit source and deliberately excludes the redirect entrypoint:
+
+> The redirect entrypoint is never one of them: every request to it becomes a
+> redirect, so a router on it would answer a 301 for a host it was meant to proxy.
+
+So a router on `websecure` is correct, and spec §7.3 agrees: the entrypoint
+answers on "80/tcp for the redirect and the ACME HTTP-01 challenge, 443/tcp for
+TLS". **`web` carries the redirect and ACME; it does not serve routes.** No
+decision is needed here and the earlier framing of it as a choice was wrong.
+
+**What is left is one real question.** Both properties the suite asserts are
+correct about different entrypoints — a 301 from `web` for any host, and no
+router there — and the observed answer is:
+
+```
+$ curl -s -i -H 'Host: staging.web' http://127.0.0.1:20001/
+HTTP/1.1 404 Not Found
+```
+
+If the entrypoint-level redirect were configured, **every** host on `web` would
+answer 301 regardless of routers. A 404 means the redirection is not being
+applied. The flag is present and correctly spelled:
+
+```
+Exec=--entryPoints.web.http.redirections.entrypoint.to=websecure
+```
+
+and `edgeconf.ARGUMENT` matches it — `^--entryPoints\.(?P<name>[A-Za-z0-9_-]+)\.(?P<rest>.+)$` —
+so guarden reads the entrypoint as declared.
+
+**The open question is therefore narrow:** does traefik v3.2 apply
+`http.redirections.entrypoint` from that flag, and if not, what is the correct
+spelling or shape? That is a question about traefik, measured in the VM, and it
+wants an agent rather than another reading of this repository.
+
+Note for whoever takes it: an earlier agent claimed PascalCase `--entryPoints`
+is ignored, and I refuted that by showing all three entrypoints bound. The
+refutation stands. What was adjacent and real is that guarden's own regex is
+case-sensitive, so a lowercase spelling would be silently invisible to
+`edgeconf` — a second way for a rename to break silently.
