@@ -613,3 +613,51 @@ rather than work around it.
 The assertion is unchanged and still the thing that would have caught all three:
 count the `--` arguments guarden emitted, count them again in the generated
 `ExecStart`, and require they match.
+
+## The file-provider route fails identically, so my preference was wrong
+
+I said the file provider was the fix I would reach for. Tested it. Same result:
+
+```
+$ podman run -d -v /tmp/edgedyn:/etc/guarden/edge:ro traefik:v3.2 \
+    --providers.file.directory=/etc/guarden/edge --log.level=INFO
+```
+
+with `/etc/guarden/edge/ep.yml` declaring three entrypoints, redirections and all:
+
+```
+entryPoints:
+  web:       {address: ":80", http: {redirections: {entryPoint: {to: websecure, scheme: https}}}}
+  websecure: {address: ":443"}
+  api:       {address: ":8080", http: {api: {insecure: true, dashboard: true}}}
+```
+
+**One socket, `:0050` = 80. `code=404` for an unrouted host.** The file is mounted
+and readable inside the container (`-rw-r--r-- 1 nobody nobody 266 ep.yml`) and
+the log is empty.
+
+**So the pattern is not about the mechanism at all.** Both routes -- command-line
+flags and the file provider -- bind only the FIRST declared entrypoint, in both
+the working hand-written run and this one. The difference between them is not the
+way the entrypoints are declared. I have been treating a mechanism question as
+though it were the whole question, and the mechanism is not where the fault is.
+
+**What that points at, and what would confirm it.** In every failing run the
+surviving entrypoint is `web` on `:80`, and `80` is also the *only* one of the
+three that guarden publishes to pasta:
+
+```
+--publish 127.0.0.1:20001:80 --publish 127.0.0.1:20002:443 --publish ...
+```
+
+`:80` is both traefik's default `web` address and the first thing published. In the
+one run that bound all three, the container was started by me with `-p
+127.0.0.1:20005:80` only -- a single publish. **So "binds only :80" may be
+"binds only what was published", and pasta may be involved after all**, which
+would move this away from quadlet entirely and back toward the publication path.
+
+**The measurement that settles it** is the one I should have run first: bind all
+three ports in the container and query all three from inside it, without any
+pasta mapping at all. If all three answer inside and only one answers from the
+host, the fault is in publication. If only one answers inside, it is in traefik's
+own parsing and quadlet is exonerated.
