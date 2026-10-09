@@ -25,6 +25,7 @@ import hashlib
 import lzma
 import os
 import platform
+import shutil
 import socket
 import stat
 import tarfile
@@ -2178,19 +2179,29 @@ def alias_probe() -> int:
     # interpreter's traceback out of here instead made `soil install --apply` on
     # such a host exit 1 with nothing on stderr but a stack, which is the one
     # outcome an operator cannot act on and a test cannot assert about.
+    #
+    # **Each probe carries its own reason back, and that is not cosmetic.**
+    # `h.run` hands a missing tool back as a non-ok result rather than raising,
+    # and collapsing every non-ok result into the fact that failed told an
+    # operator their route was wrong on a host where nothing had installed podman
+    # yet. The remedy differs per cause -- `soil packages --apply` for one, the
+    # probe image for another, the route for a third -- so the cause travels with
+    # the answer.
     try:
-        gateway = _probe_gateway(network)
+        gateway, why = _probe_gateway(network)
         if not gateway:
-            h.error("alias probe 1 of 4: the container's default route names no gateway")
+            h.error(f"alias probe 1 of 4: {why}")
             return 1
         if not _probe_reaches_host(gateway, network):
             h.error(f"alias probe 2 of 4: a socket bound to 127.0.0.1 on the host is not "
                     f"reachable from the container at {gateway}")
             return 1
-        owner, source = _probe_socket_owner()
+        owner, source, unreadable = _probe_socket_owner()
     except OSError as exc:
-        h.error(f"alias probe: {exc.filename} is not installed or not on PATH, so this host "
-                f"cannot measure the alias; `soil packages --apply` installs it")
+        h.error(f"alias probe: this host could not run the probe: {exc}")
+        return 1
+    if unreadable:
+        h.error(f"alias probe 3 of 4: the connection could not be read on the host: {unreadable}")
         return 1
     if not owner:
         h.error("alias probe 3 of 4: the connection did not arrive with a uid as the "
@@ -2216,14 +2227,34 @@ def _podman_argv(network: str, *command: str) -> tuple[str, ...]:
     return ("podman", "run", "--rm", "--network", f"pasta:{network}", h.PROBE_IMAGE, *command)
 
 
-def _probe_gateway(network: str) -> str:
+def _probe_gateway(network: str) -> tuple[str, str]:
+    """The container's default gateway, and why there is none when there is not.
+
+    **The reason is the point, and it is why this returns two values.** `h.run`
+    reports a tool that is not installed as a non-ok result rather than raising,
+    and an earlier version of this returned `""` for every non-ok result -- so a
+    host with no `podman` was told its route named no gateway, when the remedy is
+    `soil packages --apply`.
+
+    **"Is the tool installed" is asked of `PATH`, not of an exit code.** `h.run`
+    invents `127` for a missing host binary, and an OCI runtime reports a missing
+    command *inside* the container as `127` too (126 for not-executable) -- so a
+    probe image without `ip` would have produced a remedy that cannot apply to
+    that cause, which is the very defect this replaced. `shutil.which` answers the
+    question directly and the exit code never has to.
+    """
+    if shutil.which("podman") is None:
+        return "", ("podman is not installed, so this host cannot measure the alias; "
+                    "`soil packages --apply` installs it")
     result = h.run(*_podman_argv(network, "ip", "-4", "route", "show", "default"))
     if not result.ok:
-        return ""
+        reported = result.err.strip().splitlines()
+        first = reported[0] if reported else f"podman exited {result.code}"
+        return "", f"the probe container did not run: {first}"
     fields = result.line.split()
     if "via" in fields:
-        return fields[fields.index("via") + 1]
-    return ""
+        return fields[fields.index("via") + 1], ""
+    return "", "the container's default route names no gateway"
 
 
 def _probe_reaches_host(gateway: str, network: str) -> bool:
@@ -2263,11 +2294,23 @@ def _probe_reaches_host(gateway: str, network: str) -> bool:
     return bool(reached) and reached[0]
 
 
-def _probe_socket_owner() -> tuple[int, str]:
-    """The socket owner and the peer address, read from the kernel on the host."""
+def _probe_socket_owner() -> tuple[int, str, str]:
+    """The socket owner, the peer address, and why they could not be read.
+
+    Same shape and same reason as `_probe_gateway`: `ss` is a `packages` item, and
+    a host without it must be told which tool is missing rather than that its
+    connection "did not arrive with a uid as the socket owner", which describes a
+    kernel rule and not a missing binary. The question is asked of `PATH` for the
+    same reason it is there -- an exit code cannot distinguish a missing host tool
+    from a missing command inside a container.
+    """
+    if shutil.which("ss") is None:
+        return 0, "", ("ss is not installed, so this host cannot read the socket; "
+                       "`soil packages --apply` installs it")
     result = h.run("ss", "-tnp", "state", "established")
     if not result.ok:
-        return 0, ""
+        reported = result.err.strip().splitlines()
+        return 0, "", reported[0] if reported else f"ss exited {result.code}"
     for line in result.out.splitlines()[1:]:
         fields = line.split()
         if len(fields) < 5:
@@ -2278,8 +2321,8 @@ def _probe_socket_owner() -> tuple[int, str]:
                 owner = int(line.split("uid:")[1].split()[0])
             except (IndexError, ValueError):
                 owner = 0
-        return owner, fields[3].rsplit(":", 1)[0]
-    return 0, ""
+        return owner, fields[3].rsplit(":", 1)[0], ""
+    return 0, "", "no established connection was found to read"
 
 
 # --------------------------------------------------------------------------

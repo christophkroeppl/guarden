@@ -50,6 +50,15 @@ run soil install --apply
 assert_exit 1
 assert_stderr_has "alias probe"
 assert_stderr_has "drift: ingress.alias holds an address the probe measured"
+# **And the line names the cause.** The shape above is not enough on its own, and
+# this is the assertion that says so: the probe used to answer "the container's
+# default route names no gateway" for *every* failure, so a host with no `podman`
+# was told about its route -- a cause this machine does not have, since it has a
+# default route and the probe never reached reading one. A line naming the wrong
+# cause sends the operator to the wrong remedy, which is the same defect as a
+# stack trace in a different costume. Whichever of the two causes this machine
+# has, the answer must not be this one.
+assert_stderr_lacks "names no gateway"
 # And the alias is still unmeasured afterwards. A failed probe that recorded an
 # address would be worse than one that recorded nothing: the edge would start with
 # a gateway that does not reach this host, and it answers every route with a 502
