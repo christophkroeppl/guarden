@@ -468,3 +468,42 @@ of them pass while the edge serves nothing.
   of `--` arguments guarden wrote is the number the generator emitted. That
   catches this class for every service at once, and it is checkable without a
   container running.
+
+## ANSWERED: quadlet does not support multiple `Exec=` entries at all
+
+podman-container-tools/podman#24901, "Quadlet: Handle multiple Exec= entries",
+is an **open feature request**, not a bug report. Its description:
+
+> Allowing multiple Exec= entries, like with Label=, would provide better
+> readability and maintainability. A prime example is the example docker-compose.yml
+> of traefik with four long entries.
+
+So last-wins is not a documented semantic that guarden misread. It is an
+**unimplemented key**, and guarden's eleven `Exec=` lines have been silently
+collapsing to one for as long as this module has existed.
+
+**The fix is therefore not a spelling change and not a workaround: it is to stop
+using a key that cannot carry what guarden needs to say.**
+
+The quadlet key that does accumulate is `Exec=`'s sibling — `Command=` for a
+plain `.container`, or `Entrypoint=`/`Cmd=` when the image brings its own
+entrypoint. The traefik image carries `/entrypoint.sh` (it is `Path` in the
+generated unit), so an argument list meant to follow it has to be `Cmd=` or
+`Entrypoint=`, not `Exec=`.
+
+**What is settled, and it is worth separating from what is not:**
+
+- Settled: `Exec=` cannot carry eleven arguments, quadlet keeps one, and the
+  other ten vanish. Confirmed by measurement and by upstream's own tracker.
+- Settled: this is not edge-specific. Every service that passes more than one
+  argument to an image is affected the same way, and none of them can see it
+  from guarden because both files are individually correct.
+- Not settled: which accumulating key is right per image, and whether guarden's
+  renderer should emit one line or many. That is a decision about the renderer,
+  and it needs to be made for every service rather than for traefik.
+
+The assertion proposed in the previous commit is the part that survives
+regardless of which key is chosen: **count the `--` arguments guarden emitted
+and count them again in the generated `ExecStart`; they must match.** That is
+checkable with no container running, and it is the only thing that would have
+caught this.
