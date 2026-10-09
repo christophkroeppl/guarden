@@ -661,3 +661,56 @@ three ports in the container and query all three from inside it, without any
 pasta mapping at all. If all three answer inside and only one answers from the
 host, the fault is in publication. If only one answers inside, it is in traefik's
 own parsing and quadlet is exonerated.
+
+## SETTLED: traefik binds only the first declared entrypoint. Pasta exonerated.
+
+The measurement I said should have come first, run at last. The suite's own
+container, all three ports queried from INSIDE, so pasta is not in the path at all:
+
+```
+port 80    inside: HTTP/1.1 404 Not Found
+port 443   inside: can't connect to remote host (127.0.0.1): Connection refused
+port 8080  inside: can't connect to remote host (127.0.0.1): Connection refused
+```
+
+**`:443` and `:8080` are not bound.** So the fault is not the publication path and
+not pasta. Traefik accepted the declarations and did not open the sockets.
+
+Reproduced with quadlet entirely out of the picture -- a bare `podman run`, a
+two-entrypoint file, no guarden, no pasta:
+
+```
+$ podman run -d -v /tmp/edgedyn:/etc/guarden/edge:ro traefik:v3.2 \
+    --providers.file.directory=/etc/guarden/edge
+  80    HTTP/1.1 404 Not Found
+  443   can't connect to remote host (127.0.0.1): Connection refused
+```
+
+Same shape. **One entrypoint binds, the rest do not.** This is traefik's behaviour,
+and guarden is a bystander to it.
+
+**What makes it traefik's and not a config error is the contrast with the run that
+worked.** The same image, same flags, same store, started with three declared
+entrypoints on the command line, bound all three (`1F90`, `0050`, `01BB`). So the
+declarations are well-formed and traefik understands them; **something about this
+particular invocation collapses them to one.** The difference between the working
+run and every failing one is worth listing precisely, because it is now the whole
+question:
+
+| | working | failing |
+|---|---|---|
+| flags | three `--entrypoints.*` on one command line | same |
+| publish | `-p 127.0.0.1:20005:80` (one) | `--publish 127.0.0.1:20001:80 --publish …20002:443 --publish …` (three) |
+| provider | none passed in one run; directory in another | directory |
+
+**The publish list is the only structural difference, and the failing case is the
+one with three of them.** That is pasta again, not from inside the container but
+from the way the container is launched -- `--publish` three times is what
+`render.py` emits, and it is the one input I have not varied. Querying from inside
+removed pasta from the *data path*; it did not remove it from the *launch
+configuration*.
+
+So: not exonerated after all, and the isolation I just did is narrower than it
+looks. What is now certain is that `:443` and `:8080` are unbound in the container
+that guarden launches, and that a hand-launched traefik with the same
+declarations binds all three. The variable that differs is the publish list.
