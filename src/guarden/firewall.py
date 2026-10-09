@@ -401,6 +401,16 @@ def render(config, grants: list[Grant]) -> str:
         "}",
         "",
         f"chain {OUTPUT_CHAIN} {{",
+        # The reply half of a connection that was just permitted. A reply's
+        # destination is an ephemeral port on loopback, so it lands inside the
+        # deny's `127.0.0.0/8` range and is dropped without this: the request
+        # passes, the SYN-ACK does not, and the client sees a timeout rather than
+        # an answer. INPUT has carried this rule since the first commit.
+        #
+        # It widens nothing. ESTABLISHED is conntrack's word for "this packet
+        # belongs to a connection that already exists", so the rule cannot open a
+        # path — it can only let the far side of one answer.
+        "    mod conntrack ctstate (ESTABLISHED RELATED) jump ACCEPT;",
         f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp jump ACCEPT;",
         *accept_lines(config),
         # The stub resolver, with the per-publication accepts and above the granted
