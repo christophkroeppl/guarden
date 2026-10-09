@@ -328,3 +328,52 @@ One thing already established that makes this worth chasing rather than parking:
 shipped PascalCase, so the edge's API has never been on the publication guarden
 advertises. The spelling fix corrects that whatever the redirect turns out to
 need.
+
+## Answered: traefik does apply the flag. 408f898 was the fix.
+
+Run by hand in the VM with the corrected flags:
+
+```
+$ podman run -d --name tj2 -p 127.0.0.1:20002:80 traefik:v3.2 \
+    --entrypoints.web.address=:80 \
+    --entrypoints.websecure.address=:443 \
+    --entrypoints.web.http.redirections.entrypoint.to=websecure
+$ curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: anything.example' \
+    http://127.0.0.1:20002/
+301 https://anything.example/
+```
+
+Zero errors in the log, and a 301 carrying the requested name back — exactly
+what `t50-slice.sh` asserts. **The redirection is applied from the flag; the
+PascalCase spelling was the whole defect.**
+
+A one-flag run is the useful negative, and it is why the earlier three-way
+framing was wrong to leave open. Naming a target that does not exist:
+
+```
+ERR error="'to' entry point field references a non-existing entry point: websecure"
+entryPointName=web providerName=internal
+```
+
+So traefik validates the target and refuses the redirect rather than silently
+serving. The generated unit in the suite declares both `web` and `websecure`, so
+that is not the suite's failure — but it is the shape a mistake in this area
+takes, and worth knowing.
+
+**`t50-slice.sh` still fails after 408f898**, and the generated unit carries the
+corrected flags at every stage:
+
+```
+/var/lib/guarden/render/traefik-production/units/traefik.container
+/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.container
+```
+
+so what differs between the two runs is not the flags and not the spelling.
+The container is torn down when the suite ends, which is why reading its runtime
+is not available afterwards, and instrumenting the suite to catch it is the
+thing this ticket exists to stop.
+
+What is left is a runtime difference: what traefik binds inside the container,
+what its log says, and whether pasta's publication mapping reaches the port the
+unit declares. That is a run-with-the-container-up question and it needs an
+agent, which the daily quota is currently refusing.
