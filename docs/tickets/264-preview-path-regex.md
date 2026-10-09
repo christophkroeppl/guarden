@@ -98,3 +98,37 @@ caller can tell them apart, and for `render_tunnel` to use each instance's own
 ref. That is a change to what the edge's route configuration means, so it
 wants an ADR: today a service has one route slice, and after this it has one
 per instance.
+
+## Regression found by the full gate: the unreserved rule contradicts ticket 220
+
+`c949878` added `is_url_safe` — RFC 3986 unreserved only, refusing anything else with
+exit 2. It makes **two suites red on develop**, independent of any branch:
+
+    $ tests/lxc.sh run t110-previews.sh --no-cache
+    error: ref 'feature/x' is not URL-safe; a preview ref must contain only
+    alphanumeric characters, '-', '.', '_', and '~' (RFC 3986 unreserved)
+    FAIL t110-previews.sh
+
+    $ tests/lxc.sh run t130-paths.sh --no-cache
+    FAIL t130-paths.sh
+
+**The rule contradicts its own ticket.** Ticket 220's unticked item says a preview is
+published at a path built from the ref, and that the ref is *"a path on one host"* —
+`feature/x` is the canonical example and it is exactly what these suites use.
+A character set that excludes `/` cannot express a path.
+
+**Do not simply delete the rule.** It was written to close a real collision: two refs
+differing only by percent-encoding decode to the same path, so `feature%2Fx` and
+`feature/x` must not both be publishable. That reasoning is sound and the defect
+ticket 264 describes — an unescaped `.` in a regex — is real.
+
+The two requirements are compatible, and the fix is to escape rather than refuse:
+
+- accept a ref that is a **path** — segments of unreserved characters separated by `/`;
+- percent-encode each segment when building the URL path, so the published path is
+  unambiguous and cannot collide after decoding;
+- keep the regex quoting and anchoring that ticket 264 needs, which is a separate
+  concern from what characters may appear in a ref.
+
+An earlier revision of this work reached for a stricter character set instead. That
+trades a collision for a broken feature, and two suites say so.
