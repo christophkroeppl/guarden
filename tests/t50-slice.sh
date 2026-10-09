@@ -183,7 +183,7 @@ deny_before=$(deny_packets)
 run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.53 53' || true
 stub_after=$(stub_packets)
 deny_after=$(deny_packets)
-echo "STUB=$stub_before->$stub_after DENY=$deny_before->$deny_after" >&2
+echo "MEASURE: STUB_ACCEPT=$stub_before->$stub_after DENY_DROP=$deny_before->$deny_after"
 [ "$stub_after" -gt "$stub_before" ] \
     || _fail "the stub accept did not take the packet, so a service still cannot resolve"
 [ "$deny_after" = "$deny_before" ] \
@@ -196,7 +196,7 @@ echo "STUB=$stub_before->$stub_after DENY=$deny_before->$deny_after" >&2
 other_before=$(deny_packets)
 run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.1 9' || true
 other_after=$(deny_packets)
-echo "OTHER_DENY=$other_before->$other_after" >&2
+echo "MEASURE: OTHER_DENY=$other_before->$other_after"
 [ "$other_after" -gt "$other_before" ] \
     || _fail "a loopback destination other than the stub was not denied, so the accept is too wide"
 
