@@ -156,12 +156,42 @@ def format_line(key: str, value: str, path: Path) -> str:
     A value with a space in a key that cannot be quoted is refused rather than
     written, because the alternative is a unit file that means one thing and
     parses as another.
+
+    **`Exec=` is never quoted.** It is in `QUOTABLE` because systemd *accepts* a
+    quoted `Exec=`, not because quoting means the same thing there -- and for
+    `Exec=` it does not. Quadlet splits an unquoted `Exec=` value on whitespace,
+    so
+
+        Exec=--a=1 --b=2
+
+    becomes two arguments, while
+
+        Exec="--a=1 --b=2"
+
+    becomes ONE argument holding both, which the process receives as a single
+    unrecognised flag and discards with everything after it. Measured by running
+    the quadlet generator by hand: the quoted form emits
+    `"--a=1\\x20--b=2"` as a single token, and the unquoted form emits two.
+
+    A value that genuinely needs a space inside one argument is therefore refused
+    rather than quoted: there is no spelling that carries it, and a unit that
+    silently passes one argument instead of two is the failure this whole file
+    exists to prevent.
     """
     if " " in value and key not in QUOTABLE:
         raise errors.GuardenError(
             f"{path}: the value of {key}= has a space in it and {key} does not take a "
             f"quoted value: {value!r}"
         )
+    if key == "Exec":
+        for argument in value.split():
+            if " " in argument:
+                raise errors.GuardenError(
+                    f"{path}: an Exec= argument contains a space: {argument!r}. Quadlet "
+                    f'splits Exec= on whitespace, so an argument with a space in it '
+                    f"cannot be expressed."
+                )
+        return f"{key}={value}"
     if key in QUOTABLE and (" " in value or '"' in value):
         return f'{key}="{value}"'
     return f"{key}={value}"
