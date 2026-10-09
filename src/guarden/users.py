@@ -26,6 +26,7 @@ may need belong to the system and the distribution rather than to guarden.
 
 from __future__ import annotations
 
+import grp
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,18 +71,21 @@ def group_id(name: str) -> int:
     """The gid a group-owned file needs. The `guarden` group is created by
     `soil install` and is load-bearing rather than tidiness: the registry, every
     `overrides.toml` and all of `/etc/guarden` are `root:guarden` and the
-    unprivileged programs read them through it."""
-    for line in _read(paths.GROUP):
-        parts = line.split(":")
-        if len(parts) >= 3 and parts[0] == name:
-            try:
-                return int(parts[2])
-            except ValueError:
-                break
-    raise errors.GuardenError(
-        f"the {name} group does not exist in {paths.GROUP}; `soil install` creates it",
-        errors.HOST_NOT_AS_ASSUMED,
-    )
+    unprivileged programs read them through it.
+
+    **Asked of the host, not of `paths.GROUP`.** `groupadd` writes the real
+    `/etc/group` and cannot be staged, so a `GUARDEN_PREFIX` that points
+    elsewhere has a staged `etc/group` that nothing maintains. Asking the kernel
+    is the only question with a truthful answer under any prefix — and a gid is a
+    property of the system, not of a tree a test stages.
+    """
+    try:
+        return grp.getgrnam(name).gr_gid
+    except KeyError:
+        raise errors.GuardenError(
+            f"the {name} group does not exist on this host; `soil install` creates it",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
 
 
 def _read(path: Path) -> list[str]:
