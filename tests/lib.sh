@@ -32,11 +32,8 @@ set -Eeuo pipefail
 # `tests/lxc.sh` gives a suite a wall clock.
 #
 # It does not fire inside a condition, so a helper that tests a command with `||`
-# or `if` is not reported twice. It also does not fire on bare `return`
-# statements in helpers (those propagate an exit code the caller checks with
-# `assert_exit`); the failing line is the one in the test file that called
-# the helper.
-trap 'case "$BASH_COMMAND" in return*) ;; *) printf "error: failed at line %s: %s (exit %s)\n" "$LINENO" "$BASH_COMMAND" "$?" >&2 ;; esac' ERR
+# or `if` is not reported twice.
+trap 'printf "error: failed at line %s: %s (exit %s)\n" "$LINENO" "$BASH_COMMAND" "$?" >&2' ERR
 
 GUARDEN_ROOT=${GUARDEN_ROOT:-$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")}
 GUARDEN_FIXTURES=${GUARDEN_FIXTURES:-$(mktemp -d)}
