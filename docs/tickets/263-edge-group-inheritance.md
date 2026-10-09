@@ -923,3 +923,51 @@ same two lines. The standalone reproduction with the same pair works; the genera
 one does not. The difference is the presence of a *third* entry
 (`127.0.0.1:20000:8080`) and of `443/udp` mapping to `20002/udp` rather than to
 `20002`. Those are the two shapes I have not tried, and one of them is the answer.
+
+## FINAL, and it invalidates 8392a18: `Exec=` cannot express more than one argument
+
+The container is **Up** and still 404s. Not a publish problem, not a spelling
+problem. Its argv:
+
+```
+$ podman inspect traefik-production-traefik --format '{{json .Args}}'
+["--providers.file.directory=/etc/guarden/edge --providers.file.watch=true
+ --entrypoints.web.address=:80 --entrypoints.web.http.redirections.entrypoint.to=websecure
+ --entrypoints.websecure.address=:443 --entrypoints.websecure.http3
+ --entrypoints.api.address=:8080 ..."]
+
+ONE token. A hand-written run's argv for comparison:
+["--entrypoints.web.address=:80","--entrypoints.websecure.address=:443", ...]
+Five tokens.
+```
+
+**`8392a18` did not fix this. It changed the failure.** Collapsing eleven `Exec=`
+lines into one line turned "one flag survives" into "one giant flag survives" --
+still exactly one argv token, still discarded whole by traefik. I reported that
+commit as verified because the argv *text* looked right in the generated unit; it
+was one token there too, and I did not count.
+
+**The requirement is multiple argv tokens, and `Exec=` cannot produce it.** The key
+is unparsed and single-valued; the accumulating key does not exist in podman
+(#24901). So there is no `Exec=` spelling that works, which is also why the file
+provider route is the right one: it moves the configuration out of argv entirely,
+into `/etc/guarden/edge/`, which is already read, already rendered, and already
+carries `entryPoints:` in the camelCase traefik's file format wants.
+
+**What is needed**, concretely:
+
+1. **`modules/gate/traefik-production`**: delete all nine `--entrypoints.*` and the
+   two `--providers.file.*` lines from the `.container`. Keep `Image=` and
+   `PublishPort=`. `--providers.file.directory` and `--providers.file.watch` also
+   have to move, since they are arguments too.
+2. **A rendered `entrypoints.yml`** in `/etc/guarden/edge/`, written by `roots`
+   from the same declarations guarden already parses out of the unit source -- the
+   `edgeconf` parse exists and works, which is how the (spelling-correct)
+   entrypoint names are read today.
+3. **A refusal** that catches the general shape: if a `.container` has more than
+   one `Exec=`, or one `Exec=` containing a space, refuse it by name. That is the
+   check that would have made this whole chain loud at render time instead of
+   silent at runtime.
+
+Item 3 is what stops the fifth recurrence of exactly this bug, and it is
+independent of items 1 and 2.
