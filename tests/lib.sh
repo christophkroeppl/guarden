@@ -108,7 +108,11 @@ run() {
     else
         _capture "$program" "$@"
     fi
-    return "$GUARDEN_EXIT"
+    # NOT $GUARDEN_EXIT. A suite that runs a verb expected to fail -- `run
+    # weedr service build` then `assert_exit 1` -- dies here under `set -e`
+    # before the assertion that was written to handle it. Measured: removing
+    # this line is what keeps t10-help green. The status is read by assert_exit,
+    # which is the right consumer; `run` reports only whether it ran.
 }
 
 # run_in <dir> <program> [args...]: run a command from a directory the target user
