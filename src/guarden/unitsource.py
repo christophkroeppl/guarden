@@ -24,6 +24,7 @@ a set's iteration order is not a thing to hang that on.
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -173,10 +174,20 @@ def format_line(key: str, value: str, path: Path) -> str:
     the quadlet generator by hand: the quoted form emits
     `"--a=1\\x20--b=2"` as a single token, and the unquoted form emits two.
 
-    A value that genuinely needs a space inside one argument is therefore refused
-    rather than quoted: there is no spelling that carries it, and a unit that
-    silently passes one argument instead of two is the failure this whole file
-    exists to prevent.
+    **A quoted value is delivered as ONE argument, and that is the syntax working
+    as written.** `Exec="--flag=a b"` really does pass one argument holding a
+    space, so this is not a parse error -- it is refused because `Exec=` is a
+    command line and the author who writes
+
+        Exec="--a=1 --b=2"
+
+    has almost always written several flags and will get one argument, which the
+    process receives as a single unrecognised flag and discards -- **silently**,
+    which is how this repository lost a whole entrypoint set to it. The form is
+    refused rather than guessed at, and the message names the spelling for each
+    intent: several arguments are written unquoted and space-separated, and one
+    argument holding a space is written by quoting *that argument*
+    (`Exec=--flag="a b"`), which this leaves alone.
     """
     if " " in value and key not in QUOTABLE:
         raise errors.GuardenError(
@@ -184,13 +195,37 @@ def format_line(key: str, value: str, path: Path) -> str:
             f"quoted value: {value!r}"
         )
     if key == "Exec":
-        for argument in value.split():
-            if " " in argument:
-                raise errors.GuardenError(
-                    f"{path}: an Exec= argument contains a space: {argument!r}. Quadlet "
-                    f'splits Exec= on whitespace, so an argument with a space in it '
-                    f"cannot be expressed."
-                )
+        # **Refuse a value that is ONE quoted argument, which is the shape that
+        # collapses.** Quadlet passes a quoted value through as a single argv
+        # token, so `Exec="--a=1 --b=2"` hands the process one flag it does not
+        # recognise and it discards all of it -- measured by running the generator
+        # on both shapes.
+        #
+        # **Segment quoting is a different thing and must be allowed.** An earlier
+        # version of this refused any one-token value containing a space, which
+        # fired on `Exec=--flag="a b"` -- a legitimate value the generator emits
+        # correctly as one argument. The discriminator is therefore not the token
+        # count alone: the value has to *begin* with the quote, which is what
+        # makes it one quoted string rather than a flag with a quoted tail.
+        #
+        # **The guard this replaces could not fire at all.** It tested each token
+        # of `value.split()` for a space, and `str.split()` never yields a token
+        # containing one -- a refusal that was unreachable while reading like a
+        # check, which is worse than no check at all. `shlex` asks the question the
+        # generator answers: how many arguments does this value name?
+        try:
+            arguments = shlex.split(value)
+        except ValueError as exc:
+            raise errors.GuardenError(
+                f"{path}: the value of Exec= cannot be read as arguments: {exc}"
+            ) from None
+        if len(arguments) == 1 and " " in arguments[0] and value.strip()[:1] in ('"', "'"):
+            raise errors.GuardenError(
+                f"{path}: Exec= is one quoted argument holding {arguments[0].count(' ') + 1} "
+                f"words, and quadlet passes a quoted value through as a SINGLE argv token: "
+                f"the process would receive one flag it does not recognise and discard it. "
+                f"Write the arguments unquoted and space-separated."
+            )
         return f"{key}={value}"
     if key in QUOTABLE and (" " in value or '"' in value):
         return f'{key}="{value}"'
