@@ -468,6 +468,42 @@ def refuse_directives(source: Source) -> None:
                 )
 
 
+def check_exec(unit: unitsource.Unit, origin: str) -> None:
+    """Refuse a `.container` that tries to pass more than one argument.
+
+    **Quadlet's `Exec=` is single-valued and unparsed.** There is no spelling that
+    carries more than one argument: repeated `Exec=` lines are last-wins (podman
+    #24901, an open feature request, not a bug), and one line holding a space-
+    separated list arrives as **one** argv token, so the process sees a single flag
+    it does not recognise and discards the lot.
+
+    Both shapes have been shipped here and both fail silently -- the container
+    starts, binds its default, and serves nothing, with an empty log. The whole
+    `t50-slice` investigation was five commits establishing that. A refusal at
+    render time is the only thing that makes either shape loud.
+
+    The way to pass several arguments is the file provider, not argv: render the
+    configuration into `/etc/guarden/edge/` (or the module's own volume) and
+    point one `--providers.file.directory` at it.
+    """
+    values = [line for line in unit.get("Container", "Exec")]
+    if len(values) > 1:
+        raise errors.GuardenError(
+            f"{origin} has {len(values)} `Exec=` lines, and quadlet "
+            f"keeps only the last one (podman#24901). The rest are discarded "
+            f"without a word: the container starts on defaults and serves nothing. "
+            f"Render the configuration into a file the provider reads instead."
+        )
+    if len(values) == 1 and " " in values[0].split("=", 1)[-1].strip():
+        raise errors.GuardenError(
+            f"{origin} has one `Exec=` holding "
+            f"{values[0].count(' ') + 1} arguments, and quadlet passes the line "
+            f"through unparsed: the process receives ONE argv token, does not "
+            f"recognise it, and discards all of it. Render the configuration into "
+            f"a file the provider reads instead."
+        )
+
+
 def check_containers(document: manifest_mod.Manifest, source: Source) -> None:
     """`routes:`, `ports:` and `widgets:` name a container the unit source
     defines. Both sides are input, so this is exit `2` naming the manifest and the
@@ -765,6 +801,8 @@ def build(
     plan = Plan(warnings=list(source.warnings))
     refuse_directives(source)
     check_containers(document, source)
+    for container, unit in source.units.items():
+        check_exec(unit, f"{source.origin}: {container}")
     mounts = check_volumes(document, source)
     check_mount_paths(mounts, source, context)
 
