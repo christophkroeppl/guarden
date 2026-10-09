@@ -331,7 +331,6 @@ packages:
   - procps
   - git
   - rsync
-  - btrfs-convert
   - dracut-core
 CLOUD
 }
