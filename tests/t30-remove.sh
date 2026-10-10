@@ -37,16 +37,6 @@ assert_not_rejected
 run weedr service ingest myapp-staging --from poke myapp@9f2c1ab
 assert_exit 0
 
-# assert_stopped_in_manager <user> <unit>: the user manager's own answer rather
-# than a record of a call. `inactive`, `failed` and `unknown` all mean the
-# container is not running, and an exact comparison is the whole of it — a
-# substring test would read "inactive" as "active".
-assert_stopped_in_manager() {
-    local state
-    state=$(systemctl --user --machine "$1@" is-active "$2" 2>/dev/null || true)
-    [ "$state" != active ] || _fail "$2 is $state in $1's user manager"
-}
-
 # The precondition, and it is what makes the assertion below mean anything.
 # "Not active" is the same answer whether the mutator stopped a running unit or
 # the unit was never started at all, so without this the after-assertion passes
@@ -80,7 +70,16 @@ assert_running_in_manager myapp-staging web
 run weedr service remove myapp-staging
 assert_exit 0
 assert_stdout_has "removed myapp-staging"
-assert_stopped_in_manager myapp-staging web
+# **No assertion that the unit is stopped, and its absence is the honest answer.**
+# `assert_stopped_in_manager` used to sit here and could never fail: `users.destroy`
+# runs `systemctl stop user@<uid>.service`, which takes the whole user manager down
+# and the unit with it, so "not active" is the answer whether `stop_units` ran or
+# not. Measured: with `stop_units` deleted from `_remove_service`, and with the
+# start above in place, the suite still passed. An assertion that cannot fail is
+# worse than none — it reads as coverage — so the ordering claim is left to the
+# code and the comment, and the start above still asserts the precondition that
+# makes the service's removal a real transition rather than a no-op on a service
+# nothing ever ran.
 
 # The user is gone from all three databases, not merely from the passwd file: a
 # `userdel` that left the delegated range behind would hand the next service the
