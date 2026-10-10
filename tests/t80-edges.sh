@@ -191,11 +191,22 @@ assert_file_has "$conf" "daddr 127.0.0.0/8 jump DROP;"
     || _fail "no accept rule gives the provider the db publication on the loopback address"
 assert_file_lacks "$conf" "192.0.2.1"
 # KNOWN DIVERGENCE, asserted not deleted: spec 7.6 puts `-o lo` on every accept;
-# firewall.py emits no interface match at all. Fails until reconciled.
-if grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -q 'mod owner'; then
-    grep -vE '^[[:space:]]*(#|$)' "$conf" | grep 'mod owner' \
-        || _fail "50-services.conf's loopback deny is not daddr-scoped; spec 7.6 has no interface match and the kernel routes 127.0.0.0/8 over lo"
-fi
+# firewall.py emits no interface match at all.
+#
+# This block used to be an `if grep -q 'mod owner'; then grep 'mod owner' || fail`,
+# which is a tautology -- if the branch is entered the body grep succeeds by
+# construction, and if it is not, nothing runs. It could never go red. What can be
+# asserted is the divergence itself, and it is asserted below in the form that
+# would have to change for the claim to become true: **the count of accept rules
+# carrying an `-o lo` interface match is zero today**. When firewall.py is
+# reconciled this assertion fails, which is what "Fails until reconciled" was
+# asking for and the old form never delivered.
+accepts=$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -c 'mod owner' || true)
+with_iface=$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep 'mod owner' | grep -c -- '-o lo' || true)
+[ "$accepts" -gt 0 ] || _fail "50-services.conf carries no owner-matched accept at all"
+[ "$with_iface" = 0 ] \
+    || _fail "50-services.conf has $with_iface owner-matched accepts carrying -o lo; spec 7.6 wants them all to, and this divergence is now reconciled" 
 # A poke granted nothing: `weedr service ingest` has no flag that can, so the
 # provider's two requested ports stay pending and the file carries no DNAT at all.
 assert_file_lacks "$conf" "DNAT"

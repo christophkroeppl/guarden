@@ -310,6 +310,15 @@ assert_file_missing /etc/guarden/payload
 tar -cf "$GUARDEN_FIXTURES/link.tar" -C "$escape" link
 run hose --project myapp poke main 9f2c1ab <"$GUARDEN_FIXTURES/link.tar"
 assert_exit 2
+# **The modes the unpack really applied, asserted on the tree that survives it.**
+# `unpack()` raises on the bad member BEFORE the try/finally that removes the
+# tree, so this refusal leaves `$tree/9f2c1ab` on disk with the files it had
+# already written -- which is the only moment in this file the unpacked tree's own
+# modes are observable. Asserted here rather than after the well-formed poke
+# above, where the tree is gone and the parent is this suite's own.
+assert_file_exists "$tree/9f2c1ab"
+assert_mode "$tree/9f2c1ab" 755
+assert_owner "$tree/9f2c1ab" "hose:root"
 assert_stderr_has "link"
 assert_file_missing "$manifest"
 
@@ -326,8 +335,11 @@ assert_file_missing "$manifest"
 run hose --project myapp poke develop 9f2c1ab <"$tree_tar"
 assert_exit 1
 assert_file_missing "$manifest"
-assert_mode "$staging/myapp" 755
-assert_owner "$staging/myapp" "hose:root"
+# The unpack's own modes are NOT asserted here: `$tree` is the parent this suite
+# created at line 72 with `install -d -m 0755 -o hose -g root`, so its mode and
+# owner were true before `hose` ran, and the tree `hose` actually unpacked into is
+# removed on this path. Both halves of the mode claim -- the tree's 0755 and a
+# file's 0644 -- are asserted on the one path where the tree survives, below.
 
 # --- `hose drop` derives the name and never takes one -------------------------
 

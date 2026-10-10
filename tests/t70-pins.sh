@@ -157,10 +157,18 @@ assert_snapshot_marked "$config" "$two" yes
 assert_snapshot_userdata "$config" "$two" guarden pin
 assert_snapshot_tag "$config" "$two" number
 
-# `one` is wanted and already marked, so it is not written again: that is what
-# makes the reconciler idempotent rather than a source of write traffic every
-# hour. The state that proves it is that its provenance is the **preview's**, not
-# the pin's — a rewrite would have set `guarden=pin` on it.
+# `one` is wanted from this first run, and its provenance is the **preview's**,
+# not the pin's: `one` was marked when it was minted as the preview's fork
+# source, and the reconciler marking it now would set `guarden=pin` on it.
+#
+# **This is not the idempotency claim and could not be.** Nothing marked `one`
+# before this run, so on the first sync the reconciler writes the mark from the
+# seed -- which sets exactly the value asserted here -- and the assertions are
+# identical whether it wrote the mark or found it already there. The "already
+# marked, so it is not written again" claim needs a *second* run against a mark
+# that is already in place, and that is asserted below where it belongs; the
+# provenance half is kept here because it is a different claim, and it does vary:
+# a reconciler that marked `one` from the pin would leave `guarden=pin` and fail.
 assert_snapshot_marked "$config" "$one" yes
 assert_snapshot_userdata "$config" "$one" guarden myapp-preview
 

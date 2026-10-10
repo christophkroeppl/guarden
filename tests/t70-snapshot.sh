@@ -131,14 +131,17 @@ assert_stdout_has "NUMBER_LIMIT 2-10, NUMBER_LIMIT_IMPORTANT 8-12"
 
 # A bulk volume is snapshotted by nothing, and its configuration is never asked
 # about: a bulk volume that quietly appeared would be a volume whose data nothing
-# had ever protected. `assert_no_snapper_config` above is that claim; the count
-# staying at two across the `--all` run below is it again after more work.
+# had ever protected. `assert_no_snapper_config` above is that claim, and it was
+# repeated here verbatim under a comment saying the repeat was "after more work".
+# It was not: nothing between the two assertions changed the answer, so the second
+# one could not fail. **What shows the claim after the `--all` run is the count**
+# -- no snapshot directory appears under the bulk volume, asserted below once
+# `--all` has run -- and that is where the second observation belongs.
 #
 # The assertion that used to sit here was
 # `assert_not_called "snapper --config myapp-production-chainstate"`, and it is now
 # a fact about the filesystem: there is no such configuration for `snapper` to
 # list, which is why nothing can have snapshotted it.
-assert_no_snapper_config myapp-production-chainstate
 
 # `--all` names the bulk volumes it skipped rather than passing them over in
 # silence, which is the whole of its contract, and it reaches the other service.
