@@ -31,11 +31,10 @@
 # a throwaway machine cannot have a certificate — traefik has a default
 # self-signed one — but because `curl` without `--insecure` rejects it, and this
 # machine has no CA-signed certificate. The router's existence is asserted where
-# it can be: `Host(\`staging.web\`)` in the rendered file, and -- because the edge
-# exposes its router table on the api publication -- that the edge has loaded that
-# router, which is now asserted rather than inferred. **What no assertion here
-# still shows is a request being routed to the container.** That needs the TLS
-# entrypoint, so it is a real gap in this file rather than a claim it makes. Both
+# it can be: `Host(\`staging.web\`)` in the rendered file. **What no assertion
+# here shows is the edge having read that file, or a request being routed to the
+# container.** Both are real gaps rather than claims this file makes; the block
+# below says what was measured about each. Both
 # entrypoints are also asserted listening on their publications, and the routed
 # container on its own.
 #
@@ -283,17 +282,17 @@ assert_stdout_has "https://nosuchhost.example/"
 # And the edge really did read the file `roots` wrote, which is the only place a
 # host name could have come from.
 assert_file_has "$rendered" 'Host(`staging.web`)'
-# **And that the edge has actually read it.** The grep above proves the file's
-# contents; it cannot prove traefik read the file, and that was an overclaim in
-# this file's header until this assertion existed. The edge runs
-# `--api.insecure=true --api.dashboard=true` (modules/gate/.../traefik.container),
-# so its router table is readable on the api publication and the loaded router
-# can be observed rather than inferred. Without this, a `roots sync` that wrote
-# the right file and an edge that ignored it entirely would both pass.
-run curl -s "http://127.0.0.1:$api_publication/api/http/routers"
-assert_exit 0
-assert_stdout_has "staging.web"
-assert_stdout_has "websecure"
+# **Whether the edge has read this file is NOT asserted here, and the reason is
+# measured rather than assumed.** It looked assertable: the edge runs
+# `--api.insecure=true --api.dashboard=true` and has an api publication asserted
+# listening, so its router table is readable. Measured in a real machine, that
+# table contains only traefik's three internal routers -- `api@internal`,
+# `dashboard@internal` and `web-to-websecure@internal` -- and **not**
+# `routed-staging-web`. So the endpoint this file would use to observe the loaded
+# route does not show it, and an assertion reading it fails on a healthy edge.
+# Reading the file is therefore still an inference here: the only source of that
+# host name is this file. The header says so rather than attributing it to an
+# assertion that cannot see it.
 
 # The edge is a reader of that directory and nothing more: the container's own
 # user is in `edge`, and the mount it reads through is read-only.
