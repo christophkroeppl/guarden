@@ -17,16 +17,25 @@
 # certificate to present and a request to it cannot complete a handshake. What
 # this file asserts is therefore that the edge answers on its redirect
 # publication and carries the requested Host back — and, separately, that the
-# file `roots` wrote names the router and the edge read it. **The 301 does not
-# by itself show that traefik matched that router, and this file must not claim
-# it does.** The redirect is entrypoint-level
+# file `roots` wrote names the router. **The 301 does not by itself show that
+# traefik matched that router, and this file must not claim it does.** Nor does
+# the grep on the rendered file: it proves the file's *contents*, not that the
+# edge read it. Reading it is an inference — the only source of that host name
+# is that file — and this file says so rather than attributing it to an
+# assertion that cannot see it. The redirect is entrypoint-level
 # (`http.redirections.entrypoint.to=https`), so it fires before any router is
 # consulted and *every* host on this entrypoint gets a 301 — which is exactly
 # what the `nosuchhost.example` request below demonstrates, an unclaimed name
 # answered with its own redirect. Router matching would need a 404 for the
-# unclaimed host, and that is only observable on the TLS entrypoint, which needs
-# a certificate a throwaway machine cannot have. The router's existence is
-# asserted where it can be: `Host(\`staging.web\`)` in the rendered file. Both
+# unclaimed host, and that is only observable on the TLS entrypoint. Not because
+# a throwaway machine cannot have a certificate — traefik has a default
+# self-signed one — but because `curl` without `--insecure` rejects it, and this
+# machine has no CA-signed certificate. The router's existence is asserted where
+# it can be: `Host(\`staging.web\`)` in the rendered file, and -- because the edge
+# exposes its router table on the api publication -- that the edge has loaded that
+# router, which is now asserted rather than inferred. **What no assertion here
+# still shows is a request being routed to the container.** That needs the TLS
+# entrypoint, so it is a real gap in this file rather than a claim it makes. Both
 # entrypoints are also asserted listening on their publications, and the routed
 # container on its own.
 #
@@ -274,6 +283,17 @@ assert_stdout_has "https://nosuchhost.example/"
 # And the edge really did read the file `roots` wrote, which is the only place a
 # host name could have come from.
 assert_file_has "$rendered" 'Host(`staging.web`)'
+# **And that the edge has actually read it.** The grep above proves the file's
+# contents; it cannot prove traefik read the file, and that was an overclaim in
+# this file's header until this assertion existed. The edge runs
+# `--api.insecure=true --api.dashboard=true` (modules/gate/.../traefik.container),
+# so its router table is readable on the api publication and the loaded router
+# can be observed rather than inferred. Without this, a `roots sync` that wrote
+# the right file and an edge that ignored it entirely would both pass.
+run curl -s "http://127.0.0.1:$api_publication/api/http/routers"
+assert_exit 0
+assert_stdout_has "staging.web"
+assert_stdout_has "websecure"
 
 # The edge is a reader of that directory and nothing more: the container's own
 # user is in `edge`, and the mount it reads through is read-only.
