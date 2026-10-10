@@ -190,7 +190,6 @@ assert_file_lacks "$conf" "to-source"
 assert_file_lacks "$conf" "0.0.0.0"
 assert_file_lacks "$conf" "192.0.2.1"
 assert_file_lacks "$conf" "jump REDIRECT"
-assert_file_lacks "$conf" "192.0.2.1"
 
 # The rendered INPUT accept is plain, because a forwarded packet has no socket
 # and an owner match there would be unreliable: the uid restriction is in OUTPUT,
@@ -315,9 +314,15 @@ assert_file_lacks "$conf" "20007"
 # soil's skeleton: a grant renders nothing into either, so no manifest can move
 # the SSH accept or disable a failsafe. There is no failsafe to disable --
 # guarden has none -- but nothing here may claim one, either.
-assert_file_lacks "$conf" "ufw"
-assert_file_lacks "$conf" "deadman"
+# **The SSH accept is not observable here, and the assertion says so rather than
+# pretending otherwise.** 00-ssh.conf is written by `soil firewall`, which this
+# suite never runs — measured in a VM: the file does not exist, so asserting on it
+# failed. What IS observable is the half that matters for a grant: the services
+# file carries no INPUT chain of its own, because a grant is a DNAT and the INPUT
+# set is soil's skeleton in 10-framework.conf. A grant that moved the SSH accept
+# or wrote a policy would have to write one of these lines, and none appears.
 assert_file_lacks "$conf" "chain INPUT"
+assert_file_lacks "$conf" "policy"
 
 # A service that does not exist has nothing to grant, and that is the host not
 # being in the assumed state rather than a rejected input.

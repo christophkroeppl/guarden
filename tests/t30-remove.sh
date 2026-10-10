@@ -47,12 +47,36 @@ assert_stopped_in_manager() {
     [ "$state" != active ] || _fail "$2 is $state in $1's user manager"
 }
 
+# The precondition, and it is what makes the assertion below mean anything.
+# "Not active" is the same answer whether the mutator stopped a running unit or
+# the unit was never started at all, so without this the after-assertion passes
+# on a service nothing ever ran — which was measured: with `stop_units` deleted
+# from `_remove_service` the suite still passed. Asserting the unit IS active
+# first turns the pair into a real transition: this line fails if the start did
+# not take, and the line after the removal fails if the mutator did not stop it.
+assert_running_in_manager() {
+    local state
+    state=$(systemctl --user --machine "$1@" is-active "$2" 2>/dev/null || true)
+    [ "$state" = active ] || _fail "$2 is $state in $1's user manager, expected active"
+}
+
 # A unit in the service's own home is stopped before the volumes move, because a
 # running container writing into a subvolume that is being renamed is a data
-# problem and not a cosmetic one. What is asserted afterwards is the outcome: the
-# unit is not active. A deleted user answers the same question the same way, so
-# this proves the state the mutator left behind and not the order it left it in.
+# problem and not a cosmetic one. **What is asserted afterwards is the outcome,
+# not the order, and that limit is measured rather than assumed.** The unit IS
+# active first — `assert_running_in_manager` fails if the start did not take, so
+# the pair is a real transition and not a service nothing ever ran. But the
+# after-assertion cannot fail on its own: `users.destroy` runs
+# `systemctl stop user@<uid>.service`, which takes the whole user manager down and
+# the unit with it, so "not active" is the answer whether `stop_units` ran or not.
+# Measured: with `stop_units` deleted from `_remove_service`, and with this
+# precondition in place, the suite still passed. A second assertion cannot repair
+# that — the order is simply not visible from outside, because the mutator stops
+# the manager as part of removing the account.
 touch /var/lib/guarden/services/myapp-staging/home/.config/containers/systemd/web.container
+run weedr service start myapp-staging
+assert_exit 0
+assert_running_in_manager myapp-staging web
 run weedr service remove myapp-staging
 assert_exit 0
 assert_stdout_has "removed myapp-staging"

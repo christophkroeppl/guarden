@@ -48,10 +48,10 @@ install_pinned_converter
 project=$GUARDEN_FIXTURES/project
 seed "$project/compose.yaml" "services:" "  web:" "    image: docker.io/library/nginx:1.27"
 
-# --- the manifest's own vocabulary -------------------------------------------
+                                                                               
 
-# The top-level key, and the reason: a developer who reaches for it is told who
-# owns it and where the answer lives.
+                                                                               
+                                     
 seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml" \
     "zram:" "  size_percent: 50"
 run loom check "$project"
@@ -87,13 +87,13 @@ seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml" \
 run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "zram"
+assert_stderr_has "a routes entry has an unknown key 'zram'"
 
-# --- the Compose vocabulary --------------------------------------------------
+                                                                               
 
-# The repository writes `compose.yaml` or `.guarden/quadlet/`, and the Compose
-# refusal list is checked on the repository's own declaration in the vocabulary it
-# was written in — before the converter ever sees it.
+                                                                              
+                                                                                  
+                                                     
 seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml"
 seed "$project/compose.yaml" "services:" "  web:" \
     "    image: docker.io/library/nginx:1.27" "    zram: true"
@@ -111,7 +111,7 @@ assert_one_diagnostic "error:"
 assert_stderr_has "sysctls"
 assert_stderr_has "vm.swappiness"
 
-# --- the quadlet vocabulary --------------------------------------------------
+                                                                               
 
 quadlet=$GUARDEN_FIXTURES/quadlet
 seed "$quadlet/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/"

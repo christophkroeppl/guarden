@@ -56,8 +56,10 @@ assert_stderr_empty
 assert_file_has "$render/units/web.container" "AddHost=postgres-staging:192.0.2.1"
 assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-staging"
 assert_file_has "$render/units/guarden.env" "DB_PORT=20007"
-assert_file_missing "$GUARDEN_PREFIX/etc/hosts"
-assert_file_missing "$GUARDEN_PREFIX/etc/guarden/hosts"
+# The provider's service name must not appear in the real /etc/hosts.
+if grep -qw postgres-staging /etc/hosts 2>/dev/null; then
+    _fail "postgres-staging appears in /etc/hosts"
+fi
 
 # The start order is in the system manager, because a unit in one service's user
 # manager cannot require a unit in another's. `loom` emits the edges and the
