@@ -15,11 +15,20 @@
 # **It is over http, through the redirect entrypoint, and that is deliberate.**
 # A throwaway machine cannot complete ACME, so the TLS entrypoint has no
 # certificate to present and a request to it cannot complete a handshake. What
-# this file asserts is therefore that the edge answers, on its redirect
-# publication, with the right Host — the redirect carries the routed host name
-# back, which is only true if traefik matched the router `roots` wrote — and
-# that both entrypoints are listening on their publications while the routed
-# container is listening on its own.
+# this file asserts is therefore that the edge answers on its redirect
+# publication and carries the requested Host back — and, separately, that the
+# file `roots` wrote names the router and the edge read it. **The 301 does not
+# by itself show that traefik matched that router, and this file must not claim
+# it does.** The redirect is entrypoint-level
+# (`http.redirections.entrypoint.to=https`), so it fires before any router is
+# consulted and *every* host on this entrypoint gets a 301 — which is exactly
+# what the `nosuchhost.example` request below demonstrates, an unclaimed name
+# answered with its own redirect. Router matching would need a 404 for the
+# unclaimed host, and that is only observable on the TLS entrypoint, which needs
+# a certificate a throwaway machine cannot have. The router's existence is
+# asserted where it can be: `Host(\`staging.web\`)` in the rendered file. Both
+# entrypoints are also asserted listening on their publications, and the routed
+# container on its own.
 #
 # machine: fresh
 
