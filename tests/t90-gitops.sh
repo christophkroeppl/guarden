@@ -317,8 +317,13 @@ assert_exit 2
 # modes are observable. Asserted here rather than after the well-formed poke
 # above, where the tree is gone and the parent is this suite's own.
 assert_file_exists "$tree/9f2c1ab"
+# Measured in the VM: the mode is 755 as the comment promises. **The owner is
+# root:root, not hose:root** -- this suite drives `hose` through lib.sh's `run`,
+# which invokes it as the invoking user, and that is root here, so the tree is
+# owned by whoever unpacked it. An owner assertion naming `hose` was my error and
+# the suite caught it; asserting the mode is the claim, and the owner follows the
+# caller rather than a fixed name.
 assert_mode "$tree/9f2c1ab" 755
-assert_owner "$tree/9f2c1ab" "hose:root"
 assert_stderr_has "link"
 assert_file_missing "$manifest"
 
