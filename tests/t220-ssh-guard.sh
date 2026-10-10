@@ -6,7 +6,11 @@
 # 1. 00-ssh.conf is still 0600 root:root — unchanged.
 # 2. The accept is still the first rule of guarden-ssh, and the INPUT jump is still first.
 # 3. soil firewall --apply --check still reports no drift on the SSH items.
-# 4. Revoking the grant (weedr share revoke) removes the tunnel rules and leaves the SSH chain exactly as it was.
+# 4. The tunnel's own effect is the share projection, not a firewall rule: `weedr share
+#    reconcile` writes /var/lib/guarden/share/projection.json and touches no firewall file
+#    (measured: `grep -c firewall src/guarden/share.py` is 0). So what is asserted is that
+#    the grant appears in that projection and the revoke takes it away, while the SSH chain
+#    is left exactly as it was.
 #
 # Real host, real uids, real `useradd`: GUARDEN_PREFIX=/ and the machine's own
 # tools. What is asserted is state — a file, a rule position, an unchanged file —
@@ -142,6 +146,12 @@ first=$(sed -n 's/^issued \([0-9a-f]*\) .*/\1/p' "$GUARDEN_STDOUT")
 run weedr share reconcile
 assert_exit 0
 
+# The grant's own effect, which the header used to describe as a firewall rule and
+# is not one: the tunnel reads a projection, so that is what is asserted.
+projection=/var/lib/guarden/share/projection.json
+assert_file_exists "$projection"
+assert_file_has "$projection" "alice@example.com"
+
 # MUTATION TEST: break the SSH chain by inserting a rule before the accept
 # This simulates what would happen if a grant path wrote to 00-ssh.conf
 # Uncomment the next 4 lines to make the test fail (red):
@@ -177,6 +187,11 @@ assert_stdout_has "revoked"
 # Run reconcile again to update the vendor policy
 run weedr share reconcile
 assert_exit 0
+
+# And the revoke takes it out of the projection, which is the half the header
+# claimed and nothing checked: without this the suite passes whether or not the
+# revoke reached the projection at all.
+assert_file_lacks "$projection" "alice@example.com"
 
 # SSH guarantee must still hold exactly as before
 assert_mode "$ssh_conf" 0600
