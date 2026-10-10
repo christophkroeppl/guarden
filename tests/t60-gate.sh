@@ -2,9 +2,13 @@
 # Ticket 60, the gate half: exactly two outcomes, one per track, and nothing
 # stopped before the gate has been asked.
 #
-# The blocked-gate case is the load-bearing one, so it is asserted three ways:
-# the verb exits `1` and names the key, no unit of this service was stopped
-# before the gate was asked, and the registry carries the state and the reason.
+# The blocked-gate case is the load-bearing one, so it is asserted **two** ways:
+# the verb exits `1` and names the key, and the registry carries the state and
+# the reason. A third leg -- that no unit of this service was stopped before the
+# gate was asked -- was dropped rather than ported, and the block below says why:
+# no container of this service has ever run on this host, so "not active" reads
+# the same whether the gate stopped it or never started it. An assertion that
+# passes whatever the program did is not evidence, so it is not here.
 # The ungated case is asserted to do the opposite — a warning naming the key,
 # `not-required` recorded, and the start proceeding.
 #

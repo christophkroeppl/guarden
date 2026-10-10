@@ -255,7 +255,12 @@ fi
 run weedr secret list qapp-production
 assert_exit 0
 assert_stdout_has "DB_PASSWORD"
-assert_stdout_has "set"
+# The human report is tab-separated -- `<name>\t<state>\t<marks>` -- and the
+# state word for an unset key is `not set`, which CONTAINS `set`. A bare
+# `assert_stdout_has "set"` therefore passes for a key that was never planted,
+# which is the opposite of what this line is here for. Anchoring on the name and
+# the tab that follows it is the assertion that can fail.
+assert_stdout_has $'DB_PASSWORD\tset'
 assert_stdout_lacks "$VALUE"
 
 run weedr secret list qapp-production --json
