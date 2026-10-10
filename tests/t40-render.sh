@@ -157,7 +157,12 @@ cp -r "$project" "$GUARDEN_FIXTURES/project-before"
 run loom check "$project"
 assert_exit 0
 assert_stdout_has "renderable"
-assert_file_missing "$GUARDEN_FIXTURES/checked"
+# The path asserted absent here is one `check` could only have written inside the
+# project tree -- `do_check` takes no `--out` and never calls `write()` -- and the
+# project tree is already covered by the diff below. `$GUARDEN_FIXTURES/checked`
+# was asserted here before and passed whether or not the write-nothing logic was
+# there, because nothing in the suite ever named that path. The claim is the
+# diff: the tree is byte-identical after a `check`.
 run diff -r "$GUARDEN_FIXTURES/project-before" "$project"
 assert_exit 0
 
@@ -171,6 +176,18 @@ export GUARDEN_TEMPLATES=$GUARDEN_FIXTURES/templates
 run loom render "$project" --service app-production --out "$render"
 assert_exit 0
 assert_file_has "$unit" "Rendered by loom"
+# The claim is that a CHANGED template changes the next render, so the template
+# has to change. Copying the stock tree and asserting the stock marker proved
+# only that the default renders, and would have stayed green with the
+# `GUARDEN_TEMPLATES` lookup deleted outright. Marking the seam and rendering
+# again is what makes it a seam: the marker comes out of the copy, and the stock
+# line does not.
+printf '\n# GUARDEN_TEMPLATES marker: this line exists only in the copy\n' \
+    >>"$GUARDEN_FIXTURES/templates/quadlet-container.j2"
+out=$GUARDEN_FIXTURES/render-marked
+run loom render "$project" --service app-production --out "$out"
+assert_exit 0
+assert_file_has "$out/units/web.container" "GUARDEN_TEMPLATES marker"
 unset GUARDEN_TEMPLATES
 
 # `loom` writes only into --out and the shared slices the mutator installs for

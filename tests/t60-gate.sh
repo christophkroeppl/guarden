@@ -284,8 +284,16 @@ assert_exit 0
 assert_stdout_has "generated      SESSION_SIGNING_KEY"
 assert_stdout_has "gate           not-required"
 
-# A second plant of a generated key does not make it a planted one: nothing could
-# tell the difference in the store, which is exactly why the table exists.
+# **A second plant of a generated key does not make it a planted one.** The table
+# is `[generated]` in the registry, so a value planted over a generated one
+# changes the blob and the materialised secret but not the origin — and the point
+# of the table is that nothing could otherwise tell the difference. This was a
+# `secret list` re-read of the same unmutated store as the block above, which
+# asserted nothing; now the plant is actually issued, so the read is of changed
+# state and the claim is the reason the origin does not move.
+run weedr secret set qapp-staging SESSION_SIGNING_KEY <<<"EXAMPLE-not-a-real-value"
+assert_exit 0
+assert_stdout_has "planted SESSION_SIGNING_KEY of qapp-staging"
 run weedr secret list qapp-staging --json
 assert_exit 0
 assert_json secrets.0.source '"generated"'
