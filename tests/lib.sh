@@ -364,14 +364,18 @@ assert_only_alias_rm() {
     run "$@" --help
     [ "$GUARDEN_EXIT" = 0 ] || _fail "$* --help exited $GUARDEN_EXIT"
     local token
-    # `|| true` because `grep -oE` exits 1 when it matches nothing, and under
-    # `set -E` the ERR trap fires for that failure even though the pipeline is
-    # inside a process substitution whose status is discarded. The suite then
-    # passes while printing `error: failed at line 363: sort -u (exit 1)` once
-    # per call — thirteen spurious error lines on a green run, which reads as
-    # thirteen failures. A command followed by `||` is not the final command in
-    # the list, so `set -e` does not exit on it and the ERR trap does not fire.
-    # The assertion itself is unchanged: no parenthesised token means no
+    # `|| true` because `grep -oE` exits 1 when it matches nothing, and the ERR
+    # trap fires for it — measured, and the location is the part worth writing
+    # down: the trap runs **inside the process substitution's own subshell**
+    # (`BASHPID` differs from the parent's), because `set -E` makes ERR inherited
+    # there. The suite still passed, since the substitution's status is discarded
+    # — so a GREEN run printed `error: failed at line 363: sort -u (exit 1)` once
+    # per call, thirteen times, which reads as thirteen failures.
+    #
+    # `|| true` is what stops it: a command followed by `||` is not the final
+    # command in the list, so neither `set -e` nor the ERR trap fires for it.
+    # Measured both ways — with the `|| true` there is no trap line, without it
+    # there is. The assertion is unchanged: no parenthesised token means no
     # violation, which is what an empty input to the loop already expressed.
     while read -r token; do
         [ -n "$token" ] || continue
