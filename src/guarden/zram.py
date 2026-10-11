@@ -401,6 +401,22 @@ def _await_device(timeout: float = 10.0) -> None:
         time.sleep(0.1)
 
 
+def _await_reset(timeout: float = 5.0) -> None:
+    """Wait for `disksize` to reach 0 after `zramctl --reset`.
+
+    `zramctl --reset` returns success as soon as the ioctl is issued, but the
+    kernel may not have zeroed the `disksize` sysfs attribute yet. Under load
+    (a full gate running 52 concurrent machines), the gap is wide enough that
+    a subsequent read sees a non-zero value and the teardown appears to have
+    left the device in place.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not present():
+            return
+        time.sleep(0.1)
+
+
 def _tear_down() -> None:
     """Take a device off the host's swap and out of its sysfs, whatever state.
 
@@ -413,6 +429,7 @@ def _tear_down() -> None:
         return
     h.run("swapoff", DEVICE_PATH)
     h.run_or_die("zramctl", "--reset", DEVICE_PATH)
+    _await_reset()
     control = h.hostpath(*ZRAM_CONTROL, "hot_remove")
     try:
         control.write_text(f"{DEVICE.removeprefix('zram')}\n", encoding="utf-8")

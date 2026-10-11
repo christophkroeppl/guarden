@@ -888,6 +888,70 @@ def _edge_group(module: modules.Module) -> None:
             continue
         tool.run(["usermod", "--append", "--groups", EDGE_GROUP, entry.name])
         sys.stdout.write(f"added {entry.name} to the {EDGE_GROUP} group\n")
+    # A systemd user manager's supplementary groups are fixed at its creation
+    # time. If the manager was started before the user was added to `edge`
+    # (e.g. by `loginctl enable-linger` during `service.create`), it will never
+    # pick up the group, and containers it launches with `--group-add keep-groups`
+    # will not have `edge` either. Restarting the manager picks up the new
+    # group set, and it is only done when the group is actually missing so a
+    # re-run against a converged host does not interrupt a running edge.
+    for entry in module.services:
+        if entry.ingress:
+            _restart_user_manager(entry.name)
+            break
+
+
+def _restart_user_manager(name: str) -> None:
+    """Restart the user manager when it is missing a group its user now holds.
+
+    A systemd user manager inherits its supplementary groups from the session
+    that started it and never updates them. After `usermod --append --groups
+    edge <user>`, the manager still has its old set, so a container launched
+    with `--group-add keep-groups` inherits no `edge` and is denied a read on
+    `/var/lib/guarden/edge/dynamic`.
+
+    Restarting `user@<uid>.service` makes the manager re-read `/etc/group`.
+    The restart is skipped when the manager already carries the group, so a
+    converged host is not disturbed, and it is a no-op when no manager is
+    running because `systemctl restart` on a stopped unit starts nothing.
+    """
+    uid = users.passwd_entries()[name][0]
+    wanted = users.group_id(EDGE_GROUP)
+    if _manager_has_group(uid, wanted):
+        return
+    tool.run(["systemctl", "restart", f"user@{uid}.service"])
+    sys.stdout.write(f"restarted user@{uid}.service to pick up the {EDGE_GROUP} group\n")
+
+
+def _manager_has_group(uid: int, gid: int) -> bool:
+    """Whether the running user manager for `uid` carries `gid`.
+
+    The manager's PID comes from systemd itself, and its groups come from
+    `/proc/<pid>/status`, which is the process's own word for them. `id -nG
+    <user>` asks the user database and cannot answer this: the user is in the
+    group there while the manager is not.
+
+    A manager that is not running has no groups to carry, so the answer is
+    `False` and the caller restarts — which starts it with the current group
+    set, which is what the service needs anyway.
+    """
+    result = tool.call(
+        ["systemctl", "show", f"user@{uid}.service", "--property=MainPID", "--value"]
+    )
+    if not result.ok or not result.stdout.strip().isdigit():
+        return False
+    pid = result.stdout.strip()
+    if pid == "0":
+        return False
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8") as handle:
+            status = handle.read()
+    except OSError:
+        return False
+    for line in status.splitlines():
+        if line.startswith("Groups:"):
+            return str(gid) in line.split()[1:]
+    return False
 
 
 def _edge_directory(module: modules.Module) -> None:
