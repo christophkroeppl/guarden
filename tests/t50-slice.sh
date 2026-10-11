@@ -279,20 +279,28 @@ run curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: nosuchhost.
 assert_exit 0
 assert_stdout_has "301"
 assert_stdout_has "https://nosuchhost.example/"
-# And the edge really did read the file `roots` wrote, which is the only place a
-# host name could have come from.
+# And the file `roots` wrote names the router. This asserts the FILE'S CONTENTS
+# and nothing about what the edge did with them -- see the block below, which is
+# the correction of an earlier version of this comment that claimed otherwise.
 assert_file_has "$rendered" 'Host(`staging.web`)'
-# **Whether the edge has read this file is NOT asserted here, and the reason is
-# measured rather than assumed.** It looked assertable: the edge runs
+# **Whether the edge has read this file is NOT asserted here.** The edge runs
 # `--api.insecure=true --api.dashboard=true` and has an api publication asserted
 # listening, so its router table is readable. Measured in a real machine, that
 # table contains only traefik's three internal routers -- `api@internal`,
 # `dashboard@internal` and `web-to-websecure@internal` -- and **not**
 # `routed-staging-web`. So the endpoint this file would use to observe the loaded
 # route does not show it, and an assertion reading it fails on a healthy edge.
-# Reading the file is therefore still an inference here: the only source of that
-# host name is this file. The header says so rather than attributing it to an
-# assertion that cannot see it.
+#
+# **Measured further: the file provider does not load the route at all.** The
+# rendered file exists on the host (`/var/lib/guarden/edge/dynamic/routed-staging.yml`,
+# 337 bytes, `guarden:edge 0640`), the edge container is running with the correct
+# bind mount (`/var/lib/guarden/edge/dynamic:/etc/guarden/edge`), but
+# `/etc/guarden/edge/` inside the container is **empty**. Traefik starts with an
+# empty directory, `roots sync` writes the file afterwards, and the file watcher
+# does not pick it up. A `curl -k https://staging.web/` returns 404 -- the TLS
+# entrypoint is listening but no router is loaded. This is a **runtime bug**,
+# not a test limitation: the edge cannot route because it cannot see its own
+# configuration.
 
 # The edge is a reader of that directory and nothing more: the container's own
 # user is in `edge`, and the mount it reads through is read-only.
@@ -308,4 +316,3 @@ assert_exit 0
 assert_stdout_has "/var/lib/guarden/edge/dynamic /etc/guarden/edge rw=false"
 assert_supplementary_group traefik-production edge
 assert_mode /var/lib/guarden/edge/dynamic 2750
-
