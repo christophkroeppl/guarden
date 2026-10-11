@@ -291,16 +291,30 @@ assert_file_has "$rendered" 'Host(`staging.web`)'
 # `routed-staging-web`. So the endpoint this file would use to observe the loaded
 # route does not show it, and an assertion reading it fails on a healthy edge.
 #
-# **Measured further: the file provider does not load the route at all.** The
-# rendered file exists on the host (`/var/lib/guarden/edge/dynamic/routed-staging.yml`,
-# 337 bytes, `guarden:edge 0640`), the edge container is running with the correct
-# bind mount (`/var/lib/guarden/edge/dynamic:/etc/guarden/edge`), but
-# `/etc/guarden/edge/` inside the container is **empty**. Traefik starts with an
-# empty directory, `roots sync` writes the file afterwards, and the file watcher
-# does not pick it up. A `curl -k https://staging.web/` returns 404 -- the TLS
-# entrypoint is listening but no router is loaded. This is a **runtime bug**,
-# not a test limitation: the edge cannot route because it cannot see its own
-# configuration.
+# **Measured further: the file provider does not load the route at all.** Four
+# readings, all from one machine, and none of them a claim about the cause:
+#
+#   host       /var/lib/guarden/edge/dynamic/routed-staging.yml exists,
+#              337 bytes, guarden:edge 0640, and names Host(`staging.web`)
+#   container  the edge is running with the bind mount
+#              /var/lib/guarden/edge/dynamic:/etc/guarden/edge (RW=false),
+#              and /etc/guarden/edge/ INSIDE it is **empty**
+#   API        lists api@internal, dashboard@internal and web-to-websecure@internal
+#              only -- not routed-staging-web
+#   request    curl -k https://staging.web/ -> 404
+#
+# **The ordering is what makes this a defect rather than a timing artefact, and
+# an earlier version of this comment got it backwards.** `roots sync` runs at
+# line 87, BEFORE the edge starts at line 103, so the file is on disk before the
+# container is created -- a file watcher has nothing to catch. An earlier draft
+# here said the file was written afterwards and the watcher missed it; that is
+# refuted by the suite's own order and is recorded so it is not tried again.
+#
+# **The cause is NOT measured.** Something makes the container's view of a
+# directory empty while the host's view of the same path holds the file, and
+# that is the whole of what is known. It is a **runtime defect**, not a test
+# limitation: the edge cannot route because it cannot see its own configuration.
+# Ticket 263 carries this area's history and is where the cause belongs.
 
 # The edge is a reader of that directory and nothing more: the container's own
 # user is in `edge`, and the mount it reads through is read-only.

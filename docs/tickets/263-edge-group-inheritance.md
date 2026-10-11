@@ -1236,3 +1236,56 @@ which could never have passed:
   read-only flag is the boolean `RW`, printed `false`. Both sites now assert one
   exact string, `"/var/lib/guarden/edge/dynamic /etc/guarden/edge rw=false"`, from a
   targeted `--format` rather than the struct's Go default.
+
+## A fourth reading, after everything above: the container's view of the directory is EMPTY
+
+Recorded because it is not any of the readings above, and because the ticket is
+the place this area's measurements live. Measured in the VM after `t50-slice`
+runs, with the container up:
+
+```
+host       /var/lib/guarden/edge/dynamic/routed-staging.yml
+           -rw-r----- 1 guarden edge 337  (guarden:edge 0640)
+           contents: routers.routed-staging-web.rule = Host(`staging.web`)
+
+container  podman exec traefik-production-traefik ls -la /etc/guarden/edge/
+           total 0                       <-- EMPTY
+
+mount      [{Type:bind, Source:/var/lib/guarden/edge/dynamic,
+             Destination:/etc/guarden/edge, RW:false, Propagation:rprivate}]
+
+API        /api/http/routers -> api@internal, dashboard@internal,
+           web-to-websecure@internal   (not routed-staging-web)
+
+request    curl -k https://staging.web/  ->  HTTP 404
+```
+
+**The ordering rules out the watcher explanation.** `t50-slice` runs `roots sync`
+at line 87 and starts the edge at line 103, so the file is on disk *before* the
+container is created. A file watcher has nothing to catch, and `--providers.file.watch=true`
+is not what is failing. An earlier draft of the comment in `t50-slice.sh` claimed
+the opposite and has been corrected.
+
+**What is established:** the host sees the file; the container does not see it;
+the mount is present and read-only; the edge answers 404 on the TLS entrypoint
+because no router is loaded.
+
+**What is NOT established:** the cause. Candidates, none tested:
+
+- `Propagation: rprivate` and whether the source path the container resolved is
+  the one the host wrote — the mount is by *path*, and if the edge's unit was
+  generated before `roots sync` created the directory, the bind source may have
+  been resolved to a different inode.
+- `_edge_directory` (`weedr.py:906`) runs `path.mkdir(parents=True, exist_ok=True)`
+  and then `chmod`/`set_owner` on an **existing** directory. If the directory is
+  re-created rather than re-owned, a container holding the old inode sees an
+  empty mount while the host sees the new directory at the same path. That is
+  the shape to check first, and it is checkable with `stat` on the host plus
+  `ls` inside the container at the same moment.
+- Whether `podman exec ls` and the bind resolve the same path at all.
+
+**The measurement that would settle it**, cheap and specific: record the host
+directory's inode before and after the edge starts, and compare it with the
+directory the container sees. Same inode means the container is looking at the
+right place and the emptiness is something else; different inode means the mount
+source was replaced under a running container.
