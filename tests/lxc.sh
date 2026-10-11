@@ -286,7 +286,14 @@ _wait_cloud_init() {
     # free", the loop breaks on its first pass, and the wait protects nothing
     # while appearing to work. It is present on the golden (measured), so this
     # guards the case where the image changes rather than a case observed today.
-    if ! $LXC exec -T "$instance" -- command -v fuser >/dev/null 2>&1; then
+    #
+    # **`sh -c` is load-bearing.** `command -v` is a shell BUILTIN, not a binary,
+    # so `lxc exec … -- command -v fuser` tries to exec a file called `command`
+    # and fails with `Error: Command not found` — which this guard then read as
+    # "fuser is absent" and returned early on EVERY machine. Measured: it fired
+    # 52 times in one gate and disabled the very wait it was added to protect.
+    # Running it through `sh -c` is what makes the builtin resolve.
+    if ! $LXC exec -T "$instance" -- sh -c 'command -v fuser' >/dev/null 2>&1; then
         printf 'warning: fuser is not on %s, so the apt lock wait cannot run and ' \
             "$instance" >&2
         printf 'a suite that calls `soil packages` early may lose the lock race\n' >&2
