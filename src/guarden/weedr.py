@@ -888,17 +888,15 @@ def _edge_group(module: modules.Module) -> None:
             continue
         tool.run(["usermod", "--append", "--groups", EDGE_GROUP, entry.name])
         sys.stdout.write(f"added {entry.name} to the {EDGE_GROUP} group\n")
-    # A systemd user manager's supplementary groups are fixed at its creation
-    # time. If the manager was started before the user was added to `edge`
-    # (e.g. by `loginctl enable-linger` during `service.create`), it will never
-    # pick up the group, and containers it launches with `--group-add keep-groups`
-    # will not have `edge` either. Restarting the manager picks up the new
-    # group set, and it is only done when the group is actually missing so a
-    # re-run against a converged host does not interrupt a running edge.
-    for entry in module.services:
-        if entry.ingress:
-            _restart_user_manager(entry.name)
-            break
+        # A systemd user manager's supplementary groups are fixed at its
+        # creation time. If the manager was started before the user was added
+        # to `edge` (e.g. by `loginctl enable-linger` during `service.create`),
+        # it never picks up the group, and a container launched with
+        # `--group-add keep-groups` inherits no `edge` — so it is denied a read
+        # on /var/lib/guarden/edge/dynamic and the file provider never loads.
+        # The restart is skipped when the manager already carries the group, so
+        # a converged host is not disturbed.
+        _restart_user_manager(entry.name)
 
 
 def _restart_user_manager(name: str) -> None:
