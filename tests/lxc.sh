@@ -254,17 +254,25 @@ _boot_id() {
 # longer holding the dpkg lock.
 _wait_cloud_init() {
     local instance=$1
-    if $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1; then
-        return 0
-    fi
-    # An image with no cloud-init answer is not a failure, only something that
-    # cannot be waited on. Fall back to asking whether apt is still busy.
+    # **Wait on apt's locks as well as on cloud-init, and this is the whole fix.**
+    # `cloud-init status --wait` returns as soon as cloud-init reports done, but
+    # cloud-init's own `package_update` can still be holding
+    # `/var/lib/apt/lists/lock` at that moment. Measured on a cut machine: the
+    # lists lock is held from 12.5s of uptime to 23.5s, and `_wait_ready` has
+    # already returned by 12s — so a suite that calls `soil packages --apply` in
+    # its first seconds loses the race, and `apt-get` does not wait: it exits 100
+    # with `Could not get lock`. The suite then dies under `set -e` at that line
+    # with **nothing on stderr**, which is how t20-podlet and t90-projects failed
+    # in a full gate while passing alone.
     #
-    # **Both of apt's locks, and the lists one first.** `package_update` holds
-    # `/var/lib/apt/lists/lock` on its own and the `packages:` install holds
-    # `lock-frontend` afterwards, and the lock that lost a `soil packages` refresh
-    # on the golden VM was the lists one — so a fallback that asked only about the
-    # frontend lock would return while the refresh was still the thing running.
+    # Both locks are asked about, and the lists one first: `package_update` holds
+    # the lists lock on its own and the `packages:` install holds `lock-frontend`
+    # afterwards, and the lock that lost the race was the lists one.
+    # The cloud-init wait is kept because it is the honest signal when it works,
+    # and its result is deliberately not used to skip the lock wait: `status
+    # --wait` can return before `package_update` has released the lists lock,
+    # which is the race this function exists to close.
+    $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1 || :
     local i
     for ((i = 0; i < 60; i++)); do
         if ! $LXC exec -T "$instance" -- sh -c \
