@@ -1297,3 +1297,50 @@ container up, `stat -c '%i %n' /var/lib/guarden/edge/dynamic` on the host, then
 `podman exec … stat -c '%i %n' /etc/guarden/edge` inside. Different inode numbers
 mean the container is mounted somewhere else; the same number means it is looking
 at the right directory and the emptiness is a permission effect on the readdir.
+
+## THE ROOT CAUSE, fully measured: the user manager starts before the edge group exists
+
+The host user IS in the edge group. `keep-groups` is working correctly. The
+problem is **when** the user manager starts relative to when the group is added.
+
+```
+PROBE host_user_groups=[traefik-production edge]     <- user IS in edge (981)
+PROBE umgr_groups=[Gid: 982 ... Groups: 982]        <- manager is NOT
+PROBE after_mgr_restart: Groups: 981 982            <- restart fixes it
+PROBE after restarting only the service: Groups: 0   <- service restart alone does NOT
+```
+
+**The mechanism.** `keep-groups` faithfully carries the launching process's
+supplementary groups into the container. The launching process is the systemd
+user manager. The user manager's groups are fixed at its own process creation
+time — they are inherited from the session that started it, and they do not
+update when the user's group membership changes later.
+
+`_edge_group` (called from `weedr module add gate`) creates the `edge` group and
+adds the service user to it. But the user manager may already be running from
+an earlier step in the converge (e.g. `soil install` or the first
+`weedr module add`). Its group set is stale.
+
+**The fix, in order of preference:**
+
+1. **After `_edge_group` adds the user to `edge`, restart the user manager.**
+   `systemctl restart user@<uid>.service` picks up the new group set. This is
+   the smallest change and the one the measurement supports.
+2. **Create the edge group and add the user before the user manager starts.**
+   This means restructuring `weedr module add gate` so the group setup happens
+   before any command that triggers the user manager. More invasive.
+3. **Have `_edge_group` itself restart the user manager** after adding the user.
+   Self-contained in the one place that changes group membership.
+
+**Why `assert_supplementary_group` didn't catch this.** It runs `id -nG <user>`,
+which asks the **host user database** (`getent`), not the running process. The
+user IS in the edge group per `/etc/group`. The container process is not. The
+assertion checks the wrong thing.
+
+**The probe that settles it**, for future reference:
+
+```sh
+# Does the user manager have the edge group?
+grep ^Groups /proc/$(pgrep -u traefik-production -f 'systemd --user' | head -1)/status
+# -> "Groups: 982" means NO, "Groups: 981 982" means YES
+```
