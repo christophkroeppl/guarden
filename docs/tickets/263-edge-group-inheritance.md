@@ -1270,22 +1270,30 @@ the opposite and has been corrected.
 the mount is present and read-only; the edge answers 404 on the TLS entrypoint
 because no router is loaded.
 
-**What is NOT established:** the cause. Candidates, none tested:
+**What is NOT established:** the cause.
 
-- `Propagation: rprivate` and whether the source path the container resolved is
-  the one the host wrote — the mount is by *path*, and if the edge's unit was
-  generated before `roots sync` created the directory, the bind source may have
-  been resolved to a different inode.
-- `_edge_directory` (`weedr.py:906`) runs `path.mkdir(parents=True, exist_ok=True)`
-  and then `chmod`/`set_owner` on an **existing** directory. If the directory is
-  re-created rather than re-owned, a container holding the old inode sees an
-  empty mount while the host sees the new directory at the same path. That is
-  the shape to check first, and it is checkable with `stat` on the host plus
-  `ls` inside the container at the same moment.
-- Whether `podman exec ls` and the bind resolve the same path at all.
+**Refuted by reading, before it cost a VM run:** that `_edge_directory`
+re-creates the directory and the container holds a stale inode. `_edge_directory`
+(`weedr.py:893`) is `path.mkdir(parents=True, exist_ok=True)`, `conf.set_owner`
+and `os.chmod` — and `conf.set_owner` is `os.chown`, never an unlink or an
+`rmtree`. Nothing in guarden removes that directory, so its inode is stable
+across the whole run and the mount source cannot have been replaced. The
+hypothesis is recorded here because it is the first one anyone reaches for.
 
-**The measurement that would settle it**, cheap and specific: record the host
-directory's inode before and after the edge starts, and compare it with the
-directory the container sees. Same inode means the container is looking at the
-right place and the emptiness is something else; different inode means the mount
-source was replaced under a running container.
+**Still open, and the reading above narrows it rather than closing it.** The
+directory's inode is stable; what is not known is whether the container is
+looking at that inode at all. The candidates left:
+
+- the rootless mount path — the source is `guarden:edge 2750`, so traversal needs
+  the `edge` group, and the mount is set up by podman as the service user *before*
+  the container's own group set exists. `keep-groups` carries groups into the
+  **process**; whether it carries them into the **mount setup** is a different
+  question and is not the same claim.
+- whether the suite's `run_edge podman exec` and the unit's `Volume=` resolve the
+  same source path.
+
+**The measurement that settles the first**, and it is cheap: in the VM with the
+container up, `stat -c '%i %n' /var/lib/guarden/edge/dynamic` on the host, then
+`podman exec … stat -c '%i %n' /etc/guarden/edge` inside. Different inode numbers
+mean the container is mounted somewhere else; the same number means it is looking
+at the right directory and the emptiness is a permission effect on the readdir.
