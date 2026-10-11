@@ -261,9 +261,16 @@ _wait_cloud_init() {
     # lists lock is held from 12.5s of uptime to 23.5s, and `_wait_ready` has
     # already returned by 12s — so a suite that calls `soil packages --apply` in
     # its first seconds loses the race, and `apt-get` does not wait: it exits 100
-    # with `Could not get lock`. The suite then dies under `set -e` at that line
-    # with **nothing on stderr**, which is how t20-podlet and t90-projects failed
-    # in a full gate while passing alone.
+    # with `Could not get lock`.
+    #
+    # **What was observed is a `FAIL` with no `error:` line under it**, which is
+    # how t20-podlet and t90-projects failed in a full gate while passing alone.
+    # An earlier version of this comment said "nothing on stderr", and that is a
+    # stronger claim than the evidence: `hosttool.run` uses `capture_output=True`
+    # and `run_or_die` re-reports the first line as `error: apt-get ...`, so an
+    # apt-lock failure should print. The mechanism above is measured; the silence
+    # is not fully explained by it, and that gap is recorded rather than papered
+    # over.
     #
     # Both locks are asked about, and the lists one first: `package_update` holds
     # the lists lock on its own and the `packages:` install holds `lock-frontend`
@@ -273,6 +280,18 @@ _wait_cloud_init() {
     # --wait` can return before `package_update` has released the lists lock,
     # which is the race this function exists to close.
     $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1 || :
+    # **`fuser` may be absent, and its absence would make this a silent no-op.**
+    # It comes from `psmisc`, which is not in Ubuntu's base install. Without this
+    # check the `if ! ... fuser ...` below inverts a 127 into "the locks are
+    # free", the loop breaks on its first pass, and the wait protects nothing
+    # while appearing to work. It is present on the golden (measured), so this
+    # guards the case where the image changes rather than a case observed today.
+    if ! $LXC exec -T "$instance" -- command -v fuser >/dev/null 2>&1; then
+        printf 'warning: fuser is not on %s, so the apt lock wait cannot run and ' \
+            "$instance" >&2
+        printf 'a suite that calls `soil packages` early may lose the lock race\n' >&2
+        return 0
+    fi
     local i
     for ((i = 0; i < 60; i++)); do
         if ! $LXC exec -T "$instance" -- sh -c \

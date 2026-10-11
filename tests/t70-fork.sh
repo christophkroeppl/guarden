@@ -179,15 +179,18 @@ assert_exit 0
 # does not exist or, worse, accidentally name one.
 moment=$(python3 "$GUARDEN_ROOT/tests/snapfield.py" "$config" 1 date \
     <"$GUARDEN_FIXTURES/snapper-$config.json" | awk '{print $1" "$2}')
+# **The number the moment resolves to is computed, not written down.** The walk
+# is `newest_at_or_before`'s — skip anything after the moment, keep the best by
+# `(date, number)` — so a same-second tie resolves to the HIGHER number and the
+# answer depends on the clock. Writing `@1` down is a flake; writing nothing
+# down is worse, because then a fork that cloned the wrong snapshot would pass.
+# `resolve` runs the program's own walk, so the assertion below is both
+# deterministic and able to catch a wrong selection.
+expected=$(_snapfield "$config" resolve "$moment")
+[ -n "$expected" ] || _fail "no snapshot resolves to the moment $moment"
 run weedr service fork myapp-staging --from "myapp-production@$moment"
 assert_exit 0
-# The snapshot number is not asserted because `newest_at_or_before` breaks a
-# same-second tie by picking the higher number. If snapshot 2 was taken in the
-# same second as snapshot 1, the moment of 1 resolves to 2. The property under
-# test is that the fork succeeds and clones a snapshot selected by time, not
-# that it picks a specific number.
-grep -qF "cloned myapp-production:data@" "$GUARDEN_STDOUT" \
-    || _fail "stdout names no cloned snapshot"
+assert_stdout_has "cloned myapp-production:data@$expected"
 assert_subvolume "$staging/state/data"
 
 # A name that is not a time is rejected as input, not resolved to a number.

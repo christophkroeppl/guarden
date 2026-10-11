@@ -910,8 +910,16 @@ def _restart_user_manager(name: str) -> None:
 
     Restarting `user@<uid>.service` makes the manager re-read `/etc/group`.
     The restart is skipped when the manager already carries the group, so a
-    converged host is not disturbed, and it is a no-op when no manager is
-    running because `systemctl restart` on a stopped unit starts nothing.
+    converged host is not disturbed.
+
+    **When no manager is running this STARTS one**, and that is deliberate
+    rather than incidental: `systemctl restart` starts a unit that is not
+    running. Starting it with the current group set is what the service needs
+    anyway — a manager that does not exist cannot carry `edge` either — so the
+    two cases want the same action and no branch is needed. An earlier version
+    of this docstring claimed the opposite ("a no-op when no manager is
+    running"), which is false of `systemctl restart` and would have misled
+    anyone who relied on it.
     """
     uid = users.passwd_entries()[name][0]
     wanted = users.group_id(EDGE_GROUP)

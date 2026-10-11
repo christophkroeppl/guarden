@@ -36,6 +36,13 @@ of the `userdata` object — `important` and `guarden` among them.
 
 With `<number>` as `-` the field is about the configuration rather than one
 snapshot, and two of them are `count` and `newest`.
+
+With `<number>` as `resolve` the argument is a **moment** rather than a number,
+and the printed value is the snapshot `newest_at_or_before` would select for it —
+the same walk over `(date, number)` that `src/guarden/snapper.py` performs. A
+test that wants to assert which snapshot a `--from <service>@<moment>` fork
+clones must ask this rather than write the number down, because a same-second
+tie resolves to the HIGHER number and the answer depends on the clock.
 """
 
 from __future__ import annotations
@@ -44,6 +51,20 @@ import json
 import sys
 
 CONFIG_ONLY = {"count", "newest"}
+
+
+def _moment_of(value):
+    """`snapper.moment_of`, imported so there is one parser and not two.
+
+    The suite runs with `PYTHONPATH` pointing at the checkout's `src`, so the
+    program's own parser is reachable. Importing it is deliberate: a copy here
+    could accept a shape the program refuses, or refuse one it accepts, and the
+    disagreement would surface as a wrong expected number rather than as a test
+    failure.
+    """
+    from guarden.snapper import moment_of
+
+    return moment_of(value)
 
 
 def main(argv: list[str]) -> int:
@@ -88,6 +109,32 @@ def main(argv: list[str]) -> int:
             return 0
         sys.stderr.write(f"error: {field!r} is not a field of a configuration\n")
         return 2
+
+    if number == "resolve":
+        # `resolve` arrives in the NUMBER slot and the moment in the FIELD slot,
+        # because the argv shape is (config, number, field).
+        #
+        # **The parser is the program's own, imported rather than re-written.**
+        # `moment_of` accepts four naive shapes and an ISO value with a zone, and
+        # a second copy of that here would be a second implementation whose
+        # disagreement with the real one shows up as a wrong expected number.
+        when = _moment_of(field)
+        if when is None:
+            sys.stderr.write(f"error: {field!r} is not a time\n")
+            return 2
+        # The walk mirrors `snapper.newest_at_or_before`: skip anything after the
+        # moment, then keep the best by `(date, number)`, so a same-second tie
+        # resolves to the HIGHER number. This is the rule the code implements and
+        # the reason a test must not write the expected number down.
+        best = None
+        for entry in entries:
+            date = _moment_of(entry.get("date", ""))
+            if date is None or date > when:
+                continue
+            if best is None or (date, entry["number"]) > best:
+                best = (date, entry["number"])
+        print(best[1] if best else "")
+        return 0
 
     for entry in entries:
         if entry.get("number") == int(number):
