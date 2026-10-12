@@ -14,8 +14,9 @@
 
 . "$(dirname "$0")/lib.sh"
 
-# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
-# directory on PATH, and every claim below is a question to the machine: a
+# The machine's own tools, not the stand-ins that used to be in fixtures/bin:
+# that directory and its PATH entry were deleted with the fake tier (ticket 35,
+# ADR-0014). Every claim below is a question to the machine: a
 # passwd entry from the real user database, a real `loginctl` on the real
 # systemd, a real btrfs subvolume, a real snapper configuration. Under the fakes
 # the `useradd` wrote a line with uid 0 and the `loginctl` knew only

@@ -16,8 +16,9 @@
 
 . "$(dirname "$0")/lib.sh"
 
-# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
-# directory on PATH, and every assertion below asks the machine what it holds: a
+# The machine's own tools, not the stand-ins that used to be in fixtures/bin:
+# that directory and its PATH entry were deleted with the fake tier (ticket 35,
+# ADR-0014). Every assertion below asks the machine what it holds: a
 # real user gone from the real passwd database, a real btrfs subvolume renamed,
 # a real snapper configuration still on the host. The fake `userdel` left the
 # entry it had been handed in place with uid 0, so "the user is gone" was a fact

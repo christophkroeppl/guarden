@@ -25,7 +25,9 @@
 
 . "$(dirname "$0")/lib.sh"
 
-# The machine's own tools, not the stand-ins in fixtures/bin. Every claim below is
+# The machine's own tools, not the stand-ins that used to be in fixtures/bin:
+# that directory and its PATH entry were deleted with the fake tier (ticket 35,
+# ADR-0014). Every claim below is
 # a question to the box: a real btrfs subvolume, a real snapper configuration, a
 # real snapshot list, a real lock file. `.venv/bin` is kept first because it is
 # the checkout's interpreter and not a stand-in for anything.

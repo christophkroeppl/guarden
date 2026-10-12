@@ -10,8 +10,9 @@
 
 . "$(dirname "$0")/lib.sh"
 
-# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
-# directory on PATH, and the whole of this file is the read-back: a range the
+# The machine's own tools, not the stand-ins that used to be in fixtures/bin:
+# that directory and its PATH entry were deleted with the fake tier (ticket 35,
+# ADR-0014). The whole of this file is the read-back: a range the
 # real `useradd` put in the real `/etc/subuid`, a membership the real `usermod`
 # set, a linger the real `loginctl` holds. The fake `useradd` numbered every user
 # from a counter and the fake `loginctl` knew only `enable-linger`, so under it

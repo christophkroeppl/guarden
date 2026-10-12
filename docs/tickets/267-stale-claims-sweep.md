@@ -23,7 +23,7 @@ edge-group work in `t-263` (`ab2082e`), not here.
   body asserts its absence (`160–161`). Header sentence to be deleted.
 - `t80-edges.sh:193–197` and the fail message at `209` — "KNOWN DIVERGENCE …
   spec 7.6 puts `-o lo` on every accept" is stale: the spec was rewritten
-  (028c4db; spec.md:2171–2177) to say there is no interface match and there
+  (00bdddd; spec.md:2171–2177) to say there is no interface match and there
   never was. The assertion is right; its label and fail message still present
   the divergence as unreconciled.
 - `t160-grants.sh:288–291` — a comment justifying a missing assertion with
@@ -126,7 +126,7 @@ follow-up:
 - `t80-edges.sh` and this ticket cited the wrong commit for spec 7.6's
   rewrite: `git log -S 'no interface match' -- docs/spec.md` returns
   `00bdddd` alone, not `028c4db` (which touched 7.6 for the stub-resolver
-  work). Both now say `00bdddd`.
+  work). The suite now says `00bdddd` and so does the audit entry above.
 - `auth.container`'s "t150 asserts both" overstated: t150 asserts the
   middleware's address and its absence on the provider's own route; nothing
   asserts the container's own `TRAEFIK_FORWARD_AUTH_ADDRESS` — no test in
@@ -135,10 +135,16 @@ follow-up:
 - `credentials.py`'s "for the gate and the edge" named two of `value()`'s
   three callers: `weedr secret list` decrypts through it too
   (`weedr.py:564`). Both sentences now name all three.
-- Two notes this ticket's audit listed as "checked clean" were stale:
-  `t20-firewall.sh:14` and `t30-list.sh:20` said `lib.sh` puts `fixtures/bin`
-  on `PATH`, present tense, long after the fake tier was deleted (ticket 35,
-  ADR-0014). Both rewritten to the past tense with the deletion named.
+- One note this ticket's audit listed as "checked clean" was stale —
+  `t20-firewall.sh:14` said `lib.sh` puts `fixtures/bin` on `PATH`, present
+  tense, long after the fake tier was deleted (ticket 35, ADR-0014) — and its
+  near-twin in `t30-list.sh` (a file the audit listed as not fully read) was
+  the same kind of stale. Both rewritten to the past tense with the deletion
+  named, and the class was then completed over sixteen further suites — the
+  `t20-install` / `t20-packages` / `t20-storage` / `t20-sysctl` / `t20-units`
+  / `t30-create` / `t30-identity` / `t30-remove` block, the `t130-modules` /
+  `t130-packages` / `t130-scripts` / `t40-untrusted` / `t70-fork` /
+  `t70-pins` / `t70-snapshot` block, and `tests/lxc.sh`'s header.
 - **The 30-vs-50 family, found outside the audited scope:** `8c78126`
   renumbered the mutator's file to `50-services.conf` (ADR-0013's revision
   note records the rename), and 29 present-tense references across 15

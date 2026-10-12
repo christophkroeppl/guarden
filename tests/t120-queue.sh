@@ -9,11 +9,13 @@
 # verb wrote, and the JSON `furrow queue list --json` printed. Nothing is read
 # out of a record of what furrow was about to do.
 #
-# The deploys here fail at the ensure step on purpose: `stage_tree` welds a
-# second `schema:` key onto the fixture's last line, which carries no trailing
-# newline, so the staged manifest does not parse and `weedr service ingest`
-# refuses it before anything else runs. The claims under test are about the
-# request and its place in the queue, and a request whose deploy was refused
+# The staged-tree deploys here fail at the ensure step on purpose: `stage_tree`
+# appends a `schema:` key with no newline before it, welding it onto the
+# fixture's last line (`host: web`), so the staged manifest does not parse and
+# `weedr service ingest` refuses it before anything else runs. The input
+# refusals above (a path where a ref belongs, a non-hex ref, a mismatched sha)
+# exit 2 without enqueueing anything and never reach the ensure step. The claims
+# under test are about the request and its place in the queue, and a request whose deploy was refused
 # keeps its file and its message. What a deploy does with a real service is
 # t120-deploy.sh, and what a blocked gate does — exit 0, the file drains — is
 # its subject there, not this file's.

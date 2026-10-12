@@ -17,8 +17,9 @@
 
 . "$(dirname "$0")/lib.sh"
 
-# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
-# directory on PATH, and this file's whole subject is what the machine holds: the
+# The machine's own tools, not the stand-ins that used to be in fixtures/bin:
+# that directory and its PATH entry were deleted with the fake tier (ticket 35,
+# ADR-0014). This file's whole subject is what the machine holds: the
 # fake `install` creates a directory and applies the mode but *cannot* set the
 # owner, so a converge run under it leaves `/var/lib/guarden` root:root, and the
 # mode is already right, which is the combination this suite exists to catch.

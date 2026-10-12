@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # tests/lxc.sh — the real-host harness. A throwaway LXD **VM**, cut from a
-# golden snapshot, with the real tools instead of fixtures/bin.
+# golden snapshot, with the real tools and nothing standing in for them.
 #
-# Why this exists: fixtures/bin stands in for the host. Every one of those fakes
-# is a claim about what guarden would do on a machine that has the real tool.
+# Why this exists: fixtures/bin stood in for the host — every fake was a claim
+# about what guarden would do on a machine that has the real tool.
 # Here the machine has it — real useradd with real /etc/subuid arithmetic, real
 # iptables, real btrfs subvolumes, real snapper, real systemd — so the assertion
 # is about guarden and not about a stand-in for guarden's environment.

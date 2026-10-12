@@ -20,9 +20,10 @@
 
 . "$(dirname "$0")/lib.sh"
 
-# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
-# directory on PATH for the fake tier, and both the assertions below and the
-# programs under them have to reach the real `getent`, `dpkg-query`, `systemctl`,
+# The machine's own tools, not the stand-ins that used to be in fixtures/bin:
+# that directory and its PATH entry were deleted with the fake tier (ticket 35,
+# ADR-0014), and both the assertions below and the programs under them have to
+# reach the real `getent`, `dpkg-query`, `systemctl`,
 # `snapper`, `sysctl` and `install` -- otherwise this file is asking a fake what
 # it had been asked to do, which is the whole thing the rewrite exists to stop.
 # `.venv/bin` is kept first because it is the checkout's interpreter and not a
