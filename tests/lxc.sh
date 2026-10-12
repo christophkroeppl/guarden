@@ -131,6 +131,22 @@ die() {
 
 [ -x "$LXC" ] || die "$LXC not found; the LXD snap is not installed at that path"
 
+# **The failure lines are a function in their own file, and this is its only
+# caller in the runner.** A suite cannot drive this script — it runs inside
+# the machine, where `lxc` does not exist — so the part of the runner whose
+# whole value is its text is kept where `tests/t10-failure-messages.sh` can
+# assert it: name, code and the guest's status word in, one diagnostic out.
+# The path goes through `$REPO` — resolved by `readlink -f` above — because
+# `$0` under a symlinked or PATH invocation points at the link, the `.` fails,
+# and with no `set -e` every failure line then degrades to a command-not-found
+# while the run looks normal: the silent diagnostic loss this file exists to
+# remove. The hard stop for a missing file lives in `cmd_run`, not at this
+# line: the cleanup verbs (`clean`, `destroy`, `shell`) must stay reachable in
+# the one situation where the diagnostic file is absent — a broken checkout
+# must not keep its 8 GiB machine because the thing that names failures is
+# missing.
+[ -r "$REPO/tests/failure_messages.sh" ] && . "$REPO/tests/failure_messages.sh"
+
 # `lxc list -c s` prints the whole table, not the state, so the comparison
 # against RUNNING never matched and every provision tried to start a machine
 # that was already up. `-f csv` gives the bare value.
@@ -285,10 +301,10 @@ _wait_cloud_init() {
     # it is present on the golden only because `ubuntu-standard` pulls it in
     # (measured: `apt-cache rdepends --installed psmisc` lists ubuntu-standard).
     # A minimal image that drops that metapackage would lose it, and the wait
-    # below would then spend its whole 300s budget answering `unmeasured` before
-    # failing: a slow failure where an immediate, named one is what a host this
-    # broken deserves. That is why the check exists, and why it is checked
-    # rather than assumed.
+    # below would then spend its whole 60-check budget answering `unmeasured`
+    # before failing: a slow failure where an immediate, named one is what a
+    # host this broken deserves. That is why the check exists, and why it is
+    # checked rather than assumed.
     #
     # **`sh -c` is load-bearing.** `command -v` is a shell BUILTIN, not a binary,
     # so `lxc exec … -- command -v fuser` tries to exec a file called `command`
@@ -318,6 +334,30 @@ _wait_cloud_init() {
         printf 'early will lose the lock race\n' >&2
         return 1
     fi
+    # **The lock files themselves are checked for the same reason `fuser` is,
+    # and the check answers in a word for the same reason too.** A missing
+    # file is the second measured fatal cause (`Specified filename … does not
+    # exist.`) and the loop reads it as `unmeasured`: correct, and slow. But
+    # a bare `lxc exec` status cannot carry the answer — a transport blip
+    # exits 1 as well, and reading that as "missing" would fail a cut with a
+    # wrong cause, which is worse than the slow honest path. The guest prints
+    # which of the files is absent; no word at all means the exec could not be
+    # reached, and the loop below then measures it honestly instead.
+    local lockword missing
+    lockword=$(timeout --foreground --signal=KILL 20 $LXC exec -T "$instance" -- sh -c '
+        for f in /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock; do
+            [ -e "$f" ] || printf "missing:%s\n" "$f"
+        done
+        printf ok') || lockword=''
+    case "$lockword" in
+        ok) ;;
+        missing:*)
+            missing=${lockword#missing:}
+            missing=${missing%%$'\n'*}
+            printf 'error: %s is missing %s, so no check of the wait can come free\n' \
+                "$instance" "$missing" >&2
+            return 1 ;;
+    esac
     # **The guest answers one word, because every exit code the local side can
     # read is ambiguous.** Measured: `fuser` exits 1 both for "none of the
     # specified files is accessed" (empty stderr) and for a fatal error that
@@ -330,7 +370,15 @@ _wait_cloud_init() {
     # measured and is treated as such.
     local i answer
     for ((i = 0; i < 60; i++)); do
-        answer=$($LXC exec -T "$instance" -- sh -c '
+        # The poll itself is bounded, so a wedged `lxc exec` cannot hold the
+        # loop past its budget: a 124 from `timeout` leaves the word empty and
+        # is retried like any other failed measurement. `--foreground` is as
+        # load-bearing here as it is on the suite exec below — without it
+        # `timeout` puts the child in a new process group, and `lxc exec`'s
+        # session does not survive that: the client then waits on a session
+        # nobody will close, so the bound would reintroduce the wedge it is
+        # here to cap.
+        answer=$(timeout --foreground --signal=KILL 20 $LXC exec -T "$instance" -- sh -c '
             err=$(fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock 2>&1 >/dev/null)
             rc=$?
             case $rc in
@@ -350,10 +398,11 @@ _wait_cloud_init() {
     # function exists to prevent: the caller proceeds, loses the race, and the
     # suite dies with no diagnostic. Named, with the last word the guest gave,
     # so the run says which of the two it was.
-    printf 'error: %s still holds the apt lock after 300s, or the wait could not ' \
+    printf 'error: %s still holds the apt lock after 60 checks spread over at least ' \
         "$instance" >&2
-    printf 'measure it (last answer: %s); a suite that runs `soil packages` now may exit 100\n' \
+    printf '300s, or the wait could not measure it (last answer: %s); a suite that runs ' \
         "${answer:-no answer from the exec}" >&2
+    printf '`soil packages` now may exit 100\n' >&2
     return 1
 }
 
@@ -646,7 +695,7 @@ _reset() {
 }
 
 _run_suite() {
-    local name=$1 rc
+    local name=$1 rc=0 marker
     # -T always, and with stdin closed and a wall clock. A command that reads
     # stdin — an echo-off prompt, a tool that asks a question — otherwise
     # blocks forever on a stream nobody is feeding, and the run stops with no
@@ -664,34 +713,36 @@ _run_suite() {
     # **The exit code is returned rather than reduced to a boolean.** A failure
     # must reach the ledger and must not be recorded, and the one thing that
     # decides both is whether this suite actually passed.
-    local rc=0
+    # **The guest writes its own word before it exits, and the runner reads it
+    # when the code alone is ambiguous.** The wrapper below puts `<name> <rc>`
+    # in a file inside the machine; if the file says `<name> 1`, the suite
+    # itself stopped with 1 and its own line is the diagnostic; if it does not,
+    # the exec never confirmed the suite ran. Measured: `lxc exec` itself exits
+    # 1 when it cannot reach the instance, so rc=1 is the one code an assertion
+    # and a lost transport share.
     timeout --foreground --signal=KILL "$SUITE_TIMEOUT" \
         $LXC exec -T "$RUNNER" --cwd "$VM_REPO" \
         --env "PYTHONPATH=$VM_REPO/src" \
         --env "GUARDEN_ROOT=$VM_REPO" \
-        -- bash -c "cd '$VM_REPO' && bash tests/$name" </dev/null || rc=$?
+        -- bash -c "cd '$VM_REPO' || exit 97; rm -f /tmp/guarden-suite-status; \
+bash tests/$name; rc=\$?; printf '%s %s' \"$name\" \"\$rc\" >/tmp/guarden-suite-status; exit \$rc" \
+        </dev/null || rc=$?
     if [ "$rc" -eq 0 ]; then
         python3 "$CACHE_TOOL" line pass "$name"
         return 0
     fi
     python3 "$CACHE_TOOL" line fail "$name"
-    if [ "$rc" -eq 137 ]; then
-        printf 'error: %s exceeded %ss and was killed; a suite that hangs reports nothing\n' \
-            "$name" "$SUITE_TIMEOUT" >&2
-    elif [ "$rc" -gt 128 ] && [ "$rc" -lt 160 ]; then
-        # 128+n is the shell's shape for death by signal n. A suite that dies
-        # without a diagnostic leaves the runner exactly one fact — the code —
-        # and measured, a remote bash killed by SIGTERM makes `lxc exec` return
-        # 143 with empty stderr. Dropping the code dropped the only word there
-        # was: t180-firewall-rules.sh failed a full gate as a bare `FAIL`.
-        printf 'error: %s exited %s = 128+%s; a suite killed by a signal reports nothing\n' \
-            "$name" "$rc" "$((rc - 128))" >&2
-    elif [ "$rc" -ne 1 ]; then
-        # An assertion that stops a suite exits 1 (measured: `set -Eeuo pipefail`
-        # with the ERR trap and a failing command -> 1), so any other code is a
-        # different kind of death and the code is the whole of what is known.
-        printf 'error: %s exited %s; an assertion that stops a suite exits 1\n' \
-            "$name" "$rc" >&2
+    if [ "$rc" -eq 1 ] || [ "$rc" -eq 124 ]; then
+        # rc=1 and rc=124 are the two codes an assertion and a lost transport
+        # (or the wall clock) share — measured: `timeout` passes a child's own
+        # 124 through, so 124 alone is as ambiguous as 1 — and the guest's own
+        # word is read back for both before the line is chosen; the choice
+        # itself is `_failure_message`, where a suite can assert it.
+        marker=$(timeout --foreground --signal=KILL 20 $LXC exec -T "$RUNNER" -- cat /tmp/guarden-suite-status 2>/dev/null) \
+            || marker=''
+        _failure_message "$name" "$rc" "$marker"
+    else
+        _failure_message "$name" "$rc"
     fi
     return "$rc"
 }
@@ -699,6 +750,14 @@ _run_suite() {
 cmd_run() {
     local pat=${1:-}
     [ "$#" -gt 0 ] && shift
+
+    # **The one hard stop for a missing failure_messages.sh, scoped to the verb
+    # that needs it.** The source line above is tolerant on purpose, so `clean`,
+    # `destroy` and `shell` still work in a checkout where the diagnostic file
+    # is gone; a run without it could not name a single failure, so this is
+    # where the die belongs.
+    command -v _failure_message >/dev/null 2>&1 \
+        || die "$REPO/tests/failure_messages.sh is unreadable; a run cannot name a failure without it"
 
     # Four flags and none of them about the suites: what a run shares is decided
     # by each suite, and the flags decide what happens to a suite that says
