@@ -36,7 +36,7 @@ PREFIX = Path(os.environ.get("GUARDEN_PREFIX", "/"))
 PROBE_IMAGE = "localhost/guarden-probe"
 
 MODE_DIR = 0o755
-MODE_DIR_GROUP = 0o770
+MODE_DIR_LOCKS = 0o2770
 MODE_CONFIG = 0o640
 
 
@@ -309,18 +309,28 @@ def lock(name: str) -> Iterator[None]:
     """`flock` on /run/guarden/locks/<name>.lock, spec 3.5's fixed set.
 
     The directory is created here rather than assumed, because the one thing a
-    lock must never do is fail to be taken; `soil install` is what converges the
-    directory's mode, and it converges it under this same rule.
+    lock must never do is fail to be taken; the mode is re-converged here for
+    the same reason, and it is the mode `soil install` states for the directory
+    (spec 2.1: `2770`, setgid so a file created by either caller is group
+    `guarden`). A lock file's own mode is stated too, because `open`'s is
+    filtered by the caller's umask and the other caller is not the file's
+    owner: the creating caller sets `0664`, anyone else's chmod is a no-op it
+    must not fail on.
     """
     directory = hostpath("run", "guarden", "locks")
     directory.mkdir(parents=True, exist_ok=True)
-    os.chmod(directory, MODE_DIR_GROUP)
-    handle = open(directory / f"{name}.lock", "w", encoding="utf-8")
+    os.chmod(directory, MODE_DIR_LOCKS)
+    target = directory / f"{name}.lock"
+    handle = open(target, "w", encoding="utf-8")
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        os.chmod(target, 0o664)
+    except OSError:
+        pass
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         yield
     finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
 
 
