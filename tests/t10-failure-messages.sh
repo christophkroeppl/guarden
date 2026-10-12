@@ -94,8 +94,12 @@ grep -qF -- '_failure_message "$name" "$rc" "$marker"' "$runner" \
 sites=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'error:' || true)
 [ "$sites" = 5 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of five is the enumeration"
 for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after 60 checks spread over at least '" "printf 'error: cannot cut a clean %s\\n'"; do
-    grep -vE '^[[:space:]]*#' "$runner" | grep -qF -- "$sig" \
-        || _fail "the runner lost one of its five known error lines: $sig"
+    # `grep -c`, not `grep -q`: a `grep -q` that exits on its first match sends
+    # SIGPIPE to the `grep -vE` still writing upstream, and under `pipefail`
+    # the pipeline then reads as a failed match — measured here as a race that
+    # failed a different signature on each of two identical runs.
+    n=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- "$sig" || true)
+    [ "$n" -ge 1 ] || _fail "the runner lost one of its five known error lines: $sig"
 done
 kills=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c -- '--foreground --signal=KILL' || true)
 [ "$kills" = 4 ] || _fail "the runner carries $kills '--foreground --signal=KILL' uses; four is the measured set"
