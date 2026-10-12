@@ -466,6 +466,18 @@ packages:
   - git
   - rsync
   - dracut-core
+  # **The substrate, and it is deliberate that it is here as well as in
+  # `packages/packages.toml`.** Ticket 200's doctrine is "the packages are
+  # already baked into the golden"; the rebuild of 2026-10-12 showed what a
+  # golden without `ferm`, `fail2ban` and `podman` does to the suites that
+  # rely on them before their own apply — `t130-packages`' remove-first
+  # asserts, `t100-homepage`'s firewall unit load, `t110-previews`' volume
+  # writes. The rendered `tools/cloud-init/user-data.yaml` carries the
+  # substrate for the golden-VM tool; this is the harness's own cut list and
+  # it must bake the same premise.
+  - ferm
+  - fail2ban
+  - podman
 CLOUD
 }
 
