@@ -83,12 +83,15 @@ unset SUITE_TIMEOUT
 # line's tail beyond that literal is not caught, and the pins catch presence,
 # not location: a reword paired with the literal kept elsewhere stays green;
 # and the word net is a third,
-# coarser catch reaching only the three lines whose literal begins `error:
-# %s` — the fuser guard and the cut message cannot trip it at all, so a reword
-# of those two into failure language is caught by their signatures alone.
+# coarser catch keyed on the literal prefix `error: %s` — today it reaches one
+# of the five (the die line) and it fires on whichever line begins that prefix
+# after a reword, so a reword of the fuser guard or the cut message into
+# failure language is caught by its signature, or by this net once the reword
+# begins the prefix.
 # The net is a net, not a proof. Every pin reads the comment-stripped stream
 # — the timeout assignment anchor alone reads the raw file, and its `^` and
-# column-0 literal are what no comment line can satisfy — so prose quoting a
+# column-0 literal are what no comment line can satisfy (a col-0 payload line
+# elsewhere could, though; nothing does today) — so prose quoting a
 # pin cannot break the pin, and a commented-out call cannot satisfy one; a
 # trailing `# …` naming a token would still count.
 runner=$GUARDEN_ROOT/tests/lxc.sh
@@ -96,7 +99,9 @@ runner=$GUARDEN_ROOT/tests/lxc.sh
 calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c '_failure_message "' || true)
 [ "$calls" = 2 ] || _fail "the runner has $calls _failure_message call sites; two is the set (the marker branch and the plain one)"
 marker_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '_failure_message "$name" "$rc" "$marker"' || true)
-[ "$marker_calls" -ge 1 ] || _fail "the marker branch's call is gone; the guest word can no longer reach the line"
+[ "$marker_calls" = 1 ] || _fail "the marker branch's call is gone or duplicated; the guest word must reach the line exactly once"
+plain_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_failure_message "\$name" "\$rc"[[:space:]]*$' || true)
+[ "$plain_calls" = 1 ] || _fail "the plain call is gone or duplicated; the unconfirmed path must exist exactly once"
 sites=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'error:' || true)
 [ "$sites" = 5 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of five is the enumeration"
 for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after 60 checks spread over at least '" "printf 'error: cannot cut a clean %s\\n'"; do
