@@ -284,11 +284,11 @@ _wait_cloud_init() {
     # It comes from `psmisc`, which is NOT in the cloud-init package list below —
     # it is present on the golden only because `ubuntu-standard` pulls it in
     # (measured: `apt-cache rdepends --installed psmisc` lists ubuntu-standard).
-    # A minimal image that drops that metapackage would lose it, and then the
-    # `if ! ... fuser ...` below would invert a 127 into "the locks are free",
-    # the loop would break on its first pass, and the wait would protect nothing
-    # while appearing to work. That is why the check exists, and why it is
-    # checked rather than assumed.
+    # A minimal image that drops that metapackage would lose it, and the wait
+    # below would then spend its whole 300s budget answering `unmeasured` before
+    # failing: a slow failure where an immediate, named one is what a host this
+    # broken deserves. That is why the check exists, and why it is checked
+    # rather than assumed.
     #
     # **`sh -c` is load-bearing.** `command -v` is a shell BUILTIN, not a binary,
     # so `lxc exec … -- command -v fuser` tries to exec a file called `command`
@@ -318,33 +318,42 @@ _wait_cloud_init() {
         printf 'early will lose the lock race\n' >&2
         return 1
     fi
-    # **The three outcomes are told apart, because `fuser`'s exit code and `lxc
-    # exec`'s failure are both non-zero.** Measured: `fuser` returns 0 when a
-    # process holds the file and 1 when none does. An `if ! ...` treats "1, free"
-    # and "the exec itself failed" as the same answer, so a transient guest-agent
-    # failure in the first seconds after boot would report the locks free without
-    # having measured anything — the silent success this function exists to
-    # remove, left on the one path where the check itself is the thing failing.
-    local i rc
+    # **The guest answers one word, because every exit code the local side can
+    # read is ambiguous.** Measured: `fuser` exits 1 both for "none of the
+    # specified files is accessed" (empty stderr) and for a fatal error that
+    # measured nothing — `Specified filename … does not exist.` and `Cannot
+    # stat …: Permission denied` say so on stderr and exit 1 — and an `lxc
+    # exec` that cannot reach the instance exits 1 as well. The man page says
+    # it outright: non-zero covers "none accessed **or a fatal error**". So
+    # the guest decides — `free`, `held` or `unmeasured` — and a transport
+    # failure produces no word at all, which is a fourth way of not having
+    # measured and is treated as such.
+    local i answer
     for ((i = 0; i < 60; i++)); do
-        rc=0
-        $LXC exec -T "$instance" -- sh -c \
-            'fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1' \
-            || rc=$?
-        # Only `1` is "no process holds either lock", which is the answer this
-        # function is waiting for. `0` means a lock is held and `2` (or an
-        # `lxc exec` failure, 255/127) means the measurement did not happen —
-        # both want another pass, so the loop simply falls through to the sleep.
-        [ "$rc" = 1 ] && return 0
+        answer=$($LXC exec -T "$instance" -- sh -c '
+            err=$(fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock 2>&1 >/dev/null)
+            rc=$?
+            case $rc in
+                0) printf held ;;
+                1) if [ -n "$err" ]; then printf unmeasured; else printf free; fi ;;
+                *) printf unmeasured ;;
+            esac
+        ' 2>/dev/null)
+        # Only `free` — measured with an empty stderr — is the answer being
+        # waited for. `held` and `unmeasured` and the empty word all want
+        # another pass, so the loop simply falls through to the sleep.
+        [ "$answer" = free ] && return 0
         sleep 5
     done
     # **Held after the whole budget, or not askable at all.** Both mean the wait
     # did not do its job, and a silent success here is the failure mode this
     # function exists to prevent: the caller proceeds, loses the race, and the
-    # suite dies with no diagnostic. Named, so the run says why.
+    # suite dies with no diagnostic. Named, with the last word the guest gave,
+    # so the run says which of the two it was.
     printf 'error: %s still holds the apt lock after 300s, or the wait could not ' \
-        "measure it" >&2
-    printf 'ask it; a suite that runs `soil packages` now may exit 100\n' >&2
+        "$instance" >&2
+    printf 'measure it (last answer: %s); a suite that runs `soil packages` now may exit 100\n' \
+        "${answer:-no answer from the exec}" >&2
     return 1
 }
 
