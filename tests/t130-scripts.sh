@@ -12,7 +12,7 @@
 # `/etc/apt/sources.list`, no `curl` that reads a fixture, and no `btrfs` that
 # records a subvolume it did not make: a converge is asked of the host and
 # answered by the host. What replaced the call-log assertions is the state — the
-# system units `soil units --apply` installed, the tmpfiles entry `soil storage
+# system units `soil units --apply` installed, the tmpfiles entry `soil install
 # --apply` wrote, the programs `soil install --apply` linked, and the package
 # database the distribution's own query reads. The one file this suite plants is
 # the host configuration, into the machine's real `/etc/guarden`, because that is

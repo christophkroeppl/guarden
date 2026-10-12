@@ -317,7 +317,7 @@ generating one would hide it.
 Three in the morning is when somebody asks why a file is not readable, and the answer is almost
 always one of these numbers.
 
-| path | mode | owner |
+| path | mode | owner | who creates it |
 |---|---|---|
 | `/var/lib/guarden/services/<name>/` and everything under it | `0700` | the service user |
 | `/var/lib/guarden/registry/<name>.toml` | `0640` | `root:guarden` |
@@ -347,9 +347,11 @@ snapshot seed.
 
 Four of those numbers are not the default; each is there for one reader:
 
-- **`projects.toml` and `projects.d/` are `0444`** because `hose` — the only network-facing
+- **`projects.toml` and the files under `projects.d/` are `0444`** because `hose` — the only network-facing
   program — reads the ref allowlist, and a project name, a repository URL and a ref pattern are
-  not secret. **Nothing else in `/etc/guarden` is readable by `hose`,** and in particular it never
+  not secret. `projects.d/` itself is the `0755` directory the table states, because a glob that
+  cannot enter the directory silently skips every entry. **Nothing else in `/etc/guarden` is
+  readable by `hose`,** and in particular it never
   reads `allow-gated-drop`: the refusal is enforced root-side, inside `weedr service remove`.
 - **`stakes/` and `queue/` are `0770 root:guarden`** because `stakes` and `furrow` run as `guarden`
   and *create and remove* the files in them. `0750` is a defect here, not a tightening: group bits

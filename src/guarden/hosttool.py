@@ -17,7 +17,9 @@ path is the absolute one in spec 2.
 from __future__ import annotations
 
 import fcntl
+import grp
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -187,17 +189,29 @@ def directory_item(
 ) -> Item:
     """A directory, its mode and its owner.
 
-    Ownership is applied through one `install -d -o -g` call and is not compared
-    here: a converger that reported drift on the owner it had just set would have
-    to be root to see it, and the golden VM is where that is proved. Mode and
-    existence are enough to make the phase idempotent, and the group is passed
-    because the group is what is load-bearing: `root:guarden` on the registry is
-    what makes it readable by the unprivileged programs, and `root:root` on
-    `services/` is what keeps a listing from leaking a workload.
+    Ownership is applied through one `install -d -o -g` call **and compared**:
+    a mode-only comparison let a directory whose mode already matched keep the
+    wrong owner forever -- measured 2026-10-12, the firewall directory's
+    soft-chown `root:root` (the group does not exist until `install` creates
+    it) survived a converged install whose own row for it says `root:guarden`.
+    `stat` reports ownership to every caller, so comparing it costs no
+    privilege; a group that does not exist yet resolves to "does not hold",
+    which is honest, and the converge that follows the group's own item fixes
+    it.
     """
 
+    def ids() -> tuple[int, int] | None:
+        try:
+            return pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid
+        except KeyError:
+            return None
+
     def holds() -> bool:
-        return path.is_dir() and (path.stat().st_mode & 0o7777) == mode
+        wanted = ids()
+        if wanted is None or not path.is_dir():
+            return False
+        info = path.stat()
+        return (info.st_mode & 0o7777) == mode and (info.st_uid, info.st_gid) == wanted
 
     return Item(what, holds, lambda: install_directory(path, mode, owner, group))
 
@@ -325,12 +339,15 @@ def lock(name: str) -> Iterator[None]:
     """
     directory = hostpath("run", "guarden", "locks")
     directory.mkdir(parents=True, exist_ok=True)
-    os.chmod(directory, MODE_DIR_LOCKS)
-    # The owner is stated too: a root mkdir leaves `root:root`, and the mode
-    # comparison alone would let the install item skip a directory a
-    # `guarden`-user program cannot enter. The chown fails soft for the
-    # unprivileged caller, which cannot have created it wrong in the first
-    # place.
+    # The mode and the owner are stated, softly, exactly as `conf.lock` states
+    # them: a root mkdir leaves `root:root` at the umask's mode, and an install
+    # item that compares only the mode would skip the directory. Soft so the
+    # twins fail alike -- `hostprep` is the only importer today, and a caller
+    # that cannot state either value proceeds on what exists.
+    try:
+        os.chmod(directory, MODE_DIR_LOCKS)
+    except OSError:
+        pass
     try:
         shutil.chown(directory, group=LOCK_GROUP)
     except (OSError, LookupError):

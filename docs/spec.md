@@ -248,7 +248,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/etc/guarden/` | `0751` | `root:guarden` | `soil install`. **Stated in code, not inherited from the write protocol's `mkdir`** — that is `0777 & ~umask`, so an umask of `027` would silently produce the `0750` that locks `hose` and the service users out of the tree, the same defect `/var/lib/guarden` had |
 | `/etc/guarden/services/`, `/etc/guarden/projects.d/` | `0755` | `root:root` | `soil install`. A service user reads its own configuration through the first and `hose` globs the second, and both are in neither group; a listing here is names, not secrets |
 | `/etc/guarden/**` (files) | `0640` | `root:guarden` | the write protocol |
-| `/etc/guarden/projects.toml`, `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` | |
+| `/etc/guarden/projects.toml`, the files under `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` | |
 | `/etc/guarden/creds/` | `0700` | `root` | |
 | `/etc/ssh/authorized_keys.d/hose` | `0644` | `root` | |
 

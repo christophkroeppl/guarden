@@ -100,6 +100,8 @@ INSTALL_DIRECTORIES = (
     # even enter the directory), and `creds` stays `0700`.
     (("etc", "guarden"), 0o751, "root", "guarden"),
     (("etc", "guarden", "creds"), 0o700, "root", "root"),
+    (("etc", "guarden", "edge"), 0o750, "root", "guarden"),
+    (("etc", "guarden", "firewall"), 0o750, "root", "guarden"),
     (("etc", "guarden", "projects.d"), 0o755, "root", "root"),
     (("etc", "guarden", "services"), 0o755, "root", "root"),
 )
@@ -1486,12 +1488,23 @@ def _seed_ssh_conf() -> None:
         return
     
     # First ever apply - create the file. The directory is stated too: the write
-    # protocol's mkdir is umask-dependent, and under an 027 umask a
-    # `guarden:root 0750` firewall directory is one the `guarden` programs
-    # cannot read the rule files through.
+    # protocol's mkdir is umask-dependent, and an 027 root mkdir gives
+    # `root:root 0750` where this row states `root:guarden` -- the old
+    # `/etc/guarden/**` catch-all's value, kept because every /etc directory
+    # guarden owns is at least group-readable to the programs and root is the
+    # only reader of the rule files. **The chown is soft because this phase runs
+    # before `install`, which is what creates the `guarden` group**:
+    # `shutil.chown` looks the group up and raises `LookupError` when it is
+    # absent, and a bare `users.group_id` raises `GuardenError`, which escaped
+    # the item and aborted a `soil firewall --apply` on a group-less host with
+    # a traceback. The install phase's own row for this directory converges the
+    # owner once the group exists.
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o750)
-    os.chown(path.parent, 0, users.group_id(PROGRAM_GROUP))
+    try:
+        shutil.chown(path.parent, group=PROGRAM_GROUP)
+    except (OSError, LookupError):
+        pass
     from guarden import conf
     conf.write_file(path, _ssh_conf(), 0o600, (0, 0))
 
@@ -2620,7 +2633,7 @@ def what_for(phase: str) -> str:
     return {
         "packages": "the distribution's apt timers, the package index, the distribution "
                     "packages, and the pinned releases",
-        "storage": "btrfs layout, the snapper value set, root and home, the cleanup timer",
+        "storage": "btrfs layout, the snapper value set, the root configuration, the cleanup timer",
         "sysctl": "route_localnet on the ingress interface, IPv6 off, the port threshold, "
                   "and vm.swappiness when this host asked for a zram device",
         "firewall": "ferm, fail2ban, 10-framework.conf, 20-ingress-nat.conf",

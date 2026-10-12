@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -244,11 +245,12 @@ def write_marker(service: str) -> None:
     # The directory is stated too: it is created by the write protocol's
     # umask-dependent mkdir, and `roots` (the `guarden` user) reads the marker
     # through it -- under an 027 umask that is a `0750 root:root` directory it
-    # cannot traverse.
+    # cannot traverse. `shutil.chown` raises `LookupError` for a group that
+    # does not exist, which is the same soft shape the firewall's seed uses.
     try:
         os.chmod(MARKER.parent, 0o750)
-        os.chown(MARKER.parent, 0, users.group_id("guarden"))
-    except OSError:
+        shutil.chown(MARKER.parent, group="guarden")
+    except (OSError, LookupError):
         pass
 
 
