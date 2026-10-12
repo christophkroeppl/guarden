@@ -82,11 +82,12 @@ unset SUITE_TIMEOUT
 # changed or went away fails — while a reword confined to a continuation
 # line's tail beyond that literal is not caught, and the pins catch presence,
 # not location: a reword paired with the literal kept elsewhere stays green.
-# **The control-flow layer is pinned as well**: a runner that returned the
-# wrong code or recorded the wrong verdict would report a failing suite as a
-# pass, and no text pin above can see that — so the return, both verdict
-# lines, both success tests, the guest's status capture and both counter
-# increments are pinned by exact form.
+# **The control-flow chain is pinned link by link**: a runner that lost any
+# one of these would report a failing suite as a pass, and no text pin above
+# can see that — the return, both verdict lines, both success tests, the
+# guest's status capture and its re-raise, the host's capture of the exec's
+# status, both counter increments and the run's final exit test are pinned by
+# exact form, each measured to move on its own mutation and no other.
 # Every pin reads the comment-stripped stream — the timeout assignment anchor
 # alone reads the raw file, and its `^` and column-0 literal are what no
 # comment line can satisfy (a col-0 payload line elsewhere could, though;
@@ -119,13 +120,19 @@ kill_arg=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '--signal=KILL "$SU
 [ "$kill_arg" -ge 1 ] || _fail "the runner no longer feeds SUITE_TIMEOUT into its kill"
 returns=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '^[[:space:]]*return "\$rc"[[:space:]]*$' || true)
 [ "$returns" = 1 ] || _fail "the runner does not return the suite's own code exactly once; a failure could be recorded as a pass"
-passes=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'line pass "' || true)
-[ "$passes" = 1 ] || _fail "the runner's pass verdict is not recorded exactly once"
-fails=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'line fail "' || true)
-[ "$fails" = 1 ] || _fail "the runner's fail verdict is not recorded exactly once"
+passes=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE 'line pass "\$name"[[:space:]]*$' || true)
+[ "$passes" = 1 ] || _fail "the runner's pass verdict is not recorded exactly once, unsilenced"
+fails=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE 'line fail "\$name"[[:space:]]*$' || true)
+[ "$fails" = 1 ] || _fail "the runner's fail verdict is not recorded exactly once, unsilenced"
 rc_tests=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '[ "$rc" -eq 0 ]' || true)
 [ "$rc_tests" = 2 ] || _fail "the runner's success tests are not the measured pair; a flipped verdict reads as the other one"
 rc_capture=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'rc=\$?' || true)
 [ "$rc_capture" = 1 ] || _fail "the guest wrapper no longer captures the suite's own status"
 counters=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'failures=$((failures + 1))' || true)
 [ "$counters" = 2 ] || _fail "the failure counter no longer increments on both failure paths"
+exit_rc=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'exit \$rc' || true)
+[ "$exit_rc" = 1 ] || _fail "the guest wrapper no longer re-raises the suite's status; a failure would exit 0"
+host_cap=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '</dev/null || rc=$?' || true)
+[ "$host_cap" = 1 ] || _fail "the host no longer captures the exec's status into rc"
+final_test=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '[ "$failures" -eq 0 ]' || true)
+[ "$final_test" = 1 ] || _fail "the run's exit test is gone; a failing run could exit green"
