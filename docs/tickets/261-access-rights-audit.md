@@ -4,7 +4,7 @@
 
 - `00-ssh.conf` (if it exists) is `0600` — root only
 - Everything else under `/etc/guarden/**` is heading toward `0640` (was `0644`)
-- `/etc/guarden/projects.toml`, `projects.d/`, `allow-gated-drop` are `0444` so `hose` can read the ref allowlist
+- `/etc/guarden/projects.toml`, the files under `projects.d/`, `allow-gated-drop` are `0444` so `hose` can read the ref allowlist (`projects.d/` itself is the `0755` directory)
 - `/etc/guarden/creds/` is `0700` root
 - `/etc/ssh/authorized_keys.d/hose` is `0644` root
 
@@ -14,12 +14,12 @@
 
 - [ ] Enumerate every path guarden writes in `hostprep.py`, `conf.py`, `firewall.py`, `hosttool.py`, and the mutator verbs
 - [ ] For each, state the reader(s) and the tightest mode that serves them
-- [ ] Update `MODE_CONFIG`/`MODE_DIR`/`MODE_DIR_GROUP` constants and every `write_file` call to match
+- [ ] Update `MODE_CONFIG`/`MODE_DIR`/`MODE_DIR_LOCKS` constants and every `write_file` call to match
 - [ ] Add a regression test that fails if any guarden file is world-readable (`0644` or `0755` on files) unless explicitly listed as a carve-out
 - [ ] Document the carve-outs in `spec.md §2.1` with the same table that exists today
 
 **Carve-outs to record:**
-1. `projects.toml` / `projects.d/` / `allow-gated-drop` — `0444` for `hose`
+1. `projects.toml` / the files under `projects.d/` / `allow-gated-drop` — `0444` for `hose`
 2. `stakes/` — `0770` for `stakes` (runs as `guarden`)
 3. `queue/` — `0770` for `furrow` (runs as `guarden`)
 4. `shared/dashboard/` — `0755` for the dashboard service (not in either group)

@@ -1500,7 +1500,10 @@ def _seed_ssh_conf() -> None:
     # a traceback. The install phase's own row for this directory converges the
     # owner once the group exists.
     path.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o750)
+    try:
+        os.chmod(path.parent, 0o750)
+    except OSError:
+        pass
     try:
         shutil.chown(path.parent, group=PROGRAM_GROUP)
     except (OSError, LookupError):

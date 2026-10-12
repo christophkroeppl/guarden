@@ -340,10 +340,11 @@ def lock(name: str) -> Iterator[None]:
     directory = hostpath("run", "guarden", "locks")
     directory.mkdir(parents=True, exist_ok=True)
     # The mode and the owner are stated, softly, exactly as `conf.lock` states
-    # them: a root mkdir leaves `root:root` at the umask's mode, and an install
-    # item that compares only the mode would skip the directory. Soft so the
-    # twins fail alike -- `hostprep` is the only importer today, and a caller
-    # that cannot state either value proceeds on what exists.
+    # them: the statement is owed because a lock can be taken long before
+    # `install` runs -- the storage phase takes `snapshots` on a host with no
+    # group yet -- on a directory no item can have converged, and soft so the
+    # twins fail alike (`hostprep` is the only importer today; a caller that
+    # cannot state either value proceeds on what exists).
     try:
         os.chmod(directory, MODE_DIR_LOCKS)
     except OSError:

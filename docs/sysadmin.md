@@ -318,7 +318,7 @@ Three in the morning is when somebody asks why a file is not readable, and the a
 always one of these numbers.
 
 | path | mode | owner | who creates it |
-|---|---|---|
+|---|---|---|---|
 | `/var/lib/guarden/services/<name>/` and everything under it | `0700` | the service user |
 | `/var/lib/guarden/registry/<name>.toml` | `0640` | `root:guarden` |
 | `/var/lib/guarden/shared/<name>/` | `0750` | `root:guarden` |
@@ -332,6 +332,7 @@ always one of these numbers.
 | `/etc/guarden/` | `0751` | `root:guarden` | `soil install`, stated in code |
 | `/etc/guarden/` (below), files | `0640` | `root:guarden` | the write protocol |
 | `/etc/guarden/services/`, `/etc/guarden/projects.d/` | `0755` | `root:root` | `soil install` |
+| `/etc/guarden/edge/`, `/etc/guarden/firewall/` | `0750` | `root:guarden` | `soil install`, stated in code; the seeding writer states it too, softly, because both phases can run before the `guarden` group exists |
 | `/etc/guarden/projects.toml`, the files under `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` | |
 | `/etc/guarden/creds/` | `0700` | `root` |
 | `/etc/guarden/edge/auth-provider` | `0640` | `root:guarden` |

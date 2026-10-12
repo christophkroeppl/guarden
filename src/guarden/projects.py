@@ -542,8 +542,8 @@ def _config():
 def list_json(args) -> int:
     """`weedr project list`: the projects, and where each one's copy of the
     allowlist is. The one verb on the poke's sudoers rule, and it reads nothing
-    private: `projects.toml` and `projects.d/` are `0444` precisely so that it
-    can."""
+    private: `projects.toml` and the files under `projects.d/` are `0444`
+    precisely so that it can."""
     as_json = args.json
     found = load()
     if as_json:

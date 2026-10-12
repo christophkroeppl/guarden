@@ -67,7 +67,11 @@ round.
   the first lock-taking item undid the directory item's `2770` in the same apply — found by
   `t20-install` after `5a28a7a`, fixed in `0fa2937`. Both now state `2770` and `0664`, which
   is two copies of one rule; collapsing the pair is a follow-up worth doing before a third
-  caller appears.
+  caller appears. **The pair is five copies in total** — `hosttool.MODE_DIR_LOCKS`/`LOCK_GROUP`,
+  `hostprep`'s locks row, the tmpfiles template (plain text; its header names the constants),
+  spec 2.1's row and sysadmin's row — held in step by hand and pinned end-to-end by
+  `t20-install`'s mode and owner assertions on the live host. A constant the template could
+  render from would be the honest single source; today the suites are what make the copies safe.
 - The machinery is bash (its dracut half is shell by necessity — it runs in the initramfs). Its
   Python-driver half is a possible follow-up if the state dispatch ever needs more than
   `state_get`/`state_set`.
