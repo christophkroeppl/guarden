@@ -80,17 +80,22 @@ unset SUITE_TIMEOUT
 # `echo`, a format variable, a continuation line); the five signatures pin
 # each line's leading literal over the comment-stripped stream, so a site that
 # changed or went away fails — while a reword confined to a continuation
-# line's tail beyond that literal is not caught; and the word net is a third,
-# coarser catch, reaching only the lines whose literal begins `error: %s`.
-# The net is a net, not a proof. Counts and signatures ignore full-line
-# comments, so prose quoting a pin cannot break the pin — a trailing `# …`
-# naming a token would still count.
+# line's tail beyond that literal is not caught, and the pins catch presence,
+# not location: a reword paired with the literal kept elsewhere stays green;
+# and the word net is a third,
+# coarser catch reaching only the three lines whose literal begins `error:
+# %s` — the fuser guard and the cut message cannot trip it at all, so a reword
+# of those two into failure language is caught by their signatures alone.
+# The net is a net, not a proof. Counts, call pins and signatures all read the
+# comment-stripped stream, so prose quoting a pin cannot break the pin, and a
+# commented-out call cannot satisfy one — a trailing `# …` naming a token
+# would still count.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
-calls=$(grep -c '_failure_message "' "$runner" || true)
+calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c '_failure_message "' || true)
 [ "$calls" = 2 ] || _fail "the runner has $calls _failure_message call sites; two is the set (the marker branch and the plain one)"
-grep -qF -- '_failure_message "$name" "$rc" "$marker"' "$runner" \
-    || _fail "the marker branch's call is gone; the guest word can no longer reach the line"
+marker_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '_failure_message "$name" "$rc" "$marker"' || true)
+[ "$marker_calls" -ge 1 ] || _fail "the marker branch's call is gone; the guest word can no longer reach the line"
 sites=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'error:' || true)
 [ "$sites" = 5 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of five is the enumeration"
 for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after 60 checks spread over at least '" "printf 'error: cannot cut a clean %s\\n'"; do
