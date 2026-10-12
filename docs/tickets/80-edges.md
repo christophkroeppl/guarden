@@ -73,7 +73,7 @@ paths is ticket 40, and both are needed before the edge is complete.
 - [ ] `weedr port list` shows requested, granted and pending for every service; pending is
       sticky and survives until an admin grants or the manifest drops the request
 - [ ] `weedr port open <name> 8080/tcp` creates the service's `overrides.toml` if absent,
-      adds the port, and re-renders `30-services.conf` under the firewall lock; `weedr port close`
+      adds the port, and re-renders `50-services.conf` under the firewall lock; `weedr port close`
       revokes and re-renders the same way
 - [ ] **A grant is a translation, never a bind.** The public port is DNATed to the service's own
       loopback publication and no unit gains a `PublishPort` for a non-loopback address. There is

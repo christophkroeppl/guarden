@@ -246,7 +246,7 @@ phrase usually attached to it, that is the phrase's fault.
   to itself never traverses `PREROUTING`, so an on-box check passes whether or not forwarding
   works; the golden-VM criterion is therefore that a forwarded port answers *from off the box*.
   The mutator writes
-  any service's own granted forwarding into `30-services.conf`, and the two files are disjoint.
+  any service's own granted forwarding into `50-services.conf`, and the two files are disjoint.
   `REDIRECT` cannot do this job: it
   rewrites the destination to the incoming interface's own address and the edge listens on
   loopback only. The edge is an ordinary service that binds loopback publications and nothing

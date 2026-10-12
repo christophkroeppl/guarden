@@ -171,7 +171,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       fails if it ever does.** It dials out, so no `nat PREROUTING` DNAT exists for it and no
       public port forwards to it. This is the assertion that distinguishes this ticket from the
       Pangolin one, and it is checked rather than asserted in prose
-- [x] **`30-services.conf` gains `OUTPUT` accept rules for the tunnel's uid against the
+- [x] **`50-services.conf` gains `OUTPUT` accept rules for the tunnel's uid against the
       publications it fronts, and nothing else.** Destination is `127.0.0.1`, never `ingress.alias`
       — pasta maps the gateway onto host loopback in userspace before the kernel's packet path
       (spec §7.7), so a rule matching the alias matches no packet. It is rendered under the

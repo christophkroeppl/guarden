@@ -190,7 +190,8 @@ assert_file_has "$conf" "daddr 127.0.0.0/8 jump DROP;"
     | grep -cE "^[[:space:]]+mod owner uid-owner $provider_uid daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;\$" || true)" = 1 ] \
     || _fail "no accept rule gives the provider the db publication on the loopback address"
 assert_file_lacks "$conf" "192.0.2.1"
-# **No interface match, per spec 7.6.** The spec was rewritten (028c4db) to say
+# **No interface match, per spec 7.6.** The spec was rewritten (00bdddd — `git
+# log -S 'no interface match' -- docs/spec.md` finds it alone) to say
 # the code has never emitted `-o lo` — the example was corrected rather than the
 # render — so this asserts the reconciled state in the form that would have to
 # change for the claim to become true: **the count of accept rules carrying an

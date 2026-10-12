@@ -126,7 +126,7 @@ a new ADR that supersedes it. The short version:
   `net.ipv4.conf.<ingress-if>.route_localnet=1` on the ingress interface and nowhere else.
   `soil firewall`   writes `10-framework.conf` and `20-ingress-nat.conf` — the edge's three
   forwarding rules, from the enabled modules' declared ingress — and the mutator writes
-  `30-services.conf`: the whole uid-matched filter set, any service's own granted forwarding and
+  `50-services.conf`: the whole uid-matched filter set, any service's own granted forwarding and
   any service's own granted firewall rules.
   The two files are disjoint and each has exactly one writer. `443/udp` is a different protocol
   from `443/tcp`, so the edge's ingress is three rules, not two. No unprivileged process binds
@@ -319,7 +319,7 @@ writes them into `20-ingress-nat.conf` from the enabled modules' declared ingres
 additive: a client that cannot use it loses nothing and nothing else in the design depends on
 it. The numbers behind ordinary services — 8096, 32400, 5001, 20000 and the rest — are
 publications the edge dials on loopback, which is a different mechanism and needs no forwarding
-rule. A service's own granted port is forwarded too, by the mutator into `30-services.conf`, and
+rule. A service's own granted port is forwarded too, by the mutator into `50-services.conf`, and
 never bound.
 
 Two properties follow from the mechanism and are worth stating because they look like bugs:

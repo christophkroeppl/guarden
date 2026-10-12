@@ -533,12 +533,12 @@ grep -A3 '\[ports\]' /etc/guarden/services/*/overrides.toml
 To see what guarden *intends*, read the three files the two programs write:
 
 ```sh
-cat /etc/guarden/firewall/30-services.conf
+cat /etc/guarden/firewall/50-services.conf
 ```
 
 `soil firewall` writes `10-framework.conf` and `20-ingress-nat.conf`; the mutator writes
-`30-services.conf` and nothing else. The two are disjoint and each has exactly one writer, so a
-rule that appears in both is a defect. `30-services.conf` is the only file a firewall grant can
+`50-services.conf` and nothing else. The two are disjoint and each has exactly one writer, so a
+rule that appears in both is a defect. `50-services.conf` is the only file a firewall grant can
 reach: `10-framework.conf` is the policy baseline and no grant touches it.
 
 To see what the host is *actually running*, read the ruleset. These are ferm files, and ferm
@@ -634,7 +634,7 @@ for.
 **Two host invariants guarden depends on and cannot enforce are detected, not merely refused.**
 `soil sysctl --check` and `weedr service list` both report:
 
-- IPv6 has been re-enabled. Every rule in `30-services.conf` is IPv4.
+- IPv6 has been re-enabled. Every rule in `50-services.conf` is IPv4.
 - `net.ipv4.ip_unprivileged_port_start` is not `1024`. `soil sysctl` **sets** it and owns the
   key, so this is drift against a value guarden converges rather than against a convention
   somebody has to honour. If it has been lowered — and a base image that ships `0` is the
@@ -737,7 +737,7 @@ generated traffic never traverses `PREROUTING`. The only diagnostic that disting
 forwarding from none is a request from a second machine, and that is what the golden-VM check is
 for.
 
-A service's own granted port gets the same single DNAT in `30-services.conf`.
+A service's own granted port gets the same single DNAT in `50-services.conf`.
 
 `REDIRECT` is not used anywhere, deliberately: it rewrites the destination to the incoming
 interface's own address, and the edge listens on loopback only, so nothing would be listening

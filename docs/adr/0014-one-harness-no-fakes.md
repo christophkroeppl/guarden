@@ -56,7 +56,7 @@ test in the suite would have. A fake that can reach the real tool is not a test 
   been running against real tools, and that is now a checkable property rather than a habit.
 - **No test asserts on a call log.** The 51 call-log assertions across seven files go with the
   fakes. Each is rewritten as an assertion about the state the call would have produced: the unit
-  exists, the snapshot carries the mark, the rule is in `30-services.conf`, the file was not
+  exists, the snapshot carries the mark, the rule is in `50-services.conf`, the file was not
   created. Where a call had no effect there is no state to assert, and those assertions are
   dropped rather than ported — "the program did not call `apt-get install`" is a weaker claim
   than "no package was installed", and in the cases where it is not weaker, the honest answer is

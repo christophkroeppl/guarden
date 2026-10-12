@@ -83,12 +83,12 @@ the cases where it is not possible.
 
 **Nothing else widens.** The renderer still owns every rule guarden derives from the
 registries, still refuses the same things, and still cannot emit a firewall rule at all — a
-renderer that wrote one would be a second writer on `30-services.conf` with no `firewall` lock.
+renderer that wrote one would be a second writer on `50-services.conf` with no `firewall` lock.
 
 ## What did not happen
 
 No second firewall engine, and no per-service one. A service may not run its own firewall
 manager, install its own rules into the host's tableset, or be given a capability or a raw table
-handle; `30-services.conf` is the only file the mutator writes and its union now has one more
+handle; `50-services.conf` is the only file the mutator writes and its union now has one more
 kind of member. A service that needs a *destination* rather than a *rule* still needs that
 destination to be a publication, because that is not what this grants.

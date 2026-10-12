@@ -7,7 +7,7 @@ and this note is not one of them; it records how the answer was found. The
 measurements below are unchanged and are what the decision rests on.
 
 **Update 2026-10-05 (ticket 240 landed, `caa414d`→`13a76a9`).** The probe below that
-"created no service, so `30-services.conf` did not exist" is no longer needed to see
+"created no service, so `50-services.conf` did not exist" is no longer needed to see
 this: `t50-slice.sh` creates `routed-staging`, `weedr service ingest` writes the
 firewall, and `weedr service start` then fails with the message above. The generated
 `ExecStart` is correct and the generator is reached — see

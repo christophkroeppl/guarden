@@ -346,7 +346,7 @@ No unprivileged process on the host may bind a port below 1024, and no process i
 capability. `soil firewall` writes `20-ingress-nat.conf` with address translation for 80/tcp,
 443/tcp and 443/udp onto the edge's published loopback ports, which requires `route_localnet`
 scoped to the ingress interface and nothing else. The mutator writes any service's own forwarding
-and any service's own granted firewall rules into `30-services.conf`; the two files are
+and any service's own granted firewall rules into `50-services.conf`; the two files are
 disjoint.
 
 **There is no masquerade, and this document previously claimed there was one.** The claim was

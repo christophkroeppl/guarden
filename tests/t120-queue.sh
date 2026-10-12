@@ -9,11 +9,14 @@
 # verb wrote, and the JSON `furrow queue list --json` printed. Nothing is read
 # out of a record of what furrow was about to do.
 #
-# The deploys here fail at the first step on purpose — no staged tree, no
-# service, no loom on this host — because the claims under test are about the
-# request and its place in the queue, and a request whose deploy failed keeps
-# its file and its message. What a deploy does with a real service is
-# t120-deploy.sh.
+# The deploys here fail at the ensure step on purpose: `stage_tree` welds a
+# second `schema:` key onto the fixture's last line, which carries no trailing
+# newline, so the staged manifest does not parse and `weedr service ingest`
+# refuses it before anything else runs. The claims under test are about the
+# request and its place in the queue, and a request whose deploy was refused
+# keeps its file and its message. What a deploy does with a real service is
+# t120-deploy.sh, and what a blocked gate does — exit 0, the file drains — is
+# its subject there, not this file's.
 #
 # machine: fresh
 
@@ -101,6 +104,11 @@ stage_tree() {
        "$staged/.guarden/quadlet/web.container"
     cp "$GUARDEN_ROOT/fixtures/projects/quadlet-app/.guarden/.env.schema" \
        "$staged/.guarden/.env.schema"
+    # No newline before this append, on purpose: it welds into the fixture's
+    # last line, the staged manifest does not parse, and the deploy is refused
+    # at the ensure step before any gate — the refusal this file's deploys are
+    # built on. A fixture given a trailing newline would weld nothing and these
+    # deploys would reach the gate instead (t120-deploy.sh's subject).
     printf 'schema: .guarden/.env.schema\n' >> "$staged/.guarden/service.yml"
     chmod -R a+rX "$staged"
 }
@@ -108,14 +116,14 @@ stage_tree() {
 stage_tree qapp 9f2c1ab
 
 # The request for this service and sha is on disk and readable after a REFUSAL.
-# An earlier revision asserted a failure for a reason this suite did not own —
-# "this host has no installed mutator for furrow to reach", which was a missing
-# precondition and is installed now. The refusal is the gate's instead:
-# `production` is gated, the staged manifest declares a required sensitive key,
-# and nothing plants it. The request is enqueued BEFORE the gate runs, so this
-# is the case where the file must survive — the one an operator reads at three
-# in the morning. The other half is twenty lines up: an empty staged tree
-# refuses for a host-side reason of its own.
+# The refusal is the staged manifest's: `stage_tree` makes it unparseable (see
+# the weld noted there), so `weedr service ingest` refuses it at the ensure
+# step and neither the build nor the gate is ever reached. This comment once
+# gave the refusal two causes it never had — first "this host has no installed
+# mutator" (a missing precondition, since installed), then the credential gate
+# (never reached on this path). What the run below pins is the case an operator
+# reads at three in the morning: a refused request keeps its file, queued
+# before anything could have carried it out.
 run furrow deploy qapp-production --from poke qapp@9f2c1ab
 assert_exit 1
 assert_one_diagnostic "error:"

@@ -65,7 +65,7 @@ file. `soil firewall` owns the framework, the SSH accept (`00-ssh.conf`), the ad
 That union has one more kind of member since ADR-0013: a service may **ask** for a firewall rule
 of its own — a protocol the edge cannot speak — and an admin installs it with `weedr firewall
 open`, which is the same request-then-grant shape as a port and on the same kind of root-only
-verb. `30-services.conf` is rendered by one writer either way, and a rule no manifest requested
+verb. `50-services.conf` is rendered by one writer either way, and a rule no manifest requested
 is still not grantable.
 
 The renderer owns the published-port set completely. A project's `compose.yaml` or its

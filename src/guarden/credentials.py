@@ -27,7 +27,8 @@ evaluates. Nothing here ever returns a value to a caller: the caller is handed a
 boolean, or the comparison it asked for.
 
 `materialise` is the only thing that decrypts a blob into a podman store —
-`credentials.value()` also decrypts, in-process, for the gate and the edge —
+`credentials.value()` also decrypts, in-process, for the gate, the edge, and
+`weedr secret list` —
 and there is one program for it: a path unit on `/etc/guarden/creds/` and one
 boot-time oneshot (spec 6.9) rather than a pair of units per service.
 """
@@ -183,7 +184,8 @@ def materialise(service: str | None = None) -> list[str]:
     """Turn every blob into a podman secret in its own service's store.
 
     The one thing that decrypts a blob into a service's podman store —
-    `value()` is what the gate and the edge decrypt through, in-process. It
+    `value()` is what the gate, the edge and `weedr secret list` decrypt
+    through, in-process. It
     runs as root because the key is, and it creates or replaces the secret in
     the *service's* store, which
     means the value ends up inside that service's `0700` home — the documented

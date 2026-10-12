@@ -17,8 +17,9 @@
 
 . "$(dirname "$0")/lib.sh"
 
-# The machine's own tools, not the stand-ins in fixtures/bin. `lib.sh` puts that
-# directory on PATH, and this file's subject is what the machine holds. The fake
+# The machine's own tools, not the stand-ins that used to be in fixtures/bin:
+# that directory and its PATH entry were deleted with the fake tier (ticket 35,
+# ADR-0014). This file's subject is what the machine holds. The fake
 # `useradd` numbered accounts from a counter, the fake `snapper` answered
 # `list` out of a file the test wrote, and a staged `proc/sys` cannot be written
 # by `sysctl -w` at all — which is how a report claimed an IPv6 warning the box

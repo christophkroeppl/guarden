@@ -20,7 +20,7 @@ grant, and the repository still cannot make one.
 - [ ] `weedr port open <name> 8080/tcp` is the whole argument form: the service, then the port.
       **There is no `private|public:` prefix and no bare-port shorthand**
 - [ ] `weedr port open` creates the service's `overrides.toml` if absent, adds the port to
-      `[ports] open`, and re-renders `30-services.conf` in full, printing the diff, under the
+      `[ports] open`, and re-renders `50-services.conf` in full, printing the diff, under the
       `firewall` lock
 - [ ] **A grant renders a nat PREROUTING DNAT rule** from `<ingress-if>:<port>` to
       `127.0.0.1:<publication>`, **no `nat POSTROUTING` rule**, and no `PublishPort` line for a

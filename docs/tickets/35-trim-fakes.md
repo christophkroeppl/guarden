@@ -20,7 +20,7 @@ remains: the throwaway LXD VM with the real tools (ADR-0014).
 - [ ] **Every call-log assertion is rewritten as a state assertion, or dropped.** 51 of them
       across seven files (`t70-pins`, `t70-fork`, `t70-snapshot`, `t130-packages`,
       `t40-untrusted`, `t130-scripts`, `t130-modules`). "The unit exists", "the snapshot carries
-      the mark", "the rule is in `30-services.conf`", "the file was not created". Where a call
+      the mark", "the rule is in `50-services.conf`", "the file was not created". Where a call
       left no state, the assertion is **dropped rather than ported** — `assert_not_called
       "apt-get install"` becomes "no package was installed", and where that is not the same
       claim, the seam was never there and the honest answer is to say so in the ticket rather

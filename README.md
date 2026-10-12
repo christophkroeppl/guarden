@@ -235,7 +235,7 @@ different protocol and a different rule. `443/udp` is HTTP/3, served by the edge
 entrypoint; it is additive, and a browser or a network that cannot use it loses nothing.
 `soil sysctl` holds `net.ipv4.ip_unprivileged_port_start` at `1024`, so nothing unprivileged on
 the host can bind below 1024 — the edge is not an exception, it is a service like the others. The mutator owns a
-separate file, `30-services.conf`, for the uid-matched filter set and any service's own granted
+separate file, `50-services.conf`, for the uid-matched filter set and any service's own granted
 forwarding; `soil` owns the other two, and neither file is written by both.
 
 **There is no masquerade, and the `DNAT` plus `route_localnet` is the whole mechanism.** An
@@ -510,7 +510,7 @@ and never as a publication.
 No service ever binds a non-loopback address, and there is no such thing as a "private" versus
 "public" grant: a grant is a translation from a public port to that service's publication, and
 that is the only thing it is. A granted port gets the same shape as the edge's — a `PREROUTING`
-DNAT to `127.0.0.1:<publication>` in `30-services.conf`, and nothing else.
+DNAT to `127.0.0.1:<publication>` in `50-services.conf`, and nothing else.
 
 ### When a service needs a rule of its own
 

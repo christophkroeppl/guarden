@@ -13,7 +13,7 @@ Image=docker.io/traefik/forward-auth:v2.7.1
 # container; the middleware definition `roots` writes names the service and its
 # publication from outside, so the two strings differ by design — the
 # container's side is what the process inside sees, the edge's side is the
-# route it dials — and t150 asserts both.
+# route it dials; the middleware side is what t150 asserts.
 Environment=TRAEFIK_FORWARD_AUTH_ADDRESS=http://127.0.0.1:9000/verify
 Environment=TRAEFIK_FORWARD_AUTH_TRUST_FORWARD_HEADER=true
 Environment=TRAEFIK_FORWARD_AUTH_AUTH_RESPONSE_HEADERS=X-Guarden-Authenticated-User

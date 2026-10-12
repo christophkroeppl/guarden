@@ -668,7 +668,7 @@ The lock names, and the composite operation each one covers:
 | `registry` | a read of the registries, the change, and the write — for one service |
 | `projects` | a project's allowlist edit. **Not** the dispatch decision: `projects.toml` is root-owned `0444` and only root writes it, so a reader of it has nothing to serialise — `hose` takes this lock never, and §3.5's rule that a reader takes no lock is what makes that true rather than accidental |
 | `overrides` | a read of every service's overrides, the change, and the write |
-| `firewall` | **the whole render, the diff, and the install of `30-services.conf`** — without it two concurrent grants each render and the stale one installs last, silently dropping the other's rule |
+| `firewall` | **the whole render, the diff, and the install of `50-services.conf`** — without it two concurrent grants each render and the stale one installs last, silently dropping the other's rule |
 | `snapshots` | the mark reconciler **and** the cleanup unit (§8.5) |
 | `queue` | enqueue, dequeue, and the state of an in-flight request |
 | `deploy-<service>` | one deploy of one **slot** service, end to end, so two deploys of the same service cannot overlap while different services proceed in parallel |
@@ -1449,7 +1449,7 @@ refuses anything else with exit `2` naming the request it would have to be — a
 open a port the repository never asked for, because a grant with no manifest request has no
 container to translate to (§4) and rendering it would be inventing a destination. It creates
 the service's `overrides.toml` if absent, adds the public port,
-renders `30-services.conf` whole, prints the diff against what is installed, and installs it —
+renders `50-services.conf` whole, prints the diff against what is installed, and installs it —
 all under the `firewall` lock. A public port another service already forwards is refused with
 exit `1` and the holder named.
 
@@ -1462,7 +1462,7 @@ direction of travel as every other grant in the system: the manifest asks, the a
 and neither can do the other's job.
 
 `weedr firewall open` is the same shape of act for the same reason, and §7.7 is its contract: it
-installs a rule the manifest asked for by name, renders `30-services.conf` whole, prints the
+installs a rule the manifest asked for by name, renders `50-services.conf` whole, prints the
 diff and installs, all under the `firewall` lock, and refuses with exit `2` anything the
 manifest did not ask for. Two services asking for one rule is not a conflict — deduplication is
 a property of the set (§7.7) — so there is no holder to name and no exit `1` case here. What
@@ -1592,7 +1592,7 @@ The renderer refuses, with the directive named: `PodmanArgs=`, `--privileged`, `
 **A `firewall:` entry is validated here and installed nowhere.** The renderer checks the closed
 shape of §4 and refuses the same malformed input it refuses everywhere else, and it writes the
 entry into the registry as a *request* for the mutator to read — it renders no firewall rule,
-because a renderer that emitted rules would be a second writer on `30-services.conf` with no
+because a renderer that emitted rules would be a second writer on `50-services.conf` with no
 `firewall` lock, which is the precise failure §3.5's lock exists to prevent.
 
 **These refusals are guardrails against accidents, not a security boundary.** A unit source is
@@ -2124,7 +2124,7 @@ Two things about a loopback destination are worth stating because they surprise 
 
 **No service ever binds a non-loopback address**, and there is no such thing as a "private"
 versus "public" bind. A granted port that is not one of the edge's is forwarded by the mutator
-in `30-services.conf`, under the `firewall` lock. A port the manifest requested and the admin
+in `50-services.conf`, under the `firewall` lock. A port the manifest requested and the admin
 has not granted is simply not forwarded, which is what "pending" means.
 
 `route_localnet` is scoped to the ingress interface, which resolves from
@@ -2305,7 +2305,7 @@ remove a rule guarden rendered, reorder one, or take the policy of a chain away 
 allow = ["wireguard-peer"]           # requested rule names the admin has agreed to install
 ```
 
-and renders `30-services.conf` whole, prints the diff, and installs it, all under the `firewall`
+and renders `50-services.conf` whole, prints the diff, and installs it, all under the `firewall`
 lock, exactly as `weedr port open` does. `weedr firewall close <name> <rule-name>` removes it and
 re-renders the same way. A rule no manifest requested **may not be granted at all** — exit `2`
 naming the `firewall:` entry it would have to be — because the manifest asks and the admin
@@ -2329,7 +2329,7 @@ grant. **A grant may not replace the resolver's accept either**, because the res
 are rendered from the host rather than asked for and are in the set whatever any manifest says.
 
 **Deduplication is by content, and the count is by name.** Two services whose manifests ask for
-the same rule line produce **one** rule in `30-services.conf`, carrying the names of both, because
+the same rule line produce **one** rule in `50-services.conf`, carrying the names of both, because
 the render is a pure function of a set (§7.6) and a set has no duplicates. The two grants are
 independent: `weedr firewall close` on one service leaves the rule while the other service still
 asks for it, and the rule disappears when the last one closes. That is the same reference count

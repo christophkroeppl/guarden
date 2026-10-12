@@ -106,3 +106,44 @@ unit's lowercase-entrypoints block, and the shipped `[modules] enabled`
 claims all verified against current code and history. The audit was not
 exhaustive: `t30`, `t100`, `t110`, `t20-podlet`, `t210`, `t221`, `t90-projects`
 were grepped for the target patterns but not fully read.
+
+## The review's additions (second pass, 2026-10-12)
+
+The sweep above shipped in `a15fdb8` and went to a review that measured, and
+it returned six things; all were verified against the tree and fixed in the
+follow-up:
+
+- **`t120-queue.sh` was green for the wrong reason since October 5.** The
+  staged manifest is invalid YAML — `stage_tree`'s append welds into
+  `fixtures/projects/routed/.guarden/service.yml`, whose last line carries no
+  trailing newline — so `weedr service ingest` refuses it at the ensure step
+  and **the gate is never reached**. The first sweep rewrote this file's
+  comment into a gate story the run cannot produce. The weld is now deliberate
+  and documented where it happens, in the header and at the request; the
+  comment says what the run pins — a refused request keeps its file. The
+  blocked-gate path (exit 0, warning, file drained) is `t120-deploy.sh`'s
+  subject.
+- `t80-edges.sh` and this ticket cited the wrong commit for spec 7.6's
+  rewrite: `git log -S 'no interface match' -- docs/spec.md` returns
+  `00bdddd` alone, not `028c4db` (which touched 7.6 for the stub-resolver
+  work). Both now say `00bdddd`.
+- `auth.container`'s "t150 asserts both" overstated: t150 asserts the
+  middleware's address and its absence on the provider's own route; nothing
+  asserts the container's own `TRAEFIK_FORWARD_AUTH_ADDRESS` — no test in
+  `tests/` mentions TRAEFIK, 9000 or `/verify`. The comment now says which
+  side is asserted.
+- `credentials.py`'s "for the gate and the edge" named two of `value()`'s
+  three callers: `weedr secret list` decrypts through it too
+  (`weedr.py:564`). Both sentences now name all three.
+- Two notes this ticket's audit listed as "checked clean" were stale:
+  `t20-firewall.sh:14` and `t30-list.sh:20` said `lib.sh` puts `fixtures/bin`
+  on `PATH`, present tense, long after the fake tier was deleted (ticket 35,
+  ADR-0014). Both rewritten to the past tense with the deletion named.
+- **The 30-vs-50 family, found outside the audited scope:** `8c78126`
+  renumbered the mutator's file to `50-services.conf` (ADR-0013's revision
+  note records the rename), and 29 present-tense references across 15
+  documents still said `30-services.conf` — spec (7), sysadmin (5), AGENTS.md
+  (2), README (2), SECURITY (1), PRD (1), ADRs 0006/0013/0014 (4), the DNS
+  note (1), and five tickets (6). All now say the file's real name; the two
+  deliberate "(renamed from `30-services.conf`)" annotations in ADR 0013 and
+  sysadmin.md stay, because they are the record of the rename.

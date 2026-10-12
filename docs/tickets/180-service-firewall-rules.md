@@ -30,9 +30,9 @@ something the host owns (ADR-0013, spec §7.7).
       `[ports] requested` is, and `weedr service ingest` installs none of it — the same answer a
       requested port gets
 - [ ] `loom` validates the entry's shape and **writes no firewall rule at all**. A renderer that
-      emitted one would be a second writer on `30-services.conf` holding no `firewall` lock
+      emitted one would be a second writer on `50-services.conf` holding no `firewall` lock
 - [ ] `weedr firewall open <name> <rule-name>` adds that **name** to the service's
-      `[firewall] allow` in `overrides.toml`, renders `30-services.conf` whole, prints the diff
+      `[firewall] allow` in `overrides.toml`, renders `50-services.conf` whole, prints the diff
       and installs, all under the `firewall` lock. `weedr firewall close` removes it and renders
       the same way
 - [ ] **A rule no manifest requested may not be granted at all**, exit `2` naming the `firewall:`
