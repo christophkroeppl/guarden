@@ -158,3 +158,24 @@ follow-up:
   note (1), and five tickets (6). All now say the file's real name; the two
   deliberate "(renamed from `30-services.conf`)" annotations in ADR 0013 and
   sysadmin.md stay, because they are the record of the rename.
+
+## The prefix round's ledger (2026-10-12, from its review)
+
+Recorded so they are not re-litigated as the prefix commit's; each was
+verified pre-existing by that review:
+
+- `docs/spec.md:731`'s ingress example spells `["80/tcp", "443/tcp",
+  "443/udp"]` while `modules.py` requires `<entrypoint>:<port>/<proto>` and
+  all four modules ship `web:80/tcp`-style (since `d8ee036`). The same block
+  was edited at `:726` by the prefix commit; per the policy that unrelated
+  stale claims are not fixed inside a rename, it was left.
+- `docs/adr/0008-modules.md:20` says authelia "declares `requires =
+  ["gate-traefik"]`" while the shipped manifest declares `requires = []` —
+  the sentence has outlived three spellings of the name.
+- `docs/adr/0008-modules.md:11` and `CONTEXT.md:248` say `auth-authelia` is
+  "not implemented in v1" while ticket 150's checklist says implemented and
+  green in the VM.
+- An installed module directory has no prune: `_install_modules` installs and
+  never removes, so a host upgraded across a module rename keeps the old
+  directory and `available()` still lists it. Pre-release, no such host in
+  the harness; a migration note for whoever ships one.
