@@ -55,7 +55,7 @@ config=/etc/guarden/guarden.toml
 # state this file set: the drift the fixture states is reported before the apply
 # that fixes it, and a converged host is silent.
 stage_config guarden-nomodules.toml
-run soil install --check --modules gate
+run soil install --check --modules traefik
 assert_exit 1
 # The drift this suite introduced is named, and it is the selection: the file
 # records no module and the caller named one.
@@ -68,10 +68,10 @@ assert_stderr_lacks "ingress.alias"
 # `--check` on a host the first one did not change finds exactly what the first
 # found. A `--check` that wrote would make the drift line disappear on the second
 # run, which is the shape of a bug this assertion is here to catch.
-run soil install --check --modules gate
+run soil install --check --modules traefik
 assert_exit 1
 assert_stderr_has "[modules] enabled records a selection nobody has to choose twice"
-run soil install --apply --modules gate
+run soil install --apply --modules traefik
 assert_exit 0
 assert_stderr_empty
 assert_file_has "$config" 'enabled = ["traefik"]'
@@ -80,7 +80,7 @@ assert_file_has "$config" 'enabled = ["traefik"]'
 # as **any** choice is recorded. A later `weedr module add` is not drift the next
 # apply would erase — which is only worth asserting if the check is silent about
 # everything else too.
-run soil install --check --modules gate
+run soil install --check --modules traefik
 assert_exit 0
 assert_stderr_empty
 
@@ -103,7 +103,7 @@ assert_file_exists /usr/lib/guarden/modules/traefik/module.toml
 # it is a fact about the file.
 assert_file_has "$config" 'enabled = ["traefik", "homepage"]'
 
-run soil install --check --modules gate
+run soil install --check --modules traefik
 assert_exit 0
 assert_stderr_empty
 # And the other keys survive both writers, because a write rewrites one key and
@@ -128,11 +128,11 @@ assert_file_has "$config" 'domain = "example.com"'
 # key on a host that has it, and the apply that follows converges nothing.
 stage_config guarden-module-added.toml
 assert_file_has "$config" 'enabled = ["traefik", "homepage", "authelia"]'
-run soil install --check --modules gate
+run soil install --check --modules traefik
 assert_exit 0
 assert_stderr_empty
 assert_file_has "$config" 'enabled = ["traefik", "homepage", "authelia"]'
-run soil install --apply --modules auth
+run soil install --apply --modules authelia
 assert_exit 0
 # Merged, not replaced: the operator's `authelia` survived and the caller's selection
 # was found already present, so the list is unchanged rather than duplicated. A
@@ -177,12 +177,12 @@ sed -i '/^\[modules\]/,+1d' "$config"
 # because this fixture's own header comment names the table and a search for that
 # string alone matched the comment and never described the host.
 assert_file_lacks "$config" "enabled = "
-run soil install --check --modules gate
+run soil install --check --modules traefik
 assert_exit 1
 assert_stderr_has "[modules] enabled records a selection nobody has to choose twice"
-run soil install --apply --modules gate
+run soil install --apply --modules traefik
 assert_exit 0
 assert_file_has "$config" 'enabled = ["traefik"]'
-run soil install --check --modules gate
+run soil install --check --modules traefik
 assert_exit 0
 assert_stderr_empty

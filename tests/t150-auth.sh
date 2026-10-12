@@ -133,7 +133,7 @@ assert_exit 0
 # loopback — which a container does not share.
 auth_file=/var/lib/guarden/edge/dynamic/_guarden-forward-auth.yml
 assert_file_exists "$auth_file"
-provider_publication=$(sed -n 's/^auth = \([0-9]*\)$/\1/p' \
+provider_publication=$(sed -n 's/^authelia = \([0-9]*\)$/\1/p' \
     /var/lib/guarden/registry/authelia-production.toml)
 [ -n "$provider_publication" ] \
     || _fail "the auth provider holds no publication, so nothing can be aimed at it"

@@ -75,7 +75,7 @@ weedr project add myapp --repository git@github.com:you/myapp.git
 The module selection is made once, at install, and recorded in `/etc/guarden/guarden.toml`:
 
 ```sh
-soil install --apply --modules gate,homepage
+soil install --apply --modules traefik,homepage
 ```
 
 After that it is `weedr module add` that changes it, and a later `soil install --apply` leaves
