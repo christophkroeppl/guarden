@@ -81,27 +81,26 @@ unset SUITE_TIMEOUT
 # each line's leading literal over the comment-stripped stream, so a site that
 # changed or went away fails — while a reword confined to a continuation
 # line's tail beyond that literal is not caught, and the pins catch presence,
-# not location: a reword paired with the literal kept elsewhere stays green;
-# and the word net is a third,
-# coarser catch keyed on the literal prefix `error: %s` — today it reaches one
-# of the five (the die line) and it fires on whichever line begins that prefix
-# after a reword, so a reword of the fuser guard or the cut message into
-# failure language is caught by its signature, or by this net once the reword
-# begins the prefix.
-# The net is a net, not a proof. Every pin reads the comment-stripped stream
-# — the timeout assignment anchor alone reads the raw file, and its `^` and
-# column-0 literal are what no comment line can satisfy (a col-0 payload line
-# elsewhere could, though; nothing does today) — so prose quoting a
-# pin cannot break the pin, and a commented-out call cannot satisfy one; a
-# trailing `# …` naming a token would still count.
+# not location: a reword paired with the literal kept elsewhere stays green.
+# **The control-flow layer is pinned as well**: a runner that returned the
+# wrong code or recorded the wrong verdict would report a failing suite as a
+# pass, and no text pin above can see that — so the return, both verdict
+# lines, both success tests, the guest's status capture and both counter
+# increments are pinned by exact form.
+# Every pin reads the comment-stripped stream — the timeout assignment anchor
+# alone reads the raw file, and its `^` and column-0 literal are what no
+# comment line can satisfy (a col-0 payload line elsewhere could, though;
+# nothing does today) — so prose quoting a pin cannot break the pin, and a
+# commented-out call cannot satisfy one; a trailing `# …` naming a token
+# would still count.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
 calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c '_failure_message "' || true)
 [ "$calls" = 2 ] || _fail "the runner has $calls _failure_message call sites; two is the set (the marker branch and the plain one)"
-marker_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '_failure_message "$name" "$rc" "$marker"' || true)
-[ "$marker_calls" = 1 ] || _fail "the marker branch's call is gone or duplicated; the guest word must reach the line exactly once"
+marker_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_failure_message "\$name" "\$rc" "\$marker"[[:space:]]*$' || true)
+[ "$marker_calls" = 1 ] || _fail "the marker call is gone, duplicated, or silenced; it must end its line exactly once"
 plain_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_failure_message "\$name" "\$rc"[[:space:]]*$' || true)
-[ "$plain_calls" = 1 ] || _fail "the plain call is gone or duplicated; the unconfirmed path must exist exactly once"
+[ "$plain_calls" = 1 ] || _fail "the plain call is gone, duplicated, or silenced; it must end its line exactly once"
 sites=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'error:' || true)
 [ "$sites" = 5 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of five is the enumeration"
 for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after 60 checks spread over at least '" "printf 'error: cannot cut a clean %s\\n'"; do
@@ -118,5 +117,15 @@ grep -qE '^SUITE_TIMEOUT=\$\{GUARDEN_LXC_SUITE_TIMEOUT:-' "$runner" \
     || _fail "the runner no longer takes its wall clock from GUARDEN_LXC_SUITE_TIMEOUT"
 kill_arg=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '--signal=KILL "$SUITE_TIMEOUT"' || true)
 [ "$kill_arg" -ge 1 ] || _fail "the runner no longer feeds SUITE_TIMEOUT into its kill"
-net=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE "printf ['\"]error: %s[^'\"]*(exited|exceeded|died|killed|signal|128\+|wall clock)" || true)
-[ "$net" = 0 ] || _fail "a runner error line reads as a suite failure; the extraction has drifted"
+returns=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '^[[:space:]]*return "\$rc"[[:space:]]*$' || true)
+[ "$returns" = 1 ] || _fail "the runner does not return the suite's own code exactly once; a failure could be recorded as a pass"
+passes=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'line pass "' || true)
+[ "$passes" = 1 ] || _fail "the runner's pass verdict is not recorded exactly once"
+fails=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'line fail "' || true)
+[ "$fails" = 1 ] || _fail "the runner's fail verdict is not recorded exactly once"
+rc_tests=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '[ "$rc" -eq 0 ]' || true)
+[ "$rc_tests" = 2 ] || _fail "the runner's success tests are not the measured pair; a flipped verdict reads as the other one"
+rc_capture=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'rc=\$?' || true)
+[ "$rc_capture" = 1 ] || _fail "the guest wrapper no longer captures the suite's own status"
+counters=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'failures=$((failures + 1))' || true)
+[ "$counters" = 2 ] || _fail "the failure counter no longer increments on both failure paths"
