@@ -32,6 +32,7 @@ import socket
 import stat
 import tarfile
 import threading
+import time
 import zipfile
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
@@ -337,8 +338,20 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# curl's exit codes that are the network's moment rather than anything about the
+# record: a name that would not resolve, a connection that would not open, a
+# transfer that timed out, a TLS handshake that failed. Every one can pass a
+# second later. `--fail`'s 22 is deliberately absent: it collapses every HTTP
+# error into one code, and a 404 can be a wrong pin -- waiting does not fix a
+# wrong pin, it only delays the report.
+_TRANSIENT_CURL_CODES = frozenset({6, 7, 28, 35})
+
+_FETCH_ATTEMPTS = 3
+_FETCH_RETRY_DELAY_SECONDS = 2
+
+
 def _fetch_artefact(name: str, fetched: Path, version: str, pin: dict[str, str]) -> None:
-    """curl into the temporary, and nothing else.
+    """curl into the temporary, and nothing else a second attempt cannot fix.
 
     A fetch that does not happen is a **host** that is not in the state the
     request assumed -- the network, the URL and the release server are all host,
@@ -347,13 +360,32 @@ def _fetch_artefact(name: str, fetched: Path, version: str, pin: dict[str, str])
     reports the item as drift and exits 1. It is not a rejection: nothing about
     the record is wrong, and a caller who read 2 here would go looking for a typo
     in a file that is correct.
+
+    **The transient half of that is retried, bounded and narrow.** A resolver
+    that fails one lookup and answers the next is the ordinary weather of
+    networks, and a host converging a whole phase should not lose it to a single
+    blip. Measured, 2026-10-12: a full gate on a fixed tree went red on one suite
+    for `curl: (6) Could not resolve host: github.com` while every other fetch in
+    the same run passed -- one guest's moment, and the only red in the gate.
+    A network that is genuinely down still fails, after the attempts, with the
+    same single line it always had; the line grows `, after N attempts` only
+    when there was more than one, so a flaky mirror reads differently in the
+    journal from a dead one.
     """
-    result = h.run("curl", "--fail", "--silent", "--show-error", "--location",
-                   "--output", str(fetched), pin["url"])
-    if result.ok:
-        return
+    argv = ["curl", "--fail", "--silent", "--show-error", "--location",
+            "--output", str(fetched), pin["url"]]
+    attempt = 0
+    while True:
+        attempt += 1
+        result = h.run(*argv)
+        if result.ok:
+            return
+        if result.code not in _TRANSIENT_CURL_CODES or attempt >= _FETCH_ATTEMPTS:
+            break
+        time.sleep(_FETCH_RETRY_DELAY_SECONDS)
     reason = errors.oneline(result.err.strip()) or str(result.code)
-    h.error(f"fetching {name} {version} for this host: {pin['url']}: {reason}")
+    aftermath = f", after {attempt} attempts" if attempt > 1 else ""
+    h.error(f"fetching {name} {version} for this host: {pin['url']}: {reason}{aftermath}")
 
 
 def _verify_artefact(name: str, fetched: Path, version: str, pin: dict[str, str],
