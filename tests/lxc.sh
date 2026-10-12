@@ -281,11 +281,14 @@ _wait_cloud_init() {
     # which is the race this function exists to close.
     $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1 || :
     # **`fuser` may be absent, and its absence would make this a silent no-op.**
-    # It comes from `psmisc`, which is not in Ubuntu's base install. Without this
-    # check the `if ! ... fuser ...` below inverts a 127 into "the locks are
-    # free", the loop breaks on its first pass, and the wait protects nothing
-    # while appearing to work. It is present on the golden (measured), so this
-    # guards the case where the image changes rather than a case observed today.
+    # It comes from `psmisc`, which is NOT in the cloud-init package list below —
+    # it is present on the golden only because `ubuntu-standard` pulls it in
+    # (measured: `apt-cache rdepends --installed psmisc` lists ubuntu-standard).
+    # A minimal image that drops that metapackage would lose it, and then the
+    # `if ! ... fuser ...` below would invert a 127 into "the locks are free",
+    # the loop would break on its first pass, and the wait would protect nothing
+    # while appearing to work. That is why the check exists, and why it is
+    # checked rather than assumed.
     #
     # **`sh -c` is load-bearing.** `command -v` is a shell BUILTIN, not a binary,
     # so `lxc exec … -- command -v fuser` tries to exec a file called `command`
@@ -293,21 +296,56 @@ _wait_cloud_init() {
     # "fuser is absent" and returned early on EVERY machine. Measured: it fired
     # 52 times in one gate and disabled the very wait it was added to protect.
     # Running it through `sh -c` is what makes the builtin resolve.
+    # **The wait's own outcome is reported, and the loop's timeout is a failure.**
+    # `return 0` on every path means a caller under `set -euo pipefail` cannot
+    # tell "waited and the locks came free" from "waited 300s and gave up", from
+    # "`lxc exec` was dead", or from "fuser was never there". The first is the
+    # purpose of this function and the other three are all the same thing: no
+    # wait happened and the race is wide open. Adversarial review named this the
+    # strongest remaining defect, so every path that did not wait now says so
+    # with its exit status rather than only on stderr.
+    # **`fuser` absent is exit 1, not a warning-and-continue.** An earlier version
+    # of this returned 0 after printing a warning, and adversarial review caught
+    # that it contradicted its own commit message: "a warning rather than a
+    # silent success" is false, because the exit code IS the contract and 0 says
+    # the wait succeeded. A caller cannot see stderr and a code at once. Every
+    # path that did not wait must say so with its status, or the caller proceeds
+    # into the race believing it was protected.
     if ! $LXC exec -T "$instance" -- sh -c 'command -v fuser' >/dev/null 2>&1; then
-        printf 'warning: fuser is not on %s, so the apt lock wait cannot run and ' \
+        printf 'error: fuser is not on %s, so the apt lock wait cannot run; ' \
             "$instance" >&2
-        printf 'a suite that calls `soil packages` early may lose the lock race\n' >&2
-        return 0
+        printf 'install psmisc on the golden, or a suite that calls `soil packages` ' >&2
+        printf 'early will lose the lock race\n' >&2
+        return 1
     fi
-    local i
+    # **The three outcomes are told apart, because `fuser`'s exit code and `lxc
+    # exec`'s failure are both non-zero.** Measured: `fuser` returns 0 when a
+    # process holds the file and 1 when none does. An `if ! ...` treats "1, free"
+    # and "the exec itself failed" as the same answer, so a transient guest-agent
+    # failure in the first seconds after boot would report the locks free without
+    # having measured anything — the silent success this function exists to
+    # remove, left on the one path where the check itself is the thing failing.
+    local i rc
     for ((i = 0; i < 60; i++)); do
-        if ! $LXC exec -T "$instance" -- sh -c \
-            'fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1'; then
-            return 0
-        fi
+        rc=0
+        $LXC exec -T "$instance" -- sh -c \
+            'fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1' \
+            || rc=$?
+        # Only `1` is "no process holds either lock", which is the answer this
+        # function is waiting for. `0` means a lock is held and `2` (or an
+        # `lxc exec` failure, 255/127) means the measurement did not happen —
+        # both want another pass, so the loop simply falls through to the sleep.
+        [ "$rc" = 1 ] && return 0
         sleep 5
     done
-    return 0
+    # **Held after the whole budget, or not askable at all.** Both mean the wait
+    # did not do its job, and a silent success here is the failure mode this
+    # function exists to prevent: the caller proceeds, loses the race, and the
+    # suite dies with no diagnostic. Named, so the run says why.
+    printf 'error: %s still holds the apt lock after 300s, or the wait could not ' \
+        "measure it" >&2
+    printf 'ask it; a suite that runs `soil packages` now may exit 100\n' >&2
+    return 1
 }
 
 _conversion_state() {
@@ -478,7 +516,12 @@ cmd_provision() {
     # finished. Asking anything of apt while it runs loses the dpkg lock, which
     # is how snapper went missing from a golden — the capability gate caught it,
     # but the honest wait is cloud-init's own.
-    _wait_cloud_init "$GOLDEN"
+    #
+    # **The exit status is checked, and that is the point of the function
+    # returning one.** `tests/lxc.sh` runs under `set -uo pipefail` and NOT
+    # `set -e`, so an unchecked non-zero return here is silently ignored — the
+    # diagnostic prints and the run continues into the race anyway.
+    _wait_cloud_init "$GOLDEN" || die "cannot wait for cloud-init on $GOLDEN"
 
     if [ "${_needs_build:-0}" = 0 ] && [ "$(_conversion_state "$GOLDEN")" != done ]; then
         printf 'replacing %s: no snapshot and its conversion state is not done\n' "$GOLDEN"
@@ -584,7 +627,12 @@ _reset() {
     # exactly why `soil packages` also disables the distribution's own apt timers
     # and why that change fixes no suite here: no timer in the list is the thing
     # holding the lock at 12 s.
-    _wait_cloud_init "$RUNNER"
+    # **A non-zero return here is the caller's to handle, not this function's to
+    # act on.** `_reset`'s callers already branch on it: the per-suite cut prints
+    # `error: cannot cut a clean <name>` and CONTINUES to the next suite, and the
+    # shared cut dies. Calling `die` from in here would abort the whole gate for
+    # one machine's problem, which is the opposite of what the caller wants.
+    _wait_cloud_init "$RUNNER" || return 1
     _push "$RUNNER" "$REPO" "$VM_REPO"
 }
 
