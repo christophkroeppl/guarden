@@ -70,6 +70,7 @@ packages:
   - podman
   - python3-yaml
   - python3-jinja2
+  - dracut-core
 
   # harness: the throwaway machine's check tooling, and no host's
   - passt
