@@ -1215,7 +1215,9 @@ still converge and the run still exits `1`.
   the package index from the family's own `update` argv in
   `packages/packages.toml` once per run, **immediately before the first install that needs it**:
   btrfs-progs, snapper,
-  ferm, fail2ban, podman, and `python3-yaml` and `python3-jinja2`. `ufw` is **uninstalled** by
+  ferm, fail2ban, podman, `dracut` (the conversion machinery's initramfs hook runs under it —
+  `dracut-core` on Debian — and a host without it refuses the conversion explicitly), and
+  `python3-yaml` and `python3-jinja2`. `ufw` is **uninstalled** by
   installation and is **not** in any package list, on any family, for any reason. The host firewall
   is `ferm` and nothing else. It also fetches **pinned artefacts**
   from outside a distribution repository, and each one is an exception to "distribution packages

@@ -136,6 +136,12 @@ packages = [
     "podman",
     "python3-yaml",
     "python3-jinja2",
+    # The conversion machinery's initramfs hook runs under dracut; `soil
+    # storage` refuses explicitly on a host without it (other initramfs
+    # generators convert offline from a rescue environment instead), and
+    # without it here a real host learns both facts at apply time. `dracut-core`
+    # is Debian's name for the same tool the other two families call `dracut`.
+    "dracut-core",
 ]
 
 [families.debian.variant]
@@ -156,6 +162,7 @@ packages = [
     "podman",
     "python3-pyyaml",
     "python3-jinja2",
+    "dracut",
 ]
 
 [families.arch]
@@ -171,6 +178,7 @@ packages = [
     "podman",
     "python-yaml",
     "python-jinja2",
+    "dracut",
 ]
 
 # The throwaway machine's extras. Deliberately a separate role: `soil packages`

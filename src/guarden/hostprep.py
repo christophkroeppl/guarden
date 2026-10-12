@@ -1121,7 +1121,12 @@ def _finish_conversion() -> None:
     """
     if not _btrfs_layout_holds():
         return
-    h.run(str(_conversion_script()), "--apply", "--yes")
+    result = h.run(str(_conversion_script()), "--apply", "--yes")
+    if result.code == 0:
+        return
+    reason = result.err.strip().splitlines()
+    h.error("the root filesystem conversion could not be finished: "
+            + (reason[0] if reason else f"soil-storage-convert exited {result.code}"))
 
 
 def storage_items() -> list[Item]:
@@ -1176,8 +1181,8 @@ def storage_items() -> list[Item]:
                                         "root", "guarden"),
         ),
         Item(
-            f"no reboot is outstanding for the root filesystem conversion "
-            f"({_conversion_marker()} is absent)",
+            "no reboot is outstanding for the root filesystem conversion "
+            "(reboot-required under /var/lib/guarden/soil/)",
             lambda: not _conversion_marker().exists(),
             _finish_conversion,
         ),
@@ -1908,14 +1913,20 @@ def _make_programs_runnable() -> None:
 def _templates_installed() -> bool:
     """Whether the installed templates are the checkout's, contents and all.
 
-    Contents, not existence, for the reason `_modules_installed` gives.
+    Contents, not existence, for the reason `_modules_installed` gives — and
+    **recursively**, because `convert/` is the first subdirectory `templates/`
+    has ever had and a walker that skipped directories reported a host
+    converged while the conversion machinery under it was stale or absent.
     """
     installed = paths.TEMPLATES
     source = _source_tree() / "guarden" / "templates"
-    for path in sorted(source.iterdir()):
-        if not path.is_file():
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        target = installed / relative
+        if path.is_dir():
+            if not target.is_dir():
+                return False
             continue
-        target = installed / path.name
         if not target.is_file() or target.read_bytes() != path.read_bytes():
             return False
     return True
@@ -1958,10 +1969,25 @@ def _link_programs() -> None:
 
 
 def _install_templates() -> None:
+    """The templates tree, directories included.
+
+    Same walk and the same shape as `_install_modules`, and for the reason the
+    review measured: `install -m 0644 <directory> <dst>` prints "omitting
+    directory" and exits 1, so a file-only walk fails on every host that has to
+    install the templates at all (and the walk above would not notice the
+    directory was never repaired). Modes follow the exec bit, `-D` makes the
+    parent, and `convert/`'s shipped script keeps its 0755.
+    """
     source = _source_tree() / "guarden" / "templates"
-    for path in sorted(source.iterdir()):
-        h.run_or_die("install", "-m", "0644", "-o", "root", "-g", "root",
-                     str(path), str(paths.TEMPLATES))
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        target = paths.TEMPLATES / relative
+        if path.is_dir():
+            h.run_or_die("install", "-d", "-m", "0755", "-o", "root", "-g", "root", str(target))
+            continue
+        mode = "0755" if os.access(path, os.X_OK) else "0644"
+        h.run_or_die("install", "-D", "-m", mode, "-o", "root", "-g", "root",
+                     str(path), str(target))
 
 
 def _install_modules() -> None:

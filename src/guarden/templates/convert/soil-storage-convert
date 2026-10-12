@@ -26,8 +26,7 @@
 #
 # /home is NOT split off. hostprep.HOST_CONFIGURATIONS maps snapper config
 # `home` → "/home", and snapper snapshots a subvolume, so /home must be a btrfs
-# subvolume for `snapper -c home create-config -f btrfs -p /home` to work —
-# see the NOTES section at the bottom.
+# subvolume for `snapper -c home create-config -f btrfs -p /home` to work.
 #
 # Usage: soil-storage-convert [--check|--apply] [--yes]
 set -euo pipefail

@@ -58,13 +58,14 @@ Phases in order: `packages`, `storage`, `sysctl`, `firewall`, `install`, `units`
 
 ```
 soil storage --check     # ok when converged; reports the reboot marker and names it
-soil storage --apply     # creates @ and @var, fixes fstab
+soil storage --apply     # schedules the offline conversion -- or migrates, after the first reboot
 soil storage --check     # ok when converged
-reboot                    # only if --check asked for it
+reboot                   # only if --check asked for it
 ```
 
-State lives in `/var/lib/guarden/soil/`. Exactly one reboot is required; a second run after
-success reports no drift. `/boot` stays on ext4. The same phase installs
+State lives in `/var/lib/guarden/soil/`. **Two reboots**: the first converts the root offline in
+the initramfs, the second boots into the migrated `@`/`@var` layout; `--check` names the marker
+while either is outstanding, and a run after the second reports no drift. `/boot` stays on ext4. The same phase installs
 `/etc/apt/apt.conf.d/80guarden-snapper`, whose `DPkg::Pre-Invoke` snapshots `root` before every
 package transaction, creates the `root` and `home` configurations, and installs the replacement
 cleanup timer. It creates **no** service volume, and a snapper configuration belonging to a service is created by

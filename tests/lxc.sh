@@ -474,12 +474,6 @@ _ensure_pool() {
         || die "cannot create the btrfs pool $POOL; a dir pool makes a restore take 101s"
 }
 
-# _convert <instance>: drive the three-stage conversion to convergence.
-#
-# Exit 75 is not a failure. It is the script's way of saying the machine must
-# reboot for the next stage to exist, which is the whole reason it was ported
-# rather than replaced with an online conversion: btrfs-progs refuses a mounted
-# device, and a live root cannot be converted under itself.
 # _convert <instance>: converge the root filesystem with the product's own
 # machinery, across the reboots it asks for.
 #
@@ -522,7 +516,7 @@ _convert() {
         fi
         die "storage did not converge and no reboot is outstanding (apply exited $rc)"
     done
-    die "storage did not converge in six stages"
+    die "storage did not converge in six stages (last apply exited $rc)"
 }
 
 # _prove <instance>: the capabilities the suite depends on, checked before any
