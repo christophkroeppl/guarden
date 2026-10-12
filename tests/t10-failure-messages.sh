@@ -90,17 +90,17 @@ unset SUITE_TIMEOUT
 # exact form, each measured to move on its own mutation and no other. **And
 # the boundary of the whole approach, stated so it cannot be mistaken for
 # more**: these are presence checks on text — an edit that keeps every literal
-# (an `rc=0` on the next line, an early `return 0`, a reworded ledger message)
-# is invisible to grep, and closing that class needs executing the runner,
+# (an `exit 0` inserted just before the exit test) is invisible to a presence
+# check; the adjacency pins in this block close the named instances of that
+# class, and a residue remains that only executing the runner could close,
 # which no in-machine suite can do to a host process. That boundary is ticket
 # 266's; what is asserted here is every literal the chain is built from, each
 # pinned by its own measured mutation.
 # Every pin reads the comment-stripped stream — the timeout assignment anchor
-# alone reads the raw file, and its `^` and column-0 literal are what no
-# comment line can satisfy (a col-0 payload line elsewhere could, though;
-# nothing does today) — so prose quoting a pin cannot break the pin, and a
-# commented-out call cannot satisfy one; a trailing `# …` naming a token
-# would still count.
+# and the two adjacency pins read the raw file, adjacency being about the
+# physical next line, which stripping would destroy — so prose quoting a pin
+# cannot break the pin, and a commented-out call cannot satisfy one; a
+# trailing `# …` naming a token would still count.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
 calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c '_failure_message "' || true)
@@ -145,8 +145,10 @@ final_test=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '\[ "\$failures" -eq
 [ "$final_test" = 1 ] || _fail "the run's exit test is gone or suffixed; a failing run could exit green"
 call_site=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_run_suite "\$name" \|\| rc=\$\?[[:space:]]*$' || true)
 [ "$call_site" = 1 ] || _fail "the call site no longer captures _run_suite's status; the verdict is decoupled from it"
-continues=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '^[[:space:]]*continue[[:space:]]*$' || true)
-[ "$continues" = 7 ] || _fail "the fail path's continue is gone or moved; a failed suite would be cached as a hit"
+continue_adj=$(grep -A1 -E 'failures=\$\(\(failures \+ 1\)\)[[:space:]]*$' "$runner" | grep -cE '^[[:space:]]*continue[[:space:]]*$' || true)
+[ "$continue_adj" = 1 ] || _fail "the failure path no longer runs straight into its continue; a failed suite would be cached as a hit"
+exit_before=$(grep -B1 -E '\[ "\$failures" -eq 0 \][[:space:]]*$' "$runner" | grep -cE '^[[:space:]]*exit' || true)
+[ "$exit_before" = 0 ] || _fail "an exit sits immediately before the run's exit test; a failing run would exit green"
 ledger_pass=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'pass\t%s' || true)
 [ "$ledger_pass" = 1 ] || _fail "the ledger's pass arm is not the measured literal"
 ledger_fail=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'fail\t%s' || true)

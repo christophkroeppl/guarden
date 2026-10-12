@@ -60,19 +60,21 @@ Observations that exist are manual and recorded, not asserted:
 ## The pin block's boundary, measured
 
 `tests/t10-failure-messages.sh` pins the runner's failure text and control
-flow by presence: seventeen pinned literals, each measured to move on its own
-mutation and no other. Round 12 of the adversarial review measured the
-boundary of that approach — a dozen edits that keep every literal (a `|| true`
-suffix where nothing is end-anchored, a line added after a capture, an early
-`return 0`, a message swapped in place) and still make a failing suite read as
-a pass. The suffix class is closed by the end-anchors added in response and
-the in-place sites that were named are pinned; the remaining class — an edit
-that keeps every literal intact — cannot be closed by grep at all, because a
-presence check cannot see structure. Closing it needs executing the runner,
-which no in-machine suite can do to a host process, which is why this ticket
-exists. Option 1 below is that closure; the deliberately-failing probe it
-would use has already run twice by hand and printed exactly the contract the
-block asserts, including the "stopped on an assertion" line.
+flow by presence: seventeen pinned literals plus two adjacency pins, each
+measured to move on its own mutation and no other. Round 12 of the adversarial
+review measured the boundary of that approach — edits that keep every literal
+(a `|| true` suffix where nothing is end-anchored, a line added after a
+capture, an early `return 0`, an `exit 0` inserted before the exit test) and
+still make a failing suite read as a pass. The suffix class is closed by the
+end-anchors added in response, the named in-place sites are pinned, and the
+two adjacency pins close the named instances of the added-statement class; a
+residue remains — an edit that keeps every literal and every adjacency — that
+no presence check can close, because presence cannot see structure. Closing
+it needs executing the runner, which no in-machine suite can do to a host
+process, which is why this ticket exists. Option 1 below is that closure; the
+deliberately-failing probe it would use has already run twice by hand and
+printed exactly the contract the block asserts, including the "stopped on an
+assertion" line.
 
 ## Accepted residual
 
