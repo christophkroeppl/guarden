@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
-# soil-storage-convert.sh — offline ext4 → btrfs conversion + @/@var migration.
+# soil-storage-convert — offline ext4 → btrfs conversion + @/@var migration.
+#
+# **This is the phase's machinery, shipped with the programs.** It lives under
+# `/usr/lib/guarden/templates/convert/` — installed by `soil install` from
+# `src/guarden/templates/convert/` — and `soil storage` is what runs it:
+# `hostprep.storage_items`' btrfs-layout item and root-conversion-marker item
+# invoke `--apply` and translate its exit codes into the phase's own
+# reporting. `75` means "a reboot is required", which is a state of the host
+# and not a failure; everything else is the script's own stderr, reported.
+#
+# It is a staged state machine because the conversion crosses reboots and the
+# state file is the only thing that survives them: the dispatch at the bottom
+# selects a stage, and the rest of the file is invoking system tools in a
+# sequence, which is what bash is here for.
 #
 # The guarden port of .install/30-convert-btrfs.sh from the retired `next` branch.
 # Two things differ from that script and both are forced by the spec:
@@ -16,7 +29,7 @@
 # subvolume for `snapper -c home create-config -f btrfs -p /home` to work —
 # see the NOTES section at the bottom.
 #
-# Usage: soil-storage-convert.sh [--check|--apply] [--yes]
+# Usage: soil-storage-convert [--check|--apply] [--yes]
 set -euo pipefail
 
 # --- layout, per spec 6.1 and hostprep.py ------------------------------------
@@ -43,7 +56,7 @@ RSYNC_EXCLUDES=(
 )
 
 usage() {
-  printf 'usage: soil-storage-convert.sh [--check|--apply] [--yes]\n'
+  printf 'usage: soil-storage-convert [--check|--apply] [--yes]\n'
   printf '  --check  read-only; exit 0 only when / is btrfs on @ and /var on @var\n'
   printf '  --apply  converge one step; exit 75 when a reboot is required (re-run after)\n'
   printf '  --yes    skip the destructive-conversion confirmation\n'

@@ -65,7 +65,6 @@ POOL=${GUARDEN_LXC_POOL:-guarden-btrfs}
 POOL_SOURCE=${GUARDEN_LXC_POOL_SOURCE:-/media/data/guarden-lxd}
 REPO=${GUARDEN_LXC_REPO:-$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")}
 VM_REPO=${GUARDEN_LXC_VM_REPO:-/home/ubuntu/guarden}
-CONVERT=${GUARDEN_LXC_CONVERT:-$REPO/tests/lxc-btrfs-convert}
 CACHE_TOOL=${GUARDEN_LXC_CACHE_TOOL:-$REPO/tests/suitecache.py}
 
 # Tests that cannot run in the machine, by construction rather than by accident.
@@ -481,35 +480,49 @@ _ensure_pool() {
 # reboot for the next stage to exist, which is the whole reason it was ported
 # rather than replaced with an online conversion: btrfs-progs refuses a mounted
 # device, and a live root cannot be converted under itself.
+# _convert <instance>: converge the root filesystem with the product's own
+# machinery, across the reboots it asks for.
+#
+# **This drives `soil storage`, not a copy of it.** The conversion script is
+# shipped under `src/guarden/templates/convert/` and the phase is what runs it
+# and reports a staged reboot, so the harness pushes the checkout and does what
+# an operator does — apply, reboot when the marker says so, apply again. There
+# used to be a second copy of the script under `tests/` for this function; it
+# was the same file kept in two places, and it is gone.
 _convert() {
     local instance=$1 rc attempt
     _wait_ready "$instance" || die "$instance is not answering"
-    if ! _push "$instance" "$REPO/tests" /root/guarden-tests; then
-        die "cannot place the conversion script on $instance"
+    if ! _push "$instance" "$REPO" "$VM_REPO"; then
+        die "cannot place the checkout on $instance"
     fi
     for ((attempt = 1; attempt <= 6; attempt++)); do
         rc=0
-        vm_exec_t "$instance" '/root/guarden-tests/lxc-btrfs-convert --apply --yes' || rc=$?
-        if [ "$rc" = 0 ]; then
-            return 0
-        fi
-        if [ "$rc" = 75 ]; then
-            printf '  btrfs: stage needs a reboot (attempt %d)\n' "$attempt"
-            _reboot "$instance" || die "the machine did not come back after a conversion reboot"
-            continue
-        fi
+        vm_exec_t "$instance" "cd $VM_REPO && PYTHONPATH=src python3 -m guarden.soil storage --apply" || rc=$?
         # 255 is the LXD agent not answering, which right after a boot is a
         # transient rather than a conversion failure. Re-prove the machine is
         # alive and try the same stage again before giving up on it.
         if [ "$rc" = 255 ]; then
-            printf '  btrfs: agent did not answer (attempt %d), settling\n' "$attempt"
+            printf '  storage: agent did not answer (attempt %d), settling\n' "$attempt"
             _wait_ready "$instance" || die "$instance stopped answering"
             sleep 10
             continue
         fi
-        die "btrfs conversion failed with exit $rc"
+        # **A reboot is the marker's question, not an exit code's.** `soil`
+        # exits 0/1/2 and never 75 (spec 1.2), and an armed machine is a 1 with
+        # the marker set: the marker is the thing that survives the reboot, and
+        # it is the file `soil storage --check` reports by name.
+        if vm_exec_t "$instance" 'test -e /var/lib/guarden/soil/reboot-required'; then
+            printf '  storage: a reboot is required (attempt %d)\n' "$attempt"
+            _reboot "$instance" || die "the machine did not come back after a conversion reboot"
+            continue
+        fi
+        if vm_exec_t "$instance" "cd $VM_REPO && PYTHONPATH=src python3 -m guarden.soil storage --check"; then
+            printf '  storage: the conversion converged\n'
+            return 0
+        fi
+        die "storage did not converge and no reboot is outstanding (apply exited $rc)"
     done
-    die "btrfs conversion did not converge"
+    die "storage did not converge in six stages"
 }
 
 # _prove <instance>: the capabilities the suite depends on, checked before any

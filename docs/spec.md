@@ -1249,7 +1249,13 @@ still converge and the run still exits `1`.
   before every package transaction, converges the canonical value set into every snapper
   configuration it can see — a service's configurations, and the host's own `root` and `home`,
   and nothing else (§8.1) — creates `root` and `home` where they are absent, and installs
-  `/var/lib/guarden/soil/`. It creates **no** service volume. It also **disables the
+  `/var/lib/guarden/soil/`. It creates **no** service volume. **A root that is not yet btrfs,
+  or that is btrfs without the subvolumes, is converted**: the phase drives a staged offline
+  conversion — `--apply` schedules it, a reboot runs it in the initramfs, and the phase is run
+  again after each reboot (twice in all: the conversion, then the `@`/`@var` migration) — and
+  while a reboot is outstanding it reports the marker it wrote at
+  `/var/lib/guarden/soil/reboot-required` and stays unmet, which is the one drift a `storage`
+  run is expected to carry between reboots. It also **disables the
   distribution's packaged snapper cleanup timer** and installs the replacement that takes the
   `snapshots` lock (§8.5). A snapper configuration belonging to a service is created by the mutator and is
   never recreated here.

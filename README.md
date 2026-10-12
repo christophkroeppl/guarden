@@ -50,18 +50,21 @@ exit codes and the word `drift` do not change with the path taken.
 from [`packages/packages.toml`](packages/packages.toml) and hands it to the instance; the document
 installs the substrate and then converges every phase and checks every phase.
 
-**From the scripts** — for a host without cloud-init, which is most of them. Same phases, same
-order, run by hand:
+**From the scripts** — for a host without cloud-init, which is most of them. Same phases, run by
+hand — with `install` first, because it is what seeds the file `packages` resolves its fetch
+against and puts the programs on `PATH`:
 
 ```sh
-# 1. Install. This reboots once to convert the root filesystem to btrfs.
-soil packages --apply
-soil storage  --apply
+# 1. Install. `storage` reboots once or twice to convert the root filesystem to btrfs.
+soil install  --apply   # the programs, the groups, the files every phase reads
+soil packages --apply   # the distribution packages and the pinned podlet release
+soil storage  --apply   # schedules the btrfs conversion; run it again after the reboot
 soil sysctl   --apply
 soil firewall --apply
-soil install  --apply
 soil units    --apply
-# ... reboot when it tells you to, then soil storage --apply again ...
+# ... reboot when `storage` says to — it names the marker it wrote, under
+# /var/lib/guarden/soil/ — then run `soil storage --apply` again; twice, if the
+# second boot asks again (the conversion and the @/@var migration are two reboots) ...
 
 # 2. Check nothing drifted.
 soil --check
@@ -69,6 +72,12 @@ soil --check
 # 3. Say who you are.
 weedr project add myapp --repository git@github.com:you/myapp.git
 ```
+
+`soil install` reports one item it cannot converge until the host can measure it: `ingress.alias`
+is recorded by running a `localhost/guarden-probe` container image, and this repository neither
+builds nor ships that image. Until it exists, `soil install` and `soil --check` report that one
+drift — and the edge will not start, which is by design: guarden records no address it did not
+measure. Everything else converges on the first run.
 
 `soil --check` is safe to run over ssh at any time: it reports and changes nothing.
 

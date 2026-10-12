@@ -1060,14 +1060,77 @@ def _packaged_cleanup_disabled() -> bool:
     return True
 
 
+def _conversion_marker() -> Path:
+    return h.hostpath("var", "lib", "guarden", "soil", "reboot-required")
+
+
+def _conversion_script() -> Path:
+    """The conversion machinery, from the source tree or the installed copy.
+
+    Same order and the same reason as `h.template`: on a checkout — which is
+    what the golden VM's pushed repository is — the file being run and the file
+    being edited are the same one, and on an installed host it is the copy
+    `soil install` put under `/usr/lib/guarden/templates/convert/`.
+    """
+    source = _source_tree() / "guarden" / "templates" / "convert" / "soil-storage-convert"
+    if source.is_file():
+        return source
+    return h.template_path("convert", "soil-storage-convert")
+
+
+def _conversion_step() -> None:
+    """Run the machinery's next stage, and say what a reboot means.
+
+    The script is a state machine across reboots: on an ext4 root it schedules
+    the offline conversion and asks for the first reboot; on a flat btrfs root
+    it migrates into `@` and `@var` and asks for the second. `75` is the
+    machinery's "a reboot is required" — a state of the host, not a failure —
+    and the phase reports it by naming the marker that `--check` reports too.
+    Anything else is reported with the script's own first stderr line, because
+    the script is where the reason is.
+
+    The `/boot` guard comes first and is the phase's, not the script's: /boot
+    sharing the filesystem that becomes btrfs is the one outcome the runbook
+    promises cannot happen, and scheduling a conversion that cannot boot is not
+    a step worth taking.
+    """
+    if not _boot_is_ext4():
+        h.error("/boot is not on ext4: /boot shares the filesystem that becomes btrfs "
+                "and the next boot would not find a kernel")
+        return
+    result = h.run(str(_conversion_script()), "--apply", "--yes")
+    if result.code == 75:
+        h.error("the root filesystem conversion is staged: reboot now and run "
+                f"`soil storage --apply` again; the marker is {_conversion_marker()}")
+        return
+    if result.code == 0:
+        return
+    reason = result.err.strip().splitlines()
+    h.error("the root filesystem conversion could not proceed: "
+            + (reason[0] if reason else f"soil-storage-convert exited {result.code}"))
+
+
+def _finish_conversion() -> None:
+    """The post-reboot cleanup, and only when there is a conversion to finish.
+
+    The marker is cleared by the machinery's last stage — verify the layout,
+    delete the ext4 backup, remove the initramfs hook — and that stage needs the
+    layout whose absence the reboots are still fixing. While the layout does not
+    hold, the btrfs-layout item owns the machinery, and running the script here
+    as well would drive its first stage twice in one apply.
+    """
+    if not _btrfs_layout_holds():
+        return
+    h.run(str(_conversion_script()), "--apply", "--yes")
+
+
 def storage_items() -> list[Item]:
     config = h.read_config(h.config_path()) or h.shipped_config()
     items: list[Item] = [
         Item(
             "btrfs with the @ and @var subvolumes",
             _btrfs_layout_holds,
-            lambda: h.error("btrfs has no @ and @var subvolume: convert the root "
-                            "filesystem before running this phase again"),
+            _conversion_step,
         ),
         Item(
             "/boot is on ext4, so the kernel keeps booting after a btrfs conversion",
@@ -1111,6 +1174,12 @@ def storage_items() -> list[Item]:
             lambda: hostpath("var", "lib", "guarden", "soil").is_dir(),
             lambda: h.install_directory(hostpath("var", "lib", "guarden", "soil"), 0o750,
                                         "root", "guarden"),
+        ),
+        Item(
+            f"no reboot is outstanding for the root filesystem conversion "
+            f"({_conversion_marker()} is absent)",
+            lambda: not _conversion_marker().exists(),
+            _finish_conversion,
         ),
     ]
 
