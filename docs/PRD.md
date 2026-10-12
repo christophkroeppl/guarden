@@ -142,7 +142,7 @@ repository kept paying for the difference.
 
 | layer | programs | privilege | job |
 |---|---|---|---|
-| host | `soil` | root | packages, btrfs and snapper, sysctl, the ferm firewall framework, ingress forwarding, SSH guarantee, install ||
+| host | `soil` | root | packages, btrfs and snapper, sysctl, the ferm firewall framework, ingress forwarding, SSH guarantee, install |
 | control | `weedr` | root | the only mutator: identities, service roots, state volumes, units, credentials, ports, snapshots, forks, rollbacks |
 | render | `loom` | unprivileged | manifest plus registry to units, host entries, environment, credential requests |
 | render | `roots` | unprivileged | the edge's route configuration |
