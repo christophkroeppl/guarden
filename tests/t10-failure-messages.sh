@@ -31,9 +31,19 @@ esac
 line=$(_line 143)
 echo "$line" | grep -qF '128+15' || _fail "143 does not read as signal 15: $line"
 
+line=$(_line 192)
+echo "$line" | grep -qF '128+64' || _fail "192 (SIGRTMAX) does not read as signal 64: $line"
+
+line=$(_line 0)
+echo "$line" | grep -qF 'code 0' || _fail "a zero code is not named a runner defect: $line"
+
 line=$(_line 1 "t10-probe 1")
 echo "$line" | grep -qF 'stopped on an assertion' \
     || _fail "a confirmed 1 is not named an assertion: $line"
+
+line=$(_line 124 "t10-probe 124")
+echo "$line" | grep -qF '124 on its own' \
+    || _fail "a self-inflicted 124 is not told from the wall clock: $line"
 
 line=$(_line 1 "")
 echo "$line" | grep -qF 'did not confirm' \
@@ -61,10 +71,12 @@ unset SUITE_TIMEOUT
 # **The runner calls this function and has no inline failure line left.**
 # `_push` delivers tests/lxc.sh into the machine, so the one drift the
 # extraction could grow — a second print site the suite never sees — is
-# greppable from here.
+# greppable from here. The pattern is a drift net, not a proof: it catches a
+# reworded inline failure line by the words such a line uses, and a print
+# that avoids every one of them would still slip it.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
 grep -q '_failure_message "' "$runner" || _fail "the runner has no _failure_message call site"
-if grep -qE "printf 'error: %s (exited|exceeded)" "$runner"; then
+if grep -qE "printf 'error: %s[^']*(exited|exceeded|died|killed|signal|128\+|wall clock)" "$runner"; then
     _fail "the runner still prints a failure line inline; the extraction has drifted"
 fi

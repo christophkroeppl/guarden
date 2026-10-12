@@ -13,9 +13,10 @@ all. The answer landed in two halves:
   `tests/t10-failure-messages.sh` drives it every way a gate can read it —
   the 124/128+n codes, the confirmed and unconfirmed meanings of 1, the plain
   codes, and the wall value flowing through from `SUITE_TIMEOUT` rather than
-  the default alone. The suite also greps the pushed runner source for one
-  `_failure_message` call site and no inline failure printf, so the extraction
-  cannot silently drift back. That is asserted.
+  the default alone; a self-inflicted 124 and a code 0 are driven too. The
+  suite also greps the pushed runner source for one `_failure_message` call
+  site and no inline failure printf (a word-based drift net, not a proof), so
+  the extraction cannot silently drift back. That is asserted.
 - everything **machine-facing** about the runner is still unasserted: the
   guest wrapper that writes `<name> <rc>` and `exit`s with the suite's code,
   the read-back of that word on rc=1, the `fuser`/lock-file guards, the whole

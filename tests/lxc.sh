@@ -332,21 +332,30 @@ _wait_cloud_init() {
         printf 'early will lose the lock race\n' >&2
         return 1
     fi
-    # **The lock files themselves are checked for the same reason `fuser` is.**
-    # A missing file is the second measured fatal cause (`Specified filename …
-    # does not exist.`, fuser exit 1 with stderr) and the loop reads it as
-    # `unmeasured`: correct, and slow — 60 checks per cut, on every fresh
-    # suite, before the run says why. The check turns that into an immediate,
-    # named failure. Adversarial review priced the slow path; the fast one is
-    # one exec.
-    if ! $LXC exec -T "$instance" -- sh -c \
-        '[ -e /var/lib/dpkg/lock-frontend ] && [ -e /var/lib/apt/lists/lock ]' \
-        >/dev/null 2>&1; then
-        printf 'error: %s has no apt lock file (/var/lib/dpkg/lock-frontend or ' \
-            "$instance" >&2
-        printf '/var/lib/apt/lists/lock) to wait on; the wait has nothing to measure\n' >&2
-        return 1
-    fi
+    # **The lock files themselves are checked for the same reason `fuser` is,
+    # and the check answers in a word for the same reason too.** A missing
+    # file is the second measured fatal cause (`Specified filename … does not
+    # exist.`) and the loop reads it as `unmeasured`: correct, and slow. But
+    # a bare `lxc exec` status cannot carry the answer — a transport blip
+    # exits 1 as well, and reading that as "missing" would fail a cut with a
+    # wrong cause, which is worse than the slow honest path. The guest prints
+    # which of the files is absent; no word at all means the exec could not be
+    # reached, and the loop below then measures it honestly instead.
+    local lockword missing
+    lockword=$(timeout --foreground 20 $LXC exec -T "$instance" -- sh -c '
+        for f in /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock; do
+            [ -e "$f" ] || printf "missing:%s\n" "$f"
+        done
+        printf ok') || lockword=''
+    case "$lockword" in
+        ok) ;;
+        missing:*)
+            missing=${lockword#missing:}
+            missing=${missing%%$'\n'*}
+            printf 'error: %s is missing %s, so the lock wait has nothing to measure\n' \
+                "$instance" "$missing" >&2
+            return 1 ;;
+    esac
     # **The guest answers one word, because every exit code the local side can
     # read is ambiguous.** Measured: `fuser` exits 1 both for "none of the
     # specified files is accessed" (empty stderr) and for a fatal error that
@@ -684,7 +693,7 @@ _reset() {
 }
 
 _run_suite() {
-    local name=$1 rc
+    local name=$1 rc=0 marker
     # -T always, and with stdin closed and a wall clock. A command that reads
     # stdin — an echo-off prompt, a tool that asks a question — otherwise
     # blocks forever on a stream nobody is feeding, and the run stops with no
@@ -709,7 +718,6 @@ _run_suite() {
     # the exec never confirmed the suite ran. Measured: `lxc exec` itself exits
     # 1 when it cannot reach the instance, so rc=1 is the one code an assertion
     # and a lost transport share.
-    local rc=0 marker
     timeout --foreground --signal=KILL "$SUITE_TIMEOUT" \
         $LXC exec -T "$RUNNER" --cwd "$VM_REPO" \
         --env "PYTHONPATH=$VM_REPO/src" \
@@ -722,9 +730,11 @@ bash tests/$name; rc=\$?; printf '%s %s' \"$name\" \"\$rc\" >/tmp/guarden-suite-
         return 0
     fi
     python3 "$CACHE_TOOL" line fail "$name"
-    if [ "$rc" -eq 1 ]; then
-        # rc=1 is the one code an assertion and a lost transport share, so the
-        # guest's own word is read back before the line is chosen; the choice
+    if [ "$rc" -eq 1 ] || [ "$rc" -eq 124 ]; then
+        # rc=1 and rc=124 are the two codes an assertion and a lost transport
+        # (or the wall clock) share — measured: `timeout` passes a child's own
+        # 124 through, so 124 alone is as ambiguous as 1 — and the guest's own
+        # word is read back for both before the line is chosen; the choice
         # itself is `_failure_message`, where a suite can assert it.
         marker=$(timeout --foreground 20 $LXC exec -T "$RUNNER" -- cat /tmp/guarden-suite-status 2>/dev/null) \
             || marker=''
