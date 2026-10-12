@@ -11,7 +11,7 @@ repository.
 - [ ] `/usr/lib/guarden/modules/homepage/module.toml` declares the dashboard service and the
       renderer it switches on
 - [ ] `weedr module add homepage` installs the dashboard and the renderer's units, and
-      `weedr module remove` reverses it without touching `gate`
+      `weedr module remove` reverses it without touching `traefik`
 - [ ] `twig sync` merges every service's widgets into the dashboard's configuration
 - [ ] Widget files are copied through unparsed, so any YAML the dashboard accepts works
 - [ ] `twig` generates only the grouping and the per-project links, from `projects.toml`

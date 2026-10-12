@@ -18,7 +18,7 @@ alias = ""                       # the address a rootless container reaches the 
 publication_range = [20000, 32767]
 forwarded = [ "80/tcp", "443/tcp", "443/udp" ]
 # The zone delegated to the tunnel's provider, and empty by default. Empty means
-# the tunnel is NOT configured: `weedr module add tendril` refuses to install it
+# the tunnel is NOT configured: `weedr module add cloudflared` refuses to install it
 # and `soil --check` reports the absence, which is a state rather than a failure.
 # Root-owned like the alias beside it, and no manifest carries it — a repository
 # cannot choose the zone public traffic is answered in.
@@ -57,7 +57,7 @@ token_name = "share"
 scopes = [ "Access: Apps and Policies Write" ]
 
 [modules]
-enabled = ["gate", "homepage"]
+enabled = ["traefik", "homepage"]
 
 # A compressed swap device. This table is ABSENT by default and its absence is
 # the default rather than a value: with no [zram] here, `soil packages` installs

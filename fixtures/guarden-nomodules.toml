@@ -4,7 +4,7 @@
 #
 # Two things differ from the shipped table, and each earns its place.
 # `[modules] enabled` is **empty**, which is what makes the merge claim
-# non-vacuous: every other shipped fixture already carries `["gate",
+# non-vacuous: every other shipped fixture already carries `["traefik",
 # "homepage"]`, so a suite that started from one of those could not tell "the
 # installer's selection was merged" from "the file already said this" — the
 # first assertion would be satisfied before the apply ran. And `ingress.alias`

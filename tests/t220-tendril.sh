@@ -90,7 +90,7 @@ assert_not_rejected
 # never carry a route. The refusal is at the CLI seam and names the key.
 cp "$GUARDEN_PREFIX/etc/guarden/guarden.toml" "$GUARDEN_FIXTURES/guarden-tunnel.toml"
 sed -i 's/^tunnel_domain = .*/tunnel_domain = ""/' "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
-run weedr module add tendril
+run weedr module add cloudflared
 assert_exit 2
 assert_stderr_has "tunnel_domain"
 run weedr module list
@@ -107,29 +107,29 @@ run soil firewall --apply
 assert_not_rejected
 nat=$GUARDEN_PREFIX/etc/guarden/firewall/20-ingress-nat.conf
 run cp "$nat" "$GUARDEN_FIXTURES/nat-before.conf"
-run weedr module add tendril
+run weedr module add cloudflared
 assert_exit 0
 run cmp -s "$nat" "$GUARDEN_FIXTURES/nat-before.conf"
 assert_exit 0
 
 # The service exists and is a service like any other. It declares no port of its
 # own, so there is no publication and nothing to forward.
-assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/registry/tendril-production.toml"
+assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/registry/cloudflared-production.toml"
 run weedr service list
 assert_exit 0
-assert_stdout_has "tendril-production"
+assert_stdout_has "cloudflared-production"
 
 # The unit is a podman `[Container]`, like every other module's, and it passes
 # its arguments one `Exec=` line each. A raw systemd unit with a multi-word
 # `ExecStart=` is refused by `unitsource.format_line` by design, which is what
 # the container route exists to avoid.
-unit=$GUARDEN_PREFIX/usr/lib/guarden/modules/tendril/tendril-production/.guarden/quadlet/tendril-production.container
+unit=$GUARDEN_PREFIX/usr/lib/guarden/modules/cloudflared/cloudflared-production/.guarden/quadlet/cloudflared-production.container
 assert_file_exists "$unit"
 assert_file_has "$unit" "[Container]"
 assert_file_has "$unit" "Image=docker.io/cloudflare/cloudflared"
 assert_file_lacks "$unit" "ExecStart="
 
-run weedr module add gate
+run weedr module add traefik
 assert_exit 0
 stage_poke routed 9f2c1ab
 run weedr service ingest routed-staging --from poke routed@9f2c1ab
@@ -191,8 +191,8 @@ assert_file_has "$services" "127.0.0.0/8"
 # Without this the route is in the tunnel's config and reachable by nobody: the
 # deny stops the tunnel's uid before it reaches the service, so a tunnel-declared
 # route 404s at the tunnel rather than answering.
-tunnel_uid=$(getent passwd tendril-production | cut -d: -f3)
-[ -n "$tunnel_uid" ] || _fail "the tendril service user has no uid"
+tunnel_uid=$(getent passwd cloudflared-production | cut -d: -f3)
+[ -n "$tunnel_uid" ] || _fail "the cloudflared service user has no uid"
 routed_publication=$(sed -n 's/^publication = //p' \
     "$GUARDEN_PREFIX/var/lib/guarden/shared/routed-staging/routes.toml" | head -n 1)
 [ -n "$routed_publication" ] || _fail "routed-staging holds no publication"

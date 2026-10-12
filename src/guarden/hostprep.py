@@ -236,7 +236,7 @@ UNITS = (
 # would be a unit that runs every ten minutes to warn that `[share]` is unset —
 # the ambient diagnostic `be4e498` removed for `tunnel_domain`. The units are
 # installed everywhere (the tree ships them) and **enabled** only with the module.
-SHARE_MODULE = "tendril"
+SHARE_MODULE = "cloudflared"
 
 
 # --------------------------------------------------------------------------

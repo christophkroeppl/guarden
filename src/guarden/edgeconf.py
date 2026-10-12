@@ -24,7 +24,7 @@ ARGUMENT = re.compile(r"^--entrypoints\.(?P<name>[A-Za-z0-9_-]+)\.(?P<rest>.+)$"
 # Traefik v3.2 spells this flag `--entrypoints`, all lowercase: `traefik --help`
 # carries 41 of them and no `--entryPoints`. A capital P is not a flag traefik
 # recognises, and an unrecognised flag is not a declaration -- it is ignored. That
-# is how the gate module's nine PascalCase flags went unread: every entrypoint
+# is how the traefik module's nine PascalCase flags went unread: every entrypoint
 # still parsed from guarden's own (wrong) spelling, every port still bound on
 # traefik's defaults, and every suite that checked a bound port passed.
 MISSPELLED = re.compile(r"^--entryPoints\.")
@@ -40,7 +40,7 @@ API_ENTRYPOINT = "traefik"
 # node: api` and refuses to start -- so they are refused here rather than parsed.
 API_NOT_A_FIELD = ("http.api", "http.api.dashboard", "http.api.insecure")
 
-# `/etc/guarden/edge/auth-provider`: the one file connecting the auth module to
+# `/etc/guarden/edge/auth-provider`: the one file connecting the authelia module to
 # `roots`. The middleware is defined in a file of its own rather than inside
 # every rendered route file, because a route with no `auth:` must render byte for
 # byte what it rendered before — a definition in the template would be in all of
@@ -234,7 +234,7 @@ def routing_entrypoints(found: dict[str, Entrypoint]) -> list[str]:
 def write_marker(service: str) -> None:
     """Write `/etc/guarden/edge/auth-provider`, `0640 root:guarden`.
 
-    Written once, by `weedr module add auth`, and by nothing else: not by a
+    Written once, by `weedr module add authelia`, and by nothing else: not by a
     service, not by a manifest, not by a poke and not by a later sync. The
     renderer reads it and never creates it, so a marker that is missing is a
     host that has no auth provider rather than a file it is about to get.
@@ -276,7 +276,7 @@ def provider(config) -> str:
     if name is None:
         raise errors.GuardenError(
             f"{MARKER} does not exist, and it names the service `auth: true` routes are "
-            f"aimed at; `weedr module add auth` writes it",
+            f"aimed at; `weedr module add authelia` writes it",
             errors.HOST_NOT_AS_ASSUMED,
         )
     if not names.NAME_RE.match(name):

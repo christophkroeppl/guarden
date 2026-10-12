@@ -13,9 +13,9 @@ It previously decided `cloudflared` would be a second pinned host binary; it is 
 
 The reason the container route won is not only consistency. The branch's first
 implementation was a **raw systemd unit with a multi-word `ExecStart=`**, which
-`unitsource.format_line` refuses *by design* — so `weedr module add tendril` could not
+`unitsource.format_line` refuses *by design* — so `weedr module add cloudflared` could not
 run at all. A `[Container]` unit passes its arguments one `Exec=` line each, which is
-how `gate`'s traefik already runs.
+how `traefik`'s traefik already runs.
 
 ## The branch
 
@@ -23,7 +23,7 @@ how `gate`'s traefik already runs.
 
 | | |
 |---|---|
-| `120a9e6` | the prior session's foundation — config, overrides, roots, tendril scaffold |
+| `120a9e6` | the prior session's foundation — config, overrides, roots, cloudflared scaffold |
 | `0e9a574` | the module moved to `.guarden/`, like every other module |
 | `d4b70e7` | **a track's `expose` defaults to `edge`** — see below |
 | `8fe251e` | the note recording what the suite found |

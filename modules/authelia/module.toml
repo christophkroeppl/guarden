@@ -1,4 +1,4 @@
-name = "auth"
+name = "authelia"
 requires = []
 
 [[services]]
@@ -9,7 +9,7 @@ requires = []
 # through the edge by a `routes:` entry in its own shipped manifest, so it
 # declares no forwarded port of its own and
 # is not a control surface.
-service = "auth-production"
+service = "authelia-production"
 
 [[switches]]
 # `roots` is the program this module switches on, and it is the existing one:

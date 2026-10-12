@@ -65,7 +65,7 @@ edge-group work in `t-263` (`ab2082e`), not here.
 
 ## modules/
 
-- `tendril/tendril-production/.guarden/service.yml:18` — **not a comment
+- `cloudflared/cloudflared-production/.guarden/service.yml:18` — **not a comment
   defect**: `schema: .env.schema` resolves under the service root instead of
   `.guarden/` (render.py:810 joins against the module dir), the file is not
   there, `secretschema.read` returns an empty schema for a missing file — and
@@ -74,19 +74,19 @@ edge-group work in `t-263` (`ab2082e`), not here.
   all. Every other manifest spells `.guarden/.env.schema`. Fix with the
   credential item in ticket 220; an assertion on the rendered unit's
   `Secret=` belongs with it.
-- `tendril/tendril-production/.guarden/.env.schema:9–13` — the key and its
+- `cloudflared/cloudflared-production/.guarden/.env.schema:9–13` — the key and its
   annotations are plain lines; `secretschema` reads comment lines only
   (`:108–111`), so the schema declares nothing even once the path is fixed.
   Comment-prefix them, per `fixtures/projects/quadlet-app/.guarden/.env.schema`.
-- `tendril/module.toml:15–16` — "touches no other module" — `_install_module`
+- `cloudflared/module.toml:15–16` — "touches no other module" — `_install_module`
   runs `_edge_group` and `_edge_directory` for every module (weedr.py:837–843,
-  963–981); spec §7.5 and ADR-0008 attribute both to the gate module alone.
-- `auth/auth-production/.guarden/quadlet/auth.container:12–15` — "it is the
+  963–981); spec §7.5 and ADR-0008 attribute both to the traefik module alone.
+- `auth/authelia-production/.guarden/quadlet/authelia.container:12–15` — "it is the
   same string `roots` puts in the middleware definition" — the strings differ
   by design; t150 asserts the middleware address and asserts the file lacks
   `127.0.0.1` (tests/t150-auth.sh:140–141), while the container's own address
   is `http://127.0.0.1:9000/verify`.
-- `auth/auth-production/.guarden/service.yml:13–14` — "the renderer refuses
+- `auth/authelia-production/.guarden/service.yml:13–14` — "the renderer refuses
   the rule on the provider's own route whatever the manifest says" — nothing
   refuses; the slice keeps `auth = true` (render.py:1160) and `roots`
   withholds the middleware (`roots.py:94–95`).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The auth module and the one root-owned file that connects it to roots
+# The authelia module and the one root-owned file that connects it to roots
 # (ticket 150, spec 3.6, 6.4).
 #
 # Real host, real uids, real `useradd`: `GUARDEN_PREFIX=/` and the machine's own
@@ -30,10 +30,10 @@ run soil install --apply
 assert_not_rejected
 
 # The module ships, and it declares one service and the program it switches on.
-assert_file_exists /usr/lib/guarden/modules/auth/module.toml
-assert_file_exists /usr/lib/guarden/modules/auth/auth-production/.guarden/service.yml
-assert_file_exists /usr/lib/guarden/modules/auth/auth-production/.guarden/quadlet/auth.container
-assert_file_has /usr/lib/guarden/modules/auth/module.toml 'program = "roots"'
+assert_file_exists /usr/lib/guarden/modules/authelia/module.toml
+assert_file_exists /usr/lib/guarden/modules/authelia/authelia-production/.guarden/service.yml
+assert_file_exists /usr/lib/guarden/modules/authelia/authelia-production/.guarden/quadlet/authelia.container
+assert_file_has /usr/lib/guarden/modules/authelia/module.toml 'program = "roots"'
 # **No new program and no code.** `roots` is the only program a module may
 # switch on that writes the edge's routes, and the whole connection between the
 # module and the middleware is the one marker file below: no plugin interface,
@@ -41,7 +41,7 @@ assert_file_has /usr/lib/guarden/modules/auth/module.toml 'program = "roots"'
 # and a shipped service.
 run weedr module list --json
 assert_exit 0
-assert_json available.0 '"auth"'
+assert_json available.0 '"authelia"'
 assert_json enabled '[]'
 
 # --- claim 1: the marker is root-owned 0640 and written once -----------------
@@ -50,9 +50,9 @@ assert_json enabled '[]'
 # that is not installed has no provider.
 assert_file_missing /etc/guarden/edge/auth-provider
 
-run weedr module add gate
+run weedr module add traefik
 assert_exit 0
-run weedr module add auth
+run weedr module add authelia
 assert_exit 0
 marker=/etc/guarden/edge/auth-provider
 assert_file_exists "$marker"
@@ -60,17 +60,17 @@ assert_mode "$marker" 0640
 assert_owner "$marker" "root:guarden"
 # It names the auth service **by its service name** — the name the edge resolves
 # and the name the registry holds — and nothing else.
-[ "$(cat "$marker")" = auth-production ] \
-    || _fail "$marker names '$(cat "$marker")', not the auth service name auth-production"
-assert_passwd auth-production
+[ "$(cat "$marker")" = authelia-production ] \
+    || _fail "$marker names '$(cat "$marker")', not the auth service name authelia-production"
+assert_passwd authelia-production
 
 # Written **once**: a re-add rewrites nothing, and neither does any other verb.
 inode=$(stat -c %i "$marker")
-run weedr module add auth
+run weedr module add authelia
 assert_exit 0
 [ "$(stat -c %i "$marker")" = "$inode" ] \
     || _fail "$marker was rewritten by a re-add of the same module"
-run weedr module add gate
+run weedr module add traefik
 assert_exit 0
 [ "$(stat -c %i "$marker")" = "$inode" ] \
     || _fail "$marker was rewritten by adding a different module"
@@ -80,11 +80,11 @@ assert_not_rejected
     || _fail "$marker was rewritten by a firewall converge"
 
 # The shared edge directory and the `edge` group are untouched by this ticket:
-# the auth module declares no ingress, so adding it granted nothing.
+# the authelia module declares no ingress, so adding it granted nothing.
 assert_group edge
 assert_supplementary_group traefik-production edge
-assert_no_supplementary_group auth-production edge
-assert_no_supplementary_group auth-production guarden
+assert_no_supplementary_group authelia-production edge
+assert_no_supplementary_group authelia-production guarden
 assert_mode /var/lib/guarden/edge/dynamic 2750
 assert_owner /var/lib/guarden/edge/dynamic "guarden:edge"
 
@@ -134,10 +134,10 @@ assert_exit 0
 auth_file=/var/lib/guarden/edge/dynamic/_guarden-forward-auth.yml
 assert_file_exists "$auth_file"
 provider_publication=$(sed -n 's/^auth = \([0-9]*\)$/\1/p' \
-    /var/lib/guarden/registry/auth-production.toml)
+    /var/lib/guarden/registry/authelia-production.toml)
 [ -n "$provider_publication" ] \
     || _fail "the auth provider holds no publication, so nothing can be aimed at it"
-assert_file_has "$auth_file" "address: \"http://auth-production:$provider_publication\""
+assert_file_has "$auth_file" "address: \"http://authelia-production:$provider_publication\""
 assert_file_lacks "$auth_file" "127.0.0.1"
 
 # **Claim 4, asserted by diffing the rendered file and not by a substring.**
@@ -149,13 +149,13 @@ assert_file_lacks "$auth_file" "127.0.0.1"
 cp "$rendered" "$GUARDEN_FIXTURES/with-auth.yml"
 
 # --- claim 6: the module not installed is a warning, not a failure ----------
-sed -i 's/^enabled = \[.*\]$/enabled = ["gate"]/' /etc/guarden/guarden.toml
+sed -i 's/^enabled = \[.*\]$/enabled = ["traefik"]/' /etc/guarden/guarden.toml
 rm -f /var/lib/guarden/edge/dynamic/_guarden-forward-auth.yml
 roots
 assert_exit 0
 assert_file_exists "$rendered"
 [ "$(grep -c -- '- guarden-forward-auth' "$rendered" || true)" = 0 ] \
-    || _fail "$rendered still carries the middleware with the auth module not installed"
+    || _fail "$rendered still carries the middleware with the authelia module not installed"
 assert_file_missing "$auth_file"
 # Read the warnings NOW. `run diff` below overwrites both capture files, so a
 # check placed after it would read diff's empty stderr and see nothing.
@@ -177,7 +177,7 @@ $GUARDEN_STDOUT"
     || _fail "the two renders differ by more than the protected router's middleware:
 $GUARDEN_STDOUT"
 # ... and one warning per route that asked for it, on this sync. TWO, not one:
-# the auth module's own service declares `auth: true` on purpose, so it is warned
+# the authelia module's own service declares `auth: true` on purpose, so it is warned
 # about too. A count of one would have meant the provider's own route was skipped,
 # which is the case this suite exists to keep honest.
 [ "$(grep -c '^warning: ' "$GUARDEN_FIXTURES/roots-warning.txt" || true)" = 2 ] \
@@ -221,7 +221,7 @@ assert_file_exists /var/lib/guarden/edge/dynamic/plain-staging.yml
 # configuration written**: the file the edge is reading must still be the one
 # that worked, byte for byte, which is what "the routes that were working keep
 # working" means on a machine.
-run weedr module add auth
+run weedr module add authelia
 assert_exit 0
 roots
 assert_exit 0
@@ -281,26 +281,26 @@ assert_exit 0
 # --- claim 5: the provider's own route never carries the rule --------------
 #
 # The shipped manifest already declares `auth: true` on the provider's own
-# route, and `weedr module add auth` rendered that slice with it. So this needs
+# route, and `weedr module add authelia` rendered that slice with it. So this needs
 # no staging and no re-render: the assertion is made against a slice that really
 # declares the rule, which is the only form of it that is not vacuous — a test
 # that removed `auth: true` first would pass on a renderer that had no opinion.
-seed "$marker" "auth-production"
-provider_slice=/var/lib/guarden/shared/auth-production/routes.toml
+seed "$marker" "authelia-production"
+provider_slice=/var/lib/guarden/shared/authelia-production/routes.toml
 assert_file_has "$provider_slice" "auth = true"
 roots
 assert_exit 0
-own=/var/lib/guarden/edge/dynamic/auth-production.yml
+own=/var/lib/guarden/edge/dynamic/authelia-production.yml
 assert_file_exists "$own"
 [ "$(grep -c -- '- guarden-forward-auth' "$own" || true)" = 0 ] \
     || _fail "the auth service's own route carries the middleware, and the operator cannot sign in"
 run python3 -c "import sys,yaml; r=yaml.safe_load(open(sys.argv[1]))['http']['routers']; \
-assert 'middlewares' not in r['auth-production-auth'], r" "$own"
+assert 'middlewares' not in r['authelia-production-authelia'], r" "$own"
 assert_exit 0
 # The middleware is still defined and still aimed at the provider: the rule is
 # absent from one router, not from the edge.
 assert_file_has "$auth_file" "guarden-forward-auth"
-assert_file_has "$auth_file" "address: \"http://auth-production:$provider_publication\""
+assert_file_has "$auth_file" "address: \"http://authelia-production:$provider_publication\""
 # And the protected route in the other service still has it, in the same sync.
 assert_file_has "$rendered" "- guarden-forward-auth"
 
@@ -338,6 +338,6 @@ r=d['http']['routers']; assert r['protected-staging-web']['middlewares']==['guar
 assert_exit 0
 run python3 -c "import sys,yaml; m=yaml.safe_load(open(sys.argv[1]))['http']['middlewares'] \
 ['guarden-forward-auth']['forwardAuth']; \
-assert m['address']=='http://auth-production:$provider_publication', m; \
+assert m['address']=='http://authelia-production:$provider_publication', m; \
 assert m['trustForwardHeader'] is True, m" "$auth_file"
 assert_exit 0

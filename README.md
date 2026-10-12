@@ -222,7 +222,7 @@ Staging and preview do not ask. `weedr service add myapp` with no environment de
 
 ### The edge
 
-The `gate` module installs `traefik-production`, which reads the routes `roots` writes. It is an
+The `traefik` module installs `traefik-production`, which reads the routes `roots` writes. It is an
 ordinary service with its own user and no capability of any kind. Its two container ports — one
 issues the HTTP-to-HTTPS redirect, the other terminates TLS — are published on loopback
 publications guarden allocates; `weedr service list` prints the numbers.

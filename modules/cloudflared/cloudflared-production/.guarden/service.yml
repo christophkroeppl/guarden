@@ -13,6 +13,6 @@
 # `/var/lib/guarden/tunnel/`, and the unit mounts that directory read-only. The
 # credential is a podman secret. There is nothing in the service's own tree worth
 # a snapshot, so there is no `state:`.
-project: tendril
+project: cloudflared
 units: .guarden/quadlet/
 schema: .env.schema

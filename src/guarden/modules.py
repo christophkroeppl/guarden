@@ -295,7 +295,7 @@ def listing(config) -> dict[str, list[str]]:
     }
 
 
-AUTH_MODULE = "auth"
+AUTH_MODULE = "authelia"
 
 
 def auth_provider(module: Module) -> str | None:
@@ -311,11 +311,11 @@ def auth_provider(module: Module) -> str | None:
 
 
 def write_auth_provider(module: Module) -> str | None:
-    """Write the marker, once, and only for the auth module.
+    """Write the marker, once, and only for the authelia module.
 
     Called from `weedr module add` and from nothing else — not from a service
-    install, not from a render, not from a sync. A module that is not `auth`
-    returns without touching the file, so adding `gate` cannot overwrite it and
+    install, not from a render, not from a sync. A module that is not `authelia`
+    returns without touching the file, so adding `traefik` cannot overwrite it and
     a re-add of a module that has not changed rewrites nothing.
     """
     service = auth_provider(module)

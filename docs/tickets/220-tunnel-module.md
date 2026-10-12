@@ -11,21 +11,21 @@ Traefik on the kernel's forwarded ports, and the production zone's nameserver do
 tunnel answers on a **separate hostname in a zone delegated to Cloudflare**, so nothing about the
 production path depends on Cloudflare being up, reachable, or paid for.
 
-**Blocked by:** 50 (the edge), 80 (declared edges), 150 (the auth module — the shape of a
+**Blocked by:** 50 (the edge), 80 (declared edges), 150 (the authelia module — the shape of a
 sign-in in front of a route, which this reuses rather than reimplements)
 
-**Status:** partially landed. The `tendril` module shipped: ADR-0015 (a second terminator),
-`weedr share issue` / `weedr share`, `[ingress] tunnel_domain`, `modules/tendril/`, and the
+**Status:** partially landed. The `cloudflared` module shipped: ADR-0015 (a second terminator),
+`weedr share issue` / `weedr share`, `[ingress] tunnel_domain`, `modules/cloudflared/`, and the
 suite is `tests/t220-tendril.sh`. **19 checklist items remain open below** — credentials in
 the service's own secret store, preview-instance publication, URL-unsafe ref refusal, the
 runbook, and the customer-facing acceptance criteria. Ticket restored 2026-10-08 after being
-removed on the mistaken belief that the tendril module discharged it.
+removed on the mistaken belief that the cloudflared module discharged it.
 
 **Since then `c949878` closed four of them**, verified green in the VM: a preview ref is RFC
 3986 unreserved or it is refused with exit 2 naming the ref, so two refs cannot collide after
-percent-decoding; `weedr module remove tendril` deletes the Access application and fails closed
+percent-decoding; `weedr module remove cloudflared` deletes the Access application and fails closed
 with `UNCONFIGURED` rather than claiming a success it did not achieve; preview instances are
-published at a path built from the escaped ref; and the tendril service carries a
+published at a path built from the escaped ref; and the cloudflared service carries a
 `TUNNEL_CREDENTIAL` schema entry, `0600` and never rendered into a unit.
 
 **Measured 2026-10-12, on the credential item this ticket carries open.**
@@ -36,7 +36,7 @@ empty schema (silently, by design); and the schema's own key and annotations
 at `.guarden/.env.schema:9–13` are plain lines, which `secretschema` skips —
 it reads comment lines only. The renderer strips the container's
 `Secret=TUNNEL_CREDENTIAL,type=file` as an owned key and re-emits it from the
-schema alone, so the rendered tendril unit requests no credential at all — and
+schema alone, so the rendered cloudflared unit requests no credential at all — and
 nothing in `tests/` asserts one. That is the state to build from: the path is
 `.guarden/.env.schema`, the annotations are comments, and the acceptance is an
 assertion on the rendered unit's `Secret=`. (`t220-tendril.sh` asserts the
@@ -50,7 +50,7 @@ prose and the boxes were not ticked, because the assertions do not exist. In par
 stays 0600 root:root, its accept stays first in guarden-ssh, INPUT's jump to guarden-ssh
 stays first, and soil firewall --check reports no drift on SSH items.
 
-**Blocked by:** 50 (the edge), 80 (declared edges), 150 (the auth module) — all landed.
+**Blocked by:** 50 (the edge), 80 (declared edges), 150 (the authelia module) — all landed.
 
 ## The decision this ticket rests on
 
@@ -104,15 +104,15 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       pinned-binary route and this ticket's implementation exposed why it cannot: the tunnel ran as
       a raw systemd unit with a multi-word `ExecStart=`, which `unitsource.format_line` refuses by
       design, while a `[Container]` unit passes its arguments one `Exec=` line each — which is how
-      `gate`'s traefik already runs and what spec §2 means by "everything deployed is a service".
+      `traefik`'s traefik already runs and what spec §2 means by "everything deployed is a service".
       So `PINNED_ARTEFACTS` is `(podlet,)`, `cloudflared.release` is deleted, and the version in
       force is the image tag in the module's own unit source rather than a `*.release` file. A
       vendor APT repository is still refused, for the reason above
-- [x] `/usr/lib/guarden/modules/tendril/module.toml` declares one service, `tendril-production`,
+- [x] `/usr/lib/guarden/modules/cloudflared/module.toml` declares one service, `cloudflared-production`,
       the shared program it switches on, and **no ingress** — it declares no ports because it binds
-      none. `weedr module add tendril` creates the service, its user and its home, and touches no
+      none. `weedr module add cloudflared` creates the service, its user and its home, and touches no
       other module
-- [x] `tendril-production` is an ordinary service: its own user, its own home, `0700`, no
+- [x] `cloudflared-production` is an ordinary service: its own user, its own home, `0700`, no
       capability, no `PublishPort`, and **no publication of its own**. It is not an edge in any
       sense the firewall cares about, because nothing connects to it
 - [ ] **Two credentials, both in that service's own podman secret store, both gated like any
@@ -122,7 +122,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       value blocks the start and the reason is a `warning:` naming the key — the gate is a state,
       not a failure
 - [x] `[ingress]` gains a root-owned `tunnel_domain`, empty by default. Empty means the tunnel is
-      **not configured** and `weedr module add tendril` refuses to install it, naming the key. A
+      **not configured** and `weedr module add cloudflared` refuses to install it, naming the key. A
       repository cannot set it and no manifest carries it. **Corrected:** the first revision also
       said `soil --check` reports the absence, and that was implemented as a warning on every
       converged host whose tunnel_domain is empty — i.e. every host that has not adopted the
@@ -231,7 +231,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       `docs/notes/220-session-duration-decision.md`. So "expires in seven days" is guarden's timer
       removing the email from the policy, and a stopped timer means the grant outlives its
       deadline. That is stated in the runbook and in `SECURITY.md` as the failure it is. The timer
-      is `guarden-share-reconcile.timer`, every ten minutes, enabled only with the `tendril` module
+      is `guarden-share-reconcile.timer`, every ten minutes, enabled only with the `cloudflared` module
 - [x] **The reconciler holds the Cloudflare API token and is the only thing that calls the vendor.**
       It needs an API token with the narrowest scopes that work, named in this ticket, and the
       scopes are recorded next to the token's name in `guarden.toml` so an operator can audit what
@@ -244,7 +244,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       believes is closed and is not. A call that was attempted and refused is exit `1` and the
       projection is not marked applied, so the next reconcile retries. A host with no `[share]
       account`/`app` or no token is a **state**, not a failure: it warns and exits `0`
-- [ ] **`weedr module remove tendril` removes every tunnel route from the edge, and deletes the
+- [ ] **`weedr module remove cloudflared` removes every tunnel route from the edge, and deletes the
       Access application**, so removing the module cannot leave a hostname in Cloudflare proxying
       to a box that no longer answers. **Not done**: `module remove` today removes the module's
       services and re-renders the firewall, and the tunnel's routes leave with the service's
@@ -296,7 +296,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       no fake — it is the reason the vendor's own tooling matters here
 - [ ] A tunnel-published route is **absent** from the edge's dynamic directory, asserted by
       reading the directory rather than by inspecting a log
-- [ ] `20-ingress-nat.conf` is byte-identical before and after `weedr module add tendril`, and
+- [ ] `20-ingress-nat.conf` is byte-identical before and after `weedr module add cloudflared`, and
       `iptables-save` shows no rule matching the tunnel's uid except the publication accepts
 - [ ] Every refusal is asserted at the CLI seam: an empty `tunnel_domain`, a `--until` that is
       absent or over the maximum, a share issued against an `edge` route, an unknown route label in
@@ -314,7 +314,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
 
 ## What this ticket does not do
 
-- It does not replace or modify the edge, `roots`' edge output, or the `gate` module's three
+- It does not replace or modify the edge, `roots`' edge output, or the `traefik` module's three
   forwarded ports. Production is untouched and its zone's nameserver does not move
 - It does not give a manifest any say. A route's destination is a track's field and a service's
   root-owned override, and a repository can widen neither — the same shape as a port grant

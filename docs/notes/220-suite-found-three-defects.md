@@ -13,7 +13,7 @@ each `Track` with `expose=_str(row, "expose", where)`, which answers `""` for an
 key, and the validator below it rejects anything that is not `"edge"` or `"tunnel"`.
 
 So on this branch **every existing configuration failed to load** — `production`, `staging`
-and `preview` alike, none of which states `expose` — and `weedr module add tendril` could
+and `preview` alike, none of which states `expose` — and `weedr module add cloudflared` could
 not run at all. The fix is one expression: `or TRACK_DEFAULTS["expose"]`.
 
 Worth noting how it was found: not by reading. The config parses, the track table is
@@ -31,18 +31,18 @@ running `soil packages` on a fresh host hits it.
 
 ## The fork — how does a `[Container]`-model repo run a program that is not in an image?
 
-`modules/tendril/tendril-production/.guarden/quadlet/tendril-production.container` was
+`modules/cloudflared/cloudflared-production/.guarden/quadlet/cloudflared-production.container` was
 hand-written as a **raw systemd unit**:
 
 ```
 [Service]
-ExecStart=/usr/lib/guarden/bin/cloudflared tunnel --config /etc/guarden/tendril-production/config.yml run
+ExecStart=/usr/lib/guarden/bin/cloudflared tunnel --config /etc/guarden/cloudflared-production/config.yml run
 ```
 
 `unitsource.format_line` refuses that, by design: `ExecStart=` is not in `QUOTABLE`, so a
 value with a space in it is a rejected input rather than a unit that parses as something
-other than it means. Every other module ships a podman `[Container]` unit instead — `gate`,
-`homepage` and `auth` all declare `[Container]` with `Image=`, and the program runs *inside*
+other than it means. Every other module ships a podman `[Container]` unit instead — `traefik`,
+`homepage` and `authelia` all declare `[Container]` with `Image=`, and the program runs *inside*
 a container.
 
 **So the question the ticket left open is a real one, and it is the operator's:**

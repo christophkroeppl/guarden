@@ -1,9 +1,9 @@
-# The gate module: the edge and the program that writes its routes (spec 3.6).
+# The traefik module: the edge and the program that writes its routes (spec 3.6).
 #
 # `requires` is empty and the module is in the shipped `[modules] enabled`
-# list, because `weedr module add gate` is a whole operation and a module
+# list, because `weedr module add traefik` is a whole operation and a module
 # nothing else needs is not a dependency anything has to be checked against.
-name = "gate"
+name = "traefik"
 requires = []
 
 [[services]]

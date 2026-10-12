@@ -102,7 +102,7 @@ def _curl(url: str, method: str, body: str | None) -> tool.Result:
 def delete_application(config) -> tuple[str, list[str]]:
     """Delete the Access application from Cloudflare.
 
-    Called when the tendril module is removed. Returns (status, lines).
+    Called when the cloudflared module is removed. Returns (status, lines).
     """
     if not config.share.account or not config.share.app:
         return UNCONFIGURED, [

@@ -244,8 +244,8 @@ _Avoid_: pin registry, retention, backup
 ## Module
 
 A named bundle of shipped services and the shared programs they switch on, listed in
-`/etc/guarden/guarden.toml` and installed with `weedr module add`. `gate` (the edge) and
-`homepage` are on by default; `auth` is not implemented in v1. Modules never write each
+`/etc/guarden/guarden.toml` and installed with `weedr module add`. `traefik` (the edge) and
+`homepage` are on by default; `authelia` is not implemented in v1. Modules never write each
 other's files — they communicate through documented root-owned files.
 _Avoid_: addons, base, plugins
 

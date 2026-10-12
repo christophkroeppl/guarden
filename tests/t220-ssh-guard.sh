@@ -50,7 +50,7 @@ account = ""
 app = ""
 
 [modules]
-enabled = ["tendril", "gate"]
+enabled = ["cloudflared", "traefik"]
 
 [[environments]]
 name = "production"
@@ -93,9 +93,9 @@ assert_not_rejected
 run soil storage --apply
 assert_not_rejected
 
-run weedr module add tendril
+run weedr module add cloudflared
 assert_exit 0
-run weedr module add gate
+run weedr module add traefik
 assert_exit 0
 
 # Ingest a service with a tunnel route (staging track has expose=tunnel)

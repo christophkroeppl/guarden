@@ -103,7 +103,7 @@ printf '%s\n' \
 
 # Not assert_stderr_empty: the firewall and not-running-provider warnings are
 # correct on an unconverged host, so the claim is that the edge resolves.
-run weedr module add gate
+run weedr module add traefik
 assert_exit 0
 # This host has no podman for a service user, so the credential materialiser cannot
 # work here; masking it says so plainly. Without this, `secret set` reports the

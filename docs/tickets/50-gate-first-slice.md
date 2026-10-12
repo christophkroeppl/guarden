@@ -1,6 +1,6 @@
 # 50: modules, the edge, and the first vertical slice
 
-**What to build:** The `gate` module installs `traefik-production` and `roots`. A manifest goes
+**What to build:** The `traefik` module installs `traefik-production` and `roots`. A manifest goes
 in and an HTTP request comes out. This is the tracer bullet: user, render, install, runtime,
 ingress, with nothing else in the way.
 
@@ -8,11 +8,11 @@ ingress, with nothing else in the way.
 
 **Status:** ready-for-agent
 
-- [ ] `/usr/lib/guarden/modules/gate/module.toml` declares the edge service, the shared program
+- [ ] `/usr/lib/guarden/modules/traefik/module.toml` declares the edge service, the shared program
       it switches on, the ingress it declares for forwarding, and whether the service has an
       API; `weedr module list` and `weedr module add` read the directory plus `guarden.toml` and
       nothing else
-- [ ] `weedr module add gate` on a host that already has soil run creates the edge service and
+- [ ] `weedr module add traefik` on a host that already has soil run creates the edge service and
       its publications, without re-running soil and without touching other modules. It is also
       what creates the `edge` group and adds the edge's user to it
 - [ ] **The edge binds no privileged port, and no port at all that is not loopback.** It holds no

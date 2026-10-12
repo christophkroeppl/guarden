@@ -1,19 +1,21 @@
-# The tendril module: the second terminator, the one that dials out and is
+# The cloudflared module: the second terminator, the one that dials out and is
 # reached by nobody (ADR-0015, spec 3.6).
 #
 # `requires` is empty for the same reason `gate`'s and `auth`'s are: `weedr
-# module add tendril` is a whole operation and a module nothing else needs is not
+# module add cloudflared` is a whole operation and a module nothing else needs is not
 # a dependency anything has to be checked against. It does not require `gate`
 # either — the tunnel is reachable only by the routes a track's `expose` names,
 # and a host with the tunnel and no edge is a host whose edge serves nothing yet.
-name = "tendril"
+name = "cloudflared"
 requires = []
 
 [[services]]
 # The tunnel is a service like any other: its own user, its own home, its own
 # unit directory, in a gated track because the credential it holds is the one
-# worth gating. `weedr module add tendril` creates the service, its user and its
-# home, and touches no other module.
+# worth gating. `weedr module add cloudflared` creates the service, its user and its
+# home. The edge group and the edge directory are created by every module add
+# (`weedr`'s `_install_module`), this one included — spec §7.5 and ADR-0008
+# name the traefik module as the creator, and the code is broader.
 #
 # **No ingress, and that is the whole claim rather than an omission.** It
 # declares no ports because it binds none: the tunnel establishes an outbound
@@ -23,7 +25,7 @@ requires = []
 # and after this module is added — the assertion that distinguishes it from the
 # edge, and the reason `api` is not set either: it is not a control surface,
 # because no loopback publication of its own exists to be one.
-service = "tendril-production"
+service = "cloudflared-production"
 
 [[switches]]
 # The shared program this module switches on, and it is the existing one: a route

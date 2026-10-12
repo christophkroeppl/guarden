@@ -101,9 +101,9 @@ assert_not_rejected
 assert_mode /var/lib/guarden/share 0750
 assert_owner /var/lib/guarden/share root:guarden
 
-run weedr module add tendril
+run weedr module add cloudflared
 assert_exit 0
-run weedr module add gate
+run weedr module add traefik
 assert_exit 0
 
 stage_poke routed 9f2c1ab

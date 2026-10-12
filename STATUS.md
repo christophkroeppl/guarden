@@ -32,7 +32,7 @@ error: routed-staging: systemctl start of the unit web exited 1: Job for web.ser
 - The service user is `routed-staging` (uid 993)
 - The container should bind `127.0.0.1:20003:80`
 - `Network=pasta:--map-gw` is used
-- The test runs: `weedr service ingest` → `roots sync` → `module add gate` → `service start routed-staging`
+- The test runs: `weedr service ingest` → `roots sync` → `module add traefik` → `service start routed-staging`
 - The error is from `weedr`'s `_unit()` function which calls `systemctl --user --machine routed-staging@ start web`
 - The real podman error is hidden behind the systemctl wrapper message
 

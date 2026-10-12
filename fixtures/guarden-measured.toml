@@ -23,7 +23,7 @@ pasta_options = [ "--map-gw" ]
 lanes = 1
 
 [modules]
-enabled = ["gate", "homepage"]
+enabled = ["traefik", "homepage"]
 
 [[environments]]
 name = "production"

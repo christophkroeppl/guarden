@@ -772,11 +772,11 @@ def _module_add(args) -> int:
     config = config_mod.load()
     module = modules.read(args.name)
     _requirements(module, config)
-    if module.name == "tendril" and not config.tunnel_domain:
+    if module.name == "cloudflared" and not config.tunnel_domain:
         raise errors.GuardenError(
             "tunnel_domain is empty in [ingress], so the tunnel is not configured; "
             "set it to the zone delegated to the tunnel's provider before adding "
-            "the tendril module",
+            "the cloudflared module",
             errors.REJECTED_INPUT,
         )
     with conf.lock("modules"):
@@ -1115,8 +1115,8 @@ def _module_remove(args) -> int:
             sys.stderr.write(failure.report("weedr") + "\n")
             return failure.code
 
-    # If removing the tendril module, delete the Access application
-    if module.name == "tendril":
+    # If removing the cloudflared module, delete the Access application
+    if module.name == "cloudflared":
         from guarden import vendor as vendor_mod
         status, lines = vendor_mod.delete_application(config)
         for line in lines:
@@ -1155,7 +1155,7 @@ def _drop_dashboard() -> None:
 def _switches(module: modules.Module, config) -> None:
     """Reference-count `[[switches]]` by module name (spec 6.2 step 7).
 
-    Two modules may switch the same program on — `gate` and `auth` both switch
+    Two modules may switch the same program on — `traefik` and `authelia` both switch
     on `roots` — so removing one must not switch it off under the other. A
     program another enabled module still names stays, with a `warning:` naming
     the module that still wants it.

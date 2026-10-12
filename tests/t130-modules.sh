@@ -44,7 +44,7 @@ config=/etc/guarden/guarden.toml
 # The staged table carries `[modules] enabled` **empty** and `ingress.alias`
 # **measured**, and both halves earn their place. The empty selection is what
 # makes the merge claim non-vacuous: every shipped fixture already carries
-# `["gate", "homepage"]`, so a test that started from one of those could never
+# `["traefik", "homepage"]`, so a test that started from one of those could never
 # distinguish "the installer's selection was merged" from "the file already said
 # this" — the first assertion would have been satisfied before the apply ran.
 # The measured alias is what keeps the non-zero exits in this file honest: the
@@ -74,7 +74,7 @@ assert_stderr_has "[modules] enabled records a selection nobody has to choose tw
 run soil install --apply --modules gate
 assert_exit 0
 assert_stderr_empty
-assert_file_has "$config" 'enabled = ["gate"]'
+assert_file_has "$config" 'enabled = ["traefik"]'
 
 # A converged host is silent about the selection, because the item holds as soon
 # as **any** choice is recorded. A later `weedr module add` is not drift the next
@@ -89,19 +89,19 @@ assert_stderr_empty
 # lock, with a re-read.
 run soil install --apply --modules homepage
 assert_exit 0
-assert_file_has "$config" 'enabled = ["gate", "homepage"]'
+assert_file_has "$config" 'enabled = ["traefik", "homepage"]'
 
-# `soil install` installs the module directory, so `weedr module add gate` has
+# `soil install` installs the module directory, so `weedr module add traefik` has
 # something to read months later without this phase running again. The verb
 # itself is exercised in `t50-module.sh`, which creates the edge's user and its
 # publications; what is asserted *here* is the key, because this file is about
 # the key.
-assert_file_exists /usr/lib/guarden/modules/gate/module.toml
+assert_file_exists /usr/lib/guarden/modules/traefik/module.toml
 
 # The append composed rather than replacing, so both the installer's selection and
 # the module's own are in the list. This is the whole of the shared-key claim and
 # it is a fact about the file.
-assert_file_has "$config" 'enabled = ["gate", "homepage"]'
+assert_file_has "$config" 'enabled = ["traefik", "homepage"]'
 
 run soil install --check --modules gate
 assert_exit 0
@@ -127,19 +127,19 @@ assert_file_has "$config" 'domain = "example.com"'
 # than written from the caller's selection alone. So `--check` is silent about the
 # key on a host that has it, and the apply that follows converges nothing.
 stage_config guarden-module-added.toml
-assert_file_has "$config" 'enabled = ["gate", "homepage", "auth"]'
+assert_file_has "$config" 'enabled = ["traefik", "homepage", "authelia"]'
 run soil install --check --modules gate
 assert_exit 0
 assert_stderr_empty
-assert_file_has "$config" 'enabled = ["gate", "homepage", "auth"]'
+assert_file_has "$config" 'enabled = ["traefik", "homepage", "authelia"]'
 run soil install --apply --modules auth
 assert_exit 0
-# Merged, not replaced: the operator's `auth` survived and the caller's selection
+# Merged, not replaced: the operator's `authelia` survived and the caller's selection
 # was found already present, so the list is unchanged rather than duplicated. A
-# writer that appended without de-duplicating would carry `auth` twice, and a
+# writer that appended without de-duplicating would carry `authelia` twice, and a
 # module's own edge group would then be added to the box twice.
 assert_file_has "$config" 'enabled = ['
-assert_file_has "$config" '"auth"'
+assert_file_has "$config" '"authelia"'
 assert_file_has "$config" '"homepage"'
 # And every other key survived both writers, because a write rewrites one key and
 # not the file. A writer that replaced the table would have dropped the environment
@@ -182,7 +182,7 @@ assert_exit 1
 assert_stderr_has "[modules] enabled records a selection nobody has to choose twice"
 run soil install --apply --modules gate
 assert_exit 0
-assert_file_has "$config" 'enabled = ["gate"]'
+assert_file_has "$config" 'enabled = ["traefik"]'
 run soil install --check --modules gate
 assert_exit 0
 assert_stderr_empty

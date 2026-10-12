@@ -385,7 +385,7 @@ There are two groups and no per-object groups. **`soil install` creates the `gua
 that group is load-bearing rather than tidiness: the registry, every `overrides.toml` and all of
 `/etc/guarden` are `root:guarden`, and the unprivileged programs read them through it. A file
 with no group to read it by is a file no unprivileged program can open. The other group, `edge`,
-is only ever created by `weedr module add gate`, which also adds the edge's service user to it
+is only ever created by `weedr module add traefik`, which also adds the edge's service user to it
 — a host with no edge module has no `edge` group, and `soil install` never creates one.
 
 The fact that surprises people, and is correct: **a service cannot read another service's
@@ -1231,13 +1231,13 @@ weedr module add homepage
 weedr module remove homepage                  # alias: rm
 ```
 
-`gate` and `homepage` are on by default in `/etc/guarden/guarden.toml`. Adding a module creates
+`traefik` and `homepage` are on by default in `/etc/guarden/guarden.toml`. Adding a module creates
 its services and grants what it declares; it does not re-run soil and does not touch other
 modules. It is also the one verb that writes `guarden.toml`: `weedr module add` appends the
 module's name to `[modules] enabled` and rewrites nothing else in the file, under the `modules`
 lock and by the same write protocol as every other shared file.
 
-**`weedr module add gate` is also what creates the `edge` group** and adds the edge's user to it.
+**`weedr module add traefik` is also what creates the `edge` group** and adds the edge's user to it.
 `soil install` creates the `guarden` group and no other, and never an `edge` — the `guarden`
 group is what makes every `root:guarden` path readable to the unprivileged programs, and `edge`
 is only ever created here. A host with no edge module has no `edge` group, and
@@ -1272,7 +1272,7 @@ deadline computed at issue time. `weedr share reconcile` recomputes the union of
 the live issuances per hostname into one `Allow` policy, writes it to
 `/var/lib/guarden/share/projection.json`, and copies it to Cloudflare. It runs on
 `guarden-share-reconcile.timer`, every ten minutes, and it is enabled only on a
-host that has the `tendril` module.
+host that has the `cloudflared` module.
 
 **If that timer stops, a grant outlives its deadline.** The vendor has no expiry
 field, so removing the address from the policy is the act that ends a grant and it

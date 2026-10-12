@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The gate module: `weedr module list`, `weedr module add gate`, and the state
+# The traefik module: `weedr module list`, `weedr module add traefik`, and the state
 # the add leaves behind (ticket 50, spec 3.6, 6.2, 7.4, 7.5, ADR-0008).
 #
 # There is no staged host here and that is the whole of what this file is about:
@@ -43,19 +43,19 @@ run soil install --apply
 assert_not_rejected
 assert_mode /etc/guarden/guarden.toml 640
 assert_owner /etc/guarden/guarden.toml "root:guarden"
-assert_file_exists /usr/lib/guarden/modules/gate/module.toml
-assert_file_exists /usr/lib/guarden/modules/gate/traefik-production/.guarden/service.yml
+assert_file_exists /usr/lib/guarden/modules/traefik/module.toml
+assert_file_exists /usr/lib/guarden/modules/traefik/traefik-production/.guarden/service.yml
 
 # The registry: the directory plus `guarden.toml` and nothing else. The edge is
 # not installed yet, so it is available and not enabled.
 run weedr module list --json
 assert_exit 0
-assert_json available.0 '"auth"'
-assert_json available.1 '"gate"'
+assert_json available.0 '"authelia"'
+assert_json available.1 '"cloudflared"'
 assert_json enabled '[]'
 run weedr module list
 assert_exit 0
-assert_stdout_has "gate"
+assert_stdout_has "traefik"
 assert_stderr_empty
 
 # A module that ships nothing is rejected input, and nothing was written.
@@ -67,9 +67,9 @@ assert_file_lacks /etc/guarden/guarden.toml "nosuchmodule"
 
 # The add itself. `soil install` ran above and is not run again: this is the
 # claim that a module can be added without it.
-run weedr module add gate
+run weedr module add traefik
 assert_exit 0
-assert_file_has /etc/guarden/guarden.toml 'enabled = ["gate"]'
+assert_file_has /etc/guarden/guarden.toml 'enabled = ["traefik"]'
 assert_mode /etc/guarden/guarden.toml 640
 assert_owner /etc/guarden/guarden.toml "root:guarden"
 
@@ -79,7 +79,7 @@ assert_passwd traefik-production
 edge_uid=$(getent passwd traefik-production | cut -d: -f3)
 assert_file_exists "/etc/containers/systemd/users/$edge_uid"
 assert_file_has /var/lib/guarden/registry/traefik-production.toml \
-    'installed_by = "gate"'
+    'installed_by = "traefik"'
 assert_file_has /var/lib/guarden/registry/traefik-production.toml "uid = $edge_uid"
 
 # **`edge` belongs to this verb and to no other phase.** `soil install` creates
@@ -236,16 +236,16 @@ assert_stdout_has "daddr 127.0.0.0/8"
 
 # A second add is a no-op: the service converges, the list does not grow a
 # second copy, and the ingress is still three rules.
-run weedr module add gate
+run weedr module add traefik
 assert_exit 0
 run soil firewall --apply
 assert_not_rejected
 assert_rule_count "$nat" 3
-assert_file_has /etc/guarden/guarden.toml 'enabled = ["gate"]'
+assert_file_has /etc/guarden/guarden.toml 'enabled = ["traefik"]'
 
 # `weedr module list` after the add reports both halves.
 run weedr module list --json
 assert_exit 0
-assert_json enabled.0 '"gate"'
-assert_json available.0 '"auth"'
-assert_json available.1 '"gate"'
+assert_json enabled.0 '"traefik"'
+assert_json available.0 '"authelia"'
+assert_json available.1 '"cloudflared"'
