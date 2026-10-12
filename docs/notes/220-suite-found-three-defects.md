@@ -31,12 +31,13 @@ running `soil packages` on a fresh host hits it.
 
 ## The fork — how does a `[Container]`-model repo run a program that is not in an image?
 
-`modules/cloudflared/cloudflared-production/.guarden/quadlet/cloudflared-production.container` was
+`modules/tendril/tendril-production/.guarden/quadlet/tendril-production.container` (as the file
+was named then; the module is `cloudflared` and the service `cloudflared-production` today) was
 hand-written as a **raw systemd unit**:
 
 ```
 [Service]
-ExecStart=/usr/lib/guarden/bin/cloudflared tunnel --config /etc/guarden/cloudflared-production/config.yml run
+ExecStart=/usr/lib/guarden/bin/cloudflared tunnel --config /etc/guarden/tendril-production/config.yml run
 ```
 
 `unitsource.format_line` refuses that, by design: `ExecStart=` is not in `QUOTABLE`, so a

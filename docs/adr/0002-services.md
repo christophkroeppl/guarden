@@ -26,7 +26,7 @@ Consequences, all of them intended:
   carrying its own host prefix, gate, weight, retention defaults and `slot`/`instance` kind;
   adding `preprod` is appending a row. The environment is not a trust level and nothing in
   guarden branches on its name — the gate's strictness is the track's `gated` flag, and the
-  auth module is a service that lives in a gated track like any other.
+  authelia module is a service that lives in a gated track like any other.
 - The word "container" is reserved for what `compose.yaml` calls `services:`, so a service
   and a container are never confused.
 

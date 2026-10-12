@@ -23,7 +23,7 @@ how `traefik`'s traefik already runs.
 
 | | |
 |---|---|
-| `120a9e6` | the prior session's foundation — config, overrides, roots, cloudflared scaffold |
+| `120a9e6` | the prior session's foundation — config, overrides, roots, tendril scaffold |
 | `0e9a574` | the module moved to `.guarden/`, like every other module |
 | `d4b70e7` | **a track's `expose` defaults to `edge`** — see below |
 | `8fe251e` | the note recording what the suite found |

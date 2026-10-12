@@ -985,7 +985,7 @@ t220-ssh-guard  was green            -> FAIL
 ```
 
 ```
-error: …/cloudflared-production.container has one `Exec=` holding 4 arguments, and
+error: …/tendril-production.container has one `Exec=` holding 4 arguments, and
 quadlet passes the line through unparsed: the process receives ONE argv token…
 ```
 

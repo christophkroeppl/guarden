@@ -133,7 +133,7 @@ def _module_selection(value: str | None) -> list[str] | None:
     for name in names:
         if not _MODULE_NAME.fullmatch(name):
             raise ValueError(
-                f"--modules takes names like gate and homepage, comma-separated; "
+                f"--modules takes names like traefik and homepage, comma-separated; "
                 f"{name!r} is not one"
             )
     return list(dict.fromkeys(names))
