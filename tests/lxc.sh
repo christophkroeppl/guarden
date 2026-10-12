@@ -136,7 +136,14 @@ die() {
 # the machine, where `lxc` does not exist — so the part of the runner whose
 # whole value is its text is kept where `tests/t10-failure-messages.sh` can
 # assert it: name, code and the guest's status word in, one diagnostic out.
-. "$(dirname "$0")/failure_messages.sh"
+# The path goes through `$REPO` — resolved by `readlink -f` above — because
+# `$0` under a symlinked or PATH invocation points at the link, the `.` fails,
+# and with no `set -e` every failure line then degrades to a command-not-found
+# while the run looks normal: the silent diagnostic loss this file exists to
+# remove. Unreadable is a die, not a shrug.
+[ -r "$REPO/tests/failure_messages.sh" ] \
+    || die "$REPO/tests/failure_messages.sh is unreadable; the runner cannot name a failure without it"
+. "$REPO/tests/failure_messages.sh"
 
 # `lxc list -c s` prints the whole table, not the state, so the comparison
 # against RUNNING never matched and every provision tried to start a machine
@@ -335,9 +342,9 @@ _wait_cloud_init() {
     if ! $LXC exec -T "$instance" -- sh -c \
         '[ -e /var/lib/dpkg/lock-frontend ] && [ -e /var/lib/apt/lists/lock ]' \
         >/dev/null 2>&1; then
-        printf 'error: %s has lost an apt lock file (/var/lib/dpkg/lock-frontend or ' \
+        printf 'error: %s has no apt lock file (/var/lib/dpkg/lock-frontend or ' \
             "$instance" >&2
-        printf '/var/lib/apt/lists/lock), so the lock wait has nothing to measure\n' >&2
+        printf '/var/lib/apt/lists/lock) to wait on; the wait has nothing to measure\n' >&2
         return 1
     fi
     # **The guest answers one word, because every exit code the local side can
@@ -354,8 +361,13 @@ _wait_cloud_init() {
     for ((i = 0; i < 60; i++)); do
         # The poll itself is bounded, so a wedged `lxc exec` cannot hold the
         # loop past its budget: a 124 from `timeout` leaves the word empty and
-        # is retried like any other failed measurement.
-        answer=$(timeout 20 $LXC exec -T "$instance" -- sh -c '
+        # is retried like any other failed measurement. `--foreground` is as
+        # load-bearing here as it is on the suite exec below — without it
+        # `timeout` puts the child in a new process group, and `lxc exec`'s
+        # session does not survive that: the client then waits on a session
+        # nobody will close, so the bound would reintroduce the wedge it is
+        # here to cap.
+        answer=$(timeout --foreground 20 $LXC exec -T "$instance" -- sh -c '
             err=$(fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock 2>&1 >/dev/null)
             rc=$?
             case $rc in
@@ -714,7 +726,7 @@ bash tests/$name; rc=\$?; printf '%s %s' \"$name\" \"\$rc\" >/tmp/guarden-suite-
         # rc=1 is the one code an assertion and a lost transport share, so the
         # guest's own word is read back before the line is chosen; the choice
         # itself is `_failure_message`, where a suite can assert it.
-        marker=$(timeout 20 $LXC exec -T "$RUNNER" -- cat /tmp/guarden-suite-status 2>/dev/null) \
+        marker=$(timeout --foreground 20 $LXC exec -T "$RUNNER" -- cat /tmp/guarden-suite-status 2>/dev/null) \
             || marker=''
         _failure_message "$name" "$rc" "$marker"
     else

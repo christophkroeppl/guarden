@@ -11,8 +11,11 @@ all. The answer landed in two halves:
 - the **failure-line text** moved to `tests/failure_messages.sh`, a pure
   function (`_failure_message <name> <rc> [status]`), and
   `tests/t10-failure-messages.sh` drives it every way a gate can read it —
-  the 124/128+n codes, the confirmed and unconfirmed meanings of 1, and the
-  plain codes. That is asserted.
+  the 124/128+n codes, the confirmed and unconfirmed meanings of 1, the plain
+  codes, and the wall value flowing through from `SUITE_TIMEOUT` rather than
+  the default alone. The suite also greps the pushed runner source for one
+  `_failure_message` call site and no inline failure printf, so the extraction
+  cannot silently drift back. That is asserted.
 - everything **machine-facing** about the runner is still unasserted: the
   guest wrapper that writes `<name> <rc>` and `exit`s with the suite's code,
   the read-back of that word on rc=1, the `fuser`/lock-file guards, the whole
@@ -26,11 +29,41 @@ there; the runner is a host process. So the machine tier cannot reach the
 runner by construction — the split is the reason `_failure_message` is a
 separate file in the first place.
 
-Observations that exist so far are manual and recorded, not asserted: on
-2026-10-12 the wrapper's `cd … || exit 97` path and its `127` path were run
-against the golden by hand (97 writes no status word; 127 writes one), and
-`timeout --foreground --signal=KILL N sleep M` was measured to exit 124 on
-expiry. Each is one machine short of a test.
+Observations that exist are manual and recorded, not asserted:
+
+- **`free` end-to-end.** gate-v10 (63/63, 52 cuts) ran `b38145f` — the word
+  loop *without* the poll bound and *without* the lock-file guard — so it is
+  evidence that the guest's `free` word is produced and honoured on every cut
+  of a full gate, and evidence for nothing else. The round-3 review was right
+  to say so; the earlier commit cited it for code gate-v10 did not run. The
+  same loop carried t180-firewall-rules run alone beforehand.
+- **The poll bound and the guard** were observed end-to-end on the post-fix
+  validation runs from `t-runfix` on 2026-10-12 (all `--no-cache`):
+  the t10 area — 7 suites over 2 machines — the t90 area (2 over 2) and the
+  probe (1 over 1): 10 suites, 5 cuts, all green, zero `error:` lines. A bound
+  that wedged would exhaust the wait and fail every cut, and a `--foreground`
+  regression would show the same; the round-3 review caught that the earlier
+  record cited gate-v10, which ran none of this code.
+- **The rc=1 confirmed path, end to end.** A deliberately-failing probe suite
+  ran twice from `t-runfix` — once on `4bb91e7`, once on `09a2869` after the
+  round-3 fixes (removed after each; it is not in the tree). Both runs: the
+  guest wrote `<name> 1`, the read-back returned it, and the runner printed
+  `error: t999-probe-fail.sh exited 1; the suite stopped on an assertion, and
+  its own line is above`, under the suite's own two lines. That is the only
+  exercise of the branch on a real machine, and a run is not a test.
+- **The hand measurements**: `cd … || exit 97` writes no status word and a
+  missing suite file exits 127 with one; `timeout --foreground --signal=KILL
+  N sleep M` exits 124 on expiry and passes the child's code through
+  otherwise (1, 143 and 137 measured).
+
+## Accepted residual
+
+The round-3 review walked the spoof surface: a suite — or a leaked background
+child — can rewrite `/tmp/guarden-suite-status`, which can turn a real
+assertion into "did not confirm". That is mislabeling only: the verdict and
+the ledger use `rc` (`return "$rc"`), never the marker, so no spoof reaches a
+false pass. Accepted as mislabeling under adversarial input; a nonce the
+read-back checked would buy nothing the ledger does not already hold.
 
 Options, none chosen:
 

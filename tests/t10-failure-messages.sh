@@ -49,3 +49,22 @@ echo "$line" | grep -qF 'exited 127' || _fail "127 is not named: $line"
 
 line=$(_line 97)
 echo "$line" | grep -qF 'exited 97' || _fail "97 is not named: $line"
+
+# **The wall value is plumbing, and it flows.** The runner sets SUITE_TIMEOUT
+# from GUARDEN_LXC_SUITE_TIMEOUT and passes it through; pinning the default
+# 180 alone would stay green on a runner that never read the variable.
+export SUITE_TIMEOUT=456
+line=$(_line 124)
+echo "$line" | grep -qF 'exceeded 456s' || _fail "a configured wall clock does not reach the line: $line"
+unset SUITE_TIMEOUT
+
+# **The runner calls this function and has no inline failure line left.**
+# `_push` delivers tests/lxc.sh into the machine, so the one drift the
+# extraction could grow — a second print site the suite never sees — is
+# greppable from here.
+runner=$GUARDEN_ROOT/tests/lxc.sh
+[ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
+grep -q '_failure_message "' "$runner" || _fail "the runner has no _failure_message call site"
+if grep -qE "printf 'error: %s (exited|exceeded)" "$runner"; then
+    _fail "the runner still prints a failure line inline; the extraction has drifted"
+fi

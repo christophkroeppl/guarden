@@ -29,7 +29,7 @@ _failure_message() {
         # measured). An earlier branch keyed on 137 and printed "exceeded the
         # wall clock" for it, which never fired: 137 is what a signal death
         # looks like, not a timeout.
-        printf 'error: %s exceeded %ss; the wall clock killed it and `timeout` reports 124\n' \
+        printf 'error: %s exceeded %ss; `timeout` reports 124 — the killed client is the runner, the guest may still be running\n' \
             "$name" "$wall" >&2
     elif [ "$rc" -gt 128 ] && [ "$rc" -lt 160 ]; then
         # 128+n is the shell's shape for death by signal n — from the runner's
