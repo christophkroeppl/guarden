@@ -364,13 +364,15 @@ def _fetch_artefact(name: str, fetched: Path, version: str, pin: dict[str, str])
     **The transient half of that is retried, bounded and narrow.** A resolver
     that fails one lookup and answers the next is the ordinary weather of
     networks, and a host converging a whole phase should not lose it to a single
-    blip. Measured, 2026-10-12: a full gate on a fixed tree went red on one suite
-    for `curl: (6) Could not resolve host: github.com` while every other fetch in
-    the same run passed -- one guest's moment, and the only red in the gate.
-    A network that is genuinely down still fails, after the attempts, with the
-    same single line it always had; the line grows `, after N attempts` only
-    when there was more than one, so a flaky mirror reads differently in the
-    journal from a dead one.
+    blip. Measured, 2026-10-12: a single `curl: (6) Could not resolve host:
+    github.com` failed one suite of a full gate where every other fetch through
+    this function resolved -- one guest's moment, not a record's defect.
+    `tests/t20-podlet.sh` drives both sides of this: its `file://` miss asserts
+    the first-ask failure, and its `.invalid` block asserts the three asks and
+    the line's `, after 3 attempts`. A network that is genuinely down still
+    fails, after the attempts, with the same single line it always had; the line
+    grows `, after N attempts` only when there was more than one, so a flaky
+    mirror reads differently in the journal from a dead one.
     """
     argv = ["curl", "--fail", "--silent", "--show-error", "--location",
             "--output", str(fetched), pin["url"]]

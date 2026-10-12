@@ -336,6 +336,31 @@ assert_unchanged "$installed" "a failed fetch replaced the installed program"
 assert_file_missing "$bindir/podlet.fetch"
 assert_file_missing "$bindir/.podlet.new"
 
+# **And a fetch the network refuses outright is asked three times, then
+# reported -- not retried forever and not retried in silence.** The block above
+# drives the non-transient side of `_fetch_artefact` (a `file://` miss is curl's
+# 37, outside the retry set, so it fails on the first ask); this is the
+# transient side, and it needs no fake: `.invalid` is reserved by RFC 2606 and
+# resolves nowhere, so real `curl` exits 6 for this machine whatever the
+# resolver is doing -- an authoritative NXDOMAIN and an unreachable resolver
+# both produce COULDNT_RESOLVE_HOST. Measured, 2026-10-12: one suite of a full
+# gate went red on a single `curl: (6) Could not resolve host` while the same
+# function's other fetches in that run resolved, which is the moment the retry
+# exists for. The attempt count is asserted from the line rather than from a
+# stopwatch: timing a wait on a shared machine is a flake this file does not
+# need, and the count is what the bound actually decides.
+seed_record tar.xz "https://guarden-must-not-resolve.invalid/podlet.tar.xz" \
+    "$archive_digest" "$other_digest"
+run soil packages --apply
+assert_exit 1
+assert_stderr_has "fetching podlet 0.3.2 for this host"
+assert_stderr_has "guarden-must-not-resolve.invalid"
+assert_stderr_has "after 3 attempts"
+assert_stderr_has "drift: the pinned podlet is installed"
+assert_unchanged "$installed" "a fetch that never answered replaced the installed program"
+assert_file_missing "$bindir/podlet.fetch"
+assert_file_missing "$bindir/.podlet.new"
+
 # A format the install does not read. A closed set, named by the diagnostic. The
 # list is asserted by its two archive formats plus the raw one rather than as the
 # whole string, so adding a format does not silently stop this file asserting the
