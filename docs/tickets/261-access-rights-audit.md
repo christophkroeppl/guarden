@@ -28,7 +28,7 @@
 **Notes:**
 - `UNIT_MODE = 0o644` in `units.py` is for **systemd unit files** which systemd may read as a non-root user in some paths; that is a separate decision and not in scope for this ticket
 - A full audit of every file guarden writes has not been done — this ticket tracks doing it
-- The change from `0644` to `0640` in `hosttool.py:40` (`MODE_CONFIG`) is the first step; this ticket finishes the job
+- The change from `0644` to `0640` in `hosttool.py:43` (`MODE_CONFIG`) is the first step; this ticket finishes the job
 ## Follow-on found by the full gate: t130-paths, and what it says about the group ordering
 
 `a9d18bc` routed `guarden.toml`'s three writers through

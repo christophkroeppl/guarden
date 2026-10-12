@@ -247,7 +247,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/run/guarden/locks/` | `2770` | `root:guarden` | `soil install`, via `tmpfiles.d`, mode and owner from the row above; setgid so a lock file created by either caller is group `guarden`, and `conf.lock` states `0664` on it |
 | `/etc/guarden/` | `0751` | `root:guarden` | `soil install`. **Stated in code, not inherited from the write protocol's `mkdir`** — that is `0777 & ~umask`, so an umask of `027` would silently produce the `0750` that locks `hose` and the service users out of the tree, the same defect `/var/lib/guarden` had |
 | `/etc/guarden/services/`, `/etc/guarden/projects.d/` | `0755` | `root:root` | `soil install`. A service user reads its own configuration through the first and `hose` globs the second, and both are in neither group; a listing here is names, not secrets |
-| `/etc/guarden/edge/`, `/etc/guarden/firewall/` | `0750` | `root:guarden` | `soil install`, stated in code. The seeding writers state them too, softly, because their phases can run before the `guarden` group exists — the install rows converge the owner afterwards |
+| `/etc/guarden/edge/`, `/etc/guarden/firewall/` | `0750` | `root:guarden` | `soil install`, stated in code. The firewall's seed states it too, softly, because its phase runs before the `guarden` group exists; the edge's writer because the write protocol's `mkdir` is umask-dependent — the install rows converge the owner afterwards |
 | `/etc/guarden/**` (files) | `0640` | `root:guarden` | the write protocol |
 | `/etc/guarden/projects.toml`, the files under `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` | |
 | `/etc/guarden/creds/` | `0700` | `root` | |

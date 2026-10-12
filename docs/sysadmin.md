@@ -332,7 +332,7 @@ always one of these numbers.
 | `/etc/guarden/` | `0751` | `root:guarden` | `soil install`, stated in code |
 | `/etc/guarden/` (below), files | `0640` | `root:guarden` | the write protocol |
 | `/etc/guarden/services/`, `/etc/guarden/projects.d/` | `0755` | `root:root` | `soil install` |
-| `/etc/guarden/edge/`, `/etc/guarden/firewall/` | `0750` | `root:guarden` | `soil install`, stated in code; the seeding writer states it too, softly, because both phases can run before the `guarden` group exists |
+| `/etc/guarden/edge/`, `/etc/guarden/firewall/` | `0750` | `root:guarden` | `soil install`, stated in code; each seeding writer states its own softly — the firewall's because its phase runs before the `guarden` group exists, the edge's because the write protocol's `mkdir` is umask-dependent |
 | `/etc/guarden/projects.toml`, the files under `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` | |
 | `/etc/guarden/creds/` | `0700` | `root` |
 | `/etc/guarden/edge/auth-provider` | `0640` | `root:guarden` |
