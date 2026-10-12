@@ -22,7 +22,7 @@ pasta_options = [ "--map-gw" ]
 lanes = 1
 
 [modules]
-enabled = ["traefik", "homepage"]
+enabled = ["gate-traefik", "homepage"]
 
 [zram]
 algorithm = "zstd"

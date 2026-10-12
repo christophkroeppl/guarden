@@ -42,8 +42,8 @@ ExecStart=/usr/lib/guarden/bin/cloudflared tunnel --config /etc/guarden/tendril-
 
 `unitsource.format_line` refuses that, by design: `ExecStart=` is not in `QUOTABLE`, so a
 value with a space in it is a rejected input rather than a unit that parses as something
-other than it means. Every other module ships a podman `[Container]` unit instead — `traefik`,
-`homepage` and `authelia` all declare `[Container]` with `Image=`, and the program runs *inside*
+other than it means. Every other module ships a podman `[Container]` unit instead — `gate-traefik`,
+`homepage` and `auth-authelia` all declare `[Container]` with `Image=`, and the program runs *inside*
 a container.
 
 **So the question the ticket left open is a real one, and it is the operator's:**

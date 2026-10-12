@@ -103,7 +103,7 @@ assert_owner /var/lib/guarden/share root:guarden
 
 run weedr module add cloudflared
 assert_exit 0
-run weedr module add traefik
+run weedr module add gate-traefik
 assert_exit 0
 
 stage_poke routed 9f2c1ab

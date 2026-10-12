@@ -73,7 +73,7 @@ converges and is idempotent. `soil` creates no service identity.
       `host.admin_user` if it is empty, **measures `ingress.alias` and writes the result into
       `guarden.toml`**, and installs the credential materialiser units. There is no `soil users`
       phase, and `install` creates no group beyond `guarden` and never an `edge`:
-      `weedr module add traefik` does
+      `weedr module add gate-traefik` does
 - [ ] **`soil install` refuses to start the edge without `ingress.alias`**, naming the key. A
       container that cannot reach the host loopback answers every route with a cause-less 502
 - [ ] `soil storage` verifies btrfs with `@` and `@var`, creates the `root` and `home` snapper

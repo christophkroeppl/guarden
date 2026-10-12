@@ -45,9 +45,10 @@ assert_file_exists /usr/lib/guarden/modules/homepage/homepage-production/.guarde
 assert_file_exists /usr/lib/guarden/modules/homepage/homepage-production/.guarden/quadlet/homepage.container
 run weedr module list --json
 assert_exit 0
-assert_json available.0 '"authelia"'
+assert_json available.0 '"auth-authelia"'
 assert_json available.1 '"cloudflared"'
-assert_json available.2 '"homepage"'
+assert_json available.2 '"gate-traefik"'
+assert_json available.3 '"homepage"'
 assert_json enabled '[]'
 # The registry is a closed key set: the dashboard declares no forwarded port
 # and no API, because it is reached through the edge by a route rather than by
@@ -71,7 +72,7 @@ dashboard_uid=$(getent passwd homepage-production | cut -d: -f3)
 assert_file_has /var/lib/guarden/registry/homepage-production.toml 'installed_by = "homepage"'
 assert_file_has /var/lib/guarden/registry/homepage-production.toml "uid = $dashboard_uid"
 # It is a service and not the edge: it is in neither `edge` nor `guarden`, and
-# `weedr module add traefik` is the only thing that creates `edge`.
+# `weedr module add gate-traefik` is the only thing that creates `edge`.
 assert_no_supplementary_group homepage-production edge
 assert_no_supplementary_group homepage-production guarden
 
@@ -125,7 +126,7 @@ assert_file_has /etc/guarden/services/homepage-production/overrides.toml \
 # **The dashboard declares no ingress and no API, so the edge's three forwarding
 # rules are the only ones on the box.** A module that declared its own would add
 # nat rules the design does not have, and this is the count that would show it.
-run weedr module add traefik
+run weedr module add gate-traefik
 assert_exit 0
 nat=/etc/guarden/firewall/20-ingress-nat.conf
 run soil firewall --apply
@@ -268,7 +269,7 @@ assert_stderr_has "web"
 
 rm -rf "$rejected"
 
-# `weedr module remove homepage` reverses the add without touching `traefik`: the
+# `weedr module remove homepage` reverses the add without touching `gate-traefik`: the
 # edge keeps its account, its units, its publications and its forwarding rules,
 # and the dashboard goes.
 marker=/etc/guarden/allow-gated-drop
@@ -277,12 +278,12 @@ trap 'rm -f "$marker"' EXIT
 run weedr module remove homepage
 assert_exit 0
 assert_file_lacks /etc/guarden/guarden.toml '"homepage"'
-assert_file_has /etc/guarden/guarden.toml 'enabled = ["traefik"]'
+assert_file_has /etc/guarden/guarden.toml 'enabled = ["gate-traefik"]'
 assert_no_passwd homepage-production
 assert_file_missing /var/lib/guarden/registry/homepage-production.toml
 assert_file_missing /var/lib/guarden/shared/dashboard
 assert_file_missing /var/lib/guarden/shared/homepage-production
-# `traefik` is untouched: its user, its unit and all three of its nat rules.
+# `gate-traefik` is untouched: its user, its unit and all three of its nat rules.
 assert_passwd traefik-production
 assert_file_exists /var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.container
 run soil firewall --apply
@@ -291,7 +292,7 @@ assert_rule_count "$nat" 3
 assert_group edge
 run weedr module list --json
 assert_exit 0
-assert_json enabled.0 '"traefik"'
+assert_json enabled.0 '"gate-traefik"'
 assert_json_missing enabled.1
 
 # And the dashboard module can be added again afterwards: a removal is

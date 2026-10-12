@@ -44,7 +44,7 @@ config=/etc/guarden/guarden.toml
 # The staged table carries `[modules] enabled` **empty** and `ingress.alias`
 # **measured**, and both halves earn their place. The empty selection is what
 # makes the merge claim non-vacuous: every shipped fixture already carries
-# `["traefik", "homepage"]`, so a test that started from one of those could never
+# `["gate-traefik", "homepage"]`, so a test that started from one of those could never
 # distinguish "the installer's selection was merged" from "the file already said
 # this" — the first assertion would have been satisfied before the apply ran.
 # The measured alias is what keeps the non-zero exits in this file honest: the
@@ -55,7 +55,7 @@ config=/etc/guarden/guarden.toml
 # state this file set: the drift the fixture states is reported before the apply
 # that fixes it, and a converged host is silent.
 stage_config guarden-nomodules.toml
-run soil install --check --modules traefik
+run soil install --check --modules gate-traefik
 assert_exit 1
 # The drift this suite introduced is named, and it is the selection: the file
 # records no module and the caller named one.
@@ -68,19 +68,19 @@ assert_stderr_lacks "ingress.alias"
 # `--check` on a host the first one did not change finds exactly what the first
 # found. A `--check` that wrote would make the drift line disappear on the second
 # run, which is the shape of a bug this assertion is here to catch.
-run soil install --check --modules traefik
+run soil install --check --modules gate-traefik
 assert_exit 1
 assert_stderr_has "[modules] enabled records a selection nobody has to choose twice"
-run soil install --apply --modules traefik
+run soil install --apply --modules gate-traefik
 assert_exit 0
 assert_stderr_empty
-assert_file_has "$config" 'enabled = ["traefik"]'
+assert_file_has "$config" 'enabled = ["gate-traefik"]'
 
 # A converged host is silent about the selection, because the item holds as soon
 # as **any** choice is recorded. A later `weedr module add` is not drift the next
 # apply would erase — which is only worth asserting if the check is silent about
 # everything else too.
-run soil install --check --modules traefik
+run soil install --check --modules gate-traefik
 assert_exit 0
 assert_stderr_empty
 
@@ -89,21 +89,21 @@ assert_stderr_empty
 # lock, with a re-read.
 run soil install --apply --modules homepage
 assert_exit 0
-assert_file_has "$config" 'enabled = ["traefik", "homepage"]'
+assert_file_has "$config" 'enabled = ["gate-traefik", "homepage"]'
 
-# `soil install` installs the module directory, so `weedr module add traefik` has
+# `soil install` installs the module directory, so `weedr module add gate-traefik` has
 # something to read months later without this phase running again. The verb
 # itself is exercised in `t50-module.sh`, which creates the edge's user and its
 # publications; what is asserted *here* is the key, because this file is about
 # the key.
-assert_file_exists /usr/lib/guarden/modules/traefik/module.toml
+assert_file_exists /usr/lib/guarden/modules/gate-traefik/module.toml
 
 # The append composed rather than replacing, so both the installer's selection and
 # the module's own are in the list. This is the whole of the shared-key claim and
 # it is a fact about the file.
-assert_file_has "$config" 'enabled = ["traefik", "homepage"]'
+assert_file_has "$config" 'enabled = ["gate-traefik", "homepage"]'
 
-run soil install --check --modules traefik
+run soil install --check --modules gate-traefik
 assert_exit 0
 assert_stderr_empty
 # And the other keys survive both writers, because a write rewrites one key and
@@ -127,19 +127,19 @@ assert_file_has "$config" 'domain = "example.com"'
 # than written from the caller's selection alone. So `--check` is silent about the
 # key on a host that has it, and the apply that follows converges nothing.
 stage_config guarden-module-added.toml
-assert_file_has "$config" 'enabled = ["traefik", "homepage", "authelia"]'
-run soil install --check --modules traefik
+assert_file_has "$config" 'enabled = ["gate-traefik", "homepage", "auth-authelia"]'
+run soil install --check --modules gate-traefik
 assert_exit 0
 assert_stderr_empty
-assert_file_has "$config" 'enabled = ["traefik", "homepage", "authelia"]'
-run soil install --apply --modules authelia
+assert_file_has "$config" 'enabled = ["gate-traefik", "homepage", "auth-authelia"]'
+run soil install --apply --modules auth-authelia
 assert_exit 0
-# Merged, not replaced: the operator's `authelia` survived and the caller's selection
+# Merged, not replaced: the operator's `auth-authelia` survived and the caller's selection
 # was found already present, so the list is unchanged rather than duplicated. A
-# writer that appended without de-duplicating would carry `authelia` twice, and a
+# writer that appended without de-duplicating would carry `auth-authelia` twice, and a
 # module's own edge group would then be added to the box twice.
 assert_file_has "$config" 'enabled = ['
-assert_file_has "$config" '"authelia"'
+assert_file_has "$config" '"auth-authelia"'
 assert_file_has "$config" '"homepage"'
 # And every other key survived both writers, because a write rewrites one key and
 # not the file. A writer that replaced the table would have dropped the environment
@@ -177,12 +177,12 @@ sed -i '/^\[modules\]/,+1d' "$config"
 # because this fixture's own header comment names the table and a search for that
 # string alone matched the comment and never described the host.
 assert_file_lacks "$config" "enabled = "
-run soil install --check --modules traefik
+run soil install --check --modules gate-traefik
 assert_exit 1
 assert_stderr_has "[modules] enabled records a selection nobody has to choose twice"
-run soil install --apply --modules traefik
+run soil install --apply --modules gate-traefik
 assert_exit 0
-assert_file_has "$config" 'enabled = ["traefik"]'
-run soil install --check --modules traefik
+assert_file_has "$config" 'enabled = ["gate-traefik"]'
+run soil install --check --modules gate-traefik
 assert_exit 0
 assert_stderr_empty

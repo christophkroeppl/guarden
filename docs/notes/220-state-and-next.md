@@ -15,7 +15,7 @@ The reason the container route won is not only consistency. The branch's first
 implementation was a **raw systemd unit with a multi-word `ExecStart=`**, which
 `unitsource.format_line` refuses *by design* — so `weedr module add cloudflared` could not
 run at all. A `[Container]` unit passes its arguments one `Exec=` line each, which is
-how `traefik`'s traefik already runs.
+how `gate-traefik`'s traefik already runs.
 
 ## The branch
 

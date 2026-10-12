@@ -35,7 +35,7 @@ run soil packages --apply
 assert_not_rejected
 run soil install --apply
 assert_not_rejected
-run weedr module add traefik
+run weedr module add gate-traefik
 assert_exit 0
 
 edge_uid=$(getent passwd traefik-production | cut -d: -f3)

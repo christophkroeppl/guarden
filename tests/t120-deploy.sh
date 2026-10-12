@@ -45,9 +45,9 @@ assert_file_exists /usr/lib/guarden/bin/weedr
 assert_file_exists /usr/lib/guarden/bin/loom
 assert_file_exists /var/lib/guarden/render
 
-# The `traefik` module is what creates the edge service every `needs:` in this
+# The `gate-traefik` module is what creates the edge service every `needs:` in this
 # project's manifest resolves against; nothing ingests it.
-run weedr module add traefik
+run weedr module add gate-traefik
 assert_exit 0
 
 registry=/var/lib/guarden/registry

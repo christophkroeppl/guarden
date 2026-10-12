@@ -82,20 +82,20 @@ edge-group work in `t-263` (`ab2082e`), not here.
   `loads` reads; the path defect above stays with ticket 220.
 - `cloudflared/module.toml:15–16` — "touches no other module" — `_install_module`
   runs `_edge_group` and `_edge_directory` for every module (weedr.py:837–843,
-  963–981); spec §7.5 and ADR-0008 attribute both to the traefik module alone.
+  963–981); spec §7.5 and ADR-0008 attribute both to the gate-traefik module alone.
   **Closed 2026-10-12** (`t-names`): the sentence now says the edge group and
   the edge directory are created by every module add, and names this
   spec/ADR attribution in place.
-- `authelia/authelia-production/.guarden/quadlet/authelia.container:12–15` — "it is the
+- `auth-authelia/authelia-production/.guarden/quadlet/authelia.container:12–15` — "it is the
   same string `roots` puts in the middleware definition" — the strings differ
   by design; t150 asserts the middleware address and asserts the file lacks
   `127.0.0.1` (tests/t150-auth.sh:140–141), while the container's own address
   is `http://127.0.0.1:9000/verify`.
-- `authelia/authelia-production/.guarden/service.yml:13–14` — "the renderer refuses
+- `auth-authelia/authelia-production/.guarden/service.yml:13–14` — "the renderer refuses
   the rule on the provider's own route whatever the manifest says" — nothing
   refuses; the slice keeps `auth = true` (render.py:1160) and `roots`
   withholds the middleware (`roots.py:94–95`).
-- `authelia/module.toml:6–7` — "in a gated track because its credentials are the
+- `auth-authelia/module.toml:6–7` — "in a gated track because its credentials are the
   ones worth gating" — the module ships no credentials and the gate blocks
   only on declared keys; ticket 150 carries the item open. Rewrite the
   rationale or wait for 150.

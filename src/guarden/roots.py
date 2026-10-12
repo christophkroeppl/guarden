@@ -36,7 +36,7 @@ EPILOG = """\\
 directory and nowhere else. The edge reads that directory, so a route change
 appears without a restart.
 
-With the authelia module installed, /etc/guarden/edge/auth-provider names the
+With the auth-authelia module installed, /etc/guarden/edge/auth-provider names the
 service a route declaring `auth: true` is put behind, and roots validates that
 name on every sync: it must be a service that exists in a track with
 `gated = true`, and anything else is exit 1 with nothing written at all.
@@ -181,14 +181,14 @@ def provider_for(config) -> str | None:
 
     The module not being enabled is `None` and not an error: the ticket makes an
     absent provider a warning on every sync rather than a failure, because a
-    host without the authelia module is a host whose routes were never protected and
+    host without the auth-authelia module is a host whose routes were never protected and
     making `roots` fail would break the edge on top of it.
 
     The module being enabled and the marker being unusable IS an error, raised
     from `edgeconf.provider` and caught by `main` as exit 1 with nothing
     written.
     """
-    if "authelia" not in config.modules:
+    if "auth-authelia" not in config.modules:
         return None
     return edgeconf.provider(config)
 
@@ -211,7 +211,7 @@ def _warnings(routes: dict[str, list[dict]], provider: str | None) -> list[str]:
             out.append(
                 errors.warn(
                     f"{service}: the route {_router(service, route)} declares `auth: true` "
-                    f"and the authelia module is not installed, so it is emitted without a "
+                    f"and the auth-authelia module is not installed, so it is emitted without a "
                     f"middleware"
                 )
             )

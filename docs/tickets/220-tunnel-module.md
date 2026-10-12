@@ -11,7 +11,7 @@ Traefik on the kernel's forwarded ports, and the production zone's nameserver do
 tunnel answers on a **separate hostname in a zone delegated to Cloudflare**, so nothing about the
 production path depends on Cloudflare being up, reachable, or paid for.
 
-**Blocked by:** 50 (the edge), 80 (declared edges), 150 (the authelia module — the shape of a
+**Blocked by:** 50 (the edge), 80 (declared edges), 150 (the auth-authelia module — the shape of a
 sign-in in front of a route, which this reuses rather than reimplements)
 
 **Status:** partially landed. The `cloudflared` module shipped: ADR-0015 (a second terminator),
@@ -52,7 +52,7 @@ prose and the boxes were not ticked, because the assertions do not exist. In par
 stays 0600 root:root, its accept stays first in guarden-ssh, INPUT's jump to guarden-ssh
 stays first, and soil firewall --check reports no drift on SSH items.
 
-**Blocked by:** 50 (the edge), 80 (declared edges), 150 (the authelia module) — all landed.
+**Blocked by:** 50 (the edge), 80 (declared edges), 150 (the auth-authelia module) — all landed.
 
 ## The decision this ticket rests on
 
@@ -106,7 +106,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
       pinned-binary route and this ticket's implementation exposed why it cannot: the tunnel ran as
       a raw systemd unit with a multi-word `ExecStart=`, which `unitsource.format_line` refuses by
       design, while a `[Container]` unit passes its arguments one `Exec=` line each — which is how
-      `traefik`'s traefik already runs and what spec §2 means by "everything deployed is a service".
+      `gate-traefik`'s traefik already runs and what spec §2 means by "everything deployed is a service".
       So `PINNED_ARTEFACTS` is `(podlet,)`, `cloudflared.release` is deleted, and the version in
       force is the image tag in the module's own unit source rather than a `*.release` file. A
       vendor APT repository is still refused, for the reason above
@@ -316,7 +316,7 @@ Everything marked UNVERIFIED is an assertion this ticket must test rather than t
 
 ## What this ticket does not do
 
-- It does not replace or modify the edge, `roots`' edge output, or the `traefik` module's three
+- It does not replace or modify the edge, `roots`' edge output, or the `gate-traefik` module's three
   forwarded ports. Production is untouched and its zone's nameserver does not move
 - It does not give a manifest any say. A route's destination is a track's field and a service's
   root-owned override, and a repository can widen neither — the same shape as a port grant

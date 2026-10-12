@@ -6,7 +6,7 @@
 # identity of any kind -- no service user, no service directory, no state
 # volume, no snapper configuration for anything guarden does not own -- and it
 # must create no group beyond `guarden`, because a host with no edge module has
-# no `edge` group and the edge's group belongs to `weedr module add traefik`.
+# no `edge` group and the edge's group belongs to `weedr module add gate-traefik`.
 
 . "$(dirname "$0")/lib.sh"
 

@@ -57,7 +57,7 @@ on Docker Hub, and a container is how every other service in this design runs (s
 - **`Image=` is not `ExecStart=`.** The first revision's other problem is gone with it: a
   raw systemd unit with a multi-word `ExecStart=` is refused by `unitsource.format_line`
   by design, and a `[Container]` unit passes its arguments one `Exec=` line each, which is
-  how `traefik`'s traefik already runs.
+  how `gate-traefik`'s traefik already runs.
 
 **What the first revision got right, and is kept.** A vendor *APT repository* is still
 refused, for the reason below. The pin machinery is still renamed rather than copied, and

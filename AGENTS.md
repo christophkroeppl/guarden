@@ -22,7 +22,7 @@ furrow/   the build queue and the deploy order             not yet written
 hose/     the optional gitops receiver                     not yet written
 stakes/   the pin registry, unprivileged; the reconciler that marks snapshots is `weedr pin sync`
 tools/    golden-vm, the throwaway-machine harness
-modules/  shipped module definitions: traefik, homepage, authelia, cloudflared
+modules/  shipped module definitions: gate-traefik, homepage, auth-authelia, cloudflared
 tests/    the one test seam                               created by ticket 10
 fixtures/ guarden*.toml inputs and project manifests. `fixtures/bin/` and
            `fixtures/lib/` were deleted with the fakes (ticket 35, ADR-0014) and

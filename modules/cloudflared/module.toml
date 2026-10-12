@@ -1,9 +1,9 @@
 # The cloudflared module: the second terminator, the one that dials out and is
 # reached by nobody (ADR-0015, spec 3.6).
 #
-# `requires` is empty for the same reason `traefik`'s and `authelia`'s are: `weedr
+# `requires` is empty for the same reason `gate-traefik`'s and `auth-authelia`'s are: `weedr
 # module add cloudflared` is a whole operation and a module nothing else needs is not
-# a dependency anything has to be checked against. It does not require `traefik`
+# a dependency anything has to be checked against. It does not require `gate-traefik`
 # either — the tunnel is reachable only by the routes a track's `expose` names,
 # and a host with the tunnel and no edge is a host whose edge serves nothing yet.
 name = "cloudflared"
@@ -15,7 +15,7 @@ requires = []
 # worth gating. `weedr module add cloudflared` creates the service, its user and its
 # home. The edge group and the edge directory are created by every module add
 # (`weedr`'s `_install_module`), this one included — spec §7.5 and ADR-0008
-# name the traefik module as the creator, and the code is broader.
+# name the gate-traefik module as the creator, and the code is broader.
 #
 # **No ingress, and that is the whole claim rather than an omission.** It
 # declares no ports because it binds none: the tunnel establishes an outbound

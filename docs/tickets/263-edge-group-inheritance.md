@@ -166,7 +166,7 @@ redirection is configured on the `web` entrypoint.
 So the defect is that the renderer attaches a router to `websecure` when the
 service is reachable on `web`. `edgeconf.py:22` parses the module's
 `--entryPoints.<name>.…` flags with a case-sensitive regex, so which entrypoints
-exist, and the redirection between them, comes from the traefik module's quadlet
+exist, and the redirection between them, comes from the gate-traefik module's quadlet
 flags rather than from the router the renderer writes per route.
 
 **This corrects an earlier refutation in this ticket.** A previous agent claimed
@@ -250,7 +250,7 @@ VM:
 
 **41 lowercase `entrypoints` flags. Zero `entryPoints`.**
 
-Every flag in the traefik module is PascalCase:
+Every flag in the gate-traefik module is PascalCase:
 
 ```
 Exec=--entryPoints.web.address=:80
@@ -275,7 +275,7 @@ never in effect.
 
 **The fix is two parts, and the second is the one that stops it recurring.**
 
-1. The traefik module's quadlet source uses lowercase `--entrypoints.*`.
+1. The gate-traefik module's quadlet source uses lowercase `--entrypoints.*`.
 2. `edgeconf.ARGUMENT` matches what traefik actually accepts, so a flag traefik
    would ignore is refused at read time with a diagnostic naming it, rather than
    read as a declaration. A spelling the vendor does not recognise is not a
@@ -290,7 +290,7 @@ miss visible, and it is the difference between a fix and a patch.
 Measured after `408f898`, inside the VM after `t50-slice` has run its install:
 
 ```
-$ grep -h 'entrypoints\.' /usr/lib/guarden/modules/traefik/traefik-production/.guarden/quadlet/traefik.container
+$ grep -h 'entrypoints\.' /usr/lib/guarden/modules/gate-traefik/traefik-production/.guarden/quadlet/traefik.container
 Exec=--entrypoints.web.address=:80
 Exec=--entrypoints.web.http.redirections.entrypoint.to=websecure
 Exec=--entrypoints.websecure.address=:443
@@ -956,7 +956,7 @@ carries `entryPoints:` in the camelCase traefik's file format wants.
 
 **What is needed**, concretely:
 
-1. **`modules/traefik/traefik-production`**: delete all nine `--entrypoints.*` and the
+1. **`modules/gate-traefik/traefik-production`**: delete all nine `--entrypoints.*` and the
    two `--providers.file.*` lines from the `.container`. Keep `Image=` and
    `PublishPort=`. `--providers.file.directory` and `--providers.file.watch` also
    have to move, since they are arguments too.
@@ -997,7 +997,7 @@ re-verified: `t220-tendril` green.
 **This is the ordering that was wrong, and it is the second time this ticket has
 had it.** The refusal and the fix are one change, in this order:
 
-1. Move the traefik module's configuration into `/etc/guarden/edge/` — all nine
+1. Move the gate-traefik module's configuration into `/etc/guarden/edge/` — all nine
    `--entrypoints.*`, both `--providers.file.*`, out of argv and into a rendered
    file the provider already reads.
 2. Move cloudflared's four arguments the same way (`cloudflared` takes its config in
@@ -1127,7 +1127,7 @@ for, and that is a decision for the operator rather than a commit.
 ## RESOLVED: `GroupAdd=keep-groups` on the edge's unit, and the ADR is written
 
 Operator decision: option 1. Implemented as a single line in the edge's own unit
-source, `modules/traefik/traefik-production/.guarden/quadlet/traefik.container`:
+source, `modules/gate-traefik/traefik-production/.guarden/quadlet/traefik.container`:
 
 ```
 GroupAdd=keep-groups
@@ -1179,7 +1179,7 @@ command traefik error: failed to decode configuration from flags:
 field not found, node: api
 ```
 
-The traefik module declared the API as
+The gate-traefik module declared the API as
 
 ```
 --entrypoints.api.address=:8080
@@ -1316,7 +1316,7 @@ user manager. The user manager's groups are fixed at its own process creation
 time — they are inherited from the session that started it, and they do not
 update when the user's group membership changes later.
 
-`_edge_group` (called from `weedr module add traefik`) creates the `edge` group and
+`_edge_group` (called from `weedr module add gate-traefik`) creates the `edge` group and
 adds the service user to it. But the user manager may already be running from
 an earlier step in the converge (e.g. `soil install` or the first
 `weedr module add`). Its group set is stale.
@@ -1327,7 +1327,7 @@ an earlier step in the converge (e.g. `soil install` or the first
    `systemctl restart user@<uid>.service` picks up the new group set. This is
    the smallest change and the one the measurement supports.
 2. **Create the edge group and add the user before the user manager starts.**
-   This means restructuring `weedr module add traefik` so the group setup happens
+   This means restructuring `weedr module add gate-traefik` so the group setup happens
    before any command that triggers the user manager. More invasive.
 3. **Have `_edge_group` itself restart the user manager** after adding the user.
    Self-contained in the one place that changes group membership.

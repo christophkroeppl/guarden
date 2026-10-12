@@ -39,7 +39,7 @@ for the supplementary groups and passes the user's own list through.
 
 ## The decision
 
-One line, in the edge's own unit source, `modules/traefik/traefik-production/.guarden/quadlet/`:
+One line, in the edge's own unit source, `modules/gate-traefik/traefik-production/.guarden/quadlet/`:
 
 ```
 GroupAdd=keep-groups
@@ -55,7 +55,7 @@ it is not available at all.
 
 **Re-group the directory** to the service user's private group, so the container's own gid
 matches. It works, and it is rejected on the design rather than on the mechanism: the directory
-is `guarden:edge` because a group names a *reader set*, and `weedr module add traefik` created the
+is `guarden:edge` because a group names a *reader set*, and `weedr module add gate-traefik` created the
 `edge` group for that job. Pointing the directory at one user's private group deletes the set and
 keeps one member of it, and the next reader has to be added by hand.
 

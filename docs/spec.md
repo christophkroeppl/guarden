@@ -138,7 +138,7 @@ to it.
   projects.toml                        project -> repository, ref -> allowed environments
   projects.d/<project>.toml            a per-project copy, which wins over the file above
   services/<name>/overrides.toml       admin grants: ports, firewall rules, retention, groups, mounts
-  edge/auth-provider                   the authelia module's marker, read by roots
+  edge/auth-provider                   the auth-authelia module's marker, read by roots
   firewall/00-ssh.conf                 SSH accept: root:root 0600, seed-once, its own chain,
                                        first rule in INPUT after conntrack and lo. Written by soil.
   firewall/10-framework.conf           ferm skeleton, the interface's route_localnet. Written by soil.
@@ -235,7 +235,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/var/lib/guarden/shared/` | `0750` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/shared/<name>/` | `0750` | `root:guarden` | the mutator, installing the render |
 | `/var/lib/guarden/shared/dashboard/` | `0755` | `guarden:guarden` | `weedr module add homepage`. **World-readable, and that is the point** — the dashboard is an ordinary service in neither group, and the design keeps two groups, so `2750 guarden:<reader-group>` is not available. The content is merged widget output: UI configuration, no secret, and it is the public face of the box anyway |
-| `/var/lib/guarden/edge/dynamic/` | `2750` | `guarden:edge` | `weedr module add traefik` — **not** `roots`, which cannot set a group it is not in |
+| `/var/lib/guarden/edge/dynamic/` | `2750` | `guarden:edge` | `weedr module add gate-traefik` — **not** `roots`, which cannot set a group it is not in |
 | `/var/lib/guarden/stakes/` | `0770` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/share/` | `0750` | `root:guarden` | `soil storage`. The issuance record: one file per issuance, and the rendered projection the reconciler copies to the vendor |
 | `/var/lib/guarden/queue/` | `0770` | `root:guarden` | `soil storage` |
@@ -288,7 +288,7 @@ There are two groups and no per-object groups.
 | `guarden` | the `guarden` user, and `weedr`'s reading of the state it owns | the unprivileged programs share the state they may read |
 | `edge` | the edge's service user | the edge reads the one directory `roots` writes |
 
-`edge` is created by `weedr module add traefik`, and the edge's user is added to it there, not by
+`edge` is created by `weedr module add gate-traefik`, and the edge's user is added to it there, not by
 `soil install` — a host with no edge module has no `edge` group.
 
 ---
@@ -365,7 +365,7 @@ scopes = [ "Access: Apps and Policies Write" ]   # what that token needs, record
 #                                  # the memory backing it
 
 [modules]
-enabled = ["traefik", "homepage"]
+enabled = ["gate-traefik", "homepage"]
 
 [[environments]]                # a track
 name = "production"
@@ -561,7 +561,7 @@ environment  = "production"
 uid          = 1004
 created      = "2026-09-29T10:12:00Z"
 source       = "manual"          # or "gitops"; recorded, and it changes nothing
-installed_by = "traefik"            # the module that created this service, or absent for a service
+installed_by = "gate-traefik"            # the module that created this service, or absent for a service
                                  # created by a poke or by hand. This is what makes step 1 of
                                  # `weedr module remove` answerable, and it is the reason modules
                                  # record provenance at all: without it "a service the module
@@ -723,7 +723,7 @@ The module registry is this directory. There is no separate registry file, and
 `weedr module list` reads the directory plus `guarden.toml`.
 
 ```toml
-name = "traefik"
+name = "gate-traefik"
 requires = []                    # modules that must be installed first
 
 [[services]]
@@ -1274,7 +1274,7 @@ still converge and the run still exits `1`.
   the unprivileged programs must read them — records `host.admin_user` from the invoking user if
   it is empty, runs the alias probe below and writes its result into `ingress.alias`, and
   installs the credential materialiser. It creates no group beyond
-  `guarden`: the `edge` group belongs to `weedr module add traefik`. It installs no service, so a
+  `guarden`: the `edge` group belongs to `weedr module add gate-traefik`. It installs no service, so a
   fresh host has no ingress and no dashboard until a module is added, and it refuses to start the
   edge if `ingress.alias` is still empty. It is the only phase that writes outside the host's own
   storage.
@@ -1491,7 +1491,7 @@ forced command is the only source of the project name at runtime.
 and rewrites nothing else in the file, under the `modules` lock and through the §3.5 protocol.
 It then, for the module's declared services, does everything a service needs: creates the
 service from the module's own unit source, installs the units, creates any group the module owns
-(`traefik` owns `edge` and adds the edge's service user to it), and converges the edge's forwarding
+(`gate-traefik` owns `edge` and adds the edge's service user to it), and converges the edge's forwarding
 by invoking `soil firewall --apply`.
 
 **The mutator does not write `20-ingress-nat.conf`; it calls the program that does.** An earlier
@@ -1523,7 +1523,7 @@ module is the failure this verb exists to prevent. In order, under the `modules`
 1. Refuse if any service the module installed is not the module's own — refused with exit `1`
    naming it. A module never removes a service it did not create.
 
-   **This is the one caller exempt from the gated-drop refusal.** `weedr module add traefik` installs
+   **This is the one caller exempt from the gated-drop refusal.** `weedr module add gate-traefik` installs
    `traefik-production` on a `gated = true` track, and `weedr service remove` is refused outright
    there, so removing the module that installed it would otherwise be impossible. The exemption is
    narrow and is not a flag: the module removes exactly the services in its own `[[services]]`
@@ -1544,8 +1544,8 @@ module is the failure this verb exists to prevent. In order, under the `modules`
 6. Remove the group the module owns **only** if no remaining service is in it, and report the
    group removal on stdout. A group in use is a `warning:` line and exit `0`, not a failure.
 7. **`[[switches]]` is reference-counted by module name, and that is why `installed_by` exists.**
-   Two modules switch the same program on — `traefik` and `authelia` both switch on `roots` — so
-   removing `traefik` must not switch `roots` off out from under `authelia`. The rule: after step 6, for
+   Two modules switch the same program on — `gate-traefik` and `auth-authelia` both switch on `roots` — so
+   removing `gate-traefik` must not switch `roots` off out from under `auth-authelia`. The rule: after step 6, for
    each program this module switched on, remove it only if **no other enabled module's
    `[[switches]]` names it**, and report what stayed with a `warning:` naming the module that
    still wants it. Without the count the two cases are indistinguishable, and switching `roots`
@@ -1629,7 +1629,7 @@ renders the edge's file-provider configuration into `/var/lib/guarden/edge/dynam
 `guarden:edge 2750`. The edge's user is in `edge` and is not in `guarden`. `roots` **must not**
 write outside that directory.
 
-With the authelia module installed, a route declaring `auth: true` gets the forward-auth rule aimed
+With the auth-authelia module installed, a route declaring `auth: true` gets the forward-auth rule aimed
 at the service named in `/etc/guarden/edge/auth-provider`, which must be the name of an
 existing service in a gated track; anything else is exit `1` and no configuration is written.
 The auth service's own routes never carry the rule. With the module **not** installed, `roots`

@@ -57,7 +57,7 @@ token_name = "share"
 scopes = [ "Access: Apps and Policies Write" ]
 
 [modules]
-enabled = ["traefik", "homepage"]
+enabled = ["gate-traefik", "homepage"]
 
 # A compressed swap device. This table is ABSENT by default and its absence is
 # the default rather than a value: with no [zram] here, `soil packages` installs

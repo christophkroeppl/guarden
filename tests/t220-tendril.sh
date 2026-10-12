@@ -129,7 +129,7 @@ assert_file_has "$unit" "[Container]"
 assert_file_has "$unit" "Image=docker.io/cloudflare/cloudflared"
 assert_file_lacks "$unit" "ExecStart="
 
-run weedr module add traefik
+run weedr module add gate-traefik
 assert_exit 0
 stage_poke routed 9f2c1ab
 run weedr service ingest routed-staging --from poke routed@9f2c1ab

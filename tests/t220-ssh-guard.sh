@@ -50,7 +50,7 @@ account = ""
 app = ""
 
 [modules]
-enabled = ["cloudflared", "traefik"]
+enabled = ["cloudflared", "gate-traefik"]
 
 [[environments]]
 name = "production"
@@ -95,7 +95,7 @@ assert_not_rejected
 
 run weedr module add cloudflared
 assert_exit 0
-run weedr module add traefik
+run weedr module add gate-traefik
 assert_exit 0
 
 # Ingest a service with a tunnel route (staging track has expose=tunnel)

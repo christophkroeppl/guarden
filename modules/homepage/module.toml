@@ -4,7 +4,7 @@
 # `requires` is empty and the module is in the shipped `[modules] enabled`
 # list, because `weedr module add homepage` is a whole operation and a module
 # nothing else needs is not a dependency anything has to be checked against.
-# It does **not** require `traefik`: the dashboard is an ordinary service and it
+# It does **not** require `gate-traefik`: the dashboard is an ordinary service and it
 # is reachable through the edge by an ordinary `routes:` entry in its own
 # shipped manifest, so a host with the dashboard and no edge is a host whose
 # dashboard simply has no route yet.

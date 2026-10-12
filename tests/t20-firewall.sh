@@ -36,7 +36,7 @@ interface=$(ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i ==
 # that outlives the test is a phantom service on every file that runs after
 # this one. There is no timer to stop, because guarden has no lockout failsafe.
 cleanup() {
-    rm -f /usr/lib/guarden/modules/traefik/module.toml \
+    rm -f /usr/lib/guarden/modules/gate-traefik/module.toml \
         /var/lib/guarden/registry/traefik-production.toml
 }
 trap cleanup EXIT
@@ -97,7 +97,7 @@ assert_file_has /etc/guarden/firewall/10-framework.conf "50-services.conf"
 [ "$(grep -vE '^[[:space:]]*(#|$)' /etc/guarden/firewall/20-ingress-nat.conf | grep -cE '^[[:space:]]+(jump|proto|mod|ip|if|daddr|iif) ' || true)" = 0 ] \
     || _fail "a host with no edge installed renders an ingress rule"
 
-# The three rules, once the traefik module is enabled and the edge's publications
+# The three rules, once the gate-traefik module is enabled and the edge's publications
 # exist. Each publication is read from the registry and never assumed, because
 # it is allocated from `ingress.publication_range`: `80/tcp` lands on the
 # redirect entrypoint's publication and `443/*` on the TLS one, so the two
@@ -106,8 +106,8 @@ assert_file_has /etc/guarden/firewall/10-framework.conf "50-services.conf"
 # The module seeded here is the shipped one, in the shape it ships in: an
 # ingress entry names the entrypoint it forwards to, because a publication is a
 # loopback port a container is already listening on.
-seed /usr/lib/guarden/modules/traefik/module.toml \
-    'name = "traefik"' \
+seed /usr/lib/guarden/modules/gate-traefik/module.toml \
+    'name = "gate-traefik"' \
     '[[services]]' 'service = "traefik-production"' \
     'ingress = [ "web:80/tcp", "websecure:443/tcp", "websecure:443/udp" ]' 'api = true'
 seed /var/lib/guarden/registry/traefik-production.toml \

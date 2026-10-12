@@ -1,5 +1,5 @@
 # The measured environment table with a module appended to `[modules] enabled`,
-# as `weedr module add authelia` leaves it.
+# as `weedr module add auth-authelia` leaves it.
 #
 # It exists as a fixture rather than as an edit inside a test because the claim
 # it serves is about what happens *after* that append: the next `soil install
@@ -23,7 +23,7 @@ pasta_options = [ "--map-gw" ]
 lanes = 1
 
 [modules]
-enabled = ["traefik", "homepage", "authelia"]
+enabled = ["gate-traefik", "homepage", "auth-authelia"]
 
 [[environments]]
 name = "production"

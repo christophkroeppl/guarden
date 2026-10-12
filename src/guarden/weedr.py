@@ -1155,7 +1155,7 @@ def _drop_dashboard() -> None:
 def _switches(module: modules.Module, config) -> None:
     """Reference-count `[[switches]]` by module name (spec 6.2 step 7).
 
-    Two modules may switch the same program on — `traefik` and `authelia` both switch
+    Two modules may switch the same program on — `gate-traefik` and `auth-authelia` both switch
     on `roots` — so removing one must not switch it off under the other. A
     program another enabled module still names stays, with a `warning:` naming
     the module that still wants it.
