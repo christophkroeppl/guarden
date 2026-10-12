@@ -77,10 +77,14 @@ assert_dpkg python3-jinja2
 # the phase does. The apply below puts all three back and the end of the file asks
 # again, so both directions are the machine's answer in this one file.
 #
+# The removal goes through `apt_waits`: this call runs before any `soil packages`
+# has established the drift report the timers are asserted from, so the machine
+# may still be finishing its boot with a distribution unit holding the lock.
+#
 # `podman` is one of the three on purpose. Its absence from the old image is why
 # `t70-fork.sh` could not reach a single one of its data-movement success paths,
 # and `t60-secrets.sh` had to install it for itself.
-apt-get remove -y ferm fail2ban podman
+apt_waits remove -y ferm fail2ban podman
 assert_no_dpkg ferm
 assert_no_dpkg fail2ban
 assert_no_dpkg podman

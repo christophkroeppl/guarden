@@ -7,12 +7,14 @@ so the two modes cannot drift apart, and `--check` changing nothing is a
 property of the shape rather than of care in each phase.
 
 **A phase may also have one step that runs before any of its items, and only
-`--apply` runs it.** That is `prepare_for`, and it exists for the one thing in
-the whole set that is not a fact about the host: the distribution's package
-index. A step with nothing to converge it against cannot be an `Item` — asking
-whether a stale index holds would report drift on every host forever — so it is
-outside the list, and a check that ran it would be a check that changed
-something.
+`--apply` runs it.** That is `prepare_for`, and no phase populates it today:
+the one thing in the whole set that is not a fact about the host — the
+distribution's package index — moved into the install that needs it
+(`_ensure_index`), because a step before the items refreshed for applies that
+were converging nothing about any package. A step with nothing to converge it
+against cannot be an `Item` — asking whether a stale index holds would report
+drift on every host forever — and a check that ran one would be a check that
+changed something.
 
 The order the phases run in is the order in spec 6.1, and it is not
 interchangeable: `storage` creates the directories `install` writes into and the
@@ -639,7 +641,12 @@ def _install_packages(packages: Iterable[str], row: dict | None = None) -> None:
     be reported: a single `apt-get install` of the whole list fails as a unit and
     says which of seven packages was missing only by parsing the distribution's
     prose.
+
+    The index refresh belongs here rather than to the phase: an install is what
+    needs it, so a converge with nothing to install pays nothing for it, and two
+    installs in one run pay for it once.
     """
+    _ensure_index(row)
     for package in packages:
         h.run_or_die(*packagelist.install_argv([package], row))
 
@@ -647,22 +654,14 @@ def _install_packages(packages: Iterable[str], row: dict | None = None) -> None:
 def prepare_for(phase: str, family: str | None = None) -> Callable[[], None] | None:
     """The step a phase runs before any of its items, or nothing at all.
 
-    **This is `--apply` only, and the difference is the whole of it.** A step with
-    nothing to converge it against cannot be an `Item`: `--check` asks every item
-    whether it already holds, and the package index is not a piece of declared
-    state — there is no file of guarden's that says how fresh it is, and a check
-    that reported a stale index as drift would report it on every host forever
-    and every morning after. So it is a step rather than an item, and the two
-    modes cannot disagree about it because only one of them has it.
-
-    One phase has one, and it is the packages phase. An install is resolved
-    against the distribution's index, so the index is refreshed first: an apply
-    against an index the mirror has moved past fails on a version that exists and
-    is not the one available, and the failure reads as a package problem rather
-    than as the host's own view of its mirror being weeks old.
+    No phase has one. The packages phase's index refresh used to live here and
+    did not belong: it ran before the phase's items were evaluated at all, so an
+    apply whose only unmet items were timers or files still paid a full mirror
+    refresh. It is now `_ensure_index`, called by the install that needs it, and
+    `soil`'s apply loop catches its two failures with the same classification
+    this step's caller used. The function stays because the caller's contract is
+    per-phase and a future phase may genuinely need a step.
     """
-    if phase == "packages":
-        return lambda: _refresh_package_index(family)
     return None
 
 
@@ -716,8 +715,11 @@ def _reload_system_manager() -> None:
         )
 
 
-def _refresh_package_index(family: str | None) -> None:
-    """Run the family's own refresh argv, from the list, once, before the installs.
+_INDEX_REFRESHED = False
+
+
+def _ensure_index(row: dict | None) -> None:
+    """Refresh the family's package index once per run, before the first install.
 
     **The two failures here are different things and carry different codes.** An
     argv the list does not carry is a repository input nobody filled in, and it is
@@ -725,8 +727,18 @@ def _refresh_package_index(family: str | None) -> None:
     mirror, and it is exit `1` (spec 1.2's dividing line: the list is input, the
     mirror is the host). Getting that backwards would tell an operator to edit a
     file in this repository when the thing to fix is the network.
+
+    It ran as the phase's own step until 2026-10-12, before the phase's items
+    were even evaluated: every apply with one unmet item paid a full refresh,
+    and four of the five applies `tests/t20-packages.sh` drives were paying it
+    to change nothing about any package. The once-guard is a process-global
+    because a run is a process and a process converges one family; `soil`'s
+    apply loop catches both failures from the `converge` that triggered this
+    with the same classification the step's old caller used.
     """
-    row = packagelist.family(family)
+    global _INDEX_REFRESHED
+    if _INDEX_REFRESHED:
+        return
     argv = packagelist.update_argv(row)
     if not argv:
         raise errors.GuardenError(
@@ -738,6 +750,7 @@ def _refresh_package_index(family: str | None) -> None:
         )
     result = h.run(*argv)
     if result.ok:
+        _INDEX_REFRESHED = True
         return
     reason = result.err.strip().splitlines()
     raise errors.GuardenError(

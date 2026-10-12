@@ -988,3 +988,25 @@ wait_settled() {
     done
     _fail "unit $unit is still '$state' after 30s"
 }
+
+# apt_waits <args...>: apt-get on a machine whose background services may hold
+# the dpkg lock. `apt-get` does not queue for a lock it cannot take -- it exits
+# 100 with the lock's name -- and a cut machine can meet a boot-time
+# `unattended-upgrades` between the reach of a drift report and the call; one
+# did, in `t130-packages.sh`, on 2026-10-12. While another process holds the
+# lock this waits for it, the way the runner itself waits at boot; a failure
+# with the lock free is apt's own and stands unchanged.
+apt_waits() {
+    local attempt
+    for attempt in 1 2 3 4 5 6; do
+        if apt-get "$@"; then
+            return 0
+        fi
+        fuser -s /var/lib/dpkg/lock-frontend || {
+            apt-get "$@"
+            return $?
+        }
+        sleep 2
+    done
+    apt-get "$@"
+}

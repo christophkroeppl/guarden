@@ -119,8 +119,9 @@ seed_record tar.xz "file://$archive" "$archive_digest" "$payload_digest"
 # not install is drift on a throwaway machine rather than a refusal, so the exit
 # asked for here is 0 or 1 and only a 2 would be one. Whether the phase converges
 # as a whole is `t20-packages.sh`'s question and not this file's: the golden's
-# package index is as old as the golden, and a phase that installs without
-# refreshing it fails on a version the mirror has moved past. What is asserted
+# package index is as old as the golden, and an install refreshes it first
+# before resolving, so a converge can fail on a mirror that cannot be reached
+# rather than on anything this file asked for. What is asserted
 # from here on is the pin, and the pin's own convergence is the ELF header and the
 # two digests below rather than a phase's exit code.
 run soil install --apply

@@ -260,8 +260,9 @@ def _check(
     # escapes — and uncaught it was a traceback and an exit 1, which is the wrong
     # code for a rejected input and says nothing about which families exist. An
     # operator on an unsupported distribution gets one line and a fix instead of a
-    # stack trace. `--apply` does not need the same guard: it calls `prepare_for`
-    # before this phase's items and `_prepare` already answers 2 for it.
+    # stack trace. `--apply` does not need the same guard: it builds the same
+    # items under the same rejection handler in `_apply`, and `_prepare` answers
+    # 2 for a phase step that rejects its input.
     try:
         items = _collect(phases, family, modules)
     except packagelist.UnknownFamily as exc:
@@ -316,6 +317,19 @@ def _apply(
                     return _reject(f"a pinned artefact is not installable: {exc}")
                 except packagelist.UnknownFamily as exc:
                     return _reject(str(exc))
+                except errors.GuardenError as exc:
+                    # The packages phase's index refresh now runs inside the
+                    # first install that needs it (`hostprep._ensure_index`), so
+                    # its two failures arrive here rather than from `_prepare`:
+                    # the same classification, one call site later. Rejected
+                    # input stops the run; a host that cannot reach its mirror
+                    # is reported the way `_prepare`'s `(False, None)` reported
+                    # it -- this phase's items are reported, not converged, the
+                    # later phases still get their turn, and the run ends `1`.
+                    if exc.code == errors.REJECTED_INPUT:
+                        return _reject(exc.message)
+                    error(exc.message)
+                    ready = False
                 if item.correctable and item.holds():
                     continue
             if item.correctable:

@@ -1207,9 +1207,10 @@ that phase's installs and the run reports the packages it could not install; the
 still converge and the run still exits `1`.
 
 - `packages` **disables the distribution's own apt timers — `apt-daily`,
-  `apt-daily-upgrade` and `dpkg-db-backup` — then refreshes the package index from
-  the family's own `update` argv in
-  `packages/packages.toml`, then** installs the distribution packages: btrfs-progs, snapper,
+  `apt-daily-upgrade` and `dpkg-db-backup` — then** installs the distribution packages, refreshing
+  the package index from the family's own `update` argv in
+  `packages/packages.toml` once per run, **immediately before the first install that needs it**:
+  btrfs-progs, snapper,
   ferm, fail2ban, podman, and `python3-yaml` and `python3-jinja2`. `ufw` is **uninstalled** by
   installation and is **not** in any package list, on any family, for any reason. The host firewall
   is `ferm` and nothing else. It also fetches **pinned artefacts**

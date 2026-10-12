@@ -149,8 +149,10 @@ assert_stdout_has "the host carries both"
 # The removal is real dpkg work and the install below puts every package back, so
 # the same three are asked of the machine in both directions in one file. What this
 # does **not** do is leave the machine as it found it: the re-install is the apply's
-# job and is asserted at the end.
-apt-get remove -y ferm fail2ban podman
+# job and is asserted at the end. The removal goes through `apt_waits`, because it
+# runs before any `soil packages` has established the drift report the apt timers
+# are asserted from — a boot-time distribution unit may still hold the lock.
+apt_waits remove -y ferm fail2ban podman
 assert_no_dpkg ferm
 assert_no_dpkg fail2ban
 assert_no_dpkg podman
