@@ -998,14 +998,18 @@ wait_settled() {
 # with the same probe, though it reads two locks and does not trust fuser's exit
 # alone, which in-guest as root collapses to "free" -- and a failure with the
 # lock free is re-run once and its code returned: that is apt's own answer to
-# the command. The waiting is bounded -- six sleeps of two seconds and a final
-# attempt, a little past the runner's measured boot window -- and an upgrade run
-# still in flight past that fails the suite, which is the honest report.
+# the command.
+# The waiting is bounded -- thirty sleeps of two seconds and a final attempt,
+# past the runner's measured boot window -- and an upgrade run still in flight
+# past that fails the suite, which is the honest report. Twelve seconds was the
+# first bound and it was too short: a boot-time `unattended-upgrades` has a
+# whole machine's package set to walk, and it reddened `t130-packages` twice in
+# one day (rc 100 out of this helper's last call) before the bound was raised.
 # `fuser` comes from `psmisc` via `ubuntu-standard`; without it the probe fails
 # open and the command simply runs.
 apt_waits() {
     local attempt
-    for attempt in 1 2 3 4 5 6; do
+    for attempt in $(seq 1 30); do
         if apt-get "$@"; then
             return 0
         fi

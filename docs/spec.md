@@ -225,7 +225,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 
 | path | mode | owner | who creates it |
 |---|---|---|---|
-| `/var/lib/guarden/` | `0750` | `root:guarden` | `soil storage` |
+| `/var/lib/guarden/` | `0751` | `root:guarden` | `soil storage` |
 | `/var/lib/guarden/services/` | `0711` | `root:root` | `soil storage` |
 | `/var/lib/guarden/services/<name>` and everything under it | `0700` | the service user | `weedr service add`. **One owner for the whole tree, including every instance's volumes** — a `kind = "instance"` track's instances are one trust domain (§5.2) and are not `0700` individually |
 | `/var/lib/guarden/registry/` | `0750` | `root:guarden` | `soil storage` |
@@ -261,7 +261,13 @@ boot — `soil install` writes a `tmpfiles.d` entry and nothing depends on the d
 **`/var/lib/guarden/services/` is `0711` rather than `0750` deliberately**: every service tree
 under it is `0700`, so listing the directory would leak every workload name on the host and
 which tracks exist, while `0711` still lets a program traverse to a service it legitimately
-owns. `stakes` cannot use the traversal to read anything — a `0700` tree stops it — which is
+owns. **That grant only works because `/var/lib/guarden/` above it is `0751`** — the same
+traverse-but-not-list mode, one level up, for the same users: a service user, `hose` and the
+edge are in neither group and must pass through the parent to reach their own trees, and at
+`0750` the child's `x` bit is unreachable. Measured, 2026-10-12, on the first golden whose
+`soil storage` had actually converged: at `0750` every service user was locked out of its own
+home and volumes — the defect this row corrects. `stakes` cannot use the traversal to read
+anything — a `0700` tree stops it — which is
 the same reason the pin store is separate from the state volumes in the first place.
 
 The `0700` on a service's tree is load-bearing. Without it any service user can read every

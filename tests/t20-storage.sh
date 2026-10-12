@@ -59,7 +59,7 @@ assert_file_exists /etc/apt/apt.conf.d/80guarden-snapper
 # machine can: `root:guarden` on the registry is what makes it readable by the
 # unprivileged programs, and `root:root` on `services/` is what keeps a listing
 # from leaking a workload.
-assert_mode /var/lib/guarden 0750
+assert_mode /var/lib/guarden 0751
 assert_owner /var/lib/guarden root:guarden
 assert_mode /var/lib/guarden/services 0711
 assert_owner /var/lib/guarden/services root:root

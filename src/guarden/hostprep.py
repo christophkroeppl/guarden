@@ -47,9 +47,16 @@ from guarden.hosttool import Item, hostpath, lock
 
 # spec 2.1, one row each: a directory a program writes into is 0770, one it
 # only reads is 0750, and /var/lib/guarden/services/ is 0711 so that listing it
-# would not leak every workload name on the box.
+# would not leak every workload name on the box. **And /var/lib/guarden itself
+# is 0751 — read for `guarden`'s programs, `x` for everyone else — because a
+# service user, `hose` and the edge are none of them in `guarden`, and a
+# traverse grant on `services/` is worthless while the directory above it
+# denies one.** Measured 2026-10-12 on the first converged golden: at 0750,
+# every service user was locked out of its own home and volumes (t110's
+# `touch` as the service user, EPERM); at 0751 it works and a listing is still
+# denied, which is the whole point of the mode.
 STORAGE_DIRECTORIES = (
-    (("var", "lib", "guarden"), 0o750, "root", "guarden"),
+    (("var", "lib", "guarden"), 0o751, "root", "guarden"),
     (("var", "lib", "guarden", "services"), 0o711, "root", "root"),
     (("var", "lib", "guarden", "registry"), 0o750, "root", "guarden"),
     (("var", "lib", "guarden", "shared"), 0o750, "root", "guarden"),
