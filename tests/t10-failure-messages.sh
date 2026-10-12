@@ -87,7 +87,14 @@ unset SUITE_TIMEOUT
 # can see that — the return, both verdict lines, both success tests, the
 # guest's status capture and its re-raise, the host's capture of the exec's
 # status, both counter increments and the run's final exit test are pinned by
-# exact form, each measured to move on its own mutation and no other.
+# exact form, each measured to move on its own mutation and no other. **And
+# the boundary of the whole approach, stated so it cannot be mistaken for
+# more**: these are presence checks on text — an edit that keeps every literal
+# (an `rc=0` on the next line, an early `return 0`, a reworded ledger message)
+# is invisible to grep, and closing that class needs executing the runner,
+# which no in-machine suite can do to a host process. That boundary is ticket
+# 266's; what is asserted here is every literal the chain is built from, each
+# pinned by its own measured mutation.
 # Every pin reads the comment-stripped stream — the timeout assignment anchor
 # alone reads the raw file, and its `^` and column-0 literal are what no
 # comment line can satisfy (a col-0 payload line elsewhere could, though;
@@ -124,15 +131,27 @@ passes=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE 'line pass "\$name"[[:sp
 [ "$passes" = 1 ] || _fail "the runner's pass verdict is not recorded exactly once, unsilenced"
 fails=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE 'line fail "\$name"[[:space:]]*$' || true)
 [ "$fails" = 1 ] || _fail "the runner's fail verdict is not recorded exactly once, unsilenced"
-rc_tests=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '[ "$rc" -eq 0 ]' || true)
-[ "$rc_tests" = 2 ] || _fail "the runner's success tests are not the measured pair; a flipped verdict reads as the other one"
+rc_tests=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE 'if \[ "\$rc" -eq 0 \]; then[[:space:]]*$' || true)
+[ "$rc_tests" = 2 ] || _fail "the runner's success tests are not the measured pair, unsuffixed; a flipped or escaped verdict reads as the other one"
 rc_capture=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'rc=\$?' || true)
 [ "$rc_capture" = 1 ] || _fail "the guest wrapper no longer captures the suite's own status"
-counters=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'failures=$((failures + 1))' || true)
-[ "$counters" = 2 ] || _fail "the failure counter no longer increments on both failure paths"
+counters=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE 'failures=\$\(\(failures \+ 1\)\)[[:space:]]*$' || true)
+[ "$counters" = 2 ] || _fail "the failure counter no longer increments, unsuffixed, on both failure paths"
 exit_rc=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'exit \$rc' || true)
 [ "$exit_rc" = 1 ] || _fail "the guest wrapper no longer re-raises the suite's status; a failure would exit 0"
-host_cap=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '</dev/null || rc=$?' || true)
-[ "$host_cap" = 1 ] || _fail "the host no longer captures the exec's status into rc"
-final_test=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '[ "$failures" -eq 0 ]' || true)
-[ "$final_test" = 1 ] || _fail "the run's exit test is gone; a failing run could exit green"
+host_cap=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '</dev/null \|\| rc=\$\?[[:space:]]*$' || true)
+[ "$host_cap" = 1 ] || _fail "the host no longer captures the exec's status into rc, unsuffixed"
+final_test=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '\[ "\$failures" -eq 0 \][[:space:]]*$' || true)
+[ "$final_test" = 1 ] || _fail "the run's exit test is gone or suffixed; a failing run could exit green"
+call_site=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_run_suite "\$name" \|\| rc=\$\?[[:space:]]*$' || true)
+[ "$call_site" = 1 ] || _fail "the call site no longer captures _run_suite's status; the verdict is decoupled from it"
+continues=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '^[[:space:]]*continue[[:space:]]*$' || true)
+[ "$continues" = 7 ] || _fail "the fail path's continue is gone or moved; a failed suite would be cached as a hit"
+ledger_pass=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'pass\t%s' || true)
+[ "$ledger_pass" = 1 ] || _fail "the ledger's pass arm is not the measured literal"
+ledger_fail=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'fail\t%s' || true)
+[ "$ledger_fail" = 2 ] || _fail "the ledger's fail arm is not the measured literal"
+dispatch=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'run) shift; cmd_run "$@" ;;' || true)
+[ "$dispatch" = 1 ] || _fail "the run verb's dispatch arm is gone; the run's status could not propagate"
+cd_guard=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'exit 97' || true)
+[ "$cd_guard" = 1 ] || _fail "the wrapper's cd guard is gone; a missing repo would exit as a pass"
