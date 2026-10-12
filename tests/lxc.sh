@@ -468,13 +468,16 @@ packages:
   - dracut-core
   # **The substrate, and it is deliberate that it is here as well as in
   # `packages/packages.toml`.** Ticket 200's doctrine is "the packages are
-  # already baked into the golden"; the rebuild of 2026-10-12 showed what a
-  # golden without `ferm`, `fail2ban` and `podman` does to the suites that
-  # rely on them before their own apply — `t130-packages`' remove-first
-  # asserts, `t100-homepage`'s firewall unit load, `t110-previews`' volume
-  # writes. The rendered `tools/cloud-init/user-data.yaml` carries the
-  # substrate for the golden-VM tool; this is the harness's own cut list and
-  # it must bake the same premise.
+  # already baked into the golden", and the rebuild of 2026-10-12 showed what
+  # a golden without `ferm`, `fail2ban` and `podman` does to the suites that
+  # use them before their own apply: `t100-homepage`'s firewall unit never
+  # loaded and `t150-auth`'s module add failed the same way. The other two reds
+  # of that rebuild were different classes and were fixed elsewhere --
+  # `t110-previews` needed the `/var/lib/guarden` traverse (`df0b268`) and
+  # `t130-packages` died on a rolled-back golden transaction, not on this
+  # list. The rendered `tools/cloud-init/user-data.yaml` carries the raw
+  # substrate; `t15-cutlist.sh` holds this list to `soil packages --list`, so a
+  # package added to the one list cannot miss the other.
   - ferm
   - fail2ban
   - podman
@@ -676,6 +679,31 @@ cmd_provision() {
         || $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
     $LXC snapshot "$GOLDEN" "$SNAPSHOT" >/dev/null \
         || die "cannot snapshot $GOLDEN"
+
+    # **The snapshot is verified from a machine that reboots from it, because
+    # the builder's own session cannot see what a stop rolls back.** Every
+    # check above reads the running machine, and the running machine's page
+    # cache is exactly what an uncommitted transaction lives in: on
+    # 2026-10-12 `soil storage --check` passed on a golden whose snapshot
+    # carried the state before its final apply, and only a cut could tell.
+    # This cut reads the premises the suites ride: the conversion state, the
+    # marker, and the snapper configuration the apt hook needs.
+    local probe="${GOLDEN}-probe"
+    $LXC delete "$probe" --force >/dev/null 2>&1 || true
+    $LXC copy "$GOLDEN/$SNAPSHOT" "$probe" >/dev/null 2>&1 \
+        || die "cannot cut a probe from $GOLDEN/$SNAPSHOT"
+    $LXC start "$probe" >/dev/null 2>&1 || die "the probe cut did not start"
+    for ((i = 0; i < 60; i++)); do
+        $LXC exec -T "$probe" -- true >/dev/null 2>&1 && break
+        sleep 3
+    done
+    $LXC exec -T "$probe" -- bash -lc '
+        test "$(cat /var/lib/guarden/soil/state 2>/dev/null)" = done &&
+        test ! -e /var/lib/guarden/soil/reboot-required &&
+        snapper -c root get-config >/dev/null 2>&1' >/dev/null 2>&1 \
+        || die "a cut from $GOLDEN/$SNAPSHOT does not carry the converged storage state"
+    $LXC delete "$probe" --force >/dev/null 2>&1 || true
+    printf '  the probe cut carries the converged state\n'
 
     printf 'provisioned %s on pool %s (snapshot %s)\n' "$GOLDEN" "$POOL" "$SNAPSHOT"
 }

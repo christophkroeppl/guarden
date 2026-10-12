@@ -99,9 +99,12 @@ assert_file_missing /var/lib/guarden/services/myapp-production
 assert_file_missing /var/lib/guarden/services/myapp-production/state
 
 # The render directory is the one the unprivileged programs may write into, and
-# the lock directory takes the same mode because unprivileged programs take those
-# locks. The group is the load-bearing half of both: `root:guarden` on the
-# registry is what makes it readable by the programs that run as `guarden`.
+# the lock directory carries the same owner for the same reason -- unprivileged
+# programs take those locks -- plus setgid, so a lock file created by either
+# caller is group `guarden` and both can open it (conf.lock states 0664; the
+# mode argument of open() is umask-filtered and would be). The group is the
+# load-bearing half of both: `root:guarden` on the registry is what makes it
+# readable by the programs that run as `guarden`.
 assert_mode /var/lib/guarden/render 0770
 assert_owner /var/lib/guarden/render guarden:guarden
 assert_mode /run/guarden/locks 2770

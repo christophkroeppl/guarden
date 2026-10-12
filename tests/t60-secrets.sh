@@ -297,15 +297,16 @@ assert_file_lacks "$unit" "$VALUE"
 # materialiser hands the value to podman as the service user, podman keeps it
 # inside that service's own home, and whatever can read that home has it.
 #
-# **The machine has to carry a real `podman` for this half, so this suite installs
-# one with the phase that owns it.** The golden ships substrate only —
-# `t20-packages.sh` asserts `podman` is *absent* on a fresh cut, because it is
-# that suite's drift to converge — and nothing faked could answer the question, so
-# the answer is to ask the distribution repository through `soil packages`, the
-# one program whose list names `podman`. It is the real tool and the real phase,
-# which is the whole rule; `assert_dpkg` asserts the state rather than the intent,
-# and `assert_not_rejected` is right because the phase is asked for the package
-# and not for a converged host — the pinned converter is the item after it and
+# **The machine has to carry a real `podman` for this half, and the golden
+# bakes it as substrate (`tests/lxc.sh`'s cut list; `t15-cutlist.sh` keeps the
+# two lists agreeing).** This suite still installs it through the phase that
+# owns it, because the phase is what the block exercises; what it no longer
+# assumes is that some other suite's removal left it absent, which was never
+# true of a fresh cut in the first place. It is the real tool and the real
+# phase, which is the whole rule; `assert_dpkg` asserts the state rather than
+# the intent, and `assert_not_rejected` is right because the phase is asked
+# for the package and not for a converged host — the pinned converter is the
+# item after it and
 # this suite says nothing about that.
 #
 # An earlier revision asserted the exit code and the store below and expected both

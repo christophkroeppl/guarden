@@ -41,9 +41,12 @@ assert_not_rejected
 # btrfs — so a cut from it arrives with every storage item already holding, and
 # an assertion that "a fresh machine has storage drift" would be asserting the
 # golden's build history rather than anything this file does. Removing one
-# storage-owned file makes the drift this run's own, exactly the way
-# `t20-packages.sh` removes the packages its apply puts back.
+# storage-owned file and loosening one storage-owned mode makes the drift this
+# run's own, exactly the way `t20-packages.sh` removes the packages its apply
+# puts back; without them the mode assertions below would be pre-satisfied at
+# cut on a converged golden.
 rm -f /etc/apt/apt.conf.d/80guarden-snapper
+chmod 0755 /var/lib/guarden/queue
 run soil storage --check
 assert_exit 1
 assert_stderr_has "drift: the package hook snapshots root before every transaction"
