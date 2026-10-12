@@ -283,38 +283,33 @@ assert_stdout_has "https://nosuchhost.example/"
 # and nothing about what the edge did with them -- see the block below, which is
 # the correction of an earlier version of this comment that claimed otherwise.
 assert_file_has "$rendered" 'Host(`staging.web`)'
-# **Whether the edge has read this file is NOT asserted here.** The edge runs
-# `--api.insecure=true --api.dashboard=true` and has an api publication asserted
-# listening, so its router table is readable. Measured in a real machine, that
-# table contains only traefik's three internal routers -- `api@internal`,
-# `dashboard@internal` and `web-to-websecure@internal` -- and **not**
-# `routed-staging-web`. So the endpoint this file would use to observe the loaded
-# route does not show it, and an assertion reading it fails on a healthy edge.
+# **Whether the edge has read this file, and the search that ended in a
+# permission denial.** The edge runs with the API on an asserted publication
+# (above), so its router table is readable, and the assertion at the end of
+# this file now reads it. Before the fix that table held only traefik's three
+# internal routers -- `api@internal`, `dashboard@internal` and
+# `web-to-websecure@internal` -- and not `routed-staging-web`. Traefik's own
+# journal said why:
 #
-# **Measured further: the file provider does not load the route at all.** Four
-# readings, all from one machine, and none of them a claim about the cause:
+#   ERR Cannot start the provider *file.Provider error="unable to read
+#   directory /etc/guarden/edge: open /etc/guarden/edge: permission denied"
 #
-#   host       /var/lib/guarden/edge/dynamic/routed-staging.yml exists,
-#              337 bytes, guarden:edge 0640, and names Host(`staging.web`)
-#   container  the edge is running with the bind mount
-#              /var/lib/guarden/edge/dynamic:/etc/guarden/edge (RW=false),
-#              and /etc/guarden/edge/ INSIDE it is **empty**
-#   API        lists api@internal, dashboard@internal and web-to-websecure@internal
-#              only -- not routed-staging-web
-#   request    curl -k https://staging.web/ -> 404
+# `roots sync` above runs before the edge starts, so the file was on disk
+# before the container was created and a file watcher had nothing to catch:
+# the file was there and the container could not read it. An earlier version
+# of this comment claimed the watcher missed a late write; the suite's own
+# order refutes that and ticket 263 records the refutation so it is not tried
+# again.
 #
-# **The ordering is what makes this a defect rather than a timing artefact, and
-# an earlier version of this comment got it backwards.** `roots sync` runs at
-# line 87, BEFORE the edge starts at line 103, so the file is on disk before the
-# container is created -- a file watcher has nothing to catch. An earlier draft
-# here said the file was written afterwards and the watcher missed it; that is
-# refuted by the suite's own order and is recorded so it is not tried again.
-#
-# **The cause is NOT measured.** Something makes the container's view of a
-# directory empty while the host's view of the same path holds the file, and
-# that is the whole of what is known. It is a **runtime defect**, not a test
-# limitation: the edge cannot route because it cannot see its own configuration.
-# Ticket 263 carries this area's history and is where the cause belongs.
+# **The cause, measured (ticket 263; ADR-0017).** A systemd user manager's
+# supplementary groups are fixed when the manager starts, and `loginctl
+# enable-linger` starts it before `_edge_group` adds the user to `edge`. So
+# `keep-groups` -- which faithfully carries the *manager's* set -- carried one
+# without `edge`, and the 2750 directory refused the read. No gid number
+# stands in for this: `/etc/subgid` maps the container's gids far above the
+# host group's number. `_edge_group` now restarts the manager when it lacks
+# the group, and the two assertions at the end of this file pin the fix: the
+# manager's own group set, and the route the provider now loads.
 
 # The edge is a reader of that directory and nothing more: the container's own
 # user is in `edge`, and the mount it reads through is read-only.
@@ -330,3 +325,29 @@ assert_exit 0
 assert_stdout_has "/var/lib/guarden/edge/dynamic /etc/guarden/edge rw=false"
 assert_supplementary_group traefik-production edge
 assert_mode /var/lib/guarden/edge/dynamic 2750
+
+# **The user manager carries the `edge` group, and `id -nG` cannot see this.**
+# The assertion above reads the user database, where the membership is
+# correct; the container inherits the *manager's* supplementary groups through
+# `keep-groups`, and those are fixed at the manager's creation. Measured in
+# ticket 263: `id traefik-production` -> groups 982,981(edge) while the
+# manager ran with 982 alone, and traefik's journal then held `open
+# /etc/guarden/edge: permission denied`. /proc/<MainPID>/status is the
+# manager's own word for its set.
+edge_gid=$(getent group edge | cut -d: -f3)
+edge_uid=$(id -u traefik-production)
+run systemctl show "user@$edge_uid.service" --property=MainPID --value
+assert_exit 0
+manager_pid=$(cat "$GUARDEN_STDOUT")
+run grep '^Groups' "/proc/$manager_pid/status"
+assert_exit 0
+grep -qw "$edge_gid" "$GUARDEN_STDOUT" \
+    || _fail "the user manager for $edge_uid has no edge group ($edge_gid): $(cat "$GUARDEN_STDOUT")"
+
+# **And what it buys: the edge has loaded the route.** The api publication
+# answers with the router table, and `routed-staging-web@file` being in it is
+# the consequence the fix was for -- before it, the file provider could not
+# read the directory and only the three internal routers were listed.
+run curl -s "http://127.0.0.1:$api_publication/api/http/routers"
+assert_exit 0
+assert_stdout_has "routed-staging-web@file"
