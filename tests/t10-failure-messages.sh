@@ -86,10 +86,11 @@ unset SUITE_TIMEOUT
 # coarser catch reaching only the three lines whose literal begins `error:
 # %s` — the fuser guard and the cut message cannot trip it at all, so a reword
 # of those two into failure language is caught by their signatures alone.
-# The net is a net, not a proof. Counts, call pins and signatures all read the
-# comment-stripped stream, so prose quoting a pin cannot break the pin, and a
-# commented-out call cannot satisfy one — a trailing `# …` naming a token
-# would still count.
+# The net is a net, not a proof. Every pin reads the comment-stripped stream
+# — the timeout assignment anchor alone reads the raw file, and its `^` and
+# column-0 literal are what no comment line can satisfy — so prose quoting a
+# pin cannot break the pin, and a commented-out call cannot satisfy one; a
+# trailing `# …` naming a token would still count.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
 calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c '_failure_message "' || true)
@@ -110,7 +111,7 @@ kills=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c -- '--foreground --signal=
 [ "$kills" = 4 ] || _fail "the runner carries $kills '--foreground --signal=KILL' uses; four is the measured set"
 grep -qE '^SUITE_TIMEOUT=\$\{GUARDEN_LXC_SUITE_TIMEOUT:-' "$runner" \
     || _fail "the runner no longer takes its wall clock from GUARDEN_LXC_SUITE_TIMEOUT"
-grep -qF -- '--signal=KILL "$SUITE_TIMEOUT"' "$runner" || _fail "the runner no longer feeds SUITE_TIMEOUT into its kill"
-if grep -qE "printf ['\"]error: %s[^'\"]*(exited|exceeded|died|killed|signal|128\+|wall clock)" "$runner"; then
-    _fail "a runner error line reads as a suite failure; the extraction has drifted"
-fi
+kill_arg=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '--signal=KILL "$SUITE_TIMEOUT"' || true)
+[ "$kill_arg" -ge 1 ] || _fail "the runner no longer feeds SUITE_TIMEOUT into its kill"
+net=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE "printf ['\"]error: %s[^'\"]*(exited|exceeded|died|killed|signal|128\+|wall clock)" || true)
+[ "$net" = 0 ] || _fail "a runner error line reads as a suite failure; the extraction has drifted"
