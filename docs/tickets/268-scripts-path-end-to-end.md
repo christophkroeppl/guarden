@@ -56,6 +56,13 @@ round.
 - No suite can drive the conversion: every cut machine boots from the golden, whose root is
   already btrfs. The coverage is the golden build (`_convert`) and this manual round; a suite
   would need a deliberately unconverted machine, which no harness shape provides today.
+- **`/etc/guarden`'s directory modes: spec 2.1 says `0750` directories; the write protocol
+  creates them `0755`.** Measured on a probe cut (2026-10-12): `0755 root:root`, and a
+  non-`guarden` user traverses and stats it fine. The spec row and the code disagree, and in
+  this instance the code is the one that serves the design — `hose` must read
+  `projects.toml` (0444) through that directory and is in neither group, so a `0750` there
+  would be the same traverse defect `/var/lib/guarden` had (`df0b268`). Reconcile the row
+  rather than the code; nothing is blocked today because `0755` is the looser mode.
 - The machinery is bash (its dracut half is shell by necessity — it runs in the initramfs). Its
   Python-driver half is a possible follow-up if the state dispatch ever needs more than
   `state_get`/`state_set`.
