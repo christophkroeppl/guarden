@@ -34,7 +34,7 @@ getent group guarden >/dev/null 2>&1 || groupadd --system guarden
 # queue a `guarden` program can read but not enqueue into is the 0750 defect
 # spec 2.1 names, and the mode is what the first two assertions are about.
 install -d -m 0770 -o root -g guarden /var/lib/guarden/queue
-install -d -m 0770 -o root -g guarden /run/guarden/locks
+install -d -m 2770 -o root -g guarden /run/guarden/locks
 stage_config guarden.toml
 
 queue=/var/lib/guarden/queue

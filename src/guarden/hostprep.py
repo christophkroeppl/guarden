@@ -91,13 +91,13 @@ INSTALL_DIRECTORIES = (
     (("run", "guarden", "locks"), 0o2770, "root", "guarden"),
     # The /etc rows are stated here rather than left to the write protocol's
     # `mkdir(parents=True)`, which is `0777 & ~umask`: under root's usual 022
-    # that silently produced 0755 where the table promises 0750, and under a
-    # 027 umask it would silently produce the 0750 that locks `hose` out --
-    # the same class of defect as `/var/lib/guarden`. `0751` on the parent is
-    # traverse for `hose` and the service users and a listing for neither;
-    # `projects.d` and `services` are `0755` because both are globbed or read
-    # by a user who is in neither group (`projects.py` skips nothing found by
-    # a glob that cannot even enter the directory), and `creds` stays `0700`.
+    # that was 0755 where the one old row promised 0750, and under a 027 umask
+    # it would produce the 0750 that locks `hose` out -- the same class of
+    # defect as `/var/lib/guarden`. `0751` on the parent is traverse for `hose`
+    # and the service users and a listing for neither; `projects.d` and
+    # `services` are `0755` because both are globbed or read by a user who is
+    # in neither group (`projects.py` skips nothing found by a glob that cannot
+    # even enter the directory), and `creds` stays `0700`.
     (("etc", "guarden"), 0o751, "root", "guarden"),
     (("etc", "guarden", "creds"), 0o700, "root", "root"),
     (("etc", "guarden", "projects.d"), 0o755, "root", "root"),
@@ -248,6 +248,14 @@ PACKAGED_APT = (
 
 SYSCTL_FILE = ("etc", "sysctl.d", "90-guarden.conf")
 SYSTEMD_DIR = ("etc", "systemd", "system")
+# **The tmpfiles entry has to live where tmpfiles reads.** `systemd-tmpfiles`
+# reads `/etc/tmpfiles.d`, `/run/tmpfiles.d` and `/usr/lib/tmpfiles.d` and never
+# `/etc/systemd/system`; the entry sat in the unit directory until 2026-10-12,
+# so "/run/guarden is recreated at every boot" was false -- measured on a cut,
+# `/run/guarden` absent after boot and the first lock leaving the directory
+# `2770 root:root`, which no `guarden`-user program can enter. Everything else
+# in SYSTEMD_DIR is a unit and is read there.
+TMPFILES_DIR = ("etc", "tmpfiles.d")
 APT_DIR = ("etc", "apt", "apt.conf.d")
 FIREWALL_DIR = ("etc", "guarden", "firewall")
 CREDS_DIR = ("etc", "guarden", "creds")
@@ -1477,8 +1485,13 @@ def _seed_ssh_conf() -> None:
         # This will cause verification to fail
         return
     
-    # First ever apply - create the file
+    # First ever apply - create the file. The directory is stated too: the write
+    # protocol's mkdir is umask-dependent, and under an 027 umask a
+    # `guarden:root 0750` firewall directory is one the `guarden` programs
+    # cannot read the rule files through.
     path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o750)
+    os.chown(path.parent, 0, users.group_id(PROGRAM_GROUP))
     from guarden import conf
     conf.write_file(path, _ssh_conf(), 0o600, (0, 0))
 
@@ -2245,7 +2258,7 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             for name in PINNED_ARTEFACTS
         ],
         h.text_item("the tmpfiles entry recreates /run/guarden at every boot",
-                    hostpath(*SYSTEMD_DIR, "guarden-tmpfiles.conf"),
+                    hostpath(*TMPFILES_DIR, "guarden-tmpfiles.conf"),
                     _template("guarden-tmpfiles.conf")),
         # spec 6.9 / ADR-0005: two units do this for the whole host. This is the
         # instantiable one the `.path` triggers per blob; `guarden-creds-boot` is

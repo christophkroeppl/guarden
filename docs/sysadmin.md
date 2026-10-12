@@ -329,12 +329,14 @@ always one of these numbers.
 | `/var/lib/guarden/staging/` | `0755` | `root:root`. Nobody creates a subdirectory here at run time |
 | `/var/lib/guarden/staging/<project>/` | `0755` | the `hose` user. Created by `weedr project grant`, removed by `weedr project revoke` — `hose` is unprivileged and cannot `mkdir` here itself |
 | `/var/lib/guarden/staging/<project>/<sha>/` | `0755`, files `0644` | the `hose` user, which also removes the tree after the deploy |
-| `/etc/guarden/**` | `0640`, directories `0750` | `root:guarden` |
-| `/etc/guarden/projects.toml`, `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` |
+| `/etc/guarden/` | `0751` | `root:guarden` | `soil install`, stated in code |
+| `/etc/guarden/` (below), files | `0640` | `root:guarden` | the write protocol |
+| `/etc/guarden/services/`, `/etc/guarden/projects.d/` | `0755` | `root:root` | `soil install` |
+| `/etc/guarden/projects.toml`, the files under `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` | |
 | `/etc/guarden/creds/` | `0700` | `root` |
 | `/etc/guarden/edge/auth-provider` | `0640` | `root:guarden` |
 | `/etc/ssh/authorized_keys.d/hose` | `0644` | `root` |
-| `/run/guarden/locks/` | tmpfs, gone on reboot | `root:guarden` |
+| `/run/guarden/locks/` | `2770`, gone on reboot | `root:guarden` — recreated by `/etc/tmpfiles.d/guarden-tmpfiles.conf` |
 
 The `0700` on the service tree is the whole isolation scheme, and there is no carve-out for the
 home. Without it every service user can read every other service's state volumes straight off the

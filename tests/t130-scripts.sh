@@ -162,7 +162,7 @@ assert_no_passwd myapp-production
 # and nothing else, the apply puts it back, and the check is then silent. That is
 # `soil --check` exiting `1` with the word `drift` (spec 6.1) and `0` on a
 # converged host, proved without borrowing an item nobody here can converge.
-rm -f /etc/systemd/system/guarden-tmpfiles.conf
+rm -f /etc/tmpfiles.d/guarden-tmpfiles.conf
 run soil install --check
 assert_exit 1
 assert_stderr_has "drift: the tmpfiles entry recreates /run/guarden at every boot"
@@ -173,7 +173,7 @@ assert_stderr_empty
 run soil install --check
 assert_exit 0
 assert_stderr_empty
-assert_file_has /etc/systemd/system/guarden-tmpfiles.conf "/run/guarden/locks"
+assert_file_has /etc/tmpfiles.d/guarden-tmpfiles.conf "/run/guarden/locks"
 
 # The second converge is a no-op for the phases that can converge, and the state
 # says so rather than a call log. Nothing the install phase owns is rewritten: a
@@ -198,8 +198,8 @@ assert_link /usr/bin/soil "$program"
 # the only fetch is the pinned podlet, which this host does not have — and neither
 # of those is a fact a machine can report after the fact anyway. What it can
 # report is whether the files the phases own are there, which is what these are.
-assert_file_exists /etc/systemd/system/guarden-tmpfiles.conf
-assert_file_has /etc/systemd/system/guarden-tmpfiles.conf "/run/guarden/locks"
+assert_file_exists /etc/tmpfiles.d/guarden-tmpfiles.conf
+assert_file_has /etc/tmpfiles.d/guarden-tmpfiles.conf "/run/guarden/locks"
 assert_file_exists /etc/systemd/system/guarden-creds.path
 assert_file_exists /etc/systemd/system/guarden-creds-boot.service
 # Both enabled, and the boot oneshot is the one that was not: without the

@@ -28,6 +28,7 @@ own verb.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -228,3 +229,12 @@ def seeded(track, overrides: Overrides | None = None) -> Overrides:
 
 def save(service: str, overrides: Overrides, owner: tuple[int, int]) -> None:
     conf.write_toml(paths.overrides(service), overrides.to_document(), OVERRIDES_MODE, owner)
+    # The service's configuration directory is created by the write protocol's
+    # umask-dependent mkdir; it is stated here because a service whose unit
+    # bind-mounts a source under `/etc/guarden` resolves the path as its own
+    # user, and under an 027 umask the directory would be one that user cannot
+    # traverse (spec 2.1's row: `0755`, a listing of names and no secrets).
+    try:
+        os.chmod(paths.overrides(service).parent, 0o755)
+    except OSError:
+        pass

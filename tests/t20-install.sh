@@ -68,7 +68,7 @@ assert_file_has /etc/guarden/guarden.toml 'fork_from = "production"'
 assert_file_exists /usr/lib/guarden/bin/soil
 assert_file_exists /usr/lib/guarden/bin/weedr
 assert_file_exists /usr/lib/guarden/bin/hose
-assert_file_has /etc/systemd/system/guarden-tmpfiles.conf "d /run/guarden"
+assert_file_has /etc/tmpfiles.d/guarden-tmpfiles.conf "d /run/guarden"
 
 # The two program users and the one group, and nothing else. What the account is
 # is the claim, not the argv that made it: a system account with no login shell,
@@ -164,14 +164,14 @@ assert_file_has /etc/guarden/guarden.toml 'pasta_options = [ "--map-gw" ]'
 # same directory and renames, so a rewrite cannot leave the inode it found.
 accounts=$(getent passwd | wc -l)
 groups=$(getent group | wc -l)
-tmpfiles_inode=$(stat -c %i /etc/systemd/system/guarden-tmpfiles.conf)
+tmpfiles_inode=$(stat -c %i /etc/tmpfiles.d/guarden-tmpfiles.conf)
 run soil install --apply
 assert_exit 1
 [ "$(getent passwd | wc -l)" = "$accounts" ] \
     || _fail "a second apply created an account"
 [ "$(getent group | wc -l)" = "$groups" ] \
     || _fail "a second apply created a group"
-[ "$(stat -c %i /etc/systemd/system/guarden-tmpfiles.conf)" = "$tmpfiles_inode" ] \
+[ "$(stat -c %i /etc/tmpfiles.d/guarden-tmpfiles.conf)" = "$tmpfiles_inode" ] \
     || _fail "a second apply rewrote guarden-tmpfiles.conf"
 assert_passwd guarden
 assert_passwd hose

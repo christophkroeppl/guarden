@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import tomllib
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from guarden import errors, paths
+from guarden.hosttool import LOCK_GROUP, MODE_DIR_LOCKS
 
 # modules > projects > overrides > registry > preview-cap > queue > firewall > deploy-*
 LOCK_ORDER = (
@@ -72,6 +74,18 @@ def lock(*names: str) -> Iterator[None]:
     if _held and ranks and _held[-1][1] > ranks[0]:
         raise AssertionError(f"lock {names[0]!r} taken while {sorted(_held)[-1][0]!r} is held")
     paths.LOCKS.mkdir(parents=True, exist_ok=True)
+    # The same statement `hosttool.lock` makes, for the same reason: a
+    # directory this creates is umask-mode and root-owned, and both lock
+    # implementations serve one directory. The twin is recorded in ticket 268;
+    # until they are one, they agree.
+    try:
+        os.chmod(paths.LOCKS, MODE_DIR_LOCKS)
+    except OSError:
+        pass
+    try:
+        shutil.chown(paths.LOCKS, group=LOCK_GROUP)
+    except (OSError, LookupError):
+        pass
     for name in names:
         _held.append((name, _rank(name)))
     handles = []

@@ -666,8 +666,8 @@ cmd_provision() {
     # **A graceful stop, and the sync before it, because the snapshot is the
     # artifact.** A forced stop kills the guest within seconds of the phase's
     # last convergence, and btrfs commits roughly every 30s: the final
-    # transaction -- `state=done`, the marker cleared, the root and home snapper
-    # configurations -- was still in the page cache, and the snapshot carried
+    # transaction -- `state=done`, the marker cleared, the root snapper
+    # configuration -- was still in the page cache, and the snapshot carried
     # the state before it (`migrated`, marker present, no configurations). The
     # build's own `--check` had passed because it read the same page cache;
     # only a rebooted cut could see the rollback, which is how `t130-packages`

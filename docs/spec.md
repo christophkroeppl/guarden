@@ -282,9 +282,11 @@ per-consumer credential and every uid-matched firewall rule decorative.
 
 Three carve-outs from `0640 root:guarden`, each for a specific reader:
 
-- `projects.toml` and `projects.d/` are `0444` because `hose` — the network-facing program —
-  must read the ref allowlist, and a project name, a repository URL and a ref pattern are not
-  secret. Nothing else in `/etc/guarden` is readable by `hose`. In particular `hose` never
+- `projects.toml` and the files under `projects.d/` are `0444` because `hose` — the
+  network-facing program — must read the ref allowlist, and a project name, a repository URL
+  and a ref pattern are not secret. `projects.d/` itself is the `0755` directory the table
+  states, because a glob that cannot enter the directory silently skips every entry. Nothing
+  else in `/etc/guarden` is readable by `hose`. In particular `hose` never
   reads `allow-gated-drop`: the refusal is enforced root-side, in `weedr service remove`.
 - `stakes/` is `0770 root:guarden` because `stakes` runs as `guarden`, **creates and removes**
   the pin files itself, and reads them back. `weedr pin sync` is root and reads them.

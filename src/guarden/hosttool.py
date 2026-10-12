@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -38,6 +39,11 @@ PROBE_IMAGE = "localhost/guarden-probe"
 MODE_DIR = 0o755
 MODE_DIR_LOCKS = 0o2770
 MODE_CONFIG = 0o640
+
+# The one group the lock files belong to, spelled once here because both lock
+# implementations state it: spec 3.5's fixed set is taken by root and by
+# `guarden` in either order.
+LOCK_GROUP = "guarden"
 
 
 def hostpath(*parts: str) -> Path:
@@ -320,6 +326,15 @@ def lock(name: str) -> Iterator[None]:
     directory = hostpath("run", "guarden", "locks")
     directory.mkdir(parents=True, exist_ok=True)
     os.chmod(directory, MODE_DIR_LOCKS)
+    # The owner is stated too: a root mkdir leaves `root:root`, and the mode
+    # comparison alone would let the install item skip a directory a
+    # `guarden`-user program cannot enter. The chown fails soft for the
+    # unprivileged caller, which cannot have created it wrong in the first
+    # place.
+    try:
+        shutil.chown(directory, group=LOCK_GROUP)
+    except (OSError, LookupError):
+        pass
     target = directory / f"{name}.lock"
     handle = open(target, "w", encoding="utf-8")
     try:

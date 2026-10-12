@@ -61,7 +61,7 @@ manifest=$staging/myapp/9f2c1ab/.guarden/service.yml
 
 install -d -m 0755 -o root -g root "$staging"
 install -d -m 0770 -o root -g guarden /var/lib/guarden/queue
-install -d -m 0770 -o root -g guarden /run/guarden/locks
+install -d -m 2770 -o root -g guarden /run/guarden/locks
 install -d -m 0750 -o root -g guarden /var/lib/guarden/registry
 install -m 0640 -o root -g guarden "$GUARDEN_ROOT/fixtures/guarden.toml" \
     /etc/guarden/guarden.toml
