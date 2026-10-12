@@ -343,8 +343,10 @@ def render(config, grants: list[Grant]) -> str:
     interface = config.interface or hosttool.default_route_device()
     lines = [
         "# Written by weedr, and by nothing else. soil firewall owns",
-        "# 10-framework.conf and 20-ingress-nat.conf; the three files are disjoint",
-        "# and each has exactly one writer.",
+        "# 10-framework.conf and 20-ingress-nat.conf; those three files are disjoint",
+        "# and each has exactly one writer. The directory holds two more —",
+        "# 00-ssh.conf, seed-once, and 30-admin.conf, admin-edited — neither of",
+        "# which weedr writes (8c78126).",
         "#",
         "# A granted port is a PREROUTING DNAT onto the service's own loopback",
         "# publication. No POSTROUTING masquerade is written here: the destination",

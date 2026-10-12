@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# soil firewall: the two files it owns, the three rules it forwards, and the
-# timer that gets an operator back in.
+# soil firewall: the two files it owns and the three rules it forwards.
 #
 # The masquerade is the part worth pinning. An earlier revision of these
 # documents required a `nat POSTROUTING` masquerade on the grounds that without

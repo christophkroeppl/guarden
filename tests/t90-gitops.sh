@@ -340,11 +340,10 @@ assert_file_missing "$manifest"
 run hose --project myapp poke develop 9f2c1ab <"$tree_tar"
 assert_exit 1
 assert_file_missing "$manifest"
-# The unpack's own modes are NOT asserted here: `$tree` is the parent this suite
-# created at line 72 with `install -d -m 0755 -o hose -g root`, so its mode and
-# owner were true before `hose` ran, and the tree `hose` actually unpacked into is
-# removed on this path. Both halves of the mode claim -- the tree's 0755 and a
-# file's 0644 -- are asserted on the one path where the tree survives, below.
+# The tree's 0755 is asserted above, on the path where the tree survives. The
+# 0644 on an unpacked file is asserted nowhere — 0064c9a records that in its own
+# message, which corrected the sentence this one replaces; the tree this path
+# unpacks into is removed whatever the deploy returned, so nothing here reads it.
 
 # --- `hose drop` derives the name and never takes one -------------------------
 

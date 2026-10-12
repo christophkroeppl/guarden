@@ -190,23 +190,19 @@ assert_file_has "$conf" "daddr 127.0.0.0/8 jump DROP;"
     | grep -cE "^[[:space:]]+mod owner uid-owner $provider_uid daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;\$" || true)" = 1 ] \
     || _fail "no accept rule gives the provider the db publication on the loopback address"
 assert_file_lacks "$conf" "192.0.2.1"
-# KNOWN DIVERGENCE, asserted not deleted: spec 7.6 puts `-o lo` on every accept;
-# firewall.py emits no interface match at all.
-#
-# This block used to be an `if grep -q 'mod owner'; then grep 'mod owner' || fail`,
-# which is a tautology -- if the branch is entered the body grep succeeds by
-# construction, and if it is not, nothing runs. It could never go red. What can be
-# asserted is the divergence itself, and it is asserted below in the form that
-# would have to change for the claim to become true: **the count of accept rules
-# carrying an `-o lo` interface match is zero today**. When firewall.py is
-# reconciled this assertion fails, which is what "Fails until reconciled" was
-# asking for and the old form never delivered.
+# **No interface match, per spec 7.6.** The spec was rewritten (028c4db) to say
+# the code has never emitted `-o lo` — the example was corrected rather than the
+# render — so this asserts the reconciled state in the form that would have to
+# change for the claim to become true: **the count of accept rules carrying an
+# `-o lo` interface match is zero**. A render that grew one fails here. The block
+# previously carried this as a KNOWN DIVERGENCE against the old spec text; there
+# is no divergence left to name.
 accepts=$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -c 'mod owner' || true)
 with_iface=$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
     | grep 'mod owner' | grep -c -- '-o lo' || true)
 [ "$accepts" -gt 0 ] || _fail "50-services.conf carries no owner-matched accept at all"
 [ "$with_iface" = 0 ] \
-    || _fail "50-services.conf has $with_iface owner-matched accepts carrying -o lo; spec 7.6 wants them all to, and this divergence is now reconciled" 
+    || _fail "50-services.conf has $with_iface owner-matched accepts carrying -o lo; spec 7.6 emits no interface match and the count must stay zero" 
 # A poke granted nothing: `weedr service ingest` has no flag that can, so the
 # provider's two requested ports stay pending and the file carries no DNAT at all.
 assert_file_lacks "$conf" "DNAT"

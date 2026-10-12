@@ -407,11 +407,13 @@ def _swap(
     plan: list[Plan],
     now: str,
 ) -> list[str]:
-    """Stop, move aside, clone, record, start — and put it all back on error.
+    """Stop, move aside, clone, record — and put it all back on error.
 
-    The ordering is spec 8.4's: the units are stopped **before** a subvolume is
-    renamed, because a running container writing into a subvolume that is being
-    moved is a data problem and not a cosmetic one.
+    Nothing here starts what it stopped: the start call was removed in
+    1dd6a03, and `_undo` — the error path — is the only place that starts
+    units. The ordering is spec 8.4's: the units are stopped **before** a
+    subvolume is renamed, because a running container writing into a subvolume
+    that is being moved is a data problem and not a cosmetic one.
     """
     _validate(plan, resolved.name)
     escaped = resolved.escaped_ref
@@ -651,7 +653,10 @@ def seed_instance(resolved, now: str) -> list[str]:
 
 
 def rollback(resolved, when: datetime, now: str) -> list[str]:
-    """A stop, a swap and a start. It restores **data** and nothing else.
+    """A stop and a swap — through `_swap`. It restores **data** and nothing else.
+
+    Nothing in this path starts units again; `_undo` is the only starter, and
+    it runs on `_swap`'s error path.
 
     Refused outright on a track with `gated = true`, with no flag that overrides
     it: the verb is not on the `guarden` sudoers rule at all, so this is a

@@ -77,7 +77,7 @@ PROGRAM_GROUP = "guarden"
 SECRET = (
     ("set", "plant a value, encrypted, with the terminal's echo off"),
     ("list", "the key names and whether each is set; never a value"),
-    ("materialise", "the one place a blob is decrypted, into a service's podman store"),
+    ("materialise", "decrypt the blobs into a service's podman store"),
 )
 
 PORT = (

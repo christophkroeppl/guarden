@@ -2,7 +2,7 @@
 # `weedr service list` is the status command, and spec 1.2's field set is **closed**:
 # an unknown field is never emitted and never read, and adding one to a program is
 # a change to that table and not a compatible addition. So every one of the
-# fourteen fields is present, and a field with nothing to say is null or an empty
+# sixteen fields is present, and a field with nothing to say is null or an empty
 # collection rather than absent — with the distinction the spec insists on, that
 # `gate: null` is not the same as `state: "ready"`.
 #

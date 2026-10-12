@@ -15,8 +15,9 @@ requires = []
 # The dashboard is a service like any other: its own user, its own home, its
 # own quadlet unit directory. No ingress — it declares no forwarded port of its
 # own, because it is reached through the edge by a route rather than by the
-# kernel forwarding 80 or 443 at it, and `api = false` because the dashboard is
-# not a control surface on a loopback publication of its own.
+# kernel forwarding 80 or 443 at it, and no `api` key because the dashboard is
+# not a control surface on a loopback publication of its own — the key's
+# absence is the value, and t100 asserts the absence.
 service = "homepage-production"
 
 [[switches]]

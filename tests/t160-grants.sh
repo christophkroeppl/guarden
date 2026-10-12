@@ -285,10 +285,10 @@ run weedr port close peer-staging 8333/tcp
 assert_exit 0
 assert_file_lacks "$overrides/peer-staging/overrides.toml" "8333"
 assert_file_has "$registry/peer-staging.toml" "node = 20133"
-# relay-staging still holds 8333/tcp (line 235), so the accept must SURVIVE this
-# close: two services asking for one number is one rule carrying both names, and
-# closing one leaves it while the other still asks. Asserting its absence here
-# would demand the render drop a grant that is still in force.
+# relay-staging never holds 8333/tcp: its request was refused at the grant above,
+# where two services asking for one number is one rule and the holder is named.
+# This close is asserted through the service's own override file and the
+# registry's node line below.
 
 # A close of something that was never granted is the requested state already
 # true: exit 0, and a line saying so rather than a failure.

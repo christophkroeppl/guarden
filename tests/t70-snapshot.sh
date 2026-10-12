@@ -218,10 +218,11 @@ rm -f /etc/snapper/configs/unreadable-staging-data
 rm -f "$registry/unreadable-staging.toml"
 
 # A rejected name is exit 2 and nothing is snapshotted at all: the counts on the
-# two real configurations are unchanged. `--all` has run twice since the count of
-# three above — once here at line 175 and once for the chain-only service — so the
-# unchanged figures are 4 and 2, and asking for the counts as they stood before the
-# refusal would pass on a verb that had snapshotted everything.
+# two real configurations are unchanged. `--all` has run once since the count of
+# three above — for the chain-only service at line 187; the `snapshot` at 175 was
+# a refused plain run — so the unchanged figures are 4 and 2, and asking for the
+# counts as they stood before the refusal would pass on a verb that had
+# snapshotted everything.
 run weedr service snapshot NOPE
 assert_exit 2
 assert_one_diagnostic "error:"

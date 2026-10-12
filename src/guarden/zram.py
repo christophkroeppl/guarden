@@ -453,10 +453,10 @@ def _teardown_item() -> h.Item:
 
 
 def _gone() -> bool:
-    # The sysfs node and not merely the swap entry: `zramctl --reset` leaves
-    # `/sys/block/zram0` behind with a size of zero, and a node an operator finds
-    # and a checker reads as present is not a device that has gone away. If the
-    # hot-remove was refused, this stays drift, which is the honest report.
+    # Presence is the device's size and not the node's existence: `present()` is
+    # `disksize() > 0` by design (caa414d), and `zramctl --reset` leaves
+    # `/sys/block/zram0` behind with a size of zero. A device that has gone away
+    # is one whose size is zero, with conf and marker both removed.
     return (
         not conf_path().exists()
         and not marker_path().exists()

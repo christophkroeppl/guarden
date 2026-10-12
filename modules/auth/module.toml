@@ -3,9 +3,11 @@ requires = []
 
 [[services]]
 # The auth service is a service like any other: its own user, its own home,
-# its own quadlet unit directory, in a gated track because its credentials are
-# the ones worth gating. It is reachable through the edge by a `routes:` entry
-# in its own shipped manifest, so it declares no forwarded port of its own and
+# its own quadlet unit directory, in a gated track. The module declares no
+# credentials, and the gate blocks only on declared keys — whether the gated
+# track is still the right home is ticket 150's open item. It is reachable
+# through the edge by a `routes:` entry in its own shipped manifest, so it
+# declares no forwarded port of its own and
 # is not a control surface.
 service = "auth-production"
 

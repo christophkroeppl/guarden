@@ -10,10 +10,11 @@
 #
 # **`auth: true` is declared here on purpose.** A provider behind itself cannot
 # answer its own sign-in page, and the fix for that is not "remember not to
-# declare it": it is that the renderer refuses the rule on the provider's own
-# route whatever the manifest says. Shipping the declaration is what keeps that
-# rule honest — the one manifest in the tree that asks for the middleware and
-# must not get it.
+# declare it": `roots` withholds the middleware on the provider's own route
+# whatever the manifest says (roots.py:94-95) — the declaration stays true to
+# what the service is, and the route builder is where the rule lives. Shipping
+# the declaration is what keeps that rule honest — the one manifest in the tree
+# that asks for the middleware and must not get it.
 project: auth
 units: .guarden/quadlet/
 
