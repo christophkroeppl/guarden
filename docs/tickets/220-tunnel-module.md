@@ -28,6 +28,21 @@ with `UNCONFIGURED` rather than claiming a success it did not achieve; preview i
 published at a path built from the escaped ref; and the tendril service carries a
 `TUNNEL_CREDENTIAL` schema entry, `0600` and never rendered into a unit.
 
+**Measured 2026-10-12, on the credential item this ticket carries open.**
+The schema entry above declares nothing today, twice over: `service.yml` reads
+`schema: .env.schema`, which resolves under the service root and not
+`.guarden/`, so `secretschema.read` is handed a missing file and returns an
+empty schema (silently, by design); and the schema's own key and annotations
+at `.guarden/.env.schema:9–13` are plain lines, which `secretschema` skips —
+it reads comment lines only. The renderer strips the container's
+`Secret=TUNNEL_CREDENTIAL,type=file` as an owned key and re-emits it from the
+schema alone, so the rendered tendril unit requests no credential at all — and
+nothing in `tests/` asserts one. That is the state to build from: the path is
+`.guarden/.env.schema`, the annotations are comments, and the acceptance is an
+assertion on the rendered unit's `Secret=`. (`t220-tendril.sh` asserts the
+unit's image, `[Container]` and absent `ExecStart=` and nothing about the
+credential.) Ticket 267 carries the same measurements.
+
 **19 boxes are still unticked and each needs its own work.** An agent reported several done in
 prose and the boxes were not ticked, because the assertions do not exist. In particular
 **the structural SSH guarantee is TESTED**: `tests/t220-ssh-guard.sh` asserts that after
