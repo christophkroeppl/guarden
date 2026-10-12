@@ -23,20 +23,21 @@
 # `.gitignore` matches `.env.*`, which matches `.env.schema` at the root as
 # well, so "tracked" is a real assertion here and not a formality: without the
 # negation the schema would resolve perfectly and never reach a clone. The
-# harness puts a fake `git` first on PATH that exits 0 for everything, so the
-# real binary is named outright — the fake would make these pass whatever the
-# ignore rules say.
+# harness once put a fake `git` first on PATH that exited 0 for everything
+# (fixtures/bin, deleted with the fake tier — ticket 35, ADR-0014), so the real
+# binary is still named outright — a stand-in of that shape would make these
+# pass whatever the ignore rules say.
 
 . "$(dirname "$0")/lib.sh"
 
 # --- the schema is tracked ---------------------------------------------------
 
-# Not ignored, so it can be committed. The real git, not the fake on PATH.
+# Not ignored, so it can be committed. The real git, named outright.
 run /usr/bin/git check-ignore -q .env.schema
 assert_exit 1
 
 # And visible to git as a tracked file rather than suppressed, which is the
-# distinction a fake `git` returning 0 for everything would hide. `ls-files`
+# distinction a stand-in `git` returning 0 for everything would hide. `ls-files`
 # rather than `status`: a committed file is tracked and correctly absent from
 # status, so the status form asserted a pre-commit moment and then stopped
 # meaning anything the moment the schema landed.

@@ -75,7 +75,8 @@ CACHE_TOOL=${GUARDEN_LXC_CACHE_TOOL:-$REPO/tests/suitecache.py}
 # /media/data/projects/infra/.git/worktrees/service-based, which is a host path
 # that does not exist in a guest. The checkout is pushed without `.git`, so the
 # commands fail and the test reports git's exit 128 as a guarden defect. It is a
-# repository-hygiene test, not a guarden test; `just test` still runs it.
+# repository-hygiene test, not a guarden test; the VM runner skips it
+# (`HOST_ONLY`, below), and nothing else runs it today — see ticket 266.
 HOST_ONLY=${GUARDEN_LXC_HOST_ONLY:-t35-env-schema.sh}
 
 _is_host_only() {

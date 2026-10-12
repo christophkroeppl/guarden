@@ -107,3 +107,11 @@ Options, none chosen:
 Whatever is chosen, the claim to close this ticket is: **a change to the
 runner's machine-facing paths goes red somewhere in `tests/` when it is
 wrong**, the same standard the runner exists to hold the suites to.
+
+## One line for the ledger, from the sweep's third pass (2026-10-12)
+
+`tests/t35-env-schema.sh` is skipped by the VM runner (`HOST_ONLY`) because a
+guest has no `.git` to check the checkout against — and nothing else runs it:
+no recipe invokes it, and the justfile mentions it only in a comment. It is
+the one suite with no runner, host or guest. Whoever gives the host tier its
+own recipe (or runs the suite where its subject lives) closes this line.
