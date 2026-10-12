@@ -718,6 +718,25 @@ def _reload_system_manager() -> None:
 _INDEX_REFRESHED = False
 
 
+class IndexUnavailable(Exception):
+    """The packages phase's index refresh failed, classified for its catcher.
+
+    A dedicated type and not a bare `GuardenError`, because `soil`'s apply loop
+    must catch exactly this and nothing broader: the firewall phase's apply-time
+    verification raises a `GuardenError` from an item that is not correctable,
+    and that raise is the item's only channel to fail the run (t150's four
+    scenarios read its exit 1). A blanket `except GuardenError` around
+    `item.converge()` swallowed it into a green exit 0. Carries the same
+    message and code a `GuardenError` would, so the catcher's classification is
+    unchanged.
+    """
+
+    def __init__(self, message: str, code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
 def _ensure_index(row: dict | None) -> None:
     """Refresh the family's package index once per run, before the first install.
 
@@ -735,13 +754,18 @@ def _ensure_index(row: dict | None) -> None:
     because a run is a process and a process converges one family; `soil`'s
     apply loop catches both failures from the `converge` that triggered this
     with the same classification the step's old caller used.
+
+    One timing moved with it: an argv-less family is refused when an install
+    would run rather than at the phase's start, so a host with nothing to
+    install reports green and the list's gap surfaces on the first run that
+    needs to resolve a version against it — which is the run the gap is about.
     """
     global _INDEX_REFRESHED
     if _INDEX_REFRESHED:
         return
     argv = packagelist.update_argv(row)
     if not argv:
-        raise errors.GuardenError(
+        raise IndexUnavailable(
             f"the package list at {packagelist.list_path()} carries no update argv for this "
             f"family, and an install is resolved against the distribution's index: an install "
             f"against an index nothing refreshed is a converge that fails on a version the "
@@ -753,7 +777,7 @@ def _ensure_index(row: dict | None) -> None:
         _INDEX_REFRESHED = True
         return
     reason = result.err.strip().splitlines()
-    raise errors.GuardenError(
+    raise IndexUnavailable(
         f"the package index could not be refreshed: {argv[0]} {' '.join(argv[1:])}: "
         f"{reason[0] if reason else result.code}, so nothing is installed against it",
         errors.HOST_NOT_AS_ASSUMED,

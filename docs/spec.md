@@ -1192,13 +1192,17 @@ the only program with two modes and the only other one with a `--check`. It **mu
 create a service user, a service directory, or any identity belonging to a service. There is
 no `soil users` phase: the two program users are created by `install`.
 
-**One phase has one step that is not an item.** The `packages` phase runs the family's index
-refresh **once, before the first install**, and never per install, because one refresh serves
-every install in the run. It is a step rather than an item because the index is not a declared
-piece of state — no file of guarden's says how fresh it is — so there is nothing for `--check`
-to ask it and nothing for it to converge against. **`--check` does not refresh the index and
-does not report it as drift**, and `--apply` asks every item to make itself hold and runs the
-one step the phase has before it.
+**The index refresh is not an item, and it is not a step before the phase either.** The
+`packages` phase runs the family's index refresh **once per run, inside the first install that
+needs it** — immediately before that install resolves a version against the index — and never
+per install, because one refresh serves every install in the run. It is not an item because the
+index is not a declared piece of state — no file of guarden's says how fresh it is — so there is
+nothing for `--check` to ask it and nothing for it to converge against. **`--check` does not
+refresh the index and does not report it as drift**, and `--apply` refreshes it only when an
+item it is about to converge actually installs. (An earlier revision had it as a step that ran
+before the phase's items; that paid a refresh for applies that converged nothing about any
+package.) Its failures surface from the install that triggered the refresh, classified as the
+paragraph below says.
 
 The refresh **exits `1`** when it runs and fails, because a host that cannot reach its own
 mirror is the host and not the request (§1.2), and **`2`** when `packages.toml` carries no
@@ -1236,10 +1240,10 @@ still converge and the run still exits `1`.
   updates unattended and switching it off is an operator's decision, not this phase's; the
   timer this removes is what triggers it on a schedule. Anything that starts that service
   deliberately can still meet a `packages` run, and the run reports it rather than retrying.
-  The disable is this phase's **first item** and the refresh is its one step that runs before
-  the items, so the *first* `packages` run on a host whose timers are still armed can still meet
-  one during that refresh. Closing that would need the disable inside the step, and there is one
-  step per phase and it is the refresh.
+  The disable is this phase's **first item**, and the refresh runs inside the first install
+  that needs it — after the disable — so the *first* `packages` run on a host whose timers are
+  still armed meets them only in the window before its own first item: the disable is what
+  closes that window.
 - `storage` verifies btrfs with `@` and `@var` subvolumes, installs
   `/etc/apt/apt.conf.d/80guarden-snapper` with a `DPkg::Pre-Invoke` that snapshots `root`
   before every package transaction, converges the canonical value set into every snapper

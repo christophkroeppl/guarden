@@ -110,7 +110,9 @@ test.**
 The `libidn12` failure recorded above was not a bad package: `packages/packages.toml` declared an
 `update` argv per family and **no program read it**, so nothing ever refreshed the index and every
 install was resolved against whatever the mirror had last published. `soil packages` now runs the
-family's refresh once before its first install, as a **step** rather than an item, so `--check` has
-no drift to report about a thing no file of guarden's describes (spec §6.1). A refresh that fails
-is exit `1` — the host cannot reach its own mirror — and a family row with no `update` is exit
-`2`, because a list nobody filled in is input.
+family's refresh once per run, **inside the first install that needs it** (it began as a step
+before the phase's items and moved into the install on 2026-10-12, because the step paid a
+refresh for applies converging nothing about any package), so `--check` has no drift to report
+about a thing no file of guarden's describes (spec §6.1). A refresh that fails is exit `1` — the
+host cannot reach its own mirror — and a family row with no `update` is exit `2` from the install
+that would need it, because a list nobody filled in is input.

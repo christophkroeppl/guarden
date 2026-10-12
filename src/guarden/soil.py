@@ -13,12 +13,16 @@ make itself hold. Neither mode has its own idea of what converged means, which
 is the only way to keep `--check` from describing a state `--apply` does not
 produce.
 
-**`--apply` also runs the one step a phase may have before its items, and
-`--check` never does.** A step is not an item: it is not a fact about the host
-with a "does it already hold" question, so there is nothing for `--check` to ask
-it and asking anyway would be a check that changed something. The only step that
-exists is the package index, and the whole of the difference between the two
-modes is that one of them refreshes it.
+**The packages phase refreshes the family's package index inside the first
+install that needs it, and `--check` never refreshes it.** A refresh is not an
+item: it is not a fact about the host with a "does it already hold" question, so
+there is nothing for `--check` to ask of it and asking anyway would be a check
+that changed something. It is not a phase step before the items either — it
+runs from `hostprep._ensure_index`, once per run, only when an install is about
+to resolve against it, because a step before the items refreshed for applies
+that converged nothing about any package. Its two failures arrive from the
+`converge` that triggered it and are classified by `_apply` the way the old
+step's caller classified them.
 """
 
 from __future__ import annotations
@@ -219,11 +223,17 @@ def _collect(
 def _prepare(phase: str, family: str | None) -> tuple[bool, int | None]:
     """The phase's own step before any of its items, and what the run does about it.
 
-    `(True, None)` is the ordinary case: the step is absent or it ran.
+    `(True, None)` is the ordinary case, and it is the only case a phase
+    produces today: `prepare_for` returns None for every phase, and the packages
+    phase's index refresh runs inside the install that needs it
+    (`hostprep._ensure_index`), classified by `_apply`'s converge-catch. The two
+    failure shapes below are this function's contract for a future phase that
+    does populate a step; they are kept because `_apply`'s classification is
+    written against them.
 
     `(False, None)` is a step that ran and failed because **the host is not in the
-    state the request assumed** — the package index could not be refreshed, so the
-    host cannot reach its own mirror. Nothing is refused and the run does not
+    state the request assumed** — a host that cannot reach its own mirror cannot
+    converge the phase's items against it. Nothing is refused and the run does not
     stop: the phase's items are reported rather than converged, and the next phase
     still gets its turn, so one unreachable mirror does not stop a host
     converging everything else. The run ends in exit `1`, which is the code
@@ -317,15 +327,21 @@ def _apply(
                     return _reject(f"a pinned artefact is not installable: {exc}")
                 except packagelist.UnknownFamily as exc:
                     return _reject(str(exc))
-                except errors.GuardenError as exc:
-                    # The packages phase's index refresh now runs inside the
-                    # first install that needs it (`hostprep._ensure_index`), so
-                    # its two failures arrive here rather than from `_prepare`:
-                    # the same classification, one call site later. Rejected
-                    # input stops the run; a host that cannot reach its mirror
-                    # is reported the way `_prepare`'s `(False, None)` reported
-                    # it -- this phase's items are reported, not converged, the
+                except hostprep.IndexUnavailable as exc:
+                    # The packages phase's index refresh runs inside the first
+                    # install that needs it (`hostprep._ensure_index`), so its
+                    # two failures arrive here rather than from `_prepare`: the
+                    # same classification, one call site later. Rejected input
+                    # stops the run; a host that cannot reach its mirror is
+                    # reported the way `_prepare`'s `(False, None)` reported it
+                    # -- this phase's items are reported, not converged, the
                     # later phases still get their turn, and the run ends `1`.
+                    #
+                    # This catches the dedicated type and nothing broader: a
+                    # converge-time `GuardenError` from any other item stays
+                    # fatal, because for a non-correctable item -- the firewall
+                    # phase's apply-time verification -- raising is its only
+                    # channel to fail the run.
                     if exc.code == errors.REJECTED_INPUT:
                         return _reject(exc.message)
                     error(exc.message)

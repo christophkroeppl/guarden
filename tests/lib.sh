@@ -994,8 +994,15 @@ wait_settled() {
 # 100 with the lock's name -- and a cut machine can meet a boot-time
 # `unattended-upgrades` between the reach of a drift report and the call; one
 # did, in `t130-packages.sh`, on 2026-10-12. While another process holds the
-# lock this waits for it, the way the runner itself waits at boot; a failure
-# with the lock free is apt's own and stands unchanged.
+# frontend lock this waits for it -- the runner waits for the same lock at boot
+# with the same probe, though it reads two locks and does not trust fuser's exit
+# alone, which in-guest as root collapses to "free" -- and a failure with the
+# lock free is re-run once and its code returned: that is apt's own answer to
+# the command. The waiting is bounded -- six sleeps of two seconds and a final
+# attempt, a little past the runner's measured boot window -- and an upgrade run
+# still in flight past that fails the suite, which is the honest report.
+# `fuser` comes from `psmisc` via `ubuntu-standard`; without it the probe fails
+# open and the command simply runs.
 apt_waits() {
     local attempt
     for attempt in 1 2 3 4 5 6; do
