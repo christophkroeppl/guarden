@@ -669,6 +669,20 @@ _run_suite() {
     if [ "$rc" -eq 137 ]; then
         printf 'error: %s exceeded %ss and was killed; a suite that hangs reports nothing\n' \
             "$name" "$SUITE_TIMEOUT" >&2
+    elif [ "$rc" -gt 128 ] && [ "$rc" -lt 160 ]; then
+        # 128+n is the shell's shape for death by signal n. A suite that dies
+        # without a diagnostic leaves the runner exactly one fact — the code —
+        # and measured, a remote bash killed by SIGTERM makes `lxc exec` return
+        # 143 with empty stderr. Dropping the code dropped the only word there
+        # was: t180-firewall-rules.sh failed a full gate as a bare `FAIL`.
+        printf 'error: %s exited %s = 128+%s; a suite killed by a signal reports nothing\n' \
+            "$name" "$rc" "$((rc - 128))" >&2
+    elif [ "$rc" -ne 1 ]; then
+        # An assertion that stops a suite exits 1 (measured: `set -Eeuo pipefail`
+        # with the ERR trap and a failing command -> 1), so any other code is a
+        # different kind of death and the code is the whole of what is known.
+        printf 'error: %s exited %s; an assertion that stops a suite exits 1\n' \
+            "$name" "$rc" >&2
     fi
     return "$rc"
 }
