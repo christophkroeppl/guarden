@@ -104,7 +104,7 @@ assert_file_missing /var/lib/guarden/services/myapp-production/state
 # registry is what makes it readable by the programs that run as `guarden`.
 assert_mode /var/lib/guarden/render 0770
 assert_owner /var/lib/guarden/render guarden:guarden
-assert_mode /run/guarden/locks 0770
+assert_mode /run/guarden/locks 2770
 assert_owner /run/guarden/locks root:guarden
 
 # ADR-0005's two units, plus the instantiable per-blob unit the path triggers,

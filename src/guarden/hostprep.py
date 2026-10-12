@@ -54,12 +54,17 @@ from guarden.hosttool import Item, hostpath, lock
 # denies one.** Measured 2026-10-12 on the first converged golden: at 0750,
 # every service user was locked out of its own home and volumes (t110's
 # `touch` as the service user, EPERM); at 0751 it works and a listing is still
-# denied, which is the whole point of the mode.
+# denied, which is the whole point of the mode. The same grant is owed to
+# `shared/`: the dashboard is an ordinary service in neither group, it reads
+# `shared/dashboard` through a bind mount whose source resolves through every
+# ancestor, and at 0750 the 0755 on that directory was unreachable text -- a
+# homepage container that cannot start. `shared/<name>/` stays 0750, so
+# nothing below the pair is exposed.
 STORAGE_DIRECTORIES = (
     (("var", "lib", "guarden"), 0o751, "root", "guarden"),
     (("var", "lib", "guarden", "services"), 0o711, "root", "root"),
     (("var", "lib", "guarden", "registry"), 0o750, "root", "guarden"),
-    (("var", "lib", "guarden", "shared"), 0o750, "root", "guarden"),
+    (("var", "lib", "guarden", "shared"), 0o751, "root", "guarden"),
     (("var", "lib", "guarden", "stakes"), 0o770, "root", "guarden"),
     (("var", "lib", "guarden", "share"), 0o750, "root", "guarden"),
     (("var", "lib", "guarden", "queue"), 0o770, "root", "guarden"),
@@ -80,7 +85,23 @@ INSTALL_DIRECTORIES = (
     (paths.TEMPLATES.relative_to(h.hostpath()).parts, 0o755, "root", "root"),
     (("var", "lib", "guarden", "render"), 0o770, "guarden", "guarden"),
     (("run", "guarden"), 0o755, "root", "root"),
-    (("run", "guarden", "locks"), 0o770, "root", "guarden"),
+    # Setgid, because the lock files are created by whichever caller locks
+    # first and both callers must be able to open them: the group inheritance
+    # is half of that, and `conf.lock` states the mode for the other half.
+    (("run", "guarden", "locks"), 0o2770, "root", "guarden"),
+    # The /etc rows are stated here rather than left to the write protocol's
+    # `mkdir(parents=True)`, which is `0777 & ~umask`: under root's usual 022
+    # that silently produced 0755 where the table promises 0750, and under a
+    # 027 umask it would silently produce the 0750 that locks `hose` out --
+    # the same class of defect as `/var/lib/guarden`. `0751` on the parent is
+    # traverse for `hose` and the service users and a listing for neither;
+    # `projects.d` and `services` are `0755` because both are globbed or read
+    # by a user who is in neither group (`projects.py` skips nothing found by
+    # a glob that cannot even enter the directory), and `creds` stays `0700`.
+    (("etc", "guarden"), 0o751, "root", "guarden"),
+    (("etc", "guarden", "creds"), 0o700, "root", "root"),
+    (("etc", "guarden", "projects.d"), 0o755, "root", "root"),
+    (("etc", "guarden", "services"), 0o755, "root", "root"),
 )
 
 # The only two users and the only one group this host ever gets. There is no

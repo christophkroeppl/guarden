@@ -39,7 +39,7 @@ tidiness — the registry, every `overrides.toml` and all of `/etc/guarden` are 
 and the unprivileged programs read them through it. A module can be added months after soil has
 run, without re-running it. `weedr module add homepage` reads the registry, creates the
 services, grants what the module declares, installs the units, and creates
-`/var/lib/guarden/shared/dashboard/` `guarden:guarden 0750` — the one directory `twig` may
+`/var/lib/guarden/shared/dashboard/` `guarden:guarden 0755` — the one directory `twig` may
 write, which is the writer/reader split the edge's directory already draws and the reason a
 dashboard module did not need a third group. `weedr module remove <name>` is the inverse in a
 stated order (spec §6.2), and its step four is the one that matters: it calls

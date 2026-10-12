@@ -87,6 +87,14 @@ assert_owner /var/lib/guarden/shared/dashboard "guarden:guarden"
 run runuser -u guarden -- touch /var/lib/guarden/shared/dashboard/.written-by-twig
 assert_exit 0
 assert_file_exists /var/lib/guarden/shared/dashboard/.written-by-twig
+# **The dashboard's user must be able to REACH the directory, not merely be
+# denied a write in it.** The bind mount's source resolves through every
+# ancestor, and `shared/` at 0750 root:guarden denied the traverse to a user in
+# neither group -- the 0755 on the directory was unreachable text and a
+# homepage container could not start. The refusal below passes either way, so
+# the grant needs its own positive assertion, the shape t110's `touch` uses.
+run runuser -u homepage-production -- test -r /var/lib/guarden/shared/dashboard/.written-by-twig
+assert_exit 0
 run runuser -u homepage-production -- touch /var/lib/guarden/shared/dashboard/refused
 assert_exit 1
 assert_file_missing /var/lib/guarden/shared/dashboard/refused

@@ -78,6 +78,18 @@ def lock(*names: str) -> Iterator[None]:
     try:
         for name in names:
             handle = open(paths.lock_path(name), "a")  # noqa: SIM115 - closed below
+            # `open`'s mode argument is filtered by the caller's umask, so the
+            # creating caller under the usual 022 would leave `0644` and the
+            # other caller could not open it for append -- and the names both
+            # take, `deploy-<service>` above all, are taken by `weedr` (root)
+            # and `furrow` (guarden) in either order. The setgid on the
+            # directory supplies the group; this states the mode. Only the
+            # creator sets it: the other caller is not the file's owner, and
+            # a mode already stated must not be a failure.
+            try:
+                os.chmod(paths.lock_path(name), 0o664)
+            except OSError:
+                pass
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             handles.append(handle)
         yield

@@ -232,7 +232,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/var/lib/guarden/registry/<name>.toml` | `0640` | `root:guarden` | `weedr`, by the write protocol |
 | `/var/lib/guarden/render/` | `0770` | `guarden:guarden` | `soil install` |
 | `/var/lib/guarden/render/<service>[/<ref>]/` | `0700` | `guarden` | `loom` |
-| `/var/lib/guarden/shared/` | `0750` | `root:guarden` | `soil storage` |
+| `/var/lib/guarden/shared/` | `0751` | `root:guarden` | `soil storage`. The dashboard reads `shared/dashboard` through a bind mount whose source resolves through this directory, and its user is in neither group — the same traverse grant as the row above, for the same measured reason |
 | `/var/lib/guarden/shared/<name>/` | `0750` | `root:guarden` | the mutator, installing the render |
 | `/var/lib/guarden/shared/dashboard/` | `0755` | `guarden:guarden` | `weedr module add homepage`. **World-readable, and that is the point** — the dashboard is an ordinary service in neither group, and the design keeps two groups, so `2750 guarden:<reader-group>` is not available. The content is merged widget output: UI configuration, no secret, and it is the public face of the box anyway |
 | `/var/lib/guarden/edge/dynamic/` | `2750` | `guarden:edge` | `weedr module add gate-traefik` — **not** `roots`, which cannot set a group it is not in |
@@ -244,17 +244,23 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/var/lib/guarden/staging/<project>/` | `0755` | the `hose` user | `weedr project grant`, and `weedr project revoke` removes it. Pre-created because `hose` is unprivileged and cannot `mkdir` under a `0755 root:root` parent |
 | `/var/lib/guarden/staging/<project>/<sha>/` | `0755`, files `0644` | the `hose` user | `hose`, and **`hose` removes it** once the deploy returns |
 | `/run/guarden/` | `0755` | `root:root` | `soil install`, via `tmpfiles.d` — it is tmpfs and must be recreated every boot |
-| `/run/guarden/locks/` | `0770` | `root:guarden` | `soil install`, via `tmpfiles.d`, mode and owner from the row above |
-| `/etc/guarden/**` | `0640` | `root:guarden`, directories `0750` | |
+| `/run/guarden/locks/` | `2770` | `root:guarden` | `soil install`, via `tmpfiles.d`, mode and owner from the row above; setgid so a lock file created by either caller is group `guarden`, and `conf.lock` states `0664` on it |
+| `/etc/guarden/` | `0751` | `root:guarden` | `soil install`. **Stated in code, not inherited from the write protocol's `mkdir`** — that is `0777 & ~umask`, so an umask of `027` would silently produce the `0750` that locks `hose` and the service users out of the tree, the same defect `/var/lib/guarden` had |
+| `/etc/guarden/services/`, `/etc/guarden/projects.d/` | `0755` | `root:root` | `soil install`. A service user reads its own configuration through the first and `hose` globs the second, and both are in neither group; a listing here is names, not secrets |
+| `/etc/guarden/**` (files) | `0640` | `root:guarden` | the write protocol |
 | `/etc/guarden/projects.toml`, `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` | |
 | `/etc/guarden/creds/` | `0700` | `root` | |
 | `/etc/ssh/authorized_keys.d/hose` | `0644` | `root` | |
 
-`/run/guarden/locks/` is `0770 root:guarden` because `guarden` and root both take these locks
-and the `queue`, `registry`, `firewall`, `snapshots`, `projects`, `overrides`, `modules`,
-`preview-cap` and `deploy-*` names in §3.5 are all taken by unprivileged programs. It is not
+`/run/guarden/locks/` is `2770 root:guarden` because `guarden` and root both take these locks
+— `queue` and `deploy-*` are taken by `furrow` as the `guarden` user, and the remaining names
+(`registry`, `firewall`, `snapshots`, `projects`, `overrides`, `modules`, `preview-cap`) by
+root-only callers. The setgid bit makes a newly created lock file group `guarden` whatever the
+caller, and `conf.lock` states `0664` on creation because `open`'s mode is filtered by the
+caller's umask: without both, a root-created `deploy-<service>.lock` under the usual `022` is
+`0644 root:root` and the next `furrow deploy` of that service cannot open it for append. It is not
 `0777`: a world-writable lock directory is a way for any process on the box to hold the
-firewall render or a service's deploy open indefinitely, and `0777` buys nothing that `0770`
+firewall render or a service's deploy open indefinitely, and `0777` buys nothing that `2770`
 does not. The directory is tmpfs, so the row is incomplete without saying it is recreated at
 boot — `soil install` writes a `tmpfiles.d` entry and nothing depends on the directory surviving.
 
@@ -1665,7 +1671,7 @@ twig sync
 
 Merges every service's widget files, copied through from the shared directory **unparsed**,
 into `/var/lib/guarden/shared/dashboard/`, which `weedr module add homepage` creates
-`guarden:guarden 0750` and the dashboard service reads. `twig` runs as `guarden` and the
+`guarden:guarden 0755` and the dashboard service reads. `twig` runs as `guarden` and the
 shared directory is root-owned and read-only to it, so a *new* path was needed: there was
 previously no directory `twig` could write to at all, and `twig sync` — a verb the `homepage`
 module ships enabled by default — could not run. `twig` **must not** write outside that

@@ -63,6 +63,7 @@ assert_mode /var/lib/guarden 0751
 assert_owner /var/lib/guarden root:guarden
 assert_mode /var/lib/guarden/services 0711
 assert_owner /var/lib/guarden/services root:root
+assert_mode /var/lib/guarden/shared 0751
 assert_mode /var/lib/guarden/queue 0770
 assert_owner /var/lib/guarden/queue root:guarden
 assert_mode /var/lib/guarden/stakes 0770
