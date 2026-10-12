@@ -24,9 +24,11 @@
 #     table: "soil/ — the btrfs convert state and the reboot marker", 0750
 #     root:guarden), not a private /var/lib tree of its own.
 #
-# /home is NOT split off. hostprep.HOST_CONFIGURATIONS maps snapper config
-# `home` → "/home", and snapper snapshots a subvolume, so /home must be a btrfs
-# subvolume for `snapper -c home create-config -f btrfs -p /home` to work.
+# /home is NOT split off: it stays a directory inside `@`, and snapper
+# snapshots a subvolume, so a configuration for it could not be created on
+# that layout at all -- the host's configurations are `root` alone
+# (hostprep.HOST_CONFIGURATIONS), and `_btrfs_layout_holds()` is written to
+# accept exactly that layout.
 #
 # Usage: soil-storage-convert [--check|--apply] [--yes]
 set -euo pipefail

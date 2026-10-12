@@ -1204,9 +1204,9 @@ def storage_items() -> list[Item]:
             )
         )
 
-    # Every configuration soil can see: the host's own two, and whatever else
+    # Every configuration soil can see: the host's own, and whatever else
     # the directory carries. The existence item above has already created the
-    # first two by the time this converges them, because `--apply` walks the
+    # host's by the time this converges them, because `--apply` walks the
     # list in order and re-checks each item.
     for name in _visible_configurations():
         if name in HOST_CONFIGURATIONS:

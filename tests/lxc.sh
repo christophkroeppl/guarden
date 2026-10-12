@@ -660,7 +660,20 @@ cmd_provision() {
     if _has_snapshot "$GOLDEN"; then
         $LXC delete "$GOLDEN/$SNAPSHOT" >/dev/null 2>&1 || true
     fi
-    $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
+    # **A graceful stop, and the sync before it, because the snapshot is the
+    # artifact.** A forced stop kills the guest within seconds of the phase's
+    # last convergence, and btrfs commits roughly every 30s: the final
+    # transaction -- `state=done`, the marker cleared, the root and home snapper
+    # configurations -- was still in the page cache, and the snapshot carried
+    # the state before it (`migrated`, marker present, no configurations). The
+    # build's own `--check` had passed because it read the same page cache;
+    # only a rebooted cut could see the rollback, which is how `t130-packages`
+    # found it through the apt hook. The sync commits what the phase wrote;
+    # systemd's own shutdown then unmounts cleanly. Force is the fallback, not
+    # the first choice, and it exists for a guest that will not shut down.
+    vm_exec_t "$GOLDEN" "sync" >/dev/null 2>&1 || true
+    $LXC stop "$GOLDEN" --timeout 60 >/dev/null 2>&1 \
+        || $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
     $LXC snapshot "$GOLDEN" "$SNAPSHOT" >/dev/null \
         || die "cannot snapshot $GOLDEN"
 
