@@ -46,9 +46,9 @@ Observations that exist are manual and recorded, not asserted:
   regression would show the same; the round-3 review caught that the earlier
   record cited gate-v10, which ran none of this code.
 - **The rc=1 confirmed path, end to end.** A deliberately-failing probe suite
-  ran twice from `t-runfix` — once on `4bb91e7`, once on `09a2869` after the
-  round-3 fixes (removed after each; it is not in the tree). Both runs: the
-  guest wrote `<name> 1`, the read-back returned it, and the runner printed
+  ran twice from `t-runfix` — once on `4bb91e7`, once after the round-3
+  fixes (removed after each; it is not in the tree). Both runs: the guest
+  wrote `<name> 1`, the read-back returned it, and the runner printed
   `error: t999-probe-fail.sh exited 1; the suite stopped on an assertion, and
   its own line is above`, under the suite's own two lines. That is the only
   exercise of the branch on a real machine, and a run is not a test.
@@ -65,6 +65,13 @@ assertion into "did not confirm". That is mislabeling only: the verdict and
 the ledger use `rc` (`return "$rc"`), never the marker, so no spoof reaches a
 false pass. Accepted as mislabeling under adversarial input; a nonce the
 read-back checked would buy nothing the ledger does not already hold.
+
+The round-4 review walked the other direction: a timed-out suite's guest keeps
+running (the 124 line now says so), and its wrapper may write `<name> <rc>`
+after the runner has moved on — the next suite's wrapper deletes the file
+before it starts, and the marker feeds only the text, so a late word mislabels
+at worst and never reaches the return code, the ledger or the cache. Same
+acceptance, same reason.
 
 Options, none chosen:
 

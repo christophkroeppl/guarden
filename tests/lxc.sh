@@ -140,10 +140,12 @@ die() {
 # `$0` under a symlinked or PATH invocation points at the link, the `.` fails,
 # and with no `set -e` every failure line then degrades to a command-not-found
 # while the run looks normal: the silent diagnostic loss this file exists to
-# remove. Unreadable is a die, not a shrug.
-[ -r "$REPO/tests/failure_messages.sh" ] \
-    || die "$REPO/tests/failure_messages.sh is unreadable; the runner cannot name a failure without it"
-. "$REPO/tests/failure_messages.sh"
+# remove. The hard stop for a missing file lives in `cmd_run`, not at this
+# line: the cleanup verbs (`clean`, `destroy`, `shell`) must stay reachable in
+# the one situation where the diagnostic file is absent — a broken checkout
+# must not keep its 8 GiB machine because the thing that names failures is
+# missing.
+[ -r "$REPO/tests/failure_messages.sh" ] && . "$REPO/tests/failure_messages.sh"
 
 # `lxc list -c s` prints the whole table, not the state, so the comparison
 # against RUNNING never matched and every provision tried to start a machine
@@ -342,7 +344,7 @@ _wait_cloud_init() {
     # which of the files is absent; no word at all means the exec could not be
     # reached, and the loop below then measures it honestly instead.
     local lockword missing
-    lockword=$(timeout --foreground 20 $LXC exec -T "$instance" -- sh -c '
+    lockword=$(timeout --foreground --signal=KILL 20 $LXC exec -T "$instance" -- sh -c '
         for f in /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock; do
             [ -e "$f" ] || printf "missing:%s\n" "$f"
         done
@@ -352,7 +354,7 @@ _wait_cloud_init() {
         missing:*)
             missing=${lockword#missing:}
             missing=${missing%%$'\n'*}
-            printf 'error: %s is missing %s, so the lock wait has nothing to measure\n' \
+            printf 'error: %s is missing %s, so no check of the wait can come free\n' \
                 "$instance" "$missing" >&2
             return 1 ;;
     esac
@@ -376,7 +378,7 @@ _wait_cloud_init() {
         # session does not survive that: the client then waits on a session
         # nobody will close, so the bound would reintroduce the wedge it is
         # here to cap.
-        answer=$(timeout --foreground 20 $LXC exec -T "$instance" -- sh -c '
+        answer=$(timeout --foreground --signal=KILL 20 $LXC exec -T "$instance" -- sh -c '
             err=$(fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock 2>&1 >/dev/null)
             rc=$?
             case $rc in
@@ -736,7 +738,7 @@ bash tests/$name; rc=\$?; printf '%s %s' \"$name\" \"\$rc\" >/tmp/guarden-suite-
         # 124 through, so 124 alone is as ambiguous as 1 — and the guest's own
         # word is read back for both before the line is chosen; the choice
         # itself is `_failure_message`, where a suite can assert it.
-        marker=$(timeout --foreground 20 $LXC exec -T "$RUNNER" -- cat /tmp/guarden-suite-status 2>/dev/null) \
+        marker=$(timeout --foreground --signal=KILL 20 $LXC exec -T "$RUNNER" -- cat /tmp/guarden-suite-status 2>/dev/null) \
             || marker=''
         _failure_message "$name" "$rc" "$marker"
     else
@@ -748,6 +750,14 @@ bash tests/$name; rc=\$?; printf '%s %s' \"$name\" \"\$rc\" >/tmp/guarden-suite-
 cmd_run() {
     local pat=${1:-}
     [ "$#" -gt 0 ] && shift
+
+    # **The one hard stop for a missing failure_messages.sh, scoped to the verb
+    # that needs it.** The source line above is tolerant on purpose, so `clean`,
+    # `destroy` and `shell` still work in a checkout where the diagnostic file
+    # is gone; a run without it could not name a single failure, so this is
+    # where the die belongs.
+    command -v _failure_message >/dev/null 2>&1 \
+        || die "$REPO/tests/failure_messages.sh is unreadable; a run cannot name a failure without it"
 
     # Four flags and none of them about the suites: what a run shares is decided
     # by each suite, and the flags decide what happens to a suite that says

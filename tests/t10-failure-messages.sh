@@ -68,15 +68,22 @@ line=$(_line 124)
 echo "$line" | grep -qF 'exceeded 456s' || _fail "a configured wall clock does not reach the line: $line"
 unset SUITE_TIMEOUT
 
-# **The runner calls this function and has no inline failure line left.**
-# `_push` delivers tests/lxc.sh into the machine, so the one drift the
-# extraction could grow — a second print site the suite never sees — is
-# greppable from here. The pattern is a drift net, not a proof: it catches a
-# reworded inline failure line by the words such a line uses, and a print
-# that avoids every one of them would still slip it.
+# **The runner calls this function, its error prints are a closed set, and the
+# wall clock it passes in is the configured one.** `_push` delivers
+# tests/lxc.sh into the machine, so the drift the extraction could grow is
+# greppable from here — by enumeration rather than by guessing at spellings:
+# every `printf 'error:` site in the runner is one of five that name a guard
+# or the cut, so a sixth appearing at all fails this block and must be a
+# deliberate edit here. The word net below is a second, coarser catch for a
+# file whose site count is legal while a line was reworded into failure
+# language.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
 grep -q '_failure_message "' "$runner" || _fail "the runner has no _failure_message call site"
-if grep -qE "printf 'error: %s[^']*(exited|exceeded|died|killed|signal|128\+|wall clock)" "$runner"; then
-    _fail "the runner still prints a failure line inline; the extraction has drifted"
+sites=$(grep -cE "printf ['\"]error:" "$runner" || true)
+[ "$sites" = 5 ] || _fail "the runner prints error lines at $sites sites; a fixed set of five guards is the enumeration"
+grep -q 'GUARDEN_LXC_SUITE_TIMEOUT' "$runner" || _fail "the runner no longer reads GUARDEN_LXC_SUITE_TIMEOUT"
+grep -qF -- '--signal=KILL "$SUITE_TIMEOUT"' "$runner" || _fail "the runner no longer feeds SUITE_TIMEOUT into its kill"
+if grep -qE "printf ['\"]error: %s[^'\"]*(exited|exceeded|died|killed|signal|128\+|wall clock)" "$runner"; then
+    _fail "a runner error line reads as a suite failure; the extraction has drifted"
 fi
