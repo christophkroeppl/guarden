@@ -23,8 +23,12 @@
 #     whole disk and a restore measured 101 s, which is ~44 minutes for one
 #     restore per test file. On btrfs a snapshot is a subvolume and the same
 #     restore is seconds.
-#   * The golden is **converted to btrfs before it is snapshotted**, because
-#     `soil storage` verifies the layout rather than creating it.
+#   * The golden is **converted to btrfs before it is snapshotted**, because the
+#     conversion is an offline, reboot-crossing operation and the harness drives
+#     it the way an operator does — `soil storage` asks for each reboot. A cut
+#     therefore arrives with the storage phase already converged, which is why a
+#     suite whose subject is storage must stage its own unconverged state rather
+#     than assert the golden's build history.
 #
 # Usage:
 #   tests/lxc.sh provision   build the golden, convert it to btrfs, snapshot it

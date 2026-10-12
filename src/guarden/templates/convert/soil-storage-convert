@@ -351,7 +351,15 @@ fi
 
 case "$state" in
 done)
-  verify_layout && exit 0
+  if verify_layout; then
+    # A crash in the window between `state_set done` and `reboot_marker_clear`
+    # in stage 3 leaves state=done with the marker still present — a state
+    # nothing before this cleared: every later `--apply` said done, the marker
+    # stayed, and the phase reported a reboot nobody needed. Clearing it here
+    # makes that window self-healing.
+    reboot_marker_clear
+    exit 0
+  fi
   err "state=done but the layout does not verify; manual inspection needed"
   exit 1
   ;;

@@ -55,16 +55,16 @@ hand — with `install` first, because it is what seeds the file `packages` reso
 against and puts the programs on `PATH`:
 
 ```sh
-# 1. Install. `storage` reboots once or twice to convert the root filesystem to btrfs.
+# 1. Install. `storage` reboots the machine twice to convert the root filesystem to btrfs.
 soil install  --apply   # the programs, the groups, the files every phase reads
 soil packages --apply   # the distribution packages and the pinned podlet release
-soil storage  --apply   # schedules the btrfs conversion; run it again after the reboot
+soil storage  --apply   # schedules the btrfs conversion; run it again after each reboot
 soil sysctl   --apply
 soil firewall --apply
 soil units    --apply
 # ... reboot when `storage` says to — it names the marker it wrote, under
-# /var/lib/guarden/soil/ — then run `soil storage --apply` again; twice, if the
-# second boot asks again (the conversion and the @/@var migration are two reboots) ...
+# /var/lib/guarden/soil/ — then run `soil storage --apply` again: the offline
+# conversion takes one reboot and the @/@var migration takes the second ...
 
 # 2. Check nothing drifted.
 soil --check
@@ -75,9 +75,10 @@ weedr project add myapp --repository git@github.com:you/myapp.git
 
 `soil install` reports one item it cannot converge until the host can measure it: `ingress.alias`
 is recorded by running a `localhost/guarden-probe` container image, and this repository neither
-builds nor ships that image. Until it exists, `soil install` and `soil --check` report that one
-drift — and the edge will not start, which is by design: guarden records no address it did not
-measure. Everything else converges on the first run.
+builds nor ships that image. On a run before `packages` the probe's line names the missing
+`podman` instead; once the packages are in, the image is what remains. Either way the drift is
+that one item — and the edge will not start, which is by design: guarden records no address it
+did not measure. Everything else converges on the first run.
 
 `soil --check` is safe to run over ssh at any time: it reports and changes nothing.
 

@@ -35,12 +35,22 @@ run soil packages --apply
 assert_not_rejected
 run soil install --apply
 assert_not_rejected
+
+# **The machine's unconverged state is staged here, not inherited.** The golden
+# is built by converging `soil storage` — the conversion is what makes its root
+# btrfs — so a cut from it arrives with every storage item already holding, and
+# an assertion that "a fresh machine has storage drift" would be asserting the
+# golden's build history rather than anything this file does. Removing one
+# storage-owned file makes the drift this run's own, exactly the way
+# `t20-packages.sh` removes the packages its apply puts back.
+rm -f /etc/apt/apt.conf.d/80guarden-snapper
 run soil storage --check
 assert_exit 1
-assert_stderr_has "drift:"
+assert_stderr_has "drift: the package hook snapshots root before every transaction"
 
 run soil storage --apply
 assert_exit 0
+assert_file_exists /etc/apt/apt.conf.d/80guarden-snapper
 
 # Every mode is one spec 2.1 gives, and the two that were wrong there are the
 # ones a converge has to get right: `queue/` and `stakes/` are 0770 because
