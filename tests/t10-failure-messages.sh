@@ -72,21 +72,27 @@ line=$(_line 124)
 echo "$line" | grep -qF 'exceeded 456s' || _fail "a configured wall clock does not reach the line: $line"
 unset SUITE_TIMEOUT
 
-# **The runner calls this function, its error lines are a closed set, and every
-# bound it runs is the measured shape.** `_push` delivers tests/lxc.sh into the
-# machine, so the drift the extraction could grow is greppable from here.
-# Three pins, each spanning spellings rather than one of them: the count of
-# non-comment lines naming `error:` (five — four guards and the cut message,
-# so an `echo`, a format variable or a reworded line all move it), the count of
-# `--foreground --signal=KILL` uses (four — the three bounds and the suite
-# exec; round 3 rejected exactly the absence of this on two of them), and the
-# configured wall clock reaching the runner through its own assignment.
+# **The runner calls this function, every `error:` line in it is one of five
+# known, and every bound it runs is the measured shape.** `_push` delivers
+# tests/lxc.sh into the machine, so the drift the extraction could grow is
+# greppable from here, and each pin spans spellings rather than one of them:
+# the count moves on any sixth line naming `error:` in any form (an `echo`, a
+# format variable, a continuation line), the five signatures fail individually
+# on any reword of the five that exist (two coordinated edits are needed to
+# get from here to a reworded site), and the word net is a third, coarser
+# catch for a file whose count is legal while a line was reworded into
+# suite-failure language. The net is a net, not a proof: a line avoiding every
+# word in it while keeping the count intact would still slip. Both counts
+# ignore comment lines, so prose quoting a pin cannot break the pin.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
 grep -q '_failure_message "' "$runner" || _fail "the runner has no _failure_message call site"
 sites=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'error:' || true)
 [ "$sites" = 5 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of five is the enumeration"
-kills=$(grep -c -- '--foreground --signal=KILL' "$runner" || true)
+for sig in "printf 'error: %s\\n'" "error: fuser is not on" "error: %s is missing" "error: %s still holds the apt lock" "error: cannot cut a clean"; do
+    grep -qF -- "$sig" "$runner" || _fail "the runner lost one of its five known error lines: $sig"
+done
+kills=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c -- '--foreground --signal=KILL' || true)
 [ "$kills" = 4 ] || _fail "the runner carries $kills '--foreground --signal=KILL' uses; four is the measured set"
 grep -qE '^SUITE_TIMEOUT=\$\{GUARDEN_LXC_SUITE_TIMEOUT:-' "$runner" \
     || _fail "the runner no longer takes its wall clock from GUARDEN_LXC_SUITE_TIMEOUT"
