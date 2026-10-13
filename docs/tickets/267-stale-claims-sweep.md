@@ -196,3 +196,24 @@ for it, as the same policy requires:
   `SECURITY.md:318`, `:329`; it is ADR-0016's subject (0015 is the
   second-terminator/pinned-artefact ADR). `SECURITY.md:230`'s tunnel
   citation is correct and shows the distinction the others lost.
+
+## The notes-audit round's ledger (2026-10-13)
+
+From the four-auditor sweep of `docs/notes/` (twelve deletions in `dd065d1`)
+and the parent's re-verification of its claims:
+
+- **A dropped fix.** The `rm -f` precondition fix for `t130-packages.sh` was
+  added in `2416950` and, per the audit's forensics, silently dropped by
+  `merge(200)` at `1fc851e`; the suite now relies on the fresh-machine
+  default. The parent could not re-derive the drop with `-S` and records the
+  finding as the audit reported it: verify before acting on it.
+- **The substrate's pasta.** The audit disagreed with itself on whether a
+  real host gets `passt`: it is declared in `packages.toml`'s `[harness.*]`
+  rows (206/228/246), and the substrate's own source was not settled
+  read-only. If the substrate's apt runs with recommends off, a host can
+  reach ADR-0018's hop with no pasta at all — the one address the whole
+  connectivity story dials.
+- **spec 6.3 and :1254 still describe superseded behaviour** (`.volume`
+  units; `cloudflared` as a pinned artefact), and ticket 150's citation of
+  `quadlet-volume-key-is-not-a-spelling-fix` is a stale pointer written
+  before its fix landed.
