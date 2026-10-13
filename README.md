@@ -74,7 +74,7 @@ weedr project add myapp --repository git@github.com:you/myapp.git
 ```
 
 `soil install` derives `ingress.alias` from the pinned `[network] pasta_options` — there is no
-probe, no container image to fetch and nothing the host has to measure (ADR-0018) — so the first
+probe, no container image to fetch and nothing the host has to measure — so the first
 run converges fully. The edge still refuses to start while `ingress.alias` is empty, which after
 a successful install it is not.
 
@@ -625,7 +625,7 @@ is not true.
 |---|---|
 | [`CONTEXT.md`](CONTEXT.md) | The vocabulary. Read it before changing anything. |
 | [`docs/spec.md`](docs/spec.md) | The contract: verbs, exit codes, file formats, algorithms. |
-| [`docs/adr/`](docs/adr/) | The decisions that are hard to reverse. |
+| [`docs/spec.md`](docs/spec.md) | The contract — decisions that are hard to reverse. |
 | [`docs/PRD.md`](docs/PRD.md) | Why it is shaped this way: the four constraints that removed the obvious options. |
 | [`docs/sysadmin.md`](docs/sysadmin.md) | The 3am commands. |
 | [`AGENTS.md`](AGENTS.md) | How to work on the code. |

@@ -8,28 +8,25 @@ so a ticket that contradicts the spec is wrong until a decision says otherwise.
 
 ## Layout
 
-**This repository is documents only today. No program below exists yet.** `docs/` is the
-contract and everything else is written to it; the work list is `docs/tickets/`, and ticket 10
+The programs are Python modules under `src/guarden/`; there is no per-program directory. `docs/`
+is the contract and everything else is written to it; the work list is `docs/tickets/`, and ticket 10
 creates the first directory.
 
 ```
-soil/     the host converger (--check / --apply)          not yet written
-weedr/    the only privileged mutator                      not yet written
-loom/     the renderer: manifest + registry -> units       not yet written
-roots/    the edge's route configuration                   not yet written
-twig/     the dashboard's configuration                    not yet written
-furrow/   the build queue and the deploy order             not yet written
-hose/     the optional gitops receiver                     not yet written
-stakes/   the pin registry, unprivileged; the reconciler that marks snapshots is `weedr pin sync`
-tools/    golden-vm, the throwaway-machine harness
-modules/  shipped module definitions: gate-traefik, homepage, auth-authelia, cloudflared
-tests/    the one test seam                               created by ticket 10
-fixtures/ guarden*.toml inputs and project manifests. `fixtures/bin/` and
-           `fixtures/lib/` were deleted with the fakes (ticket 35, ADR-0014) and
-           stay deleted: a stand-in for a system tool is not added without being
-           asked for by name
-docs/     spec, ADRs, PRD, runbook, tickets, notes
-justfile  the task runner: `just test`, `just lint`, `just check`, `just golden-vm`
+src/guarden/  the eight programs: soil, weedr, loom, roots, twig, furrow, hose, stakes
+              (pyproject.toml maps each to a console script `guarden.<name>:main`)
+tools/        golden-vm, the throwaway-machine harness, check-deps, pre-commit, cloud-init/
+modules/      shipped module definitions: gate-traefik, homepage, auth-authelia, cloudflared
+packages/     packages.toml — the distribution packages per family
+tests/        the one test seam: lxc.sh (the VM runner), lib.sh (helpers), suitecache.py
+fixtures/     guarden*.toml inputs and project manifests. `fixtures/bin/` and
+              `fixtures/lib/` were deleted with the fakes (ticket 35) and
+              stay deleted: a stand-in for a system tool is not added without being
+              asked for by name
+              docs/         spec, ADRs, PRD, sysadmin, tickets, notes
+justfile      the task runner: `just test`, `just lint`, `just check`, `just golden-vm`
+pyproject.toml  build config, console script entry points, ruff config
+.env.schema   the tracked half of the varlock contract
 ```
 
 There is no `Makefile`. Tasks run through `justfile`, and `just` with no argument lists the
@@ -40,11 +37,11 @@ Project repositories carry `compose.yaml` at the root or quadlet units in `.guar
 `.guarden/.env.schema`.
 
 Parts talk over files and paths. There is no internal HTTP API and no socket between them
-(ADR-0012).
+.
 
 ## Binding decisions
 
-`docs/adr/0001`–`0018` are binding. `docs/spec.md` is the contract, and where the code and the
+The decisions are binding. `docs/spec.md` is the contract, and where the code and the
 spec disagree the code is wrong. Do not re-litigate them in a change; if one is wrong, write
 a new ADR that supersedes it. The short version:
 
@@ -89,7 +86,7 @@ a new ADR that supersedes it. The short version:
   `--group-add <gid>` reaches a host group that sits below the window — the number to name does not
   exist. The edge reads `/var/lib/guarden/edge/dynamic/`, which is `guarden:edge 2750` and stays
   that way, so **the edge's own unit carries `GroupAdd=keep-groups` and it is the only unit that
-  does** (ADR-0017). The blanket form stays refused: a service holding `[groups] add` grants would
+  does**. The blanket form stays refused: a service holding `[groups] add` grants would
   carry every one of them into its container, and a second service that needs to read a directory
   it does not own needs its own decision rather than this one.
 - **The loopback is closed to service uids by default, and the publications are the only way in.**
@@ -98,7 +95,11 @@ a new ADR that supersedes it. The short version:
   container reaches any host loopback port, `sshd` on 22 included. The deny does not touch
   outbound traffic, and pasta's DNS forward is explicitly excluded from the loopback mapping, so
   the old justification — that a blanket drop "would break name resolution and package updates" —
-  was false and is gone. There is no `[loopback] allow` table: a table whose whole content is a
+  was false and is gone. **One accept sits above the deny for the host's stub resolver**:
+  `127.0.0.53:53` on both udp and tcp, owner-matched to service uids, rendered from guarden's own
+  knowledge of the host and from no configuration — without it `podman pull` as a service user
+  cannot resolve the registry and no first deploy of a new workload can complete. There is no
+  `[loopback] allow` table: a table whose whole content is a
   destination is a second way to grant one beside the publication set. What this does *not* stop
   is a service *binding* a port of its own choosing, and what it no longer forbids is an admin
   granting a rule that matches `-o lo` (ADR-0013, spec §7.7) — a granted rule renders above the
@@ -141,17 +142,14 @@ a new ADR that supersedes it. The short version:
   chain, and `INPUT`'s first rule after conntrack and lo is `jump guarden-ssh;`. `soil firewall
   --apply` refuses (exit 1) unless all of these hold. Every service's rules come from the same
   ferm render, whether a module installed it, a poke deployed it or an operator typed the command.
-- **A forwarded port is a `PREROUTING` DNAT and nothing else. There is no masquerade.** An
-  earlier revision of these documents required a `nat POSTROUTING` masquerade per forwarded port
-  and claimed that without it the forwarding set "delivers exactly nothing while everything on the
-  box looks healthy". That was false and the requirement is gone. After the DNAT the destination is
-  a local address, so the packet goes to `INPUT` and never reaches `POSTROUTING`; on the reply
-  conntrack unwinds the translation and rewrites the source to the public address the client
-  dialled. A rule `-o <if> -d 127.0.0.1 --dport <pub> -j MASQUERADE` matches no packet in either
-  direction. The only requirement is `route_localnet` on the ingress interface. The golden-VM
-  criterion "a forwarded port answers from off the box" is still right, for a different reason: a
-  request the box makes to itself never traverses `PREROUTING`, so only a second machine can tell
-  a working forward from none.
+- **A forwarded port is a `PREROUTING` DNAT and nothing else. There is no masquerade.** After
+  the DNAT the destination is a local address, so the packet goes to `INPUT` and never reaches
+  `POSTROUTING`; on the reply conntrack unwinds the translation and rewrites the source to the
+  public address the client dialled. A rule `-o <if> -d 127.0.0.1 --dport <pub> -j MASQUERADE`
+  matches no packet in either direction. The only requirement is `route_localnet` on the ingress
+  interface. The golden-VM criterion "a forwarded port answers from off the box" is right because
+  a request the box makes to itself never traverses `PREROUTING`, so only a second machine can
+  tell a working forward from none.
 - Persistent data is declared in one of two lists: `state`, which is snapshotted, and `bulk`,
   which never is. A bulk volume **is** a btrfs subvolume with no snapper configuration, is never
   a fork or rollback source, is never cloned from a live volume, and is **an empty subvolume**
@@ -184,7 +182,7 @@ a new ADR that supersedes it. The short version:
   `AddHost=<provider>:<ingress.alias>` into every unit of the consumer, and a route target is
   `<name>:<publication>`. The names are service names, with no suffix and no alias. The alias is
   a normative key in the `[ingress]` table of `guarden.toml`: empty until `soil install` derives
-  it from the pinned `-g` in `[network] pasta_options` (ADR-0018), and the edge does not start
+  it from the pinned `-g` in `[network] pasta_options`, and the edge does not start
   without it. There is therefore no `hosts` lock, because nothing writes a name map.
 - **The alias is the container's default gateway, and every host-side rule matches `127.0.0.1`
   instead.** Pasta maps the gateway onto the host's loopback in userspace — "on the host such
@@ -192,7 +190,7 @@ a new ADR that supersedes it. The short version:
   packet path, so a rule matching the alias matches nothing. The alias appears in `AddHost=` and
   nowhere else. It is **pinned, not derived**: the `[network] pasta_options` set fixes the
   container's gateway at `10.0.2.2` and `soil install` derives `ingress.alias` from it
-  (ADR-0018), so it cannot drift and no check reports one; `soil sysctl --check` instead warns
+  so it cannot drift and no check reports one; `soil sysctl --check` instead warns
   when the host's own routes overlap the reserved `10.0.2.0/24`. The set is what the renderer
   writes as `Network=pasta:`, its shape is validated — a set missing `--map-gw`, `--ipv4-only`,
   `-a`, `-n` or `-g` is refused — and an option that removes the host mapping is refused, because
@@ -216,11 +214,11 @@ a new ADR that supersedes it. The short version:
   container stops, and so does the build. **A blocked gate is a state, not a failure**: the
   deploy exits `0`, the service is installed and waiting, `[gate] reason` in the registry says
   why, and `weedr service start` re-checks and starts once the operator has planted the
-  credentials. Do not disable the unit instead — see the runbook.
+  credentials. Do not disable the unit instead — see docs/sysadmin.md.
 - Every mutation that renders a shared file holds one lock across render, diff and install, or
   a stale render can install last and drop what the previous mutation granted. `guarden.toml` has
   three writers, not one — `weedr module add` appends to `[modules] enabled`, and `soil install`
-  writes the derived `ingress.alias` (from the pinned `-g`, ADR-0018) and seeds
+  writes the derived `ingress.alias` (from the pinned `-g`) and seeds
   `[modules] enabled` from cloud-init — and two of them share a key, so every one takes the
   `modules` lock, goes through the write protocol, and re-reads the file under the lock
   rather than trusting what it saw before it. Queue state is durable under `/var/lib/guarden/queue`;
@@ -298,7 +296,7 @@ a new ADR that supersedes it. The short version:
   carry only an `After=guarden-order.target` drop-in and the real edges live in a root-owned
   `<name>.target` per service, with `loom` emitting the edges and the mutator installing them.
   The edges are `Wants=`, not `Requires=`: a down provider must not stop its consumers (spec
-  §6.10, ADR-0011).
+  §6.10).
 - Modules are configuration, not plugins. They never write each other's files. `weedr module add
   gate` creates the `edge` group and adds the edge's user to it; `soil install` creates the
   `guarden` group and no other, and never an `edge`. The `guarden` group is load-bearing rather
@@ -341,7 +339,7 @@ address**, not `127.0.0.1`, because `PREROUTING` DNAT rewrites the destination o
 
 **One harness, and it is a real machine: `just test` cuts a throwaway LXD VM from a golden
 snapshot and runs every suite in it with the real tools.** There is no fast tier, no fake, and no
-call log (ADR-0014). `tests/lxc.sh run <pattern>` is the same thing for one file, and that is how
+call log. `just test-one <pattern>` is the same thing for one file, and that is how
 you run the suite while you work on it.
 
 **Each suite says in its own file whether it needs a machine of its own** — one line,
@@ -396,7 +394,8 @@ Rules that hold for every test:
   deleted by hand.
 - **Never add a fixture, and never add a stand-in for a system tool, unless a ticket or the
   operator asks for that specific file by name.** `fixtures/` holds `guarden*.toml`
-  configuration inputs and `fixtures/projects/*` manifests, and that is the whole of it.
+  configuration inputs, `fixtures/projects/*` manifests, and `fixtures/refused/`
+  refusal-test inputs, and that is the whole of it.
   `fixtures/bin/` and `fixtures/lib/` were deleted deliberately and stay deleted. A stand-in for
   `podman`, for `snapper`, for `btrfs`, for a converter, for a payload — one per system binary is
   madness, and it is the shape this repository has already paid for twice. If a test seems to
@@ -431,7 +430,8 @@ Rules that hold for every test:
   time, no wheels
   checked in. A fetch from outside a distribution repository is deliberate and rare: each is a
   **pinned artefact** whose version and two SHA256s are recorded in this repository and verified
-  on install — `podlet`, and (ADR-0015) the tunnel's `cloudflared`. No vendor repository, ever:
+  on install. Today the only pinned artefact is `podlet`; the tunnel's `cloudflared` is a
+  container image, not a second pinned binary. No vendor repository, ever:
   a repository's contents move under the pin. This keeps the host installable on a distro we have
   not tried yet.
 - `jinja2` renders units. YAML is parsed with `pyyaml` using `safe_load` only, because a
@@ -442,7 +442,7 @@ Rules that hold for every test:
   input.** podlet owns the fields guarden has no opinion about; `loom` overwrites or removes every
   field it does — the refusal list, the whole `PublishPort` set, `Network=pasta:`, `AddHost=`, the
   credential requests, the `.volume` units, the start-order edges. Running a converter is not
-  trusting its output. It runs unprivileged, which is what satisfies ADR-0012: that rule is about
+  trusting its output. It runs unprivileged, which is what satisfies the rule that
   who runs the converter, not about whether the renderer writes it itself.
 - **The programs are Python console scripts, with no shell entry point.** Each is
   `soil = "guarden.soil:main"` and so on, so `just lint` runs `ruff` and not `shellcheck` —

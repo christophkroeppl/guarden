@@ -5,7 +5,7 @@ protection stops. A security document that only lists strengths is worse than no
 an operator will design around the wrong layer.
 
 Everything here is verifiable from the design in [`docs/spec.md`](docs/spec.md) and the
-decisions in [`docs/adr/`](docs/adr/). Where this file and those disagree, those are right.
+decisions in `docs/spec.md`. Where this file and the spec disagree, the spec is right.
 
 ---
 

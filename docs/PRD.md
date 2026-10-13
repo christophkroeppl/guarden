@@ -3,7 +3,7 @@
 Status: draft, 2026-09-29. Product name **guarden**. Branch: `develop`.
 
 Companions: [`CONTEXT.md`](../CONTEXT.md) is the vocabulary and the source of truth for
-names. [`docs/spec.md`](./spec.md) is the contract. [`docs/adr/`](./adr/) holds the decisions
+names. [`docs/spec.md`](./spec.md) is the contract and holds the decisions
 that were hard to reverse.
 
 This document is why. Where it disagrees with the spec, the spec is what gets built.

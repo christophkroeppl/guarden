@@ -262,11 +262,7 @@ SYSCTL_FILE = ("etc", "sysctl.d", "90-guarden.conf")
 SYSTEMD_DIR = ("etc", "systemd", "system")
 # **The tmpfiles entry has to live where tmpfiles reads.** `systemd-tmpfiles`
 # reads `/etc/tmpfiles.d`, `/run/tmpfiles.d` and `/usr/lib/tmpfiles.d` and never
-# `/etc/systemd/system`; the entry sat in the unit directory until 2026-10-12,
-# so "/run/guarden is recreated at every boot" was false -- measured on a cut,
-# `/run/guarden` absent after boot and the first lock leaving the directory
-# `2770 root:root`, which no `guarden`-user program can enter. Everything else
-# in SYSTEMD_DIR is a unit and is read there.
+# `/etc/systemd/system`. The entry must be in one of the three directories it scans.
 TMPFILES_DIR = ("etc", "tmpfiles.d")
 APT_DIR = ("etc", "apt", "apt.conf.d")
 FIREWALL_DIR = ("etc", "guarden", "firewall")
@@ -1412,10 +1408,10 @@ def _select_variant(family: str | None = None) -> None:
 
     Necessary but NOT sufficient, which is the whole of this note's finding: ferm
     2.7 does not use the alternatives system. `find_tool` in the ferm binary
-    matches `^(.*tables)(.*)$` and prefers `$1-legacy$2` across `/usr/sbin`,
-    `/sbin` and `$PATH`, so the list states the variant ferm WRITES rather than
-    the one an operator is used to. `_rendered_rules_readable` is what proves the
-    two agree.
+       matches `^(.*tables)(.*)$` and prefers `$1-legacy$2` across `/usr/sbin`,
+       `/sbin` and `$PATH`, so the list states the variant ferm WRITES rather than
+       the one an operator is used to. `_rendered_rules_readable` is what proves the
+       two agree.
     """
     argv = packagelist.variant_argv("set", family)
     if not argv:
@@ -1728,6 +1724,11 @@ def _framework(interface: str) -> str:
             "# seed-once, its accept is the first rule of its own chain, and",
             "# `soil firewall --apply` refuses to load a ruleset in which that is not",
             "# true. There is no lockout failsafe and no timer; this is the guarantee.",
+            "#",
+            "# The edge is a control surface on loopback, restricted in OUTPUT to",
+            "# host.admin_user and never forwarded. Its publications are accepted in",
+            "# 50-services.conf (mutator-owned). No 443 accept here: PREROUTING DNAT",
+            "# rewrites the destination port to the publication before INPUT.",
             "",
             "table filter",
             f"chain {FRAMEWORK_CHAIN} {{",
@@ -1738,8 +1739,6 @@ def _framework(interface: str) -> str:
             "    mod conntrack ctstate (ESTABLISHED RELATED) jump ACCEPT;",
             "    if lo jump ACCEPT;",
             f"    jump {SSH_CHAIN};",
-            "    proto tcp dport 443 jump ACCEPT;",
-            "    proto udp dport 443 jump ACCEPT;",
             f"    jump {FRAMEWORK_CHAIN};",
             "    jump DROP;",
             "}",
