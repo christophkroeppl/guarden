@@ -327,19 +327,24 @@ admin_user = ""                  # empty: the invoking user at install time; the
 
 [ingress]
 alias = ""                  # the address a rootless container can reach the host on. Empty until
-                             # ticket 15 measures it; `soil install` writes the measured value here
-                             # from the probe it runs, and refuses to start the edge without it. Per
-                             # §7.1 this is the gateway address pasta maps, and it is a NAME the
-                             # consumer resolves -- never a firewall destination
+                             # `soil install` derives it from the pinned `-g` in `[network]
+                             # pasta_options` and writes it here (ADR-0018), and the edge does not
+                             # start without it. Per §7.1 this is the gateway address pasta maps,
+                             # and it is a NAME the consumer resolves -- never a firewall
+                             # destination
 publication_range = [20000, 32767]   # loopback ports guarden may allocate
 forwarded = [ "80/tcp", "443/tcp", "443/udp" ]   # what soil forwards to the edge
 
 [network]
 backend = "pasta"           # the only value v1 supports; slirp4netns is refused, not degraded to
-pasta_options = [ "--map-gw" ]   # the complete set guarden will run pasta with. `--map-gw` is what
-                             # makes the host reachable at all and pasta's default, but it is
-                             # written here because the whole connectivity model rests on it and a
-                             # silent change must not be possible. `--no-map-gw` is refused
+pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]
+                             # the set guarden will run pasta with, and a PINNED one
+                             # (ADR-0018). `--map-gw` is podman's token for the gateway mapping --
+                             # podman runs pasta with `--no-map-gw` by default, so without it
+                             # nothing reaches the host -- and `-g` is the constant `ingress.alias`
+                             # is derived from. The shape is validated: a set missing `--map-gw`,
+                             # `--ipv4-only`, `-a`, `-n` or `-g` is exit 2 naming this key, and
+                             # `--no-map-gw` is refused
 
 [build]
 lanes = 1                        # concurrent builds; 1 is the default and the recommendation
@@ -444,13 +449,20 @@ recognises, so adding a track is appending a row and nothing else.
 that the firewall names, and it is the uid allowed to reach the edge's API.
 
 The `[network]` table is load-bearing rather than a preference, because it decides whether a
-container can reach the host at all (§7.1). `loom` writes `Network=pasta:<pasta_options>` into
-every generated unit, from this table and nowhere else, so a `pasta_options` entry in
-`containers.conf` cannot reach a guarden container. An option that removes the host mapping —
-`--no-map-gw`, or `--map-host-loopback none` — is exit `2` naming the key: a container with no
-route to the host is not a degraded guarden, it is a box where nothing can reach anything.
-`soil firewall --check` re-renders the option set and reports drift against the installed units
-for the same reason `soil storage --check` reports retention drift.
+container can reach the host at all (§7.1). **The set is pinned, and its shape is validated**
+(ADR-0018): a set missing `--map-gw`, `--ipv4-only`, `-a`, `-n` or `-g` is exit `2` naming the
+key, because each of the five is load-bearing — `--map-gw` is podman's token for the gateway
+mapping (podman runs pasta with `--no-map-gw` by default), `-g` is the constant `ingress.alias`
+is derived from (§6.1), and `-a` and `-n` fix the container side of the range. An option that
+removes the host mapping — `--no-map-gw`, or `--map-host-loopback none` — is exit `2` naming the
+key: a container with no route to the host is not a degraded guarden, it is a box where nothing
+can reach anything. `loom` writes `Network=pasta:<pasta_options>` into every generated unit,
+from this table and nowhere else — with one correction podman 5.x forces: podman **prepends** a
+`pasta_options` list from `containers.conf` to every container's argv, so the host-level file
+does reach a guarden container (an earlier revision claimed it could not); guarden owns its own
+half of the argv, and the validation is what holds that half to the pinned shape. `soil firewall
+--check` re-renders the option set and reports drift against the installed units for the same
+reason `soil storage --check` reports retention drift.
 
 ### 3.2 `/etc/guarden/projects.toml` and `projects.d/<project>.toml`
 
@@ -481,10 +493,9 @@ RAM and never over 100, since an absolute size is not portable and a percentage 
 for a device larger than the memory backing it — a value the generator itself only warns about,
 which is not good enough for something guarden is about to write.
 
-**The device is read back from the kernel and never from the file guarden wrote**, on the same
-rule as `ingress.alias` (§7.1): `/sys/block/zram0/comp_algorithm` brackets the algorithm in
-force, `disksize` is the size, and `swapon` reports the priority. The **level is the exception
-and the documents say so**: the driver declares `algorithm_params` write-only, so there is no
+**The device is read back from the kernel and never from the file guarden wrote**:
+`/sys/block/zram0/comp_algorithm` brackets the algorithm in force, `disksize` is the size, and
+`swapon` reports the priority. The **level is the exception and the documents say so**: the driver declares `algorithm_params` write-only, so there is no
 sysfs read-back for a level, and a check that claimed one would be checking the file. What
 stands in for it is that the device exists at all, because a level the backend rejects fails
 `disksize_store` and leaves nothing initialised. The expected size is computed the way
@@ -719,10 +730,10 @@ ref becomes part of a path, a key or a filename. A raw ref is never used in any 
 because a ref taken raw may contain `/` and turn one lock file into a path that does not exist.
 
 `guarden.toml` has **three** writers, not one, and two of them share a key: `weedr module add`
-appends to `[modules] enabled`; `soil install` writes the measured `ingress.alias` **and** seeds
-`[modules] enabled` from cloud-init or from the install script; and `soil install` is also the
-phase that owns the rest of the file. The statement that this file has a single writer was wrong
-twice over.
+appends to `[modules] enabled`; `soil install` writes the derived `ingress.alias` — from the
+pinned `-g`, ADR-0018 — **and** seeds `[modules] enabled` from cloud-init or from the install
+script; and `soil install` is also the phase that owns the rest of the file. The statement that
+this file has a single writer was wrong twice over.
 
 The rule for every one of them is the same, and it is the rule for adding a fourth: **a write
 takes the `modules` lock, goes through this protocol, and rewrites only the keys it owns.** A
@@ -1245,6 +1256,18 @@ still converge and the run still exits `1`.
   in force would be the vendor's to decide rather than recorded here. `soil packages --check`
   asserts the version in force.
 
+  **A `conditional` role in `packages/packages.toml` is converged by this phase and by nothing
+  else, and only when the operator's own configuration asks for the thing it provides.** The one
+  role today is `zram`, which carries `systemd-zram-generator`, and it is conditional because
+  §3.1's promise is "absent means absent — no package": a generator in the substrate list would
+  make that false on every host the list was copied onto. The drift line names the package *and*
+  the reason it is wanted, because on a host without the knob the same package is one nobody
+  needs. `tools/render-user-data` renders the substrate and the harness roles only and **not**
+  the conditional ones, because a machine being provisioned is not yet a configured host —
+  baking the generator into every golden-VM image would make the absence untestable on the one
+  machine whose job is to test it. The phase installs one the moment the knob is there, which is
+  the same path a real host takes.
+
   **The timers are disabled for the same reason `storage` disables the packaged
   snapper cleanup timer, and it is the same overlap by another name**: a packaging
   timer running on its own schedule is another writer of the state this phase converges.
@@ -1281,9 +1304,18 @@ still converge and the run still exits `1`.
 - `sysctl` sets `net.ipv4.conf.<ingress-if>.route_localnet=1` on the ingress interface only,
   and `net.ipv6.conf.all.disable_ipv6=1` and `net.ipv6.conf.default.disable_ipv6=1`. It
   sets `net.ipv4.ip_unprivileged_port_start=1024` and owns that key — raising it to the kernel
-  default establishes the invariant, and lowering it is the thing that is refused. It also
-  checks, in `--check`, that
-  `ingress.alias` still matches the address the default route resolves to (§6.1).
+  default establishes the invariant, and lowering it is the thing that is refused. **It also
+  owns `vm.swappiness`, and only on a host whose `guarden.toml` carries a `[zram]` table
+  (§3.1).** A zram device is faster than a disk swap, so the kernel's default of 60 would keep
+  preferring the disk and leave the device idle — the one thing an operator who asked for it did
+  not ask for. The key is in the canonical set rather than beside it and, like every other key
+  here, is never from a manifest. It is **absent from the set on a host with no device**, because
+  absent means absent down to the last sysctl and a knob nothing on the box needs is a value
+  guarden should not be writing. It also **warns, rather than reporting drift**, when the host's
+  own routing table carries an on-link route overlapping the pinned `10.0.2.0/24` (ADR-0018): the
+  alias is a constant and there is nothing about it for `--check` to compare, and the one host
+  state that can collide with the pin is a route into the reserved range. The remedy is named in
+  the warning — change the range in the one place it is written, `[network] pasta_options`.
 - `firewall` installs ferm and fail2ban and
   `guarden-firewall.service`, writes `00-ssh.conf` — the SSH accept rule, root:root 0600, seed-once,
   its own `guarden-ssh` chain with the accept as the first rule, and the INPUT jump as the first
@@ -1302,43 +1334,26 @@ still converge and the run still exits `1`.
   creates the `guarden` and `hose` users **and the `guarden` group** — which is load-bearing,
   because the registry, every `overrides.toml` and all of `/etc/guarden` are `root:guarden` and
   the unprivileged programs must read them — records `host.admin_user` from the invoking user if
-  it is empty, runs the alias probe below and writes its result into `ingress.alias`, and
-  installs the credential materialiser. It creates no group beyond
+  it is empty, **derives `ingress.alias` from the `-g` value in `[network] pasta_options` and
+  writes it** (ADR-0018), and installs the credential materialiser. It creates no group beyond
   `guarden`: the `edge` group belongs to `weedr module add gate-traefik`. It installs no service, so a
   fresh host has no ingress and no dashboard until a module is added, and it refuses to start the
   edge if `ingress.alias` is still empty. It is the only phase that writes outside the host's own
   storage.
 
-  The **alias probe** runs a throwaway rootless container with the `[network]` table's options
-  and records four things, none of which may be assumed:
-
-  1. the gateway address the container sees in its own route table — this is what
-  **A `conditional` role in `packages/packages.toml` is converged by this phase and by nothing
-  else, and only when the operator's own configuration asks for the thing it provides.** The one
-  role today is `zram`, which carries `systemd-zram-generator`, and it is conditional because
-  §3.1's promise is "absent means absent — no package": a generator in the substrate list would
-  make that false on every host the list was copied onto. The drift line names the package *and*
-  the reason it is wanted, because on a host without the knob the same package is one nobody
-  needs. `tools/render-user-data` renders the substrate and the harness roles only and **not**
-  the conditional ones, because a machine being provisioned is not yet a configured host —
-  baking the generator into every golden-VM image would make the absence untestable on the one
-  machine whose job is to test it. The phase installs one the moment the knob is there, which is
-  the same path a real host takes.
-     `ingress.alias` is set to, and it is a literal address, never podman's
-     `host.containers.internal` token, because a rendered `AddHost=` has to survive a resolver
-     that is not ours;
-  2. that a socket bound to `127.0.0.1:<probe-port>` **on the host** is reachable from the
-     container at that address;
-  3. that the connection arrives on the host with the probing **service uid** as the socket
-     owner, so the `OUTPUT` accept rules can match it (§7.1);
-  4. that the source address on the host side is `127.0.0.1`, not the alias.
-
-  Any of the four failing is exit `1` naming which one, and `ingress.alias` is left empty.
-  Because the alias is derived from the host's current default route and pasta recomputes it
-  per container, the probe **must be re-run** when the host's default route changes: `soil
-  sysctl --check` compares the recorded `alias` against the address the default route currently
-  resolves to and reports drift, and a drift there means every `AddHost=` already rendered is
-  pointing at an address that no longer means this host.
+  **There is no alias probe, and `ingress.alias` is not a measurement.** An earlier revision of
+  this section ran a throwaway rootless container and recorded four facts from it, and that
+  mechanism could never run: `soil install` is root and runs before any service user exists, and
+  podman 5.7 refuses `--network pasta:` as root — "pasta networking is only supported for
+  rootless mode or when inside a nested userns" — while the image the probe needed,
+  `localhost/guarden-probe`, is external to this repository and was never built. The four facts
+  were established once, on a real machine, and are the pinned constant's basis (ADR-0018): the
+  container's default route is `via 10.0.2.2` on any host and network; a connection to
+  `10.0.2.2` arrives at the host's `127.0.0.1` with the container-running uid as the socket
+  owner; DNS and egress are unaffected; and nothing leaks to the host's route table.
+  `ingress.alias` is a constant now and cannot drift, and the one host state that can collide
+  with it — an on-link route overlapping the reserved `10.0.2.0/24` — is a warning in `sysctl
+  --check` above, not a drift item here.
 - `units` converges the system units of the unprivileged programs.
 
 ### 6.2 `weedr` — the privileged mutator
@@ -1349,14 +1364,6 @@ weedr service add <name[/ref]> --from <service>
 weedr service remove <name[/ref]>
 weedr service purge <name>                 # the only destructive verb; not on any sudoers rule
 weedr service gate <name>                  # evaluate the credential gate; change nothing else.
-  `ingress.alias` still matches the address the default route resolves to (§6.1). **It also
-  owns `vm.swappiness`, and only on a host whose `guarden.toml` carries a `[zram]` table
-  (§3.1).** A zram device is faster than a disk swap, so the kernel's default of 60 would keep
-  preferring the disk and leave the device idle — the one thing an operator who asked for it did
-  not ask for. The key is in the canonical set rather than beside it and, like every other key
-  here, is never from a manifest. It is **absent from the set on a host with no device**, because
-  absent means absent down to the last sysctl and a knob nothing on the box needs is a value
-  guarden should not be writing.
                                            # No [/ref]: the verdict is per SERVICE, because
                                            # every instance shares the service's secret store
 weedr service start|stop|restart <name[/ref]>   # start re-evaluates the gate
@@ -1603,7 +1610,7 @@ slices that the mutator installs into `/var/lib/guarden/shared/<name>/` for `roo
 **The renderer owns the container's network backend.** Every generated unit carries
 `Network=pasta:` followed by the `[network] pasta_options` from `guarden.toml`, verbatim and in
 order, joined with commas — podman's documented separator: podman cuts the value at the first
-colon and splits the remainder on commas, and the probe makes the same join — and the renderer
+colon and splits the remainder on commas — and the renderer
 **replaces** any `Network=`, `PodmanArgs=`-adjacent network option or
 `network_mode` the unit source asked for rather than passing it through — the same treatment
 `PublishPort` gets, and for the same reason: a Compose `network_mode: host` that survived
@@ -2045,19 +2052,23 @@ running set and always has.
 
 A rootless container runs in its own network namespace, so the host's `127.0.0.1` is not an
 address it can dial and a per-service `127.x` scheme is unreachable from inside it by
-construction. What a container can dial is the **default gateway address**, because pasta maps
-it. From `pasta(1)`:
+construction. What a container can dial is the **default gateway address**, and guarden pins
+which address that is (ADR-0018): the `[network] pasta_options` set fixes the container side at
+`10.0.2.100/24` with the gateway `10.0.2.2`, so the container's default route is `via 10.0.2.2`
+on every host and every network. Pasta maps the gateway onto the host's loopback. From
+`pasta(1)`:
 
 > `--map-host-loopback addr` — Translate `addr` to refer to the host. Packets from the guest to
 > `addr` will be redirected to the host. **On the host such packets will appear to have both
 > source and destination of `127.0.0.1` or `::1`.** … *Default is to translate the guest's
 > default gateway address, unless `--no-map-gw` is given.*
 
-So there is exactly one address a consumer can reach the host on, it is the gateway address the
-container already has a route for, and **pasta performs the translation itself, in userspace,
-at layer 4** — before the kernel's packet path and therefore before any firewall rule is
-consulted. guarden installs no rule of any kind for this hop. The three consequences that shape
-the rest of this section:
+Podman runs pasta with `--no-map-gw` by default, so the pinned set carries podman's `--map-gw`
+token — the only spelling that turns the mapping back on. So there is exactly one address a
+consumer can reach the host on, it is the pinned gateway address the container already has a
+route for, and **pasta performs the translation itself, in userspace, at layer 4** — before the
+kernel's packet path and therefore before any firewall rule is consulted. guarden installs no
+rule of any kind for this hop. The three consequences that shape the rest of this section:
 
 - **The alias belongs in `AddHost=` and nowhere else.** At the point the host's `OUTPUT` chain
   sees the connection it is already `127.0.0.1:<publication>`, so every rendered rule's
@@ -2066,10 +2077,12 @@ the rest of this section:
 - **The only host-side control that can see this hop is an `owner` match in `OUTPUT`.** Pasta
   makes its sockets as the service user, so `-m owner --uid-owner` matches. Nothing in the
   `nat` table participates and nothing could.
-- **The alias is derived, not chosen.** Pasta takes it from the host's current default route and
-  recomputes it whenever a container starts. `guarden` therefore owns the pasta option set
-  (§3.1) and re-measures on a trigger (§6.1); a host whose gateway changes invalidates every
-  `AddHost=` already rendered.
+- **The alias is pinned, not derived.** It is the `-g` value in `[network] pasta_options` —
+  `10.0.2.2` — and `soil install` derives `ingress.alias` from it (§6.1). It does not come from
+  the host's route and it cannot drift: the same address is the container's gateway on every
+  host and every network. A host whose own routes overlap `10.0.2.0/24` is warned about by
+  `soil sysctl --check`, and the remedy is to change the range in the one place it is written —
+  the option set.
 
 **An application inside a container must listen on `0.0.0.0`, not on `127.0.0.1`.** Pasta
 rewrites a loopback destination to the guest's observed address before delivery, and
@@ -2078,8 +2091,12 @@ because it exposes namespace-local services to the host. An application bound on
 loopback inside a container is therefore reachable from nowhere, which reads as a firewall
 problem and is not one.
 
-Ticket 15 measures this on a real machine before anything is built on it, and ADR-0004 is
-reopened if the measurement fails. Nothing here is assumed; §6.1 states what the probe records.
+The mapping was measured on a real machine before anything was built on it — the pinned
+container's default route is `via 10.0.2.2` on any host and network, a connection to `10.0.2.2`
+arrives at the host's `127.0.0.1` with the container-running uid as the socket owner, DNS and
+egress are unaffected, and nothing leaks to the host's route table — and the constant it
+produced is ADR-0018. There is no probe: the address is pinned, not measured, and §6.1 says how
+`ingress.alias` is derived.
 
 ### 7.2 One namespace
 
@@ -2806,7 +2823,7 @@ next ordinary run can inherit what the gate observed. The cache lives outside th
   unit exists, the snapshot carries the mark, the rule is in the file, the package was not
   installed. An assertion about an argv that left no state is dropped rather than ported.
 - **What the VM proves that nothing else could:** that a rootless container reaches a dependency
-  **by the alias the probe measured**, and that the connection arrives on the host with the
+  **by the pinned alias (ADR-0018)**, and that the connection arrives on the host with the
   consumer's uid as the socket owner; that a non-member cannot connect to a declared port; that a
   clone of a live data volume starts and recovers; that **a forwarded port answers from a second
   machine**; that nothing unprivileged can bind below 1024; and that a lock is a file and a rename

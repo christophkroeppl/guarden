@@ -47,7 +47,7 @@ reader of the code is sent.
 - [ ] `zram:` in a manifest is **refused by name**, in both vocabularies, in `loom`
 - [ ] `soil install --apply` twice is a no-op the second time
 - [ ] The chosen algorithm and level are **read back** from the running device, not from the
-      file guarden wrote — the same rule as `ingress.alias`
+      file guarden wrote
 - [ ] The cloud-init path carries it: `soil install --render-user-data` emits it, and the
       rendered document and `tools/golden-vm --print` agree (spec §6.10, ticket 130)
 - [ ] Removing the knob and re-running `--apply` tears the device down rather than leaving it

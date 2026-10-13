@@ -20,8 +20,9 @@ serves both, and the layout is a portability decision rather than a portability 
 - [ ] Non-default modules are selectable from cloud-init and from the script, and the selection
       is written into `/etc/guarden/guarden.toml` by `soil install` under the `modules` lock, so
       it survives a later `weedr module add`. That makes **three** writers of the file — `soil
-      install` for `[modules] enabled` and the measured `ingress.alias`, `weedr module add` for
-      `[modules] enabled` — and `[modules] enabled` is the one two of them share, so
+      install` for `[modules] enabled` and the derived `ingress.alias` (ADR-0018), `weedr
+      module add` for `[modules] enabled` — and `[modules] enabled` is the one two of them
+      share, so
       `soil install` must take the `modules` lock and refuse if a `weedr module add` is in
       progress rather than writing blind
 - [ ] The path constants exist in exactly one place and follow FHS: programs and modules under

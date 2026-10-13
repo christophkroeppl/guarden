@@ -73,12 +73,10 @@ soil --check
 weedr project add myapp --repository git@github.com:you/myapp.git
 ```
 
-`soil install` reports one item it cannot converge until the host can measure it: `ingress.alias`
-is recorded by running a `localhost/guarden-probe` container image, and this repository neither
-builds nor ships that image. On a run before `packages` the probe's line names the missing
-`podman` instead; once the packages are in, the image is what remains. Either way the drift is
-that one item — and the edge will not start, which is by design: guarden records no address it
-did not measure. Everything else converges on the first run.
+`soil install` derives `ingress.alias` from the pinned `[network] pasta_options` — there is no
+probe, no container image to fetch and nothing the host has to measure (ADR-0018) — so the first
+run converges fully. The edge still refuses to start while `ingress.alias` is empty, which after
+a successful install it is not.
 
 `soil --check` is safe to run over ssh at any time: it reports and changes nothing.
 

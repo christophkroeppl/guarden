@@ -8,6 +8,14 @@ it may conclude that an ADR is wrong, and that is a successful outcome.
 
 **Status:** ready-for-agent
 
+**Annotation 2026-10-13 (ADR-0018):** the alias this ticket's probe was to measure is no longer
+measured. The probe could never run — `soil install` is root, podman 5.7 refuses `--network
+pasta:` as root, and the probe image is external to this repository — so `ingress.alias` is now
+a pinned constant derived from `[network] pasta_options` (`-g 10.0.2.2`). The four facts the
+probe was to record were established once, on a real VM, and are recorded in ADR-0018; the items
+below that describe the probe, the measured write and the drift check are **closed by the pin**,
+not by a probe. The rest of the list stands as the ticket's history.
+
 - [ ] **The alias is the container's default gateway, and pasta maps it.** Confirm on a real
       rootless container that the address in its own `ip route` is the one that reaches a socket
       bound to `127.0.0.1` on the host, with the container running with exactly

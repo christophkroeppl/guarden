@@ -51,6 +51,11 @@ converge fully on the first run; it is deliberately not done here, because "the 
 external" is stated as design in three places and changing that is a decision for an ADR, not a
 round.
 
+> **Closed 2026-10-13 (ADR-0018):** the open decision is resolved — no image is built because
+> there is no probe. `soil install` derives `ingress.alias` from the pinned `[network]
+> pasta_options` (`-g 10.0.2.2`), so a fresh host converges fully on the first run and `soil
+> --check` carries no alias item at all.
+
 ## What remains uncovered
 
 - No suite can drive the conversion: every cut machine boots from the golden, whose root is

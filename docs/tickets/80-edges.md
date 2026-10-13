@@ -28,9 +28,9 @@ paths is ticket 40, and both are needed before the edge is complete.
 - [ ] **The firewall rules' destination address is `127.0.0.1`, never the alias.** Pasta maps the
       container's gateway onto the host's loopback in userspace, before the kernel's packet path,
       so by the time `OUTPUT` sees the connection it is already `127.0.0.1` and a rule matching the
-      alias matches nothing. The measured alias is written into `guarden.toml` as `ingress.alias`
-      by `soil install` from its own probe and appears in `AddHost=` only; the edge does not start
-      without it
+      alias matches nothing. The pinned alias is written into `guarden.toml` as `ingress.alias`
+      by `soil install` from the `-g` value in `[network] pasta_options` (ADR-0018) and appears
+      in `AddHost=` only; the edge does not start without it
 - [ ] For each edge, `weedr` renders an `OUTPUT` accept rule matching the consumer's uid and the
       dependency's publication, followed by a drop rule for every other uid
 - [ ] **The edge is permitted, by uid, to reach every route publication.** That is

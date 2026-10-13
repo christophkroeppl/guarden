@@ -59,6 +59,13 @@ container, `soil sysctl --check` reports drift when the recorded value no longer
 route, since a stale alias silently points every rendered `AddHost=` at an address that no
 longer means this host.
 
+> **Amended 2026-10-13 (ADR-0018):** the alias this paragraph describes is no longer measured,
+> and the probe that was to measure it is deleted — `soil install` is root, podman 5.7 refuses
+> `--network pasta:` as root, and the probe image is external to this repository. `ingress.alias`
+> is now a constant derived from the pinned `[network] pasta_options` (`-g 10.0.2.2`), and the
+> drift re-check is deleted because a constant cannot drift. Everything else in this document
+> stands.
+
 One consequence is a hard constraint rather than a design choice: **all services share one
 port namespace**, so two services cannot both publish 5432. `weedr` refuses the second one and
 says which service holds the publication. On a single-operator box with one database, one cache
