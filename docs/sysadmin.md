@@ -278,7 +278,7 @@ allow = ["wireguard-peer"]       # requested firewall rules granted to this serv
 
 [retention]
 keep_last = 7                    # the daily bucket's maximum; overrides the track's default
-free_limit = "0.08"              # overrides the track's default
+free_limit = 0.08                # overrides the track's default
 
 [groups]
 add = ["video", "render"]        # supplementary groups for the service user

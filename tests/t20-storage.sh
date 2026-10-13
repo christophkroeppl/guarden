@@ -142,6 +142,20 @@ run soil storage --apply
 assert_exit 0
 assert_snapper_config root EMPTY_PRE_POST_CLEANUP no
 
+# Two of the ladder keys are pinned by perturbation rather than by value,
+# because snapper's own template already ships guarden's value for them: a
+# value assertion would then prove nothing about the phase, only about the
+# distribution. Written back to something else, a converge has to put them
+# right, which is the claim the value pins cannot make.
+run snapper -c root set-config TIMELINE_LIMIT_QUARTERLY=0-0
+assert_exit 0
+run snapper -c root set-config TIMELINE_LIMIT_YEARLY=1
+assert_exit 0
+run soil storage --apply
+assert_exit 0
+assert_snapper_config root TIMELINE_LIMIT_QUARTERLY 0-2
+assert_snapper_config root TIMELINE_LIMIT_YEARLY 0
+
 # A converged host checks clean, and a second apply changes nothing: the same
 # answer to the same question is the whole of "idempotent", and it is a stronger
 # claim than a run that made no calls.
@@ -207,14 +221,21 @@ assert_snapper_config myapp-production-pgdata TIMELINE_LIMIT_WEEKLY 0-4
 # than left to be discovered.
 seed /var/lib/guarden/registry/myapp-staging.toml \
     'name = "myapp-staging"' 'environment = "staging"'
+# The staging row as the shipped template spells it, quoted floor included:
+# the converge has to read the row as a number and write it in the create
+# path's spelling, and this is the one state every staging and preview
+# service on a real host is in. The production row stays beside it: the seed
+# replaces the file wholesale, and the pgdata configuration above still
+# answers to it.
+seed /etc/guarden/guarden.toml \
+    '[[environments]]' 'name = "production"' 'keep_last = 7' 'free_limit = 0.10' \
+    'kind = "slot"' \
+    '[[environments]]' 'name = "staging"' 'keep_last = 0' 'free_limit = "0.20"' \
+    'kind = "slot"'
 seed_snapper_config myapp-staging-data
 run soil storage --apply
 assert_snapper_config myapp-staging-data TIMELINE_LIMIT_DAILY 0-0
 assert_snapper_config myapp-staging-data TIMELINE_LIMIT_MONTHLY 0-6
-# The template quotes staging's floor (`free_limit = "0.20"`), the create
-# path normalises it and so must the converge: `snapper set-config` compares
-# strings, and `0.20` written over a created `0.2` is a `soil storage
-# --check` failure on a volume the check had just converged itself.
 assert_snapper_config myapp-staging-data FREE_LIMIT 0.2
 
 # A service's own overrides win over the track, and the ladder's other buckets
@@ -232,13 +253,14 @@ assert_snapper_config myapp-staging-data TIMELINE_LIMIT_QUARTERLY 0-1
 seed /etc/guarden/guarden.toml \
     '[[environments]]' 'name = "production"' 'keep_last = 7' 'free_limit = 0.10' \
     'kind = "slot"' \
-    '[[environments]]' 'name = "preview"' 'keep_last = 1' 'free_limit = 0.20' \
+    '[[environments]]' 'name = "preview"' 'keep_last = 1' 'free_limit = "0.20"' \
     'kind = "instance"'
 seed /var/lib/guarden/registry/myapp-preview.toml \
     'name = "myapp-preview"' 'environment = "preview"'
 seed_snapper_config 'myapp-preview-feature\x2dx-data' 0-7
 run soil storage --apply
 assert_snapper_config 'myapp-preview-feature\x2dx-data' TIMELINE_LIMIT_DAILY 0-1
+assert_snapper_config 'myapp-preview-feature\x2dx-data' FREE_LIMIT 0.2
 
 # Anything else is skipped with a warning naming it, and left exactly as it was: a
 # configuration guarden did not create belongs to the operator. The value is the

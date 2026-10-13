@@ -39,6 +39,7 @@ from pathlib import Path, PurePosixPath
 
 from guarden import conf, errors, packagelist, paths, users, volumes, zram
 from guarden import hosttool as h
+from guarden.config import float_value
 from guarden.hosttool import Item, hostpath, lock
 
 # --------------------------------------------------------------------------
@@ -983,12 +984,19 @@ def _retention_for(service: str, config: dict) -> tuple[int, str, dict[str, str]
     registry = h.read_config(hostpath(*REGISTRY_DIR, f"{service}.toml"))
     row = h.track(config, registry.get("environment", ""))
     keep_last = int(row.get("keep_last", 0)) if row else 0
-    # Through the same normaliser the create path uses: the template quotes
-    # staging's and preview's free_limit (`"0.20"`), `snapper set-config`
-    # compares strings, and a converge that wrote `0.20` over its own `0.2`
-    # would leave `soil storage --check` reporting a volume it had just
-    # converged as drifted.
-    free_limit = volumes.percentage(row.get("free_limit", "0.20")) if row else "0.2"
+    # Through the same defaulting helper and the same normaliser the create
+    # path uses. `config.float_value` carries both: the row's value read as a
+    # number however it is spelled (the template quotes staging's and
+    # preview's `"0.20"`) and the same `0.10` default for a row that omits the
+    # key, so both paths spell every free_limit the same way -- a converge
+    # that wrote `0.20` over its own `0.2`, or `0.2` over its own `0.1`, is a
+    # `soil storage --check` failure on a volume the check had just converged
+    # itself (measured 2026-10-12).
+    free_limit = volumes.percentage(
+        float_value(row, "free_limit", f"the {registry.get('environment', '')} track")
+        if row
+        else 0.10
+    )
     buckets = {"weekly": "4", "monthly": "6", "quarterly": "2"}
 
     overrides = h.read_config(hostpath("etc", "guarden", "services", service, "overrides.toml"))

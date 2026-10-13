@@ -200,7 +200,7 @@ def _int(table: dict, key: str, where: str) -> int:
     return value
 
 
-def _float(table: dict, key: str, where: str) -> float:
+def float_value(table: dict, key: str, where: str) -> float:
     """A number, written as one or as a numeric string.
 
     The shipped table in spec 3.1 does both: `free_limit = 0.10` on the
@@ -208,6 +208,12 @@ def _float(table: dict, key: str, where: str) -> float:
     numbers rather than one being refused, because a retention value that is
     sometimes 0.1 and sometimes "0.2" is one two programs would round
     differently, and refusing one row would refuse the shipped configuration.
+
+    Public because there are two readers of the same row: this module's own
+    track reader and `hostprep._retention_for`, whose converge has to default
+    and normalise exactly as the create path did or `soil storage --check`
+    reports a volume it had just written itself as drifted (measured
+    2026-10-12, one default deeper than the first fix).
     """
     value = table.get(key, 0.10)
     if isinstance(value, bool):
@@ -415,7 +421,7 @@ def _tracks(rows: Any, where_file: Any) -> list[Track]:
                 host_prefix=_str(row, "host_prefix", where),
                 gated=_bool(row, "gated", where),
                 weight=_int(row, "weight", where),
-                free_limit=_float(row, "free_limit", where),
+                free_limit=float_value(row, "free_limit", where),
                 keep_last=_int(row, "keep_last", where),
                 kind=kind,
                 fork_from=_str(row, "fork_from", where),
