@@ -28,7 +28,7 @@
 #
 # - podman must be new enough for pasta. Podman 5.0 made pasta the default
 #   rootless network; below that, rootless containers get slirp4netns and the
-#   alias probe's premise does not hold. Ubuntu 26.04 ships 5.x, so `pasta` is a
+#   pinned alias's premise does not hold. Ubuntu 26.04 ships 5.x, so `pasta` is a
 #   plain package install and the binary is /usr/bin/pasta. Installing it
 #   explicitly rather than relying on Recommends is deliberate: a golden VM that
 #   silently lost pasta to a Recommends change would report "not run" for every

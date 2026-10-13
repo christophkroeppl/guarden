@@ -43,6 +43,7 @@ and with no marker either there was never anything to take down.
 
 from __future__ import annotations
 
+import errno
 import os
 import time
 from dataclasses import dataclass
@@ -434,7 +435,11 @@ def _tear_down() -> None:
     try:
         control.write_text(f"{DEVICE.removeprefix('zram')}\n", encoding="utf-8")
     except OSError as exc:
-        h.warn(f"the zram device {DEVICE_PATH} was reset but not hot-removed: {exc.strerror}")
+        # ENODEV is the goal reached by another road: the reset can take the
+        # device with it, and this write then has nothing left to remove. Any
+        # other errno is a state worth saying out loud.
+        if exc.errno != errno.ENODEV:
+            h.warn(f"the zram device {DEVICE_PATH} was reset but not hot-removed: {exc.strerror}")
 
 
 def _teardown_item() -> h.Item:

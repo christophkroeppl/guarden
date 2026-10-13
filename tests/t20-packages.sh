@@ -54,10 +54,10 @@ seed_record() {
 }
 
 # The pin is a shipped template, so it exists on a host `soil install` has run.
-# The apply exits 1 because the measured alias is the one thing `install` cannot
-# produce on any machine; everything else it converges has already converged.
+# The apply exits 0: the alias is derived from the pinned set like everything
+# else the phase converges, so this precondition converges whole.
 run soil install --apply
-assert_exit 1
+assert_exit 0
 assert_file_exists "$record"
 
 # The image now ships all eight, so the first half of this file is the new fact and
