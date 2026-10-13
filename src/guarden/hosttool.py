@@ -33,11 +33,6 @@ from guarden import paths
 
 PREFIX = Path(os.environ.get("GUARDEN_PREFIX", "/"))
 
-# The throwaway container the alias probe runs (spec 6.1). It is a constant and
-# not a configuration key because guarden.toml's schema is closed: an unknown key
-# is exit 2, so adding one for this would be a schema change.
-PROBE_IMAGE = "localhost/guarden-probe"
-
 MODE_DIR = 0o755
 MODE_DIR_LOCKS = 0o2770
 MODE_CONFIG = 0o640
@@ -119,11 +114,11 @@ def run(*argv: str) -> Result:
     **A missing tool is a host that is not in the assumed state, not a crash.**
     `subprocess.run` raises `FileNotFoundError` when the executable is not there,
     and that traceback reached the operator's terminal on the golden VM, where
-    `podman` is genuinely not installed: the alias probe called it, the exception
+    `podman` is genuinely not installed: an item called it, the exception
     escaped, and `soil install` died with a stack trace instead of the one line
     naming the tool and the item. Every one of the six phases calls out to tools
-    the host may not carry — `podman`, `ferm`, `snapper`, `btrfs` — so the guard
-    belongs here rather than in each caller.
+    the host may not carry — `ferm`, `snapper`, `btrfs` — so the guard belongs
+    here rather than in each caller.
     """
     try:
         done = subprocess.run(argv, capture_output=True, text=True, check=False)
@@ -156,11 +151,11 @@ class Item:
     modes cannot disagree about what converged state means.
 
     `correctable = False` marks the fact that is reported and never corrected.
-    spec 6.1 is explicit that the two host invariants and the alias are of that
-    kind: an operator who set a sysctl on purpose is not a machine to argue
-    with, and the alias belongs to `install`'s probe. Such an item is drift for
-    `--check` and nothing at all for `--apply`, because a converge that could not
-    fix it and still reported it would make every run on such a host fail.
+    spec 6.1 is explicit that the two host invariants are of that kind: an
+    operator who set a sysctl on purpose is not a machine to argue with. Such an
+    item is drift for `--check` and nothing at all for `--apply`, because a
+    converge that could not fix it and still reported it would make every run on
+    such a host fail.
     """
 
     what: str
@@ -442,14 +437,4 @@ def default_route_device() -> str:
     if "dev" in fields:
         return fields[fields.index("dev") + 1]
     error("the default route names no interface: no ingress interface to converge")
-    return ""
-
-
-def default_route_gateway() -> str:
-    """The address the recorded alias is derived from, per spec 6.1."""
-    route = default_route()
-    fields = route.split()
-    if "via" in fields:
-        return fields[fields.index("via") + 1]
-    error("the default route names no gateway: ingress.alias cannot be verified")
     return ""

@@ -1,7 +1,7 @@
 # The host configuration. Three writers, all under the `modules` lock and all
 # through the spec §3.5 protocol: `soil install` seeds it, `soil install` writes
-# the measured `ingress.alias`, and `weedr module add` appends to
-# `[modules] enabled`. Each rewrites only the keys it owns.
+# the `ingress.alias` derived from `[network] pasta_options`, and `weedr module
+# add` appends to `[modules] enabled`. Each rewrites only the keys it owns.
 #
 # A track is this table's row and not a name in the code: adding `preprod` is
 # appending a block, and nothing branches on the word.
@@ -12,9 +12,10 @@ interface = ""                   # empty: resolve the ingress interface from the
 admin_user = ""                  # empty: the invoking user at install time
 
 [ingress]
-alias = ""                       # the address a rootless container reaches the host on; the
-                                 # measured probe writes it, and it is a NAME the consumer
-                                 # resolves and never a firewall destination
+alias = ""                       # the address a rootless container reaches the host on, per spec
+                                 # 7.1; `soil install` derives it from the -g in pasta_options,
+                                 # and it is a NAME the consumer resolves and never a firewall
+                                 # destination
 publication_range = [20000, 32767]
 forwarded = [ "80/tcp", "443/tcp", "443/udp" ]
 # The zone delegated to the tunnel's provider, and empty by default. Empty means
@@ -26,7 +27,10 @@ tunnel_domain = ""
 
 [network]
 backend = "pasta"                # the only value v1 supports
-pasta_options = [ "--map-gw" ]   # the complete set; --no-map-gw is refused
+# The pinned addressing (spec 3.1), and the complete set: `-a` is the container's
+# address, `-n` its width, and `-g` the gateway `ingress.alias` is derived from.
+# A set missing any piece of it, or carrying `--no-map-gw`, is refused.
+pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]
 
 [build]
 lanes = 1

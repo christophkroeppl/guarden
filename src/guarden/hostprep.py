@@ -24,14 +24,13 @@ registry `install` reads a track from.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import lzma
 import os
 import platform
 import shutil
-import socket
 import stat
 import tarfile
-import threading
 import time
 import zipfile
 from collections.abc import Callable, Iterable
@@ -39,7 +38,7 @@ from pathlib import Path, PurePosixPath
 
 from guarden import conf, errors, packagelist, paths, users, volumes, zram
 from guarden import hosttool as h
-from guarden.config import TRACK_DEFAULTS, float_value, int_value
+from guarden.config import PASTA_OPTIONS, TRACK_DEFAULTS, float_value, int_value
 from guarden.hosttool import Item, hostpath, lock
 
 # --------------------------------------------------------------------------
@@ -1310,7 +1309,7 @@ def _sysctl_value(key: str) -> str:
     return h.run("sysctl", "-n", key).line
 
 
-def _sysctl_items() -> list[Item]:
+def sysctl_items() -> list[Item]:
     config = h.read_config(h.config_path()) or h.shipped_config()
     interface = h.ingress_interface(config)
     wanted: list[tuple[str, str]] = [
@@ -1369,32 +1368,6 @@ def _sysctl_file_content(wanted: list[tuple[str, str]]) -> str:
     ]
     lines.extend(f"{key} = {value}" for key, value in wanted)
     return "\n".join(lines) + "\n"
-
-
-def sysctl_items() -> list[Item]:
-    items = _sysctl_items()
-    # The two invariants and the alias are reported, never corrected: an operator
-    # who set a sysctl on purpose is not a machine to argue with, and either
-    # fact puts the box outside what the golden VM proved. Only the port
-    # threshold is soil's to converge, and it is converged by the item above.
-    recorded = h.read_config(h.config_path()).get("ingress", {}).get("alias", "")
-    if recorded:
-        # The remedy is in the drift line rather than in the apply, because the
-        # line is what an operator reads: the fix is to re-measure with the
-        # probe, never to edit the file by hand.
-        items.append(
-            Item(
-                f"ingress.alias is the address the default route resolves to "
-                f"({recorded}); re-run `soil install --apply` so the probe re-measures it",
-                lambda recorded=recorded: h.default_route_gateway() == recorded,
-                lambda: None,
-                correctable=False,
-            )
-        )
-    else:
-        h.warn("ingress.alias is empty: `soil install --apply` measures it, and the "
-               "edge does not start without it")
-    return items
 
 
 # --------------------------------------------------------------------------
@@ -2387,17 +2360,17 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
     # no sysctl write, and `--check` reports nothing" a property of the shape
     # rather than of a conditional in each of the five places it could have gone.
     #
-    # **Before the probe, so the probe stays last.** Two suites assert that the
-    # probe is the last item in the phase by counting the drift lines on a host
-    # where everything else has converged, and an item appended after it would
-    # make that count a property of whether the knob was present.
+    # **Before the alias item, so it stays last.** Two suites assert that the
+    # item is last in the phase by counting the drift lines on a host where
+    # everything else has converged, and an item appended after it would make
+    # that count a property of whether the knob was present.
     items += zram.items(h.read_config(h.config_path()))
     items.append(
         Item(
-            "ingress.alias holds an address the probe measured; the edge does not "
-            "start without it, and a wrong one answers every route with a 502",
-            lambda: bool(_alias()),
-            lambda: alias_probe(),
+            "ingress.alias is the -g address [network] pasta_options pins; the edge does "
+            "not start without it, and a wrong one answers every route with a 502",
+            _alias_is_derived,
+            _write_derived_alias,
         )
     )
     return items
@@ -2411,170 +2384,108 @@ def _alias() -> str:
     return h.read_config(h.config_path()).get("ingress", {}).get("alias", "")
 
 
-def alias_probe() -> int:
-    """The four facts of spec 6.1, and what to do about the ones that fail.
+def _pinned_options() -> tuple[str, ...]:
+    """The effective configuration's pasta options, comma-flattened as podman runs them.
 
-    None of the four may be assumed, so each is established by running
-    something and reading the result. A failure names which one and leaves
-    `ingress.alias` empty rather than recording an address that does not mean
-    this host: a container that cannot reach the host answers every route with a
-    cause-less 502, and an alias that is wrong is worse than an alias that is
-    absent, because the edge refuses to start without it.
+    The same flattening `config._pasta_options` refuses against, and for the
+    same reason: podman cuts the `Network=` value at the first colon and splits
+    the rest on commas, so an entry packed behind a comma has to be read
+    piecewise here too.
     """
     config = h.read_config(h.config_path()) or h.shipped_config()
-    network = ",".join(config.get("network", {}).get("pasta_options", []))
+    raw = config.get("network", {}).get("pasta_options", list(PASTA_OPTIONS))
+    if not isinstance(raw, list):
+        return ()
+    return tuple(piece for item in raw for piece in str(item).split(","))
 
-    # A tool that is not installed is the host, not a crash: `podman` is a
-    # `packages` item, so a host that has not run that phase cannot measure the
-    # alias, and the answer to that is one line naming the tool (spec 1.2: the
-    # host is exit 1, and a diagnostic names the thing it is about). Letting the
-    # interpreter's traceback out of here instead made `soil install --apply` on
-    # such a host exit 1 with nothing on stderr but a stack, which is the one
-    # outcome an operator cannot act on and a test cannot assert about.
-    #
-    # **Each probe carries its own reason back, and that is not cosmetic.**
-    # `h.run` hands a missing tool back as a non-ok result rather than raising,
-    # and collapsing every non-ok result into the fact that failed told an
-    # operator their route was wrong on a host where nothing had installed podman
-    # yet. The remedy differs per cause -- `soil packages --apply` for one, the
-    # probe image for another, the route for a third -- so the cause travels with
-    # the answer.
+
+def _option_value(options: tuple[str, ...], flag: str) -> str:
+    """The value after `flag`, or nothing: the pair-check shape config uses."""
+    for index, option in enumerate(options):
+        if option == flag and index + 1 < len(options):
+            return options[index + 1]
+    return ""
+
+
+def _derived_alias() -> str:
+    """The alias, derived from `-g` in the pinned pasta options.
+
+    `ingress.alias` is a function of `guarden.toml`'s `[network] pasta_options`
+    rather than something measured: pasta maps the container's gateway onto the
+    host's loopback, so the `-g` address is the one a consumer resolves the host
+    at, and a set without it derives nothing.
+    """
+    return _option_value(_pinned_options(), "-g")
+
+
+_OVERLAP_WARNED = False
+
+
+def _warn_on_pinned_overlap() -> None:
+    """A canary, not a refusal: the host's own routes against the pinned subnet.
+
+    The pinned addressing is safe only while the host's own on-link routes do
+    not overlap it. When one does, the host and every container disagree about
+    what the range means, and the remedy is an operator's choice of another
+    `-a`/`-g` range rather than a converge -- so this warns once and refuses
+    nothing.
+    """
+    global _OVERLAP_WARNED
+    if _OVERLAP_WARNED:
+        return
+    _OVERLAP_WARNED = True
+    options = _pinned_options()
+    address = _option_value(options, "-a")
+    prefix = _option_value(options, "-n")
+    if not address or not prefix:
+        return
     try:
-        gateway, why = _probe_gateway(network)
-        if not gateway:
-            h.error(f"alias probe 1 of 4: {why}")
-            return 1
-        if not _probe_reaches_host(gateway, network):
-            h.error(f"alias probe 2 of 4: a socket bound to 127.0.0.1 on the host is not "
-                    f"reachable from the container at {gateway}")
-            return 1
-        owner, source, unreadable = _probe_socket_owner()
-    except OSError as exc:
-        h.error(f"alias probe: this host could not run the probe: {exc}")
-        return 1
-    if unreadable:
-        h.error(f"alias probe 3 of 4: the connection could not be read on the host: {unreadable}")
-        return 1
-    if not owner:
-        h.error("alias probe 3 of 4: the connection did not arrive with a uid as the "
-                "socket owner, so the OUTPUT accept rules could not match it")
-        return 1
-    if source != "127.0.0.1":
-        h.error(f"alias probe 4 of 4: the source on the host side is {source} and not "
-                f"127.0.0.1, so a rule matching the alias would match nothing")
-        return 1
+        pinned = ipaddress.ip_network(f"{address}/{prefix}", strict=False)
+    except ValueError:
+        return
+    for line in h.run("ip", "-4", "route", "show").out.splitlines():
+        fields = line.split()
+        if "scope link" not in line or not fields or "/" not in fields[0]:
+            continue
+        try:
+            route = ipaddress.ip_network(fields[0], strict=False)
+        except ValueError:
+            continue
+        if route.overlaps(pinned):
+            h.warn(
+                f"the host's own route {route} is on-link and overlaps the pinned pasta "
+                f"subnet {pinned}: choose another -a/-g range in [network] pasta_options"
+            )
+            return
 
+
+def _alias_is_derived() -> bool:
+    _warn_on_pinned_overlap()
+    derived = _derived_alias()
+    return bool(derived) and _alias() == derived
+
+
+def _write_derived_alias() -> None:
+    """Write the derived alias: one key, the `modules` lock, `0640` root:guarden.
+
+    `guarden.toml` has three writers and two of them share a key, so the write
+    re-reads under the lock rather than trusting what it saw before it (spec
+    3.5). An empty derivation writes nothing: there is no address to record and
+    the drift line stands.
+    """
+    derived = _derived_alias()
+    if not derived:
+        h.error("[network] pasta_options carries no -g value, so ingress.alias cannot "
+                "be derived; the pinned set names the gateway the alias is")
+        return
     with lock("modules"):
         gid = users.group_id(PROGRAM_GROUP)
         conf.write_file(
             h.config_path(),
-            h.set_string_key(_read_text(h.config_path()), "ingress", "alias", gateway),
+            h.set_string_key(_read_text(h.config_path()), "ingress", "alias", derived),
             0o640,
             (0, gid),
         )
-    return 0
-
-
-def _podman_argv(network: str, *command: str) -> tuple[str, ...]:
-    return ("podman", "run", "--rm", "--network", f"pasta:{network}", h.PROBE_IMAGE, *command)
-
-
-def _probe_gateway(network: str) -> tuple[str, str]:
-    """The container's default gateway, and why there is none when there is not.
-
-    **The reason is the point, and it is why this returns two values.** `h.run`
-    reports a tool that is not installed as a non-ok result rather than raising,
-    and an earlier version of this returned `""` for every non-ok result -- so a
-    host with no `podman` was told its route named no gateway, when the remedy is
-    `soil packages --apply`.
-
-    **"Is the tool installed" is asked of `PATH`, not of an exit code.** `h.run`
-    invents `127` for a missing host binary, and an OCI runtime reports a missing
-    command *inside* the container as `127` too (126 for not-executable) -- so a
-    probe image without `ip` would have produced a remedy that cannot apply to
-    that cause, which is the very defect this replaced. `shutil.which` answers the
-    question directly and the exit code never has to.
-    """
-    if shutil.which("podman") is None:
-        return "", ("podman is not installed, so this host cannot measure the alias; "
-                    "`soil packages --apply` installs it")
-    result = h.run(*_podman_argv(network, "ip", "-4", "route", "show", "default"))
-    if not result.ok:
-        reported = result.err.strip().splitlines()
-        first = reported[0] if reported else f"podman exited {result.code}"
-        return "", f"the probe container did not run: {first}"
-    fields = result.line.split()
-    if "via" in fields:
-        return fields[fields.index("via") + 1], ""
-    return "", "the container's default route names no gateway"
-
-
-def _probe_reaches_host(gateway: str, network: str) -> bool:
-    """Bind a loopback port on the host and connect to it from the container.
-
-    The listener is on the host and the client is in the container, which is the
-    only direction that proves anything: a container reaching its own loopback
-    would prove nothing at all.
-    """
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
-    listener.settimeout(30)
-    port = listener.getsockname()[1]
-    reached: list[bool] = []
-
-    def accept() -> None:
-        try:
-            connection, _ = listener.accept()
-            reached.append(True)
-            connection.close()
-        except OSError:
-            reached.append(False)
-
-    thread = threading.Thread(target=accept)
-    thread.start()
-    h.run(
-        *_podman_argv(
-            network,
-            "python3", "-c",
-            f"import socket;socket.create_connection(('{gateway}',{port}),10).close()",
-        )
-    )
-    thread.join(35)
-    listener.close()
-    return bool(reached) and reached[0]
-
-
-def _probe_socket_owner() -> tuple[int, str, str]:
-    """The socket owner, the peer address, and why they could not be read.
-
-    Same shape and same reason as `_probe_gateway`: `ss` is a `packages` item, and
-    a host without it must be told which tool is missing rather than that its
-    connection "did not arrive with a uid as the socket owner", which describes a
-    kernel rule and not a missing binary. The question is asked of `PATH` for the
-    same reason it is there -- an exit code cannot distinguish a missing host tool
-    from a missing command inside a container.
-    """
-    if shutil.which("ss") is None:
-        return 0, "", ("ss is not installed, so this host cannot read the socket; "
-                       "`soil packages --apply` installs it")
-    result = h.run("ss", "-tnp", "state", "established")
-    if not result.ok:
-        reported = result.err.strip().splitlines()
-        return 0, "", reported[0] if reported else f"ss exited {result.code}"
-    for line in result.out.splitlines()[1:]:
-        fields = line.split()
-        if len(fields) < 5:
-            continue
-        owner = 0
-        if "uid:" in line:
-            try:
-                owner = int(line.split("uid:")[1].split()[0])
-            except (IndexError, ValueError):
-                owner = 0
-        return owner, fields[3].rsplit(":", 1)[0], ""
-    return 0, "", "no established connection was found to read"
 
 
 # --------------------------------------------------------------------------
@@ -2668,7 +2579,7 @@ def what_for(phase: str) -> str:
         "sysctl": "route_localnet on the ingress interface, IPv6 off, the port threshold, "
                   "and vm.swappiness when this host asked for a zram device",
         "firewall": "ferm, fail2ban, 10-framework.conf, 20-ingress-nat.conf",
-        "install": "guarden into /usr/lib/guarden, the two program users, the alias probe, "
-                   "and the zram device when this host asked for one",
+        "install": "guarden into /usr/lib/guarden, the two program users, the derived "
+                   "ingress alias, and the zram device when this host asked for one",
         "units": "the system units of the unprivileged programs",
     }[phase]

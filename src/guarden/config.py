@@ -23,8 +23,8 @@ generator's and not this table's — an algorithm guarden does not offer, a leve
 outside zstd's own range, and a percentage over 100.
 
 Nothing here writes the file. `weedr module add` appends to `[modules] enabled`
-and `soil install` writes the measured alias; a read is a read, and it takes no
-lock (spec 3.5).
+and `soil install` writes the alias derived from the pinned `[network]
+pasta_options`; a read is a read, and it takes no lock (spec 3.5).
 """
 
 from __future__ import annotations
@@ -111,6 +111,20 @@ BACKEND = "pasta"
 REFUSED_PASTA_OPTIONS = ("--no-map-gw",)
 REFUSED_PASTA_PAIRS = (("--map-host-loopback", "none"),)
 
+# The pinned addressing (spec 3.1): the complete option set every configuration
+# carries and every render writes as `Network=pasta:`. `-a` is the container's
+# address, `-n` its width and `-g` the gateway pasta maps onto the host's
+# loopback, so `soil install` derives `ingress.alias` from `-g`: the alias is a
+# function of this table rather than something measured.
+PASTA_OPTIONS = ("--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2")
+
+# Every accepted set must carry these, because a set without them is not the
+# pinned addressing: podman appends its default `--no-map-gw` when the literal
+# `--map-gw` token is absent, and an option of the second row with no value
+# after it pins nothing at all.
+REQUIRED_PASTA_FLAGS = ("--map-gw", "--ipv4-only")
+REQUIRED_PASTA_VALUES = ("-a", "-n", "-g")
+
 
 @dataclass(frozen=True)
 class Track:
@@ -161,7 +175,7 @@ class Config:
     share: Share
     firewall: Firewall
     backend: str = BACKEND
-    pasta_options: tuple[str, ...] = ("--map-gw",)
+    pasta_options: tuple[str, ...] = PASTA_OPTIONS
     zram: zram.Zram | None = None
 
     def track(self, name: str) -> Track | None:
@@ -362,7 +376,8 @@ def _backend(table: dict, where_file: Any) -> str:
 
 def _pasta_options(table: dict, where_file: Any) -> tuple[str, ...]:
     """The complete set of pasta options, refused if one removes the host
-    mapping (spec 3.1, ticket 15 item E).
+    mapping and refused unless it carries the pinned addressing (spec 3.1,
+    ticket 15 item E).
 
     Both spellings of a valued option are refused, because both are how a list
     gets written: `--map-host-loopback none` as two entries and
@@ -373,8 +388,16 @@ def _pasta_options(table: dict, where_file: Any) -> tuple[str, ...]:
     podman runs: it cuts the value at the first colon and then on commas, so an
     entry packed behind a comma has to be tested piecewise — a `--no-map-gw`
     after one would otherwise evade this refusal while podman still honoured it.
+    The positive requirement reads the same list, for the same reason: it is the
+    one podman runs, so it is the one that has to carry the pinned shape.
+
+    **A set that only avoids the refusals is not enough.** The literal
+    `--map-gw` token has to be there — podman appends its default `--no-map-gw`
+    when it is absent, so `[ "--ipv4-only" ]` silently loses the host mapping —
+    and `-a`, `-n` and `-g` have to be followed by their values, because a flag
+    with nothing after it pins no addressing and derives no alias.
     """
-    value = table.get("pasta_options", ["--map-gw"])
+    value = table.get("pasta_options", list(PASTA_OPTIONS))
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise _type_error(str(where_file), "network.pasta_options", "a list of strings")
     options = [piece for item in value for piece in item.split(",")]
@@ -386,6 +409,15 @@ def _pasta_options(table: dict, where_file: Any) -> tuple[str, ...]:
                 raise _refused_pasta(where_file, option)
             if option == flag and index + 1 < len(options) and options[index + 1] == setting:
                 raise _refused_pasta(where_file, f"{flag} {setting}")
+    for flag in REQUIRED_PASTA_FLAGS:
+        if flag not in options:
+            raise _unpinned_pasta(where_file, f"{flag!r}")
+    for flag in REQUIRED_PASTA_VALUES:
+        if not any(
+            option == flag and index + 1 < len(options) and options[index + 1]
+            for index, option in enumerate(options)
+        ):
+            raise _unpinned_pasta(where_file, f"{flag!r} with its value")
     return tuple(value)
 
 
@@ -394,6 +426,15 @@ def _refused_pasta(where_file: Any, option: str) -> errors.GuardenError:
         f"{where_file}: [network] pasta_options has {option!r}, which removes the mapping "
         f"that makes the host reachable from a container; a container with no route to the "
         f"host is not a degraded guarden, it is a box where nothing can reach anything"
+    )
+
+
+def _unpinned_pasta(where_file: Any, piece: str) -> errors.GuardenError:
+    return errors.GuardenError(
+        f"{where_file}: [network] pasta_options does not carry {piece}, and a set that is "
+        f"not the pinned addressing is refused rather than repaired: podman appends its "
+        f"default --no-map-gw when the literal --map-gw token is absent, and `soil install` "
+        f"derives ingress.alias from -g"
     )
 
 
