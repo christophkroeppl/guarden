@@ -10,7 +10,7 @@
 template writes `"0.20"` on two of its three rows. One admin-facing file accepts two spellings of a
 number and the other accepts one, and nothing states why.
 
-The asymmetry is undocumented rather than documented-wrong: spec §3.3 (spec.md:542) shows the
+The asymmetry is undocumented rather than documented-wrong: spec §3.3 shows the
 override unquoted **by example** and states no rule. Spec §3.1 was worse than silent — its comment
 claimed the table held "a TOML float, not a string" while its own staging and preview rows, twelve
 lines below, wrote `free_limit = "0.20"`; the review of `0d23f92` found the self-contradiction and
