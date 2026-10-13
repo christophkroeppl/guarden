@@ -23,7 +23,7 @@ fixtures/     guarden*.toml inputs and project manifests. `fixtures/bin/` and
               `fixtures/lib/` were deleted with the fakes (ticket 35, ADR-0014) and
               stay deleted: a stand-in for a system tool is not added without being
               asked for by name
-docs/         spec, ADRs, PRD, runbook, sysadmin, tickets, notes
+              docs/         spec, ADRs, PRD, sysadmin, tickets, notes
 justfile      the task runner: `just test`, `just lint`, `just check`, `just golden-vm`
 pyproject.toml  build config, console script entry points, ruff config
 .env.schema   the tracked half of the varlock contract
@@ -214,7 +214,7 @@ a new ADR that supersedes it. The short version:
   container stops, and so does the build. **A blocked gate is a state, not a failure**: the
   deploy exits `0`, the service is installed and waiting, `[gate] reason` in the registry says
   why, and `weedr service start` re-checks and starts once the operator has planted the
-  credentials. Do not disable the unit instead — see the runbook.
+  credentials. Do not disable the unit instead — see docs/sysadmin.md.
 - Every mutation that renders a shared file holds one lock across render, diff and install, or
   a stale render can install last and drop what the previous mutation granted. `guarden.toml` has
   three writers, not one — `weedr module add` appends to `[modules] enabled`, and `soil install`
@@ -394,7 +394,8 @@ Rules that hold for every test:
   deleted by hand.
 - **Never add a fixture, and never add a stand-in for a system tool, unless a ticket or the
   operator asks for that specific file by name.** `fixtures/` holds `guarden*.toml`
-  configuration inputs and `fixtures/projects/*` manifests, and that is the whole of it.
+  configuration inputs, `fixtures/projects/*` manifests, and `fixtures/refused/`
+  refusal-test inputs, and that is the whole of it.
   `fixtures/bin/` and `fixtures/lib/` were deleted deliberately and stay deleted. A stand-in for
   `podman`, for `snapper`, for `btrfs`, for a converter, for a payload — one per system binary is
   madness, and it is the shape this repository has already paid for twice. If a test seems to
