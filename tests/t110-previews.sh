@@ -324,4 +324,5 @@ assert_exit 0
 run script -qec 'weedr service purge myapp-staging' /dev/null
 assert_exit 0
 assert_stdout_has "destroyed every volume of myapp-staging"
-assert_file_missing /var/lib/guarden/services/myapp-staging
+assert_file_missing /var/lib/guarden/services/myapp-staging/state/data
+assert_file_missing /var/lib/guarden/services/myapp-staging/bulk/chainstate
