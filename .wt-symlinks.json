@@ -10,9 +10,6 @@
     },
     {
       "from": "opencode.jsonc"
-    },
-    {
-      "from": "kilo.jsonc"
     }
   ]
 }
