@@ -14,7 +14,7 @@ half is written. `manifest` validates through `parse` and the mutator renders
 through `ferm_line`, so the shape that was checked is the shape that is written.
 
 The one rule here that is not a request is `resolver_lines`: the accept the host
-itself needs for its own stub resolver (spec §7.6, ADR-0015). It is a rendered
+itself needs for its own stub resolver (spec §7.6, ADR-0016). It is a rendered
 accept in the mutator's dialect, drawn from guarden's knowledge of the host and
 from no configuration, and no key anywhere adds one.
 """
@@ -31,7 +31,7 @@ DEFAULT_CHAIN = "guarden-svc"
 
 # systemd-resolved's stub listener. One address, not the loopback network the
 # default deny covers, and one port on both protocols because the stub listens on
-# both — ADR-0015.
+# both — ADR-0016.
 RESOLVER_ADDRESS = "127.0.0.53"
 RESOLVER_PORT = 53
 RESOLVER_PROTOCOLS = ("udp", "tcp")
@@ -185,7 +185,7 @@ def resolver_lines(uids: Iterable[int]) -> list[str]:
     `podman pull` runs on the host as the service user, so its DNS query leaves
     through `OUTPUT` and meets the default deny — pasta's exclusion from the
     loopback mapping is about traffic from *inside* a container and says nothing
-    about this path (spec §7.6, ADR-0015). One address, one port, both
+    about this path (spec §7.6, ADR-0016). One address, one port, both
     protocols, owner-matched to service uids like every other accept, and no key
     anywhere that adds another.
 

@@ -178,11 +178,13 @@ hand:
 
 ```sh
 systemctl stop dev-zram0.swap
+systemctl stop systemd-zram-setup@zram0.service
 swapoff /dev/zram0
 zramctl --reset /dev/zram0
 printf '0\n' >/sys/class/zram-control/hot_remove
 rm -f /etc/systemd/zram-generator.conf /var/lib/guarden/soil/zram
 systemctl daemon-reload
+sysctl -q -w vm.swappiness=60
 ```
 
 `vm.swappiness` goes back out of `/etc/sysctl.d/90-guarden.conf` with it, and the next
@@ -843,7 +845,7 @@ restart.
 To materialise everything by hand after touching the blobs:
 
 ```sh
-systemctl start guarden-creds.path      # watch /etc/guarden/creds/ and materialise what changed
+systemctl enable guarden-creds.path      # watch /etc/guarden/creds/ and materialise what changed
 systemctl start guarden-creds-boot.service   # or materialise everything, once
 ```
 
@@ -1276,9 +1278,10 @@ weedr module remove homepage                  # alias: rm
 
 `gate-traefik` and `homepage` are on by default in `/etc/guarden/guarden.toml`. Adding a module creates
 its services and grants what it declares; it does not re-run soil and does not touch other
-modules. It is also the one verb that writes `guarden.toml`: `weedr module add` appends the
-module's name to `[modules] enabled` and rewrites nothing else in the file, under the `modules`
-lock and by the same write protocol as every other shared file.
+modules. `weedr module add` appends the module's name to `[modules] enabled` and rewrites
+nothing else in the file, under the `modules` lock and by the same write protocol as every
+other shared file. It is one of three writers — `soil install` seeds the table and writes
+the derived `ingress.alias` — and the only one that changes which modules are on.
 
 **`weedr module add gate-traefik` is also what creates the `edge` group** and adds the edge's user to it.
 `soil install` creates the `guarden` group and no other, and never an `edge` — the `guarden`

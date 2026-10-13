@@ -8,28 +8,25 @@ so a ticket that contradicts the spec is wrong until a decision says otherwise.
 
 ## Layout
 
-**This repository is documents only today. No program below exists yet.** `docs/` is the
-contract and everything else is written to it; the work list is `docs/tickets/`, and ticket 10
+The programs are Python modules under `src/guarden/`; there is no per-program directory. `docs/`
+is the contract and everything else is written to it; the work list is `docs/tickets/`, and ticket 10
 creates the first directory.
 
 ```
-soil/     the host converger (--check / --apply)          not yet written
-weedr/    the only privileged mutator                      not yet written
-loom/     the renderer: manifest + registry -> units       not yet written
-roots/    the edge's route configuration                   not yet written
-twig/     the dashboard's configuration                    not yet written
-furrow/   the build queue and the deploy order             not yet written
-hose/     the optional gitops receiver                     not yet written
-stakes/   the pin registry, unprivileged; the reconciler that marks snapshots is `weedr pin sync`
-tools/    golden-vm, the throwaway-machine harness
-modules/  shipped module definitions: gate-traefik, homepage, auth-authelia, cloudflared
-tests/    the one test seam                               created by ticket 10
-fixtures/ guarden*.toml inputs and project manifests. `fixtures/bin/` and
-           `fixtures/lib/` were deleted with the fakes (ticket 35, ADR-0014) and
-           stay deleted: a stand-in for a system tool is not added without being
-           asked for by name
-docs/     spec, ADRs, PRD, runbook, tickets, notes
-justfile  the task runner: `just test`, `just lint`, `just check`, `just golden-vm`
+src/guarden/  the eight programs: soil, weedr, loom, roots, twig, furrow, hose, stakes
+              (pyproject.toml maps each to a console script `guarden.<name>:main`)
+tools/        golden-vm, the throwaway-machine harness, check-deps, pre-commit, cloud-init/
+modules/      shipped module definitions: gate-traefik, homepage, auth-authelia, cloudflared
+packages/     packages.toml — the distribution packages per family
+tests/        the one test seam: lxc.sh (the VM runner), lib.sh (helpers), suitecache.py
+fixtures/     guarden*.toml inputs and project manifests. `fixtures/bin/` and
+              `fixtures/lib/` were deleted with the fakes (ticket 35, ADR-0014) and
+              stay deleted: a stand-in for a system tool is not added without being
+              asked for by name
+docs/         spec, ADRs, PRD, runbook, sysadmin, tickets, notes
+justfile      the task runner: `just test`, `just lint`, `just check`, `just golden-vm`
+pyproject.toml  build config, console script entry points, ruff config
+.env.schema   the tracked half of the varlock contract
 ```
 
 There is no `Makefile`. Tasks run through `justfile`, and `just` with no argument lists the
@@ -98,7 +95,11 @@ a new ADR that supersedes it. The short version:
   container reaches any host loopback port, `sshd` on 22 included. The deny does not touch
   outbound traffic, and pasta's DNS forward is explicitly excluded from the loopback mapping, so
   the old justification — that a blanket drop "would break name resolution and package updates" —
-  was false and is gone. There is no `[loopback] allow` table: a table whose whole content is a
+  was false and is gone. **One accept sits above the deny for the host's stub resolver** (ADR-0016):
+  `127.0.0.53:53` on both udp and tcp, owner-matched to service uids, rendered from guarden's own
+  knowledge of the host and from no configuration — without it `podman pull` as a service user
+  cannot resolve the registry and no first deploy of a new workload can complete. There is no
+  `[loopback] allow` table: a table whose whole content is a
   destination is a second way to grant one beside the publication set. What this does *not* stop
   is a service *binding* a port of its own choosing, and what it no longer forbids is an admin
   granting a rule that matches `-o lo` (ADR-0013, spec §7.7) — a granted rule renders above the
@@ -141,17 +142,14 @@ a new ADR that supersedes it. The short version:
   chain, and `INPUT`'s first rule after conntrack and lo is `jump guarden-ssh;`. `soil firewall
   --apply` refuses (exit 1) unless all of these hold. Every service's rules come from the same
   ferm render, whether a module installed it, a poke deployed it or an operator typed the command.
-- **A forwarded port is a `PREROUTING` DNAT and nothing else. There is no masquerade.** An
-  earlier revision of these documents required a `nat POSTROUTING` masquerade per forwarded port
-  and claimed that without it the forwarding set "delivers exactly nothing while everything on the
-  box looks healthy". That was false and the requirement is gone. After the DNAT the destination is
-  a local address, so the packet goes to `INPUT` and never reaches `POSTROUTING`; on the reply
-  conntrack unwinds the translation and rewrites the source to the public address the client
-  dialled. A rule `-o <if> -d 127.0.0.1 --dport <pub> -j MASQUERADE` matches no packet in either
-  direction. The only requirement is `route_localnet` on the ingress interface. The golden-VM
-  criterion "a forwarded port answers from off the box" is still right, for a different reason: a
-  request the box makes to itself never traverses `PREROUTING`, so only a second machine can tell
-  a working forward from none.
+- **A forwarded port is a `PREROUTING` DNAT and nothing else. There is no masquerade.** After
+  the DNAT the destination is a local address, so the packet goes to `INPUT` and never reaches
+  `POSTROUTING`; on the reply conntrack unwinds the translation and rewrites the source to the
+  public address the client dialled. A rule `-o <if> -d 127.0.0.1 --dport <pub> -j MASQUERADE`
+  matches no packet in either direction. The only requirement is `route_localnet` on the ingress
+  interface. The golden-VM criterion "a forwarded port answers from off the box" is right because
+  a request the box makes to itself never traverses `PREROUTING`, so only a second machine can
+  tell a working forward from none.
 - Persistent data is declared in one of two lists: `state`, which is snapshotted, and `bulk`,
   which never is. A bulk volume **is** a btrfs subvolume with no snapper configuration, is never
   a fork or rollback source, is never cloned from a live volume, and is **an empty subvolume**
@@ -341,7 +339,7 @@ address**, not `127.0.0.1`, because `PREROUTING` DNAT rewrites the destination o
 
 **One harness, and it is a real machine: `just test` cuts a throwaway LXD VM from a golden
 snapshot and runs every suite in it with the real tools.** There is no fast tier, no fake, and no
-call log (ADR-0014). `tests/lxc.sh run <pattern>` is the same thing for one file, and that is how
+call log (ADR-0014). `just test-one <pattern>` is the same thing for one file, and that is how
 you run the suite while you work on it.
 
 **Each suite says in its own file whether it needs a machine of its own** — one line,
@@ -431,7 +429,8 @@ Rules that hold for every test:
   time, no wheels
   checked in. A fetch from outside a distribution repository is deliberate and rare: each is a
   **pinned artefact** whose version and two SHA256s are recorded in this repository and verified
-  on install — `podlet`, and (ADR-0015) the tunnel's `cloudflared`. No vendor repository, ever:
+  on install. Today the only pinned artefact is `podlet`; (ADR-0015) the tunnel's `cloudflared` is a
+  container image, not a second pinned binary. No vendor repository, ever:
   a repository's contents move under the pin. This keeps the host installable on a distro we have
   not tried yet.
 - `jinja2` renders units. YAML is parsed with `pyyaml` using `safe_load` only, because a
