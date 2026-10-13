@@ -17,7 +17,7 @@
 # database the distribution's own query reads. The one file this suite plants is
 # the host configuration, into the machine's real `/etc/guarden`, because that is
 # the one value no other file on the host carries and the suite states it rather
-# than waiting for a container image to measure it.
+# than waiting for the alias to be derived into it.
 
 . "$(dirname "$0")/lib.sh"
 
@@ -103,15 +103,12 @@ assert_one_diagnostic "error:"
 # the document does, and a converged host is silent on both — the `--check` exits
 # `0` and says nothing, which is what "already true" looks like from outside.
 #
-# That claim needs a host that *can* converge, and the one item it could not was
-# `ingress.alias`: it is the only value of the whole install phase that comes from
-# a probe rather than from a file or a tool, this repository ships no image for
-# that probe, and so a suite that asked for `ingress.alias` as its guaranteed
-# non-zero exit was asserting the probe's absence — twice — rather than anything
-# about the scripts path. The suite plants the one key instead, from the shipped
-# measured fixture, which is exactly what `soil install` writes when the probe has
-# run and what the edge refuses to start without. Everything else below is
-# converged by soil on the machine, and the exit codes are the phase's own answers
+# That claim needs a host that *can* converge, and it has one: every item of the
+# install phase converges on a machine whose table pins the set — the alias is
+# derived from it rather than measured — so the suite plants the one key
+# (`ingress.alias`, from the shipped fixture, which is the value `soil install`
+# derives and what the edge refuses to start without) and everything below is
+# converged by soil on the machine. The exit codes are the phase's own answers
 # about state this file set: remove one file the phase owns, and the check must
 # report exactly that.
 #
@@ -247,9 +244,9 @@ assert_exit 0
 assert_file_exists /etc/systemd/system/guarden-snapshot.timer
 # And the install phase is converged on the same machine, both roads ending in the
 # same state: the document's runcmd and this file's converge agree, and a `--check`
-# on either is silent. The one key the probe writes was planted at the top rather
-# than waited for, so this exit `0` is about the phase and not about a container
-# image this repository does not ship.
+# on either is silent. The alias was planted at the top already holding the
+# derived address, so this exit `0` is about the phase and not about an item the
+# machine's own state happened to supply.
 run soil install --check
 assert_exit 0
 assert_stderr_empty

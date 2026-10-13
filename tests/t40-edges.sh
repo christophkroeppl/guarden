@@ -53,7 +53,7 @@ assert_stderr_empty
 # There is no name map and no /etc/hosts. For each edge the renderer writes
 # `AddHost=<provider>:<alias>` into *every* unit of the consumer, and the name is
 # the provider's own service name, with no suffix and no alias.
-assert_file_has "$render/units/web.container" "AddHost=postgres-staging:192.0.2.1"
+assert_file_has "$render/units/web.container" "AddHost=postgres-staging:10.0.2.2"
 assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-staging"
 assert_file_has "$render/units/guarden.env" "DB_PORT=20007"
 # The provider's service name must not appear in the real /etc/hosts.
@@ -134,9 +134,9 @@ run loom render "$project" --service myapp-staging --out "$render"
 assert_exit 1
 assert_stderr_has "publication"
 
-# `ingress.alias` is empty until `soil install` measures it, and an edge with no
-# alias would render host entries that resolve to nothing. Empty is the host not
-# being in the state the render assumed, so it is exit 1.
+# `ingress.alias` is written by `soil install` from the pinned set, and an edge
+# with no alias would render host entries that resolve to nothing. Empty is the
+# host not being in the state the render assumed, so it is exit 1.
 seed "$registry/myapp-staging.toml" \
     'service = "myapp-staging"' 'workload = "myapp"' 'project = "myapp"' \
     'environment = "staging"' 'uid = 1101' 'created = "2026-09-30T09:00:00Z"' \

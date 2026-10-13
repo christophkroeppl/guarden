@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# soil sysctl: the four rules that are soil's to converge, and the alias it only
-# reports.
+# soil sysctl: the four rules that are soil's to converge.
 #
 # The port threshold is the one an implementer gets wrong, and spec 1.4 and
 # §8.1's companion rule in SECURITY.md 2.7 both say why: the predicate is the
@@ -48,21 +47,9 @@ restore_ipv6() {
     sysctl -q -w "net.ipv6.conf.default.disable_ipv6=$ipv6_default" >/dev/null 2>&1 || :
 }
 
-# guarden.toml is the operator's file and this file is not the operator, so what
-# the alias blocks below replace is put back at the end.
-config=/etc/guarden/guarden.toml
-config_saved=$GUARDEN_FIXTURES/guarden.toml.before
-if [ -f "$config" ]; then
-    cp "$config" "$config_saved"
-fi
-restore_config() {
-    if [ -f "$config_saved" ]; then
-        cp "$config_saved" "$config"
-    else
-        rm -f "$config"
-    fi
-}
-trap 'restore_ipv6; restore_config' EXIT
+# Nothing of `guarden.toml` is rewritten below any more — the alias blocks that
+# seeded it went with the probe — so the only thing put back at the end is IPv6.
+trap restore_ipv6 EXIT
 
 # Every key starts wrong so the converge has all four to write, and the persisted
 # file starts absent so that "`--check` writes no file" is about this run rather
@@ -129,33 +116,13 @@ run soil sysctl --apply
 assert_exit 0
 assert_sysctl net.ipv6.conf.all.disable_ipv6 1
 
-# The alias is derived from the host's default route and drifts with it, and
-# nothing in a firewall rule may match it: pasta has already translated the
-# address to 127.0.0.1 by the time the kernel sees the connection.
-seed "$config" \
-    '[ingress]' 'alias = "198.51.100.1"' 'publication_range = [20000, 32767]'
-run soil sysctl --check
-assert_exit 1
-assert_stderr_has "ingress.alias is the address the default route resolves to (198.51.100.1)"
-
-# The remedy is in the line the operator reads: re-measure with the probe, never
-# edit the file by hand. Nothing in the firewall may match the alias, because
-# pasta has already translated it to 127.0.0.1.
-assert_stderr_has "soil install --apply"
-
-# An empty alias is a warning rather than drift: it is `soil install` that
-# measures it, and the edge refuses to start without it.
-run soil sysctl --apply
-assert_exit 0
-seed "$config" '[ingress]' 'alias = ""'
-run soil sysctl --check
-assert_exit 0
-# The line count is read with wc: lib.sh's assert_one_diagnostic counts with
-# `grep -c`, which prints 0 for no match while exiting 1, so its `|| true` turns
-# an empty stderr into a pass.
-[ "$(wc -l < "$GUARDEN_FIXTURES/stderr")" = 1 ] \
-    || _fail "expected exactly one warning line, got $(wc -l < "$GUARDEN_FIXTURES/stderr")"
-assert_stderr_has "ingress.alias is empty"
+# **The alias is not reported here any more.** It is no longer derived from the
+# host's default route — it is the `-g` the configuration pins, written by
+# `soil install` — so there is nothing about it that can drift and nothing for
+# `soil sysctl` to say. The block that used to sit here compared the recorded
+# alias with the default route and warned on an empty one; both went with the
+# probe, and the firewall's half of the claim (no rule matches the alias) lives
+# in the suites that read the rendered rules.
 
 # The persisted file holds only soil's keys, and a key in it that soil does not
 # own is a key soil rewrites away. The rewrite is of the file only: soil converges

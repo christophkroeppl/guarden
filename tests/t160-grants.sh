@@ -188,7 +188,7 @@ assert_file_lacks "$conf" "to-source"
 # destination this file names is 127.0.0.1, and ingress.alias never appears as
 # one because pasta translates to loopback before the kernel sees the packet.
 assert_file_lacks "$conf" "0.0.0.0"
-assert_file_lacks "$conf" "192.0.2.1"
+assert_file_lacks "$conf" "10.0.2.2"
 assert_file_lacks "$conf" "jump REDIRECT"
 
 # The rendered INPUT accept is plain, because a forwarded packet has no socket

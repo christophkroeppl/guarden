@@ -72,8 +72,8 @@ stage_config guarden-measured.toml
 
 # `soil install --apply` is a precondition, not the subject: ingest renders through
 # `loom`, and the programs are not on this host until install has run. It goes AFTER
-# stage_config, because install probes the host's gateway and writes what it
-# measured into the config it is reading.
+# stage_config, because install derives the alias from the pinned set and writes
+# it into the config it is reading.
 stage_podlet_release
 run soil packages --apply
 assert_not_rejected

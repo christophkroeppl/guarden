@@ -33,13 +33,13 @@ interface = ""
 admin_user = "operator"
 
 [ingress]
-alias = "192.0.2.1"
+alias = "10.0.2.2"
 tunnel_domain = "tunnel.example.net"
 publication_range = [20000, 32767]
 
 [network]
 backend = "pasta"
-pasta_options = [ "--map-gw" ]
+pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]
 
 [build]
 lanes = 1

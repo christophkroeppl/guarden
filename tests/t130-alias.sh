@@ -1,32 +1,40 @@
 #!/usr/bin/env bash
-# The one item of `soil install` that comes from a probe rather than from a file,
-# and what the phase says when the probe cannot answer.
+# The alias: the pinned set it derives from, and the hop it promises.
 #
 # (ticket 130, spec 6.1, spec 1.2)
 #
-# `ingress.alias` is the only value in the whole install phase that is measured
-# rather than written: the phase runs a container, reads the gateway its default
-# route names, and records that address, because pasta maps it and a container
-# that cannot reach the host answers every route with a cause-less 502. Every
-# other item is a file or a tool, so every other item converges on any machine
-# that has the tool.
+# `ingress.alias` is no longer measured. The container's default gateway is
+# pinned in `[network] pasta_options` — `-g 10.0.2.2` — pasta maps that gateway
+# onto the host's loopback in userspace, and `soil install` derives the alias
+# from it, so the value is a fact about the table rather than about whichever
+# route the host happened to have when a probe last ran. Three claims keep that
+# honest, and this suite is all three:
 #
-# **A probe that cannot run is a host fact, and it is reported like one.** That is
-# the claim here, and it is a claim about the *diagnostic*: `podman` is a
-# `packages` item, so a host that has not run that phase has no container runtime
-# at all, and `soil install --apply` on such a host exits `1` with two lines — the
-# probe naming what it could not do and the item named as drift. What it must not
-# do is let the interpreter's exception out: that is also exit `1`, so the exit
-# code agrees while stderr carries a stack trace instead of a sentence, which is
-# the failure mode no test can assert about and no operator can act on. That is
-# not hypothetical — it is what this suite was written for, and the assertions
-# below are the regression.
+#   1. a `pasta_options` set that does not pin the pieces the design depends on
+#      (`--map-gw`, `--ipv4-only`, `-a`, `-n`, `-g`) is rejected input, refused
+#      the way every pasta refusal is: exit 2, one `error:` line, naming the
+#      piece that is missing;
+#   2. with the pinned set staged, `soil install --apply` writes
+#      `alias = "10.0.2.2"` — the `-g` value — and a `--check` on the converged
+#      host is silent;
+#   3. **the hop itself, measured on this machine.** An unprivileged `ubuntu`
+#      container with the pinned options dials 10.0.2.2 and reaches a listener
+#      bound to 127.0.0.1 on the host, with the host-side socket owned by uid
+#      1000 and both of its ends 127.0.0.1 — the facts the retired probe
+#      measured, now measured without an image this repository does not ship.
 #
-# The same suite then proves the other half, which is what the other two ticket-130
-# suites now assert and used to borrow this one for: with the alias measured, the
-# install phase converges and a `--check` on it is silent. So the exit codes here
-# and there are all about the phase rather than about a container image this
-# repository does not ship.
+# **The hop is real and it is unprivileged, and that is the point.** root cannot
+# run pasta (the subuid range belongs to `ubuntu`), and a suite that asked a
+# stand-in for podman would be asserting its own fake; so the image is built
+# from this machine's own `/bin/busybox` and run as `ubuntu` with the real
+# podman. `tests/t130-hop.py` is the helper that holds both ends of the
+# connection up long enough to read the kernel's socket table — a helper that
+# reads machine state, not a fixture.
+#
+# machine: fresh
+# The suite installs a package (`busybox-static`), imports an image into
+# `ubuntu`'s own store and runs real containers, so it leaves package state and
+# an image store behind: it gets a machine of its own.
 
 . "$(dirname "$0")/lib.sh"
 
@@ -35,54 +43,128 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 export GUARDEN_PREFIX=/
 config=/etc/guarden/guarden.toml
 
-# The shipped table with an unmeasured alias, which is the state of a host whose
-# probe has never run. It is `fixtures/guarden.toml` rather than the empty-selection
-# one because it already records a module: no `--modules` is passed below, so the
-# selection is not an item, and the alias is the only fact in dispute.
+# The pinned set, once. The design states it as a constant — the gateway the
+# alias is, the address the container holds, the subnet that puts the two
+# on-link — and the configuration under test and the container below each name
+# it in their own spelling.
+pinned='--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2'
+
+# The shipped table pins the set; what is rewritten here is the one line under
+# test, so the only defect the phase reads is the missing piece. `--ipv4-only`
+# is the piece left out, and the diagnostic must name it: a refusal that says
+# "the set is wrong" without saying which piece sends the operator to the wrong
+# line. A refused input converges nothing, so the alias is still the
+# unmeasured one afterwards.
 stage_config guarden.toml
 assert_file_has "$config" 'alias = ""'
-
-# The probe runs and cannot answer. Whichever of the two ways that happens on a
-# given machine — no container runtime installed, or a runtime with no probe image
-# to run — the answer is the same shape: a line naming the probe and a line naming
-# the item as drift, and no interpreter between them.
-run soil install --apply
-assert_exit 1
-assert_stderr_has "alias probe"
-assert_stderr_has "drift: ingress.alias holds an address the probe measured"
-# **And the line names the cause.** The shape above is not enough on its own, and
-# this is the assertion that says so: the probe used to answer "the container's
-# default route names no gateway" for *every* failure, so a host with no `podman`
-# was told about its route -- a cause this machine does not have, since it has a
-# default route and the probe never reached reading one. A line naming the wrong
-# cause sends the operator to the wrong remedy, which is the same defect as a
-# stack trace in a different costume. Whichever of the two causes this machine
-# has, the answer must not be this one.
-assert_stderr_lacks "names no gateway"
-# And the alias is still unmeasured afterwards. A failed probe that recorded an
-# address would be worse than one that recorded nothing: the edge would start with
-# a gateway that does not reach this host, and it answers every route with a 502
-# that names no cause.
+sed -i 's/^pasta_options = .*/pasta_options = [ "--map-gw", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]/' "$config"
+run soil install --check
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "pasta_options"
+assert_stderr_has "--ipv4-only"
 assert_file_has "$config" 'alias = ""'
 
-# The same answer without running anything, which is what `--check` is for: the
-# item is drift, and it is the only item, because every other one converged in the
-# apply above.
-run soil install --check
-assert_exit 1
-assert_one_diagnostic "error:"
-assert_stderr_has "drift: ingress.alias holds an address the probe measured"
-
-# And the other half. With the alias measured — the value `soil install` writes
-# when the probe has run, and the only thing the edge refuses to start without —
-# the phase converges, and a `--check` on the converged host is silent. This is
-# what "exit 0 is done or already true" looks like (spec 1.2), and it is the
-# precondition t130-modules.sh and t130-scripts.sh state for themselves.
-stage_config guarden-measured.toml
+# The same table, whole again: the apply writes the `-g` value into
+# `ingress.alias` — not a measurement, a derivation — and the `--check` that
+# follows is what "already true" looks like from outside (spec 1.2). The two
+# fragments under it are the tie between this file and the hop below: the
+# container is run with the set the configuration actually pins, not with a set
+# retyped from the comment above it.
+stage_config guarden.toml
 run soil install --apply
 assert_exit 0
 assert_stderr_empty
+assert_file_has "$config" 'alias = "10.0.2.2"'
+assert_file_has "$config" '"--ipv4-only"'
+assert_file_has "$config" '"10.0.2.100"'
 run soil install --check
 assert_exit 0
 assert_stderr_empty
-assert_file_has "$config" 'alias = "192.0.2.1"'
+
+# The container's gateway is pinned, but a pinned option is a promise about a
+# container's routing, and only a container can keep it. So the promise is
+# measured the way the retired probe measured it — one real rootless container
+# under `ubuntu`, one listener on the host's loopback — and the four facts are
+# the same four: the default route names the gateway, the gateway reaches the
+# host, the connection arrives owned by a uid, and its host-side source is
+# 127.0.0.1.
+apt_waits install -y busybox-static
+assert_executable /bin/busybox
+
+hop=/tmp/guarden-t130-hop
+hop_tar=/tmp/guarden-t130-hop.tar
+hop_helper=/tmp/guarden-t130-hop.py
+hop_report=/tmp/guarden-t130-hop.report
+hop_port=27813
+
+# The image is this machine's own busybox, packed by the machine's own tar: a
+# payload built inside the VM from a file the machine already has. Nothing is
+# fetched — a fetch is a phase and the phase runs on a machine — and nothing is
+# a stand-in: the client below is the real busybox from the real package.
+mkdir -p "$hop/bin"
+cp /bin/busybox "$hop/bin/busybox"
+tar -C "$hop" -cf "$hop_tar" .
+chmod 644 "$hop_tar"
+# The helper is read by `ubuntu` and the checkout is not, so it is copied to a
+# readable path, where the listener and the report live too.
+cp "$GUARDEN_ROOT/tests/t130-hop.py" "$hop_helper"
+chmod 644 "$hop_helper"
+
+# The import is the unprivileged user's, because the image store is: the subuid
+# range belongs to `ubuntu` and only it may map container-root into it.
+run runuser -u ubuntu -- env -C /tmp podman import --change 'CMD ["/bin/busybox","sleep","3600"]' "$hop_tar" localhost/probe-bb:latest
+assert_exit 0
+
+# The container's default route names the pinned gateway, which is the value the
+# alias is; and its own address is the pinned one, so `-a` and `-g` are the
+# addresses this run is about.
+run runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error --network "pasta:$pinned" localhost/probe-bb /bin/busybox ip -4 route show default
+assert_exit 0
+assert_stdout_has "default via 10.0.2.2"
+run runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error --network "pasta:$pinned" localhost/probe-bb /bin/busybox ip addr show
+assert_exit 0
+assert_stdout_has "10.0.2.100"
+
+# The hop itself. The helper binds 127.0.0.1:$hop_port, starts one container as
+# the client dialling the pinned gateway at that port, and reads the kernel's
+# socket table while both ends are up — the sample a suite cannot take, because
+# the connection exists only for the life of the container.
+run runuser -u ubuntu -- env -C /tmp python3 "$hop_helper" "$hop_port" "pasta:$pinned" localhost/probe-bb:latest "$hop_report"
+assert_exit 0
+# The connection arrived and carried the container's payload ...
+assert_file_has "$hop_report" "peer=127.0.0.1"
+assert_file_has "$hop_report" "received=hop"
+# ... the host-side socket is owned by the unprivileged user's uid ...
+assert_file_has "$hop_report" "uid=1000"
+# ... and both of its ends are the loopback, which is what the OUTPUT accept
+# rules are written to match. `ss` says it in its own words, and the kernel's
+# table says it in its own: two readers, one answer.
+assert_file_has "$hop_report" "ss_local=127.0.0.1:$hop_port"
+assert_file_has "$hop_report" "ss_peer=127.0.0.1:"
+assert_file_has "$hop_report" "proc_local=127.0.0.1"
+assert_file_has "$hop_report" "proc_remote=127.0.0.1"
+
+# DNS still resolves inside the container: pasta forwards it, and the loopback
+# mapping the alias relies on does not swallow it. A container that cannot
+# resolve names is the box the old justification claimed the loopback deny would
+# make; the deny is there and this says the justification is still false.
+run runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup example.com
+assert_exit 0
+assert_stdout_has "example.com"
+
+# The host's route table gains nothing: the pinned subnet lives in the
+# container's own network namespace, and pasta's mapping is userspace. The
+# report carries the table as it was read during the hop, and the check below
+# reads it again after — a route that only appeared while a container ran would
+# be missed by the second one and is not missed by the first.
+assert_file_lacks "$hop_report" "10.0.2.0/24"
+run ip -4 route show
+assert_exit 0
+assert_stdout_lacks "10.0.2.0/24"
+
+# Clean up: the image is `ubuntu`'s, and the payload, the helper and the report
+# are this suite's own scratch.
+run runuser -u ubuntu -- env -C /tmp podman rmi localhost/probe-bb:latest
+assert_exit 0
+rm -rf "$hop" "$hop_tar" "$hop_helper" "$hop_report"

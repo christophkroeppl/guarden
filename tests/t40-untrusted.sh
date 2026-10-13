@@ -242,12 +242,12 @@ assert_exit 0
 unit=$render/units/web.container
 
 # None of the four survives. The backend is the host's own option list, so the
-# repository's `--no-map-gw` is gone and the one `guarden.toml` states is written;
-# the published-port set is the whole set from the allocation, so the
+# repository's `--no-map-gw` is gone and the pinned set `guarden.toml` states is
+# written; the published-port set is the whole set from the allocation, so the
 # repository's `8080:80` is gone; and the host entries come from the declared
 # edges, of which this service has none, so the repository's own name for another
 # host is gone with the key.
-assert_file_has "$unit" "Network=pasta:--map-gw"
+assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2"
 assert_file_lacks "$unit" "Network=pasta:--no-map-gw"
 assert_file_lacks "$unit" "PublishPort=8080:80"
 assert_file_lacks "$unit" "elsewhere"
@@ -278,7 +278,7 @@ assert_file_lacks "$render/shared/routes.toml" "8080"
 # writes only into `--out`; the two assertions are that the input tree gained
 # nothing and that the alias the render depends on was the one in the config.
 assert_file_missing "$quadlet/render"
-assert_file_has /etc/guarden/guarden.toml 'alias = "192.0.2.1"'
+assert_file_has /etc/guarden/guarden.toml 'alias = "10.0.2.2"'
 
 # **The render is unprivileged and that is the property, not the absence of a
 # `sudo`.** The old assertion was `assert_not_called "sudo"`, which read a log.

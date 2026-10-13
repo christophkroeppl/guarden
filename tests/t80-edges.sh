@@ -189,7 +189,7 @@ assert_file_has "$conf" "daddr 127.0.0.0/8 jump DROP;"
 [ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
     | grep -cE "^[[:space:]]+mod owner uid-owner $provider_uid daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;\$" || true)" = 1 ] \
     || _fail "no accept rule gives the provider the db publication on the loopback address"
-assert_file_lacks "$conf" "192.0.2.1"
+assert_file_lacks "$conf" "10.0.2.2"
 # **No interface match, per spec 7.6.** The spec was rewritten (00bdddd — `git
 # log -S 'no interface match' -- docs/spec.md` finds it alone) to say
 # the code has never emitted `-o lo` — the example was corrected rather than the
@@ -249,7 +249,7 @@ render=$GUARDEN_FIXTURES/render
 run loom render "$home" --service needful-staging --out "$render"
 assert_exit 0
 for unit in web worker; do
-    assert_file_has "$render/units/$unit.container" "AddHost=pgprov-staging:192.0.2.1"
+    assert_file_has "$render/units/$unit.container" "AddHost=pgprov-staging:10.0.2.2"
 done
 assert_file_has "$render/units/guarden.env" "DB_HOST=pgprov-staging"
 assert_file_has "$render/units/guarden.env" "DB_PORT=$db_pub"
