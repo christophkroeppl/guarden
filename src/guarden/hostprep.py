@@ -36,7 +36,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
-from guarden import conf, errors, packagelist, paths, users, volumes, zram
+from guarden import conf, config, errors, packagelist, paths, users, volumes, zram
 from guarden import hosttool as h
 from guarden.config import PASTA_OPTIONS, TRACK_DEFAULTS, float_value, int_value
 from guarden.hosttool import Item, hostpath, lock
@@ -2180,6 +2180,14 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
     # would make `--check` write, and `--check` changes nothing.
     modules = list(modules or [])
     config_path = h.config_path()
+
+    # A stated configuration is read and validated before any item runs: the
+    # alias item is last, and a refusal that arrived after the items before it
+    # had converged would be a phase that did half its work on input it should
+    # never have started. A host with no file yet is not refused -- the shipped
+    # template is what it is about to get.
+    if config_path.is_file():
+        config.load(config_path)
 
     # The `guarden` group comes first, before anything that names it: a directory
     # is installed `root:guarden` and a program user is created `--gid guarden`,
