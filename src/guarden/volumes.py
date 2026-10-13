@@ -84,11 +84,20 @@ def canonical_values(retention: Retention) -> list[tuple[str, str]]:
         ("TIMELINE_LIMIT_YEARLY", "0"),
         ("NUMBER_LIMIT", NUMBER_LIMIT),
         ("NUMBER_LIMIT_IMPORTANT", NUMBER_LIMIT_IMPORTANT),
-        ("FREE_LIMIT", _percentage(retention.free_limit)),
+        ("FREE_LIMIT", percentage(retention.free_limit)),
     ]
 
 
-def _percentage(value: float) -> str:
+def percentage(value: float) -> str:
+    """One spelling for a percentage, whichever writer reaches it.
+
+    `snapper set-config` compares strings, so `0.20` and `0.2` are different
+    values to it -- and `soil storage --check` would report a staging volume
+    it had converged itself as drifted, because the create path normalised
+    through this function while the converge path passed the template's
+    quoted `"0.20"` through raw (measured and fixed 2026-10-12; both paths
+    call this now).
+    """
     return repr(float(value)) if not float(value).is_integer() else str(int(value))
 
 

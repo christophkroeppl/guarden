@@ -116,10 +116,14 @@ assert_snapper_config root EMPTY_PRE_POST_CLEANUP no
 assert_snapper_config root NUMBER_MIN_AGE 3600
 assert_snapper_config root NUMBER_CLEANUP yes
 assert_snapper_config root TIMELINE_CLEANUP yes
+assert_snapper_config root TIMELINE_CREATE no
 assert_snapper_config root NUMBER_LIMIT_IMPORTANT 8-12
 assert_snapper_config root NUMBER_LIMIT 2-10
 assert_snapper_config root TIMELINE_LIMIT_HOURLY 0
 assert_snapper_config root TIMELINE_LIMIT_WEEKLY 0-4
+assert_snapper_config root TIMELINE_LIMIT_MONTHLY 0-6
+assert_snapper_config root TIMELINE_LIMIT_QUARTERLY 0-2
+assert_snapper_config root TIMELINE_LIMIT_YEARLY 0
 # The template snapper builds every new configuration from, asserted to be there
 # before it is read: a missing template would otherwise leave the expected value
 # empty and fail the next line with a comparison rather than a cause.
@@ -207,6 +211,11 @@ seed_snapper_config myapp-staging-data
 run soil storage --apply
 assert_snapper_config myapp-staging-data TIMELINE_LIMIT_DAILY 0-0
 assert_snapper_config myapp-staging-data TIMELINE_LIMIT_MONTHLY 0-6
+# The template quotes staging's floor (`free_limit = "0.20"`), the create
+# path normalises it and so must the converge: `snapper set-config` compares
+# strings, and `0.20` written over a created `0.2` is a `soil storage
+# --check` failure on a volume the check had just converged itself.
+assert_snapper_config myapp-staging-data FREE_LIMIT 0.2
 
 # A service's own overrides win over the track, and the ladder's other buckets
 # are per-volume for the same reason.

@@ -37,7 +37,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
-from guarden import conf, errors, packagelist, paths, users, zram
+from guarden import conf, errors, packagelist, paths, users, volumes, zram
 from guarden import hosttool as h
 from guarden.hosttool import Item, hostpath, lock
 
@@ -983,7 +983,12 @@ def _retention_for(service: str, config: dict) -> tuple[int, str, dict[str, str]
     registry = h.read_config(hostpath(*REGISTRY_DIR, f"{service}.toml"))
     row = h.track(config, registry.get("environment", ""))
     keep_last = int(row.get("keep_last", 0)) if row else 0
-    free_limit = str(row.get("free_limit", "0.20")) if row else "0.20"
+    # Through the same normaliser the create path uses: the template quotes
+    # staging's and preview's free_limit (`"0.20"`), `snapper set-config`
+    # compares strings, and a converge that wrote `0.20` over its own `0.2`
+    # would leave `soil storage --check` reporting a volume it had just
+    # converged as drifted.
+    free_limit = volumes.percentage(row.get("free_limit", "0.20")) if row else "0.2"
     buckets = {"weekly": "4", "monthly": "6", "quarterly": "2"}
 
     overrides = h.read_config(hostpath("etc", "guarden", "services", service, "overrides.toml"))
@@ -991,7 +996,7 @@ def _retention_for(service: str, config: dict) -> tuple[int, str, dict[str, str]
     if "keep_last" in retention:
         keep_last = int(retention["keep_last"])
     if "free_limit" in retention:
-        free_limit = str(retention["free_limit"])
+        free_limit = volumes.percentage(retention["free_limit"])
     for bucket in buckets:
         if bucket in retention:
             buckets[bucket] = str(retention[bucket])
