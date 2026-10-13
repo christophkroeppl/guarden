@@ -215,7 +215,7 @@ def float_value(table: dict, key: str, where: str) -> float:
     reports a volume it had just written itself as drifted (measured
     2026-10-12, one default deeper than the first fix).
     """
-    value = table.get(key, 0.10)
+    value = table.get(key, TRACK_DEFAULTS["free_limit"])
     if isinstance(value, bool):
         raise _type_error(where, key, "a number")
     if isinstance(value, str):

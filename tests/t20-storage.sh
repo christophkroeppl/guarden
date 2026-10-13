@@ -149,8 +149,10 @@ assert_snapper_config root EMPTY_PRE_POST_CLEANUP no
 # right, which is the claim the value pins cannot make.
 run snapper -c root set-config TIMELINE_LIMIT_QUARTERLY=0-0
 assert_exit 0
+assert_snapper_config root TIMELINE_LIMIT_QUARTERLY 0-0
 run snapper -c root set-config TIMELINE_LIMIT_YEARLY=1
 assert_exit 0
+assert_snapper_config root TIMELINE_LIMIT_YEARLY 1
 run soil storage --apply
 assert_exit 0
 assert_snapper_config root TIMELINE_LIMIT_QUARTERLY 0-2
@@ -245,6 +247,7 @@ assert_snapper_config myapp-staging-data FREE_LIMIT 0.2
 # a converge is the only thing that runs the writer.
 run snapper -c myapp-staging-data set-config FREE_LIMIT=0.20
 assert_exit 0
+assert_snapper_config myapp-staging-data FREE_LIMIT 0.20
 run soil storage --apply
 assert_exit 0
 assert_snapper_config myapp-staging-data FREE_LIMIT 0.2
@@ -257,6 +260,16 @@ run soil storage --apply
 assert_snapper_config myapp-staging-data TIMELINE_LIMIT_DAILY 0-3
 assert_snapper_config myapp-staging-data FREE_LIMIT 0.08
 assert_snapper_config myapp-staging-data TIMELINE_LIMIT_QUARTERLY 0-1
+
+# An integral floor is the one value the two normalisers spell differently:
+# `percentage(2.0)` is `2`, `str(2.0)` is `2.0`. No track would ship it -- it
+# is a free-space floor of 200% -- and that is exactly why it is here: it is
+# the only value that can tell the normaliser from a plain string conversion,
+# and a mutation from one to the other must not survive the suite.
+seed /etc/guarden/services/myapp-staging/overrides.toml \
+    '[retention]' 'free_limit = 2.0'
+run soil storage --apply
+assert_snapper_config myapp-staging-data FREE_LIMIT 2
 
 # The longest registry entry wins, so `myapp-production` and `myapp-preview` both
 # being services is not ambiguous for `myapp-preview-data`, and an instance's

@@ -387,9 +387,10 @@ name = "production"
 host_prefix = ""                 # route host is myapp.$DOMAIN
 gated = true                     # refuses to start on a missing or placeholder credential
 weight = 1000                    # CPUWeight and IOWeight in generated units
-free_limit = 0.10                # snapper FREE_LIMIT: a PERCENTAGE of free space (§8.1). A
-                             # TOML float, not a string, so 0.10 means ten-hundredths of a
-                             # percent -- 0.1% -- and never the 10% a string would invite
+free_limit = 0.10                # snapper FREE_LIMIT: the free-space floor (§8.1). Read as a
+                             # number however it is written -- this row's TOML float or the
+                             # quoted form the two rows below use; both spell ten-hundredths
+                             # of a percent -- 0.1% -- and never the 10% a bare 10 invites
 keep_last = 7                    # the daily bucket's maximum, NOT a total (§8.1)
 kind = "slot"                    # one service per workload
 fork_from = ""                   # the track this one forks from; empty starts empty (§8.3)
