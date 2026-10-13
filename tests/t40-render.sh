@@ -64,6 +64,19 @@ assert_file_has "$unit" "Network=pasta:--map-gw"
 assert_file_has "$unit" "Image=docker.io/library/nginx:1.27"
 assert_file_has "$unit" "Environment=APP_MODE=production"
 
+# A second option joins with commas, podman's separator: podman cuts the value
+# at the first colon and then splits on commas, so a colon-joined pair would
+# arrive as one mangled option and podman would append its default `--no-map-gw`
+# — the host mapping off, which is the one thing this table exists to keep on.
+sed -i 's/^pasta_options = .*/pasta_options = [ "--map-gw", "--ipv4-only" ]/' \
+    "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+run loom render "$project" --service app-production --out "$render"
+assert_exit 0
+assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only"
+stage_config guarden-measured.toml
+run loom render "$project" --service app-production --out "$render"
+assert_exit 0
+
 # `${domain}` is the only substitution, taken from host.domain. A host
 # environment variable does not reach a rendered unit, because a unit that
 # depended on when it was rendered would not be byte-identical across runs.

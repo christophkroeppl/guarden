@@ -171,8 +171,11 @@ class Config:
     def network(self) -> str:
         """The `Network=` value every generated unit carries, verbatim and in
         order: `pasta:` followed by the option set, from this table and nowhere
-        else (spec 3.1)."""
-        return ":".join([self.backend, *self.pasta_options])
+        else (spec 3.1). The options are joined with commas — podman cuts the
+        value at the first colon and splits the remainder on commas — so a colon
+        between two options arrives as one mangled option and podman appends its
+        default `--no-map-gw`, and the host mapping is off."""
+        return f"{self.backend}:" + ",".join(self.pasta_options)
 
 
 def _type_error(where: str, key: str, want: str) -> errors.GuardenError:
@@ -365,17 +368,23 @@ def _pasta_options(table: dict, where_file: Any) -> tuple[str, ...]:
     gets written: `--map-host-loopback none` as two entries and
     `--map-host-loopback=none` as one. A refusal that only understood one of them
     would be a refusal that turns on punctuation.
+
+    The list the refusal tests is the comma-split one, because that is the list
+    podman runs: it cuts the value at the first colon and then on commas, so an
+    entry packed behind a comma has to be tested piecewise — a `--no-map-gw`
+    after one would otherwise evade this refusal while podman still honoured it.
     """
     value = table.get("pasta_options", ["--map-gw"])
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise _type_error(str(where_file), "network.pasta_options", "a list of strings")
-    for index, option in enumerate(value):
+    options = [piece for item in value for piece in item.split(",")]
+    for index, option in enumerate(options):
         if option in REFUSED_PASTA_OPTIONS:
             raise _refused_pasta(where_file, option)
         for flag, setting in REFUSED_PASTA_PAIRS:
             if option == f"{flag}={setting}":
                 raise _refused_pasta(where_file, option)
-            if option == flag and index + 1 < len(value) and value[index + 1] == setting:
+            if option == flag and index + 1 < len(options) and options[index + 1] == setting:
                 raise _refused_pasta(where_file, f"{flag} {setting}")
     return tuple(value)
 
