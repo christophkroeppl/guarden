@@ -305,6 +305,21 @@ assert_stderr_has "warning: the snapper configuration operator-owned is not guar
 assert_snapper_config operator-owned EMPTY_PRE_POST_CLEANUP yes
 assert_snapper_config operator-owned NUMBER_MIN_AGE 0
 
+# The same rule on the other reader. `soil storage` reads the row through the
+# same strict function the create path uses, so a quoted floor is refused with
+# the track named and exit 1 rather than converged -- TOML types are distinct
+# and a string is not a number. The trailing assertions read volumes and
+# configurations rather than the table, so the row staying unreadable is
+# fine.
+seed /etc/guarden/guarden.toml \
+    '[[environments]]' 'name = "production"' 'keep_last = 7' 'free_limit = 0.10' \
+    'kind = "slot"' \
+    '[[environments]]' 'name = "staging"' 'keep_last = 0' 'free_limit = "0.20"' \
+    'kind = "slot"'
+run soil storage --check
+assert_exit 1
+assert_stderr_has "free_limit is not a number"
+
 # `soil storage` creates no service volume and never recreates a service's
 # configuration: the mutator creates those, and a subvolume here would be one
 # more way for a service's data to appear from nowhere. The registries above name

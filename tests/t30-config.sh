@@ -29,9 +29,10 @@ assert_stdout_has "no services"
 # With the shipped table staged, the complaint is about the poke's tree rather
 # than about the configuration: that is what this ticket's first item claims, and
 # it is the only thing a staged host can say about the table before a service
-# exists. That every row of the shipped table writes free_limit as a TOML float,
-# and how both readers refuse the quoted form, is proven in the type-error cases
-# below.
+# exists. That every row of the shipped table writes free_limit as a TOML float
+# is pinned by the case below; each reader's refusal of the quoted form is
+# proven where its line lives -- the create path below, the converge in
+# t20-storage's closing case.
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 2
 assert_one_diagnostic "error:"
@@ -99,10 +100,10 @@ assert_exit 2
 assert_stderr_has "'previews'"
 assert_stderr_has 'must carry a cap'
 
-# The shipped table's own free_limit is a float on one row and a string on the
-# other two, and both are read as numbers: a retention value that is sometimes
-# 0.1 and sometimes "0.2" is one two programs would round differently. What it
-# rounds to is proven where a value is actually used, in t30-create.sh.
+# Every row of the shipped table writes free_limit as a TOML float, and the
+# quoted form is refused -- by the create path in the type-error case above,
+# and by the converge in t20-storage's closing case. What the value converges
+# to once read is proven where it is actually used, in t30-create.sh.
 stage_config guarden.toml
 assert_file_has "$GUARDEN_PREFIX/etc/guarden/guarden.toml" 'free_limit = 0.10'
 assert_file_has "$GUARDEN_PREFIX/etc/guarden/guarden.toml" 'free_limit = 0.20'

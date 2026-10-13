@@ -94,9 +94,9 @@ def percentage(value: float) -> str:
     `snapper set-config` compares strings, so `0.20` and `0.2` are different
     values to it -- and `soil storage --check` would report a staging volume
     it had converged itself as drifted, because the create path normalised
-    through this function while the converge path passed the template's
-    quoted `"0.20"` through raw (measured and fixed 2026-10-12; both paths
-    call this now).
+    through this function while the converge path read the row raw (measured
+    and fixed 2026-10-12; the template's rows are plain TOML floats now, and
+    both paths call this).
     """
     return repr(float(value)) if not float(value).is_integer() else str(int(value))
 

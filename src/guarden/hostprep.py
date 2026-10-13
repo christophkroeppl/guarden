@@ -983,6 +983,10 @@ def _retention_for(service: str, config: dict) -> tuple[int, str, dict[str, str]
     """
     registry = h.read_config(hostpath(*REGISTRY_DIR, f"{service}.toml"))
     row = h.track(config, registry.get("environment", ""))
+    # The row's `where` names the track and not a file on purpose: when
+    # `/etc/guarden/guarden.toml` is absent this reader falls back to the
+    # shipped template (see `_desired_for`'s caller), so naming a file here
+    # would sometimes lie.
     where_row = f"the {registry.get('environment', '')} track"
     # Through the same strict readers and the same normaliser the create path
     # uses: a TOML number of the key's type, refused otherwise by
