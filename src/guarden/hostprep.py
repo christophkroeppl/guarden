@@ -39,7 +39,7 @@ from pathlib import Path, PurePosixPath
 
 from guarden import conf, errors, packagelist, paths, users, volumes, zram
 from guarden import hosttool as h
-from guarden.config import float_value
+from guarden.config import TRACK_DEFAULTS, float_value
 from guarden.hosttool import Item, hostpath, lock
 
 # --------------------------------------------------------------------------
@@ -995,7 +995,7 @@ def _retention_for(service: str, config: dict) -> tuple[int, str, dict[str, str]
     free_limit = volumes.percentage(
         float_value(row, "free_limit", f"the {registry.get('environment', '')} track")
         if row
-        else 0.10
+        else TRACK_DEFAULTS["free_limit"]
     )
     buckets = {"weekly": "4", "monthly": "6", "quarterly": "2"}
 

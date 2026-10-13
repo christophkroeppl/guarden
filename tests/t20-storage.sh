@@ -238,6 +238,17 @@ assert_snapper_config myapp-staging-data TIMELINE_LIMIT_DAILY 0-0
 assert_snapper_config myapp-staging-data TIMELINE_LIMIT_MONTHLY 0-6
 assert_snapper_config myapp-staging-data FREE_LIMIT 0.2
 
+# The seeded row proves the reader; the writer is proved by perturbation, the
+# shape the root ladder uses above. `percentage` and `str` differ only on an
+# integral float, so no seeded value can tell the two normalisers apart -- a
+# live configuration written back to the raw quoted spelling and repaired by
+# a converge is the only thing that runs the writer.
+run snapper -c myapp-staging-data set-config FREE_LIMIT=0.20
+assert_exit 0
+run soil storage --apply
+assert_exit 0
+assert_snapper_config myapp-staging-data FREE_LIMIT 0.2
+
 # A service's own overrides win over the track, and the ladder's other buckets
 # are per-volume for the same reason.
 seed /etc/guarden/services/myapp-staging/overrides.toml \
@@ -261,6 +272,16 @@ seed_snapper_config 'myapp-preview-feature\x2dx-data' 0-7
 run soil storage --apply
 assert_snapper_config 'myapp-preview-feature\x2dx-data' TIMELINE_LIMIT_DAILY 0-1
 assert_snapper_config 'myapp-preview-feature\x2dx-data' FREE_LIMIT 0.2
+
+# A registry entry naming a track the table no longer holds is the no-row
+# branch of the converge, and it has to spell the create path's default:
+# `0.10` through the same normaliser, `0.1`. The staging row is gone from the
+# table above; this service keeps its own registry entry and no overrides.
+seed /var/lib/guarden/registry/myapp-norow.toml \
+    'name = "myapp-norow"' 'environment = "staging"'
+seed_snapper_config myapp-norow-data
+run soil storage --apply
+assert_snapper_config myapp-norow-data FREE_LIMIT 0.1
 
 # Anything else is skipped with a warning naming it, and left exactly as it was: a
 # configuration guarden did not create belongs to the operator. The value is the
