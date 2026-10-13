@@ -372,7 +372,7 @@ The rest of the host, and where to look when a path is not what you expected:
 | path | what it is |
 |---|---|
 | `/usr/lib/guarden/` | guarden's own files, root-owned, never written by a deploy |
-| `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Four writers, all under the `modules` lock and all through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else; `soil install` writes the derived `ingress.alias` (from the pinned `-g`, ADR-0018), seeds `[modules] enabled` from cloud-init, and writes `host.admin_user`. Two share `[modules] enabled`, so a write re-reads the file under the lock rather than trusting what it saw before it |
+| `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Four writers, all under the `modules` lock and all through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else; `soil install` writes the derived `ingress.alias` (from the pinned `-g`), seeds `[modules] enabled` from cloud-init, and writes `host.admin_user`. Two share `[modules] enabled`, so a write re-reads the file under the lock rather than trusting what it saw before it |
 | `/etc/guarden/services/<name>/overrides.toml` | admin grants: ports, firewall rules, retention, groups, mounts |
 | `/etc/guarden/firewall/00-ssh.conf` | SSH accept: root:root 0600, seed-once, its own `guarden-ssh` chain, first rule in INPUT after conntrack and lo — written by `soil firewall` |
 | `/etc/guarden/firewall/10-framework.conf` | ferm skeleton, the interface's `route_localnet` — written by `soil firewall`. No grant reaches this file |
@@ -677,7 +677,7 @@ weedr service list
 There is a second address in this design and it is easy to confuse with the publications, so it
 is worth naming here. A rootless **container** cannot dial `127.0.0.1` on the host; it can dial
 the address pasta maps, which is the container's **default gateway** — pinned to `10.0.2.2` by
-the `[network] pasta_options` set (ADR-0018) and recorded in `guarden.toml` as `ingress.alias`:
+the `[network] pasta_options` set and recorded in `guarden.toml` as `ingress.alias`:
 
 ```sh
 grep -A3 '^\[ingress\]' /etc/guarden/guarden.toml   # alias = "10.0.2.2"
@@ -692,7 +692,7 @@ new gateway, a VPS migration or a VPN changes nothing about it. The one host sta
 collide with it is a route of your own inside the reserved `10.0.2.0/24`; `soil sysctl --check`
 warns when one exists, and the remedy is the range change below — not an edit to the alias.
 
-**A mapping that stops working has no host-side check.** ADR-0018 states the trade plainly: with
+**A mapping that stops working has no host-side check.** The trade is stated plainly: with
 the alias derived from configuration, nothing on the host can tell a working mapping from a broken
 one — the first symptom is a 502 at the edge, or a refused connection inside a container, and
 nothing in guarden's reporting says why. What catches a podman or pasta change before your users
@@ -710,7 +710,7 @@ and nothing else depends on it: a browser, a proxy or a network that cannot use 
 nothing, and removing the rule breaks nothing. A service's own granted port adds one more rule,
 in the other file, on the same shape.
 
-### moving an existing host onto the pinned alias (ADR-0018)
+### moving an existing host onto the pinned alias
 
 A host installed before the pin keeps the `pasta_options` it was installed with, and the new
 validation **refuses it** — exit `2` naming `[network] pasta_options` — until you replace the

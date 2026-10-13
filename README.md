@@ -74,7 +74,7 @@ weedr project add myapp --repository git@github.com:you/myapp.git
 ```
 
 `soil install` derives `ingress.alias` from the pinned `[network] pasta_options` — there is no
-probe, no container image to fetch and nothing the host has to measure (ADR-0018) — so the first
+probe, no container image to fetch and nothing the host has to measure — so the first
 run converges fully. The edge still refuses to start while `ingress.alias` is empty, which after
 a successful install it is not.
 
