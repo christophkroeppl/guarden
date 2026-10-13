@@ -43,18 +43,14 @@ assert_file_missing /etc/guarden/guarden.toml
 [ "$(stat -c %y /etc/guarden)" = "$etcd_before" ] \
     || _fail "--check wrote into /etc/guarden"
 
-# Everything the phase converges has converged even though the one item it
-# cannot converge is still unmet, because a failed probe is a finding and not a
-# rollback. The probe is the last item in the phase, so this is also the evidence
-# that it is last.
-#
-# The probe's own diagnostic is not asserted: it needs podman on PATH and the
-# image it measures with is `localhost/guarden-probe`, which this repository
-# neither builds nor ships, so which of the probe's four facts fails is a
-# property of the machine. What guarden owns either way is that it records no
-# address it did not measure, and that is asserted below.
+# Every item of the phase converges on this machine, and the alias is one of
+# them: it is derived from the pinned `[network] pasta_options` in the table the
+# phase seeds, so nothing is measured and nothing needs a container image this
+# repository does not ship. The apply is exit 0 and silent — a converged host —
+# and the drift count the alias item is evidence for comes back below, planted.
 run soil install --apply
-assert_exit 1
+assert_exit 0
+assert_stderr_empty
 
 # The shipped table is seeded, and it is a table and not a list in the code: a
 # track is a row, and adding one is appending a block.
@@ -134,12 +130,16 @@ assert_file_has /etc/systemd/system/guarden-creds.path "PathChanged=/etc/guarden
 assert_enabled guarden-creds.path
 assert_enabled guarden-creds-boot.service
 
-# The probe is the one item this phase cannot converge without, so it is drift
-# on every run until the probe has run: an alias that is wrong is worse than an
-# alias that is absent, because the edge refuses to start without it. One drift
-# line and no other is the whole of the claim -- a converged host with an
-# unmeasurable alias is exactly that, and the enable items above are converged so
-# they are not the extra line a new item would otherwise add here.
+# **The alias item is still the phase's last, and the count is re-derived
+# against it.** The old shape could leave one drift line on a converged host
+# because the probe could not run; the new one holds on any host whose table
+# pins the set, so the evidence is planted: an alias the table does not name —
+# empty, the state a host whose converge has not run is in — is drift, and
+# exactly one line of it, because every other item on this host has converged.
+# One line and no other is the whole of the claim that the item is last, and the
+# enable items above are converged, so they are not the extra line a new item
+# would otherwise add here.
+sed -i 's/^alias = .*/alias = ""/' /etc/guarden/guarden.toml
 run soil install --check
 assert_exit 1
 # The line count is read with wc and not with lib.sh's assert_one_diagnostic,
@@ -147,16 +147,21 @@ assert_exit 1
 # an empty stderr into a pass.
 [ "$(wc -l < "$GUARDEN_FIXTURES/stderr")" = 1 ] \
     || _fail "expected exactly one drift line, got $(wc -l < "$GUARDEN_FIXTURES/stderr")"
-assert_stderr_has "drift: ingress.alias holds an address the probe measured"
-assert_file_has /etc/guarden/guarden.toml 'alias = ""'
-assert_stderr_has "the edge does not start without it"
+assert_stderr_has "drift: ingress.alias"
+# And the converge puts the derived address back: an alias that is not the one
+# the pinned set names is repaired, not left, and the host that has it is
+# converged again.
+run soil install --apply
+assert_exit 0
+assert_stderr_empty
+assert_file_has /etc/guarden/guarden.toml 'alias = "10.0.2.2"'
 
 # guarden.toml has three writers and two of them share a key, so a write takes
 # the modules lock and rewrites only the key it owns. The file is otherwise the
 # shipped one, with the operator's own tracks intact.
 assert_file_exists /run/guarden/locks/modules.lock
 assert_file_has /etc/guarden/guarden.toml 'publication_range = [20000, 32767]'
-assert_file_has /etc/guarden/guarden.toml 'pasta_options = [ "--map-gw" ]'
+assert_file_has /etc/guarden/guarden.toml 'pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]'
 
 # A second apply converges nothing that it can: no account and no group is
 # created, and no installed file is rewritten. The counts are the claim, and the
@@ -166,7 +171,7 @@ accounts=$(getent passwd | wc -l)
 groups=$(getent group | wc -l)
 tmpfiles_inode=$(stat -c %i /etc/tmpfiles.d/guarden-tmpfiles.conf)
 run soil install --apply
-assert_exit 1
+assert_exit 0
 [ "$(getent passwd | wc -l)" = "$accounts" ] \
     || _fail "a second apply created an account"
 [ "$(getent group | wc -l)" = "$groups" ] \
@@ -178,9 +183,9 @@ assert_passwd hose
 assert_no_group edge
 
 # And the host still answers exactly the same question, which is the same claim
-# asked from the other side and is stronger than a run that made no calls.
+# asked from the other side and is stronger than a run that made no calls: a
+# converged host is silent, the alias among the rest — it holds the address the
+# pinned set names, so there is nothing left for the phase to say.
 run soil install --check
-assert_exit 1
-[ "$(wc -l < "$GUARDEN_FIXTURES/stderr")" = 1 ] \
-    || _fail "expected exactly one drift line, got $(wc -l < "$GUARDEN_FIXTURES/stderr")"
-assert_stderr_has "drift: ingress.alias"
+assert_exit 0
+assert_stderr_empty

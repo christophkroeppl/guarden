@@ -102,12 +102,11 @@ run soil --check
 assert_exit 1
 assert_stderr_has "drift:"
 
-# There is deliberately no `soil --apply` here. The whole-host converge stops at
-# `install`'s alias probe, which no machine can satisfy while the probe's image
-# is absent from this repository, so a run never reaches `units` and could never
-# report anything about this phase. The claim the old whole-host block was making
-# -- a second apply creates nothing -- is asked of this file's own phase instead,
-# where it can be answered.
+# There is deliberately no `soil --apply` here. This file is about the `units`
+# phase and drives it directly, so every exit code below is the phase's own
+# answer rather than a fact about the five phases before it. The claim the old
+# whole-host block was making -- a second apply creates nothing -- is asked of
+# this file's own phase instead, where it can be answered.
 accounts=$(getent passwd | wc -l)
 run soil units --apply
 assert_exit 0

@@ -69,12 +69,12 @@ assert_file_exists "$slice"
 assert_file_has "$slice" "target = \"routed-staging:$publication\""
 assert_file_has "$slice" 'host = "staging.web"'
 assert_file_lacks "$slice" "127.0.0.1"
-assert_file_lacks "$slice" "192.0.2.1"
+assert_file_lacks "$slice" "10.0.2.2"
 
 # The edge resolves that name through an `AddHost=` entry in **its own** units.
 # Without it the edge cannot resolve its own configuration and every route 502s,
 # which is why this is in the edge's units and not in the routed service's.
-assert_file_has "$edge_unit" "AddHost=routed-staging:192.0.2.1"
+assert_file_has "$edge_unit" "AddHost=routed-staging:10.0.2.2"
 
 # The edge is allowed to dial the publication, by uid, and nobody else is: the
 # owner, the edge, and the declared consumers — and this service declared none.

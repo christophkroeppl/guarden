@@ -118,7 +118,7 @@ assert_file_has "$registry" 'homepage = "homepage"'
 unit=/var/lib/guarden/services/homepage-production/home/.config/containers/systemd/homepage.container
 assert_file_exists "$unit"
 assert_file_has "$unit" "Rendered by loom"
-assert_file_has "$unit" "Network=pasta:"
+assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2"
 assert_file_has "$unit" "PublishPort=127.0.0.1:$publication:3000"
 assert_file_lacks "$unit" "AmbientCapabilities"
 assert_file_lacks "$unit" "CapAdd"

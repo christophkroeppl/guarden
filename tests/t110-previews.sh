@@ -33,8 +33,8 @@ stage_config guarden.toml
 
 # `soil install --apply` is a precondition and not this file's subject: ingest
 # renders through loom, and the programs are not on this host until install has
-# run. It goes after stage_config because it probes the host's gateway and writes
-# what it measured into the config it is reading.
+# run. It goes after stage_config because it derives the alias from the pinned
+# set and writes it into the config it is reading.
 stage_podlet_release
 run soil packages --apply
 assert_not_rejected

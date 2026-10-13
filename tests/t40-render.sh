@@ -59,20 +59,22 @@ unit=$render/units/web.container
 
 # The renderer owns the network backend, and writes it from the [network] table
 # and nowhere else — so a `pasta_options` entry in containers.conf cannot reach
-# a guarden container.
-assert_file_has "$unit" "Network=pasta:--map-gw"
+# a guarden container. The pinned set is what the table states, and the whole set
+# is what the unit carries.
+assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2"
 assert_file_has "$unit" "Image=docker.io/library/nginx:1.27"
 assert_file_has "$unit" "Environment=APP_MODE=production"
 
-# A second option joins with commas, podman's separator: podman cuts the value
-# at the first colon and then splits on commas, so a colon-joined pair would
-# arrive as one mangled option and podman would append its default `--no-map-gw`
-# — the host mapping off, which is the one thing this table exists to keep on.
-sed -i 's/^pasta_options = .*/pasta_options = [ "--map-gw", "--ipv4-only" ]/' \
+# The options join with commas, podman's separator: podman cuts the value at the
+# first colon and then splits on commas, so a colon-joined pair would arrive as
+# one mangled option and podman would append its default `--no-map-gw` — the host
+# mapping off, which is the one thing this table exists to keep on. The table
+# drives the bytes, so changing a pinned value changes the rendered one.
+sed -i 's/^pasta_options = .*/pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.101", "-n", "24", "-g", "10.0.2.2" ]/' \
     "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
 run loom render "$project" --service app-production --out "$render"
 assert_exit 0
-assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only"
+assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.101,-n,24,-g,10.0.2.2"
 stage_config guarden-measured.toml
 run loom render "$project" --service app-production --out "$render"
 assert_exit 0

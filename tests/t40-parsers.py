@@ -67,8 +67,8 @@ def sections() -> None:
         "Image=docker.io/library/nginx:1.27\n"
         "Volume=data:/var/lib/app\n"
         "Volume=chainstate:/data\n"
-        "AddHost=provider:192.0.2.1\n"
-        "AddHost=other:192.0.2.2\n"
+        "AddHost=provider:10.0.2.2\n"
+        "AddHost=other:10.0.2.3\n"
         "Environment=APP_HOST=example.com\n"
         "\n"
         "[Service]\n"
@@ -84,7 +84,7 @@ def sections() -> None:
         # collapsed them into a set would install a unit with one of the two.
         check(unit.get("Container", "Volume") == ["data:/var/lib/app", "chainstate:/data"],
               "both Volume lines are kept, in order")
-        check(unit.get("Container", "AddHost") == ["provider:192.0.2.1", "other:192.0.2.2"],
+        check(unit.get("Container", "AddHost") == ["provider:10.0.2.2", "other:10.0.2.3"],
               "both AddHost lines are kept, in order")
         check(unit.one("Service", "Restart") == "always", "a [Service] key is read")
         check(unit.get("Unit", "Image") == [], "a key is not read into another table")

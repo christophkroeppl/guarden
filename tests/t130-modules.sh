@@ -5,7 +5,7 @@
 # (ticket 130, spec 3.5, 6.1, ADR-0008)
 #
 # **Three writers share `guarden.toml` and two of them share a lock.** `weedr
-# module add` appends to `[modules] enabled`, `soil install` writes the measured
+# module add` appends to `[modules] enabled`, `soil install` writes the derived
 # `ingress.alias` and seeds `[modules] enabled` from cloud-init, and an operator
 # edits it. Every one of them takes the `modules` lock, goes through the write
 # protocol, and **re-reads the file under the lock** rather than trusting what it
@@ -42,18 +42,17 @@ config=/etc/guarden/guarden.toml
 # simply not converged yet.
 #
 # The staged table carries `[modules] enabled` **empty** and `ingress.alias`
-# **measured**, and both halves earn their place. The empty selection is what
-# makes the merge claim non-vacuous: every shipped fixture already carries
-# `["gate-traefik", "homepage"]`, so a test that started from one of those could never
+# **already the derived address**, and both halves earn their place. The empty
+# selection is what makes the merge claim non-vacuous: every shipped fixture
+# already carries `["gate-traefik", "homepage"]`, so a test that started from one of those could never
 # distinguish "the installer's selection was merged" from "the file already said
 # this" — the first assertion would have been satisfied before the apply ran.
-# The measured alias is what keeps the non-zero exits in this file honest: the
-# alias is the one item of `install` that only the probe can write, this
-# repository ships no probe image for it, and a suite whose exit codes came from
-# that item would be asserting the probe's absence rather than anything about
-# modules. So every exit code below is the phase's own answer on a host whose
-# state this file set: the drift the fixture states is reported before the apply
-# that fixes it, and a converged host is silent.
+# The recorded alias is what keeps the non-zero exits in this file honest: it is
+# the address the pinned set names, so an `install --check` on this host has
+# nothing to say about it, and a suite whose exit codes came from that item
+# would be asserting the wrong drift. So every exit code below is the phase's
+# own answer on a host whose state this file set: the drift the fixture states
+# is reported before the apply that fixes it, and a converged host is silent.
 stage_config guarden-nomodules.toml
 run soil install --check --modules gate-traefik
 assert_exit 1
@@ -61,8 +60,9 @@ assert_exit 1
 # records no module and the caller named one.
 assert_stderr_has "[modules] enabled records a selection nobody has to choose twice"
 # Nothing else supplies that exit code. An `install --check` on this host that
-# reported `ingress.alias` would be reporting an item no phase owns here, and the
-# suite would be green for the wrong reason.
+# reported `ingress.alias` would be reporting an item that holds here — the
+# fixture records the derived address — and the suite would be green for the
+# wrong reason.
 assert_stderr_lacks "ingress.alias"
 # `--check` never writes, and the only way to see that is to ask twice: a second
 # `--check` on a host the first one did not change finds exactly what the first
@@ -112,7 +112,7 @@ assert_stderr_empty
 assert_file_has "$config" "[[environments]]"
 assert_file_has "$config" 'name = "production"'
 assert_file_has "$config" 'gated = true'
-assert_file_has "$config" 'alias = "192.0.2.1"'
+assert_file_has "$config" 'alias = "10.0.2.2"'
 assert_file_has "$config" 'domain = "example.com"'
 
 # An operator's own edit is the third writer, and the failure two writers sharing
@@ -147,7 +147,7 @@ assert_file_has "$config" '"homepage"'
 assert_file_has "$config" "[[environments]]"
 assert_file_has "$config" 'name = "production"'
 assert_file_has "$config" 'gated = true'
-assert_file_has "$config" 'alias = "192.0.2.1"'
+assert_file_has "$config" 'alias = "10.0.2.2"'
 assert_file_has "$config" 'domain = "example.com"'
 
 # An unknown module is rejected input rather than a module that silently enables
@@ -171,7 +171,7 @@ assert_file_missing /var/lib/guarden/locks
 # value genuinely is replaced rather than merged, because there is nothing to merge
 # with. It is also the one case where the converge *has* something to do, so the
 # exit code follows the state the file was just put into rather than an item
-# borrowed from the probe.
+# inherited from the machine.
 sed -i '/^\[modules\]/,+1d' "$config"
 # The key is gone. The assertion names the key rather than the word `[modules]`,
 # because this fixture's own header comment names the table and a search for that

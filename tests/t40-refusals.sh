@@ -130,7 +130,9 @@ assert_stderr_has "tmpfs"
 # The host's own configuration is refused the same way: pasta is the only backend
 # v1 supports, and an option that removes the host mapping would leave a box where
 # no container can reach any other (spec 3.1, ticket 15 item E). These are only
-# reachable through `render`, because the render is what reads them.
+# reachable through `render`, because the render is what reads them. Each set
+# below is the pinned one plus the offender, so the option under test is the only
+# thing wrong with the table.
 stage_service() {
     seed "$GUARDEN_PREFIX/var/lib/guarden/registry/$1.toml" \
         "service = \"$1\"" "workload = \"myapp\"" "project = \"myapp\"" \
@@ -144,7 +146,7 @@ refuse_config() {
     shift
     seed "$GUARDEN_PREFIX/etc/guarden/guarden.toml" \
         '[host]' 'domain = "example.com"' 'admin_user = "operator"' \
-        '[ingress]' 'alias = "192.0.2.1"' 'publication_range = [ 20000, 32767 ]' \
+        '[ingress]' 'alias = "10.0.2.2"' 'publication_range = [ 20000, 32767 ]' \
         '[build]' 'lanes = 1' '[network]' "$@" \
         '[[environments]]' 'name = "staging"' 'host_prefix = "staging."' 'weight = 100' \
         'kind = "slot"' 'fork_from = ""'
@@ -155,12 +157,16 @@ refuse_config() {
 }
 
 refuse_config 'slirp4netns' 'backend = "slirp4netns"'
-refuse_config '--no-map-gw' 'pasta_options = [ "--map-gw", "--no-map-gw" ]'
+refuse_config '--no-map-gw' \
+    'pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2", "--no-map-gw" ]'
 refuse_config '--map-host-loopback none' \
-    'pasta_options = [ "--map-gw", "--map-host-loopback", "none" ]'
-refuse_config '--map-host-loopback=none' 'pasta_options = [ "--map-host-loopback=none" ]'
+    'pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2", "--map-host-loopback", "none" ]'
+refuse_config '--map-host-loopback=none' \
+    'pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2", "--map-host-loopback=none" ]'
 
 # `--no-map-gw` again, this time packed behind a comma inside one entry: podman
 # splits the value on commas and runs every piece, so a refusal that tested
 # whole entries would let this through while podman still honoured the option.
-refuse_config '--no-map-gw' 'pasta_options = [ "--map-gw,--no-map-gw" ]'
+# The pinned pieces sit beside it, so the packed entry is the only thing wrong.
+refuse_config '--no-map-gw' \
+    'pasta_options = [ "--map-gw,--no-map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]'

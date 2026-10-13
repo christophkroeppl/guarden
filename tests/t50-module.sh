@@ -217,7 +217,7 @@ assert_file_has "$services" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $web_publication jump ACCEPT;"
 assert_file_has "$services" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $tls_publication jump ACCEPT;"
-assert_file_lacks "$services" "192.0.2.1"
+assert_file_lacks "$services" "10.0.2.2"
 # The API's accept set is `host.admin_user` and nobody else.
 admin_uid=$(getent passwd operator | cut -d: -f3)
 assert_file_has "$services" \
