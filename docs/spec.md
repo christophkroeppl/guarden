@@ -2440,7 +2440,11 @@ what removes their snapper configurations. They are gone before the next `soil s
 runs, so there is no stale configuration to skip.
 
 `soil storage` converges this fixed set of values into **every** configuration it can see and
-rewrites nothing else in them:
+rewrites nothing else in them — **and a configuration is created with the same set**:
+`weedr service ingest` writes each state volume's configuration from the identical list
+(`volumes.canonical_values`), so a service is never live with a value `soil storage` would have
+to come along later and change. The two lists are held to each other by `t30-create`'s pins on
+the create-time values and `t20-storage`'s on the converged ones:
 
 | key | value | why |
 |---|---|---|

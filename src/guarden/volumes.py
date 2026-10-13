@@ -69,6 +69,13 @@ def canonical_values(retention: Retention) -> list[tuple[str, str]]:
         ("NUMBER_MIN_AGE", NUMBER_MIN_AGE),
         ("NUMBER_CLEANUP", "yes"),
         ("TIMELINE_CLEANUP", "yes"),
+        # The creation-time set is the same fixed set `soil storage` converges
+        # (spec 8.1), and this one has to be here as much as there: snapper's
+        # default is `yes`, and the distribution's `snapper-timeline.timer`
+        # would start taking snapshots guarden never made the moment a service
+        # was ingested -- before any storage apply reached the configuration.
+        # The EROFS of 2026-10-12 was written by exactly such a snapshot.
+        ("TIMELINE_CREATE", "no"),
         ("TIMELINE_LIMIT_HOURLY", "0"),
         ("TIMELINE_LIMIT_DAILY", f"0-{retention.keep_last}"),
         ("TIMELINE_LIMIT_WEEKLY", f"0-{retention.weekly}"),

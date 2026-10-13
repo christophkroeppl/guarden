@@ -74,6 +74,7 @@ assert_snapper_config myapp-production-data EMPTY_PRE_POST_CLEANUP no
 assert_snapper_config myapp-production-data NUMBER_MIN_AGE 3600
 assert_snapper_config myapp-production-data NUMBER_CLEANUP yes
 assert_snapper_config myapp-production-data TIMELINE_CLEANUP yes
+assert_snapper_config myapp-production-data TIMELINE_CREATE no
 assert_snapper_config myapp-production-data TIMELINE_LIMIT_HOURLY 0
 assert_snapper_config myapp-production-data TIMELINE_LIMIT_DAILY 0-7
 assert_snapper_config myapp-production-data TIMELINE_LIMIT_WEEKLY 0-4

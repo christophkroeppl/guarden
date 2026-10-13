@@ -66,8 +66,9 @@ ROUTINE = "timeline"
 ON_DEMAND = "number"
 
 # What a state volume's snapper configuration lives in, and what `snapper
-# create-config` makes of it: a btrfs subvolume, `root:root`, `0750`.
-SNAPSHOTS_DIRECTORY = ".snapshots"
+# create-config` makes of it: a btrfs subvolume, `root:root`, `0750`. The
+# name itself is `paths.SNAPSHOTS` -- one constant for the three modules
+# that match on it.
 SNAPSHOTS_MODE = 0o750
 
 
@@ -562,7 +563,7 @@ def _snapshots_subvolume(volume: Path) -> None:
     directory or nothing — there is no path here that deletes data, and a
     non-empty one is left alone rather than forced.
     """
-    directory = volume / SNAPSHOTS_DIRECTORY
+    directory = volume / paths.SNAPSHOTS
     if not directory.is_dir():
         return
     if tool.call(["btrfs", "subvolume", "show", str(directory)]).returncode == 0:

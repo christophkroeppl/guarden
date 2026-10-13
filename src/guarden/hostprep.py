@@ -224,7 +224,7 @@ CANONICAL: tuple[tuple[str, str | None], ...] = (
 # configuration it can see", and the two that are not constants — the daily
 # bucket's maximum and the free-space floor — are read from the `[[environments]]`
 # row that owns the volume. No row owns `root`, so those two are left as the
-# distribution shipped them and the other eleven are held.
+# distribution shipped them and the other twelve are held.
 HOST_FIXED = tuple(key for key, value in CANONICAL if value is not None)
 
 PACKAGED_CLEANUP = ("snapper-cleanup.timer", "snapper-cleanup.service")
