@@ -4,10 +4,10 @@
 #
 # (ticket 130, spec 3.5, 6.1, ADR-0008)
 #
-# **Three writers share `guarden.toml` and two of them share a lock.** `weedr
+# **Four writers share `guarden.toml` and all of them share a lock.** `weedr
 # module add` appends to `[modules] enabled`, `soil install` writes the derived
-# `ingress.alias` and seeds `[modules] enabled` from cloud-init, and an operator
-# edits it. Every one of them takes the `modules` lock, goes through the write
+# `ingress.alias`, seeds `[modules] enabled` from cloud-init, writes
+# `host.admin_user`, and an operator edits it. Every one of them takes the `modules` lock, goes through the write
 # protocol, and **re-reads the file under the lock** rather than trusting what it
 # saw before it — so a `weedr module add` that appended while an install waited for
 # the lock is still in the list, and the installer adds its selection alongside it

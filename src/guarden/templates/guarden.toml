@@ -1,7 +1,8 @@
-# The host configuration. Three writers, all under the `modules` lock and all
+# The host configuration. Four writers, all under the `modules` lock and all
 # through the spec §3.5 protocol: `soil install` seeds it, `soil install` writes
-# the `ingress.alias` derived from `[network] pasta_options`, and `weedr module
-# add` appends to `[modules] enabled`. Each rewrites only the keys it owns.
+# the `ingress.alias` derived from `[network] pasta_options`, `soil install` writes
+# `host.admin_user`, and `weedr module add` appends to `[modules] enabled`. Each
+# rewrites only the keys it owns.
 #
 # A track is this table's row and not a name in the code: adding `preprod` is
 # appending a block, and nothing branches on the word.

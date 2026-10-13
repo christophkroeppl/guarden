@@ -372,7 +372,7 @@ The rest of the host, and where to look when a path is not what you expected:
 | path | what it is |
 |---|---|
 | `/usr/lib/guarden/` | guarden's own files, root-owned, never written by a deploy |
-| `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Three writers, all under the `modules` lock and all through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else; `soil install` writes the derived `ingress.alias` (from the pinned `-g`, ADR-0018) and seeds `[modules] enabled` from cloud-init. Two share `[modules] enabled`, so a write re-reads the file under the lock rather than trusting what it saw before it |
+| `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Four writers, all under the `modules` lock and all through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else; `soil install` writes the derived `ingress.alias` (from the pinned `-g`, ADR-0018), seeds `[modules] enabled` from cloud-init, and writes `host.admin_user`. Two share `[modules] enabled`, so a write re-reads the file under the lock rather than trusting what it saw before it |
 | `/etc/guarden/services/<name>/overrides.toml` | admin grants: ports, firewall rules, retention, groups, mounts |
 | `/etc/guarden/firewall/00-ssh.conf` | SSH accept: root:root 0600, seed-once, its own `guarden-ssh` chain, first rule in INPUT after conntrack and lo — written by `soil firewall` |
 | `/etc/guarden/firewall/10-framework.conf` | ferm skeleton, the interface's `route_localnet` — written by `soil firewall`. No grant reaches this file |
@@ -1280,8 +1280,8 @@ weedr module remove homepage                  # alias: rm
 its services and grants what it declares; it does not re-run soil and does not touch other
 modules. `weedr module add` appends the module's name to `[modules] enabled` and rewrites
 nothing else in the file, under the `modules` lock and by the same write protocol as every
-other shared file. It is one of three writers — `soil install` seeds the table and writes
-the derived `ingress.alias` — and the only one that changes which modules are on.
+other shared file. It is one of four writers — `soil install` seeds the table, writes
+the derived `ingress.alias`, and writes `host.admin_user` — and the only one that changes which modules are on.
 
 **`weedr module add gate-traefik` is also what creates the `edge` group** and adds the edge's user to it.
 `soil install` creates the `guarden` group and no other, and never an `edge` — the `guarden`
