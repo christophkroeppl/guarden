@@ -95,6 +95,21 @@ assert_zram_size_percent() {
         || _fail "zram0's disksize is $got, not $want ($1 percent of ${memtotal_mb}MiB)"
 }
 
+assert_conf_neutralized() {
+    # The teardown WRITES this file; it does not delete it. The package ships
+    # /usr/lib/systemd/zram-generator.conf with a [zram0] section, and the
+    # generator falls back to it when the /etc file is absent — so a deleted
+    # config re-creates the device at the vendor default (50% of RAM). "Absent
+    # means absent" is only true while a sectionless file shadows the vendor one.
+    [ -f "$generator_conf" ] \
+        || _fail "$generator_conf is missing; a deleted config lets the vendor [zram0] re-create the device"
+    grep -q '^\[zram0\]' "$generator_conf" \
+        && _fail "$generator_conf still carries a [zram0] section, so the device can come back"
+    grep -q '^\[zram' "$generator_conf" \
+        && _fail "$generator_conf carries a zram section, so the device can come back"
+    return 0
+}
+
 # --- the host this file needs -----------------------------------------------
 #
 # guarden.toml is the operator's file and this file is not the operator, so what
@@ -110,7 +125,8 @@ restore() {
     if [ -w /sys/class/zram-control/hot_remove ]; then
         printf '0\n' >/sys/class/zram-control/hot_remove 2>/dev/null || :
     fi
-    rm -f "$generator_conf" "$marker"
+    rm -f "$marker"
+    printf '# neutralized by the suite: no zram device on this host\n' > "$generator_conf"
     systemctl daemon-reload >/dev/null 2>&1 || :
     if [ -f "$config_saved" ]; then
         cp "$config_saved" "$config"
@@ -147,6 +163,10 @@ assert_not_rejected
 # The file is put back exactly as it was found, and the marker is removed, so the
 # teardown below has nothing to distinguish from a host that never had a device.
 stage_config guarden-measured.toml
+# The generator config is removed BY HAND and the marker is left: the marker is
+# what tells the phase this device was guarden's, so `soil install --apply` below
+# is what takes it down. The hand-removal is the operator's own edit, and the
+# phase's teardown is what must survive it.
 rm -f "$generator_conf"
 
 # The device is taken down by the PHASE, not by hand: the knob goes, and
@@ -156,7 +176,7 @@ rm -f "$generator_conf"
 run soil install --apply
 assert_not_rejected
 assert_no_zram
-assert_file_missing "$generator_conf"
+assert_conf_neutralized
 assert_file_missing "$marker"
 
 run soil packages --check
@@ -173,7 +193,7 @@ assert_stderr_lacks "swappiness"
 run soil install --apply
 assert_not_rejected
 assert_stderr_lacks "zram"
-assert_file_missing "$generator_conf"
+assert_conf_neutralized
 assert_file_missing "$marker"
 assert_no_zram
 
@@ -212,7 +232,7 @@ assert_exit 1
 assert_stderr_has "drift: /etc/systemd/zram-generator.conf carries the operator's zram device"
 assert_stderr_has "drift: /var/lib/guarden/soil/zram records that this zram device is guarden's"
 assert_stderr_has "drift: /dev/zram0 is initialised with zstd"
-assert_file_missing "$generator_conf"
+assert_conf_neutralized
 assert_no_zram
 
 # `vm.swappiness` joins the canonical set, and only because the knob is there. The
@@ -310,7 +330,7 @@ assert_file_exists /dev/zram0
 run soil install --apply
 assert_exit 0
 assert_stderr_empty
-assert_file_missing "$generator_conf"
+assert_conf_neutralized
 assert_file_missing "$marker"
 # The device is out of service, not deleted: a hot-remove leaves `/dev/zram0` in
 # place, so what "gone" means is measured rather than asserted as a missing file.
@@ -352,7 +372,7 @@ assert_one_diagnostic "error:"
 assert_stderr_has "size_percent"
 assert_stderr_has "150"
 assert_stderr_has "larger than the memory backing it"
-assert_file_missing "$generator_conf"
+assert_conf_neutralized
 assert_no_zram
 
 # An algorithm guarden does not offer. lz4 is a real backend and a real tradeoff,
@@ -364,7 +384,7 @@ assert_one_diagnostic "error:"
 assert_stderr_has "algorithm"
 assert_stderr_has "lz4"
 assert_stderr_has "the algorithms guarden offers are zstd"
-assert_file_missing "$generator_conf"
+assert_conf_neutralized
 assert_no_zram
 
 # The packages phase asks the same question with the same answer, because it reads
@@ -380,5 +400,5 @@ assert_stderr_has "algorithm"
 # converged. The last thing asserted is the absence a later suite depends on: a
 # host with no knob carries no device and says nothing about one.
 assert_no_zram
-assert_file_missing "$generator_conf"
+assert_conf_neutralized
 assert_file_missing "$marker"

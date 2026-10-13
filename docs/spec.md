@@ -514,8 +514,13 @@ last sysctl.
 
 **A converge that only ever creates cannot take down what it created**, so a marker under
 `/var/lib/guarden/soil/` records that the device is guarden's. Removing the table and re-running
-`--apply` swaps the device off, resets it, hot-removes it and deletes both files, which is the
-converge-in-both-directions property `soil sysctl` has. **A `zram:` key in a manifest is refused
+`--apply` swaps the device off, resets it, hot-removes it, removes the marker, and **replaces the
+generator configuration with a sectionless one rather than deleting it** — the package ships
+`/usr/lib/systemd/zram-generator.conf` with a `[zram0]` section at 50% of RAM, and the generator
+falls back to that vendor file when the `/etc` file is absent, so a deleted configuration does not
+take the device away; it reverts the host to the distribution's default device and the next
+`daemon-reload` re-creates it. This is the converge-in-both-directions property `soil sysctl` has,
+made true rather than assumed. **A `zram:` key in a manifest is refused
 by name** in all three vocabularies a repository speaks — the manifest's own top level, a
 Compose service's keys, and a hand-written quadlet file's `Sysctl=` line — because a repository
 that could state a device would be a second place for it to be wrong.

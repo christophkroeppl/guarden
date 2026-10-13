@@ -1,45 +1,61 @@
-# 270 — zram teardown: the device survived a converged teardown once
+# 270 — zram teardown: the device came back at the vendor's default size
 
-Blockers: none. Found 2026-10-13 during the pinned-alias verification runs.
+**Resolved 2026-10-13.** Root cause found, fixed, and verified on a real machine.
 
-## What was observed
+## The defect
 
-`t170-zram.sh`, on commit `db48348` (a fresh cut, `--no-cache`), failed its
-first `assert_no_zram` — *"zram0's size is 2038956032, so the device is still
-there"* — immediately after the "absent means absent" block's
-`soil install --apply`, which asserts the phase takes the device down. The
-same suite on the same sha passed on a second fresh cut minutes later. So the
-phase's teardown converged at least once and did not at least once, on the
-same tree.
+`soil install --apply` with the `[zram]` table removed took the device down and
+then **deleted** `/etc/systemd/zram-generator.conf`. But the package ships
+`/usr/lib/systemd/zram-generator.conf`, which enables `[zram0]` at **50% of RAM
+or 4GiB, whichever is less**:
 
-## Why it is a ticket and not a retry
+```
+$ cat /usr/lib/systemd/zram-generator.conf
+# * size: 50% of available RAM or 4GiB, whichever is less
+[zram0]
+```
 
-The phase exits `0` in both runs, which means `_gone` judged true at the
-phase's end in both — the device was gone when `soil install --apply`
-returned. The suite's assertion seconds later found a device with the
-generator's own size (50% of RAM) back. Something re-created it between the
-phase's end and the assertion, or `_gone`'s `present()` read raced the
-kernel's release.
+The generator reads that vendor file whenever the `/etc` file is absent. So the
+delete did not take the device away — it **reverted the host to the
+distribution's default device**, and the `daemon-reload` at the end of
+`_teardown` regenerated `dev-zram0.swap`, which `swap.target` then activated.
 
-`_teardown` (zram.py) unlinks the generator conf before its `daemon-reload`,
-and `_tear_down` resets and hot-removes with `_await_reset` bounded at 10 s.
-The suite is `fresh`, so nothing else ran on that machine. A bounded wait
-that expires silently and a `_gone` that reads `/sys` are the two places a
-race could live; neither has been instrumented.
+That is the flake exactly: the device came back at `2038956032` bytes, which is
+`min(3889 MiB / 2, 4096 MiB)` — **50% of that VM's usable RAM**, the vendor
+default, not guarden's 25%.
 
-## What this ticket wants
+Measured on a cut (probe 3):
 
-Instrument the teardown path — which step the flake lands in (the await, the
-hot-remove's return, or a generator re-run) — and either widen the wait
-against the observed timing or make the assertion's subject provably
-post-convergence. The next occurrence's evidence should be captured before
-the fix: run the suite in a loop on one cut and record `disksize`,
-`initstate`, the swap table and `journalctl -u systemd-zram-setup@zram0` at
-the failure.
+```
+no /etc config       → units: dev-zram0.swap … ; disksize = 2038956032  (the flake's number)
+guarden teardown     → rm /etc conf + daemon-reload → units STILL generated, device re-created
+/etc config with     → units: (none); swap.target does nothing; device stays absent
+  NO [zram0] section
+```
 
-## Evidence
+## The fix
 
-- red: `~/.hermes/cache/scratch/pinned-fix-runs.log` (sha `db48348`, runner
-  `q-4`, t170-zram.sh: *"zram0's size is 2038956032"*)
-- green: `~/.hermes/cache/scratch/zram-recheck.log` (same sha, runner
-  `z-recheck`)
+`_teardown` **writes a sectionless config** instead of deleting the file
+(`zram.teardown_conf()`). An `/etc` file with no `[zram0]` shadows the vendor
+section, so the generator produces no unit and the device cannot come back.
+`_gone()` now checks the file holds that neutralizing content rather than that
+the file is absent. A second, smaller hardening: `_reset_device()` retries
+`zramctl --reset` while the kernel still holds the device (a reset right after
+`swapoff` can fail `Device or resource busy`), bounded at 5 s with one `error:`
+at the end if it truly will not reset.
+
+## Verification
+
+- `zram-verify.log`: after the fix, `disksize=absent` at +0/+2/+5/+10 s, units
+  0, swap 0, and **an explicit `swap.target` start leaves the device absent**
+  (that start is what re-created it before); a second setup/teardown cycle is
+  idempotent.
+- `t170-zram.sh` green (`zram-suite-runs2.log`), and the suite's own assertions
+  now pin the neutralizing file rather than a missing one.
+
+## Why the ticket said "the phase exits 0 in both runs"
+
+It did not, necessarily: `assert_not_rejected` accepts exit **0 or 1**, so the
+suite never distinguished a converged teardown from a drift-reported one. The
+premise was an assumption, and the real evidence was the size — which matched
+the vendor default, not guarden's.

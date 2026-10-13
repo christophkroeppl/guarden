@@ -418,6 +418,34 @@ def _await_reset(timeout: float = 5.0) -> None:
         time.sleep(0.1)
 
 
+def _reset_device(timeout: float = 5.0) -> None:
+    """`zramctl --reset`, retrying while the kernel still holds the device.
+
+    **A busy reset is not a failure, it is a device that has not let go yet.**
+    `zramctl --reset` on a device whose `swapoff` has returned but whose pages
+    are still being reclaimed fails with `Device or resource busy`; the reset
+    then has to be issued again. Measured on a cut: a single reset right after a
+    `swapoff` failed busy, and the retry a moment later succeeded.
+
+    The retry is bounded and the failure is reported once, at the end, so a
+    device that genuinely will not reset is still an operator's `error:` rather
+    than a silent loop.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        result = h.run("zramctl", "--reset", DEVICE_PATH)
+        if result.ok:
+            return
+        if time.monotonic() >= deadline:
+            reason = result.err.strip().splitlines()
+            h.error(
+                f"zramctl --reset {DEVICE_PATH}: "
+                f"{reason[0] if reason else result.code}"
+            )
+            return
+        time.sleep(0.2)
+
+
 def _tear_down() -> None:
     """Take a device off the host's swap and out of its sysfs, whatever state.
 
@@ -429,7 +457,7 @@ def _tear_down() -> None:
     if not present():
         return
     h.run("swapoff", DEVICE_PATH)
-    h.run_or_die("zramctl", "--reset", DEVICE_PATH)
+    _reset_device()
     _await_reset()
     control = h.hostpath(*ZRAM_CONTROL, "hot_remove")
     try:
@@ -442,16 +470,44 @@ def _tear_down() -> None:
             h.warn(f"the zram device {DEVICE_PATH} was reset but not hot-removed: {exc.strerror}")
 
 
+def teardown_conf() -> str:
+    """What `/etc/systemd/zram-generator.conf` holds when guarden has no device.
+
+    **This file is written, never deleted, and the difference is the whole of
+    this function.** The package ships `/usr/lib/systemd/zram-generator.conf`,
+    which enables `[zram0]` at 50% of RAM or 4GiB, whichever is less. The
+    generator reads that vendor file when the operator's `/etc` file is absent,
+    so **removing** guarden's config does not take the device away — it reverts
+    the host to the distribution's default device, and the next `daemon-reload`
+    regenerates `dev-zram0.swap` and `swap.target` activates it. Measured on a
+    cut: after a delete-and-reload the generated units were still present and the
+    device came back at 2038956032 bytes, exactly the vendor default for that
+    VM's RAM.
+
+    An `/etc` file with no `[zram0]` section is what actually disables the
+    generator: the vendor section is dropped and nothing replaces it, so no unit
+    is generated and the device cannot come back. This is the "absent means
+    absent" claim made true rather than assumed.
+    """
+    return (
+        "# Written by soil install, and by nothing else. This host has no zram\n"
+        "# device: the section below is deliberately absent, because an empty file\n"
+        "# is what keeps the package's own /usr/lib/systemd/zram-generator.conf\n"
+        "# from re-creating one.\n"
+    )
+
+
 def _teardown_item() -> h.Item:
     """The knob is gone and the marker says this device was guarden's.
 
     The device is swapped off, reset and hot-removed rather than merely
-    disabled, and the two files go with it: "the knob is gone" has to mean the
-    device is gone and the host says nothing about zram again.
+    disabled, and the config is replaced by a neutralizing one: "the knob is
+    gone" has to mean the device is gone and the host says nothing about zram
+    again.
     """
     return h.Item(
-        f"the zram device is gone: /{'/'.join(CONF)}, /{'/'.join(MARKER)} and "
-        f"/dev/{DEVICE} are all absent, because the knob is absent",
+        f"the zram device is gone: /{'/'.join(CONF)} is neutralized, "
+        f"/{'/'.join(MARKER)} and /dev/{DEVICE} are absent, because the knob is absent",
         _gone,
         _teardown,
     )
@@ -461,9 +517,10 @@ def _gone() -> bool:
     # Presence is the device's size and not the node's existence: `present()` is
     # `disksize() > 0` by design (caa414d), and `zramctl --reset` leaves
     # `/sys/block/zram0` behind with a size of zero. A device that has gone away
-    # is one whose size is zero, with conf and marker both removed.
+    # is one whose size is zero, whose config is the neutralizing one, and whose
+    # marker is removed.
     return (
-        not conf_path().exists()
+        _read(conf_path()) == teardown_conf()
         and not marker_path().exists()
         and not present()
     )
@@ -471,7 +528,7 @@ def _gone() -> bool:
 
 def _teardown() -> None:
     _tear_down()
-    conf_path().unlink(missing_ok=True)
+    h.write_file(conf_path(), teardown_conf(), h.MODE_CONFIG)
     marker_path().unlink(missing_ok=True)
     h.run("systemctl", "daemon-reload")
     h.run("sysctl", "-q", "-w", f"vm.swappiness={KERNEL_DEFAULT_SWAPPINESS}")
