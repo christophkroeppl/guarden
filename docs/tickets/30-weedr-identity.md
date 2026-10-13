@@ -133,6 +133,6 @@ Configuration is read from the root-owned files, and never written by us.
 - [ ] `/etc/guarden/guarden.toml` is read but never rewritten by any verb on this ticket. There
       are **three** writers of the file in the system, all under the `modules` lock and all
       through the write protocol and touching disjoint keys: `weedr module add` appends to
-      `[modules] enabled` and rewrites nothing else, and `soil install` writes the measured
-      `ingress.alias` from its probe
+      `[modules] enabled` and rewrites nothing else, and `soil install` writes the derived
+      `ingress.alias` (from the pinned `-g`, ADR-0018)
 - [ ] Verified at the CLI seam, in the VM

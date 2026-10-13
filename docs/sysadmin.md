@@ -370,7 +370,7 @@ The rest of the host, and where to look when a path is not what you expected:
 | path | what it is |
 |---|---|
 | `/usr/lib/guarden/` | guarden's own files, root-owned, never written by a deploy |
-| `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Three writers, all under the `modules` lock and all through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else; `soil install` writes the measured `ingress.alias` and seeds `[modules] enabled` from cloud-init. Two share `[modules] enabled`, so a write re-reads the file under the lock rather than trusting what it saw before it |
+| `/etc/guarden/guarden.toml` | the environment, network, ingress and module tables. Three writers, all under the `modules` lock and all through the spec §3.5 protocol: `weedr module add` appends to `[modules] enabled` and rewrites nothing else; `soil install` writes the derived `ingress.alias` (from the pinned `-g`, ADR-0018) and seeds `[modules] enabled` from cloud-init. Two share `[modules] enabled`, so a write re-reads the file under the lock rather than trusting what it saw before it |
 | `/etc/guarden/services/<name>/overrides.toml` | admin grants: ports, firewall rules, retention, groups, mounts |
 | `/etc/guarden/firewall/00-ssh.conf` | SSH accept: root:root 0600, seed-once, its own `guarden-ssh` chain, first rule in INPUT after conntrack and lo — written by `soil firewall` |
 | `/etc/guarden/firewall/10-framework.conf` | ferm skeleton, the interface's `route_localnet` — written by `soil firewall`. No grant reaches this file |
@@ -674,24 +674,21 @@ weedr service list
 
 There is a second address in this design and it is easy to confuse with the publications, so it
 is worth naming here. A rootless **container** cannot dial `127.0.0.1` on the host; it can dial
-the address pasta maps, which is the container's **default gateway** and is recorded in
-`guarden.toml` as `ingress.alias`:
+the address pasta maps, which is the container's **default gateway** — pinned to `10.0.2.2` by
+the `[network] pasta_options` set (ADR-0018) and recorded in `guarden.toml` as `ingress.alias`:
 
 ```sh
-grep -A3 '^\[ingress\]' /etc/guarden/guarden.toml
-ip -4 route show default          # the alias is derived from this
+grep -A3 '^\[ingress\]' /etc/guarden/guarden.toml   # alias = "10.0.2.2"
+grep -A4 '^\[network\]' /etc/guarden/guarden.toml   # the pinned set the alias is derived from
 ```
 
 `ingress.alias` appears in exactly one place — the `AddHost=` line `loom` writes into a
 consumer's units, so `<provider>` resolves — and in **no firewall rule**, because pasta has
 already translated the address to `127.0.0.1` by the time the kernel's packet path sees the
-connection. If the two disagree, every service can reach every other one and nothing looks
-wrong.
-
-Because the alias comes from the host's default route rather than from guarden, it drifts when
-the route changes — a new gateway, a VPS migration, a VPN. `soil sysctl --check` reports the
-mismatch, and the fix is to re-run `soil install --apply` so the probe re-measures it, not to
-edit the file by hand.
+connection. It is a constant and it cannot drift: it does not come from the host's route, and a
+new gateway, a VPS migration or a VPN changes nothing about it. The one host state that can
+collide with it is a route of your own inside the reserved `10.0.2.0/24`; `soil sysctl --check`
+warns when one exists, and the remedy is the range change below — not an edit to the alias.
 
 Those are the edge's three ingress ports and there are no others. Every other number in
 `weedr port list` — 8096, 32400, 5001, 20000 and the rest — is a publication a service exposes
@@ -703,6 +700,37 @@ which the edge serves from the same TLS publication as `443/tcp`. It is an addit
 and nothing else depends on it: a browser, a proxy or a network that cannot use HTTP/3 loses
 nothing, and removing the rule breaks nothing. A service's own granted port adds one more rule,
 in the other file, on the same shape.
+
+### moving an existing host onto the pinned alias (ADR-0018)
+
+A host installed before the pin keeps the `pasta_options` it was installed with, and the new
+validation **refuses it** — exit `2` naming `[network] pasta_options` — until you replace the
+set with the pinned one:
+
+```toml
+[network]
+pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]
+```
+
+Then `soil install --apply` derives `ingress.alias` from the `-g` value and writes it, and the
+alias is a constant from then on. But the units already on the box were rendered with the
+**old** alias, and nothing re-renders them on its own: **every service must be re-deployed
+once** (or its consumers re-rendered), or its containers resolve their dependencies to the old
+gateway and fail. One service at a time, through whatever re-renders it — `weedr service add`'s
+reconcile or the next `furrow deploy` — and every preview instance with it.
+
+The check that says it is done — no rendered consumer unit names anything but the pinned
+address:
+
+```sh
+grep -rI 'AddHost=' /var/lib/guarden/services/*/home/ | grep -v '10\.0\.2\.2$'
+# nothing printed: every consumer unit resolves its providers through the pinned alias
+```
+
+Any line it prints is a service that has not been re-deployed yet. And if your own LAN uses
+`10.0.2.0/24`, do not live with the overlap: change the range in the one place it is written —
+the three values `-a`, `-n` and `-g` in `[network] pasta_options` — re-run `soil install
+--apply`, which derives the new alias, and re-deploy as above.
 
 ### there is no masquerade, and there never was
 

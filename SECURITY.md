@@ -277,27 +277,30 @@ cooperative, not structural.
 The owner match is deliberately **not** used in `INPUT`. A forwarded packet has no socket, so
 an owner match there is unreliable and would drop the edge's traffic.
 
-**How a container reaches another service is a measurement, not an assumption — and what the
-host firewall matches on is not the measured value.** Rootless containers cannot reach a host
-loopback address other than the one pasta exposes, and per-service `127.x` blocks are
-unreachable from inside them by construction. From `pasta(1)`, that one address is the container's
-**default gateway**, mapped onto the host's loopback in userspace: "Packets from the guest to
-`addr` will be redirected to the host. On the host such packets will appear to have both source
-and destination of `127.0.0.1` or `::1`."
+**How a container reaches another service is pinned, not measured — and what the host firewall
+matches on is not that address.** Rootless containers cannot reach a host loopback address other
+than the one pasta exposes, and per-service `127.x` blocks are unreachable from inside them by
+construction. From `pasta(1)`, that one address is the container's **default gateway**, mapped
+onto the host's loopback in userspace: "Packets from the guest to `addr` will be redirected to
+the host. On the host such packets will appear to have both source and destination of `127.0.0.1`
+or `::1`." The gateway is `10.0.2.2` on every host: the `[network] pasta_options` set pins it and
+`soil install` derives `ingress.alias` from it (ADR-0018). The probe that once measured it is
+gone — podman 5.7 refuses `--network pasta:` as root, which is what `soil install` runs as, and
+the image it needed was external — so the address is a constant, and no check reports drift
+because a constant cannot drift.
 
 Two things follow, and the second is the one that has been got wrong before:
 
-- The alias is a **name the consumer resolves** in `AddHost=`, and it is derived from the host's
-  default route rather than chosen by guarden. Ticket 15 measures it, `soil install` records it
-  as `ingress.alias`, and `soil sysctl --check` reports drift when the recorded value no longer
-  matches the route.
+- The alias is a **name the consumer resolves** in `AddHost=`, and it is derived from the pinned
+  option set rather than from the host's route. `soil install` records it as `ingress.alias`, and
+  the edge does not start without it.
 - **Every host-side rule matches `127.0.0.1`, not the alias.** The translation is done by pasta
   in userspace before the kernel's packet path, so no rule in any table could match the alias
   even in principle, and the only host control that sees this hop at all is the `owner` match in
   `OUTPUT` — pasta's sockets are owned by the service user.
 
 **The loopback is closed to service uids by default, and the publications are the only way in.**
-Because pasta's mapping is on by default, a container can otherwise open a connection to any
+Because the pinned set maps the gateway, a container can otherwise open a connection to any
 host loopback port through the alias — `sshd` on 22, a database the operator runs by hand,
 anything. So the rendered `OUTPUT` set is a **default deny on the whole of loopback for every
 service uid**, with the per-publication accept rules above it, and the order is the whole of it.
@@ -454,9 +457,10 @@ running cleanup is lost with no error anywhere.
 
 `guarden.toml` is not exempt because little writes it, but it has **three** writers rather than
 the one previously claimed: `weedr module add` appends to `[modules] enabled`, and `soil install`
-writes both the measured `ingress.alias` and the `[modules] enabled` list it seeds from
-cloud-init. Two of the three share a key, so the rule is that every write takes the `modules`
-lock, goes through the protocol, and re-reads the file under the lock rather than trusting what it
+writes both the derived `ingress.alias` (from the pinned `-g`, ADR-0018) and the `[modules]
+enabled` list it seeds from cloud-init. Two of the three share a key, so the rule is that every
+write takes the `modules` lock, goes through the protocol, and re-reads the file under the lock
+rather than trusting what it
 saw before it. The file has no unprotocolled writer. A `kind = "instance"` track
 deploys each of its instances separately, and one `deploy-<service>` lock per service would
 serialise every preview behind every other preview, so an instance's deploy takes

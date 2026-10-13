@@ -44,7 +44,7 @@ Parts talk over files and paths. There is no internal HTTP API and no socket bet
 
 ## Binding decisions
 
-`docs/adr/0001`–`0016` are binding. `docs/spec.md` is the contract, and where the code and the
+`docs/adr/0001`–`0018` are binding. `docs/spec.md` is the contract, and where the code and the
 spec disagree the code is wrong. Do not re-litigate them in a change; if one is wrong, write
 a new ADR that supersedes it. The short version:
 
@@ -183,18 +183,20 @@ a new ADR that supersedes it. The short version:
 - There is no name map and no `/etc/hosts`. For each edge the renderer writes
   `AddHost=<provider>:<ingress.alias>` into every unit of the consumer, and a route target is
   `<name>:<publication>`. The names are service names, with no suffix and no alias. The alias is
-  a normative key in the `[ingress]` table of `guarden.toml`: empty until ticket 15 measures it,
-  written by `soil install` from the probe it runs, and the edge does not start without it. There
-  is therefore no `hosts` lock, because nothing writes a name map.
+  a normative key in the `[ingress]` table of `guarden.toml`: empty until `soil install` derives
+  it from the pinned `-g` in `[network] pasta_options` (ADR-0018), and the edge does not start
+  without it. There is therefore no `hosts` lock, because nothing writes a name map.
 - **The alias is the container's default gateway, and every host-side rule matches `127.0.0.1`
   instead.** Pasta maps the gateway onto the host's loopback in userspace — "on the host such
   packets will appear to have both source and destination of `127.0.0.1`" — before the kernel's
   packet path, so a rule matching the alias matches nothing. The alias appears in `AddHost=` and
-  nowhere else. It is derived from the host's default route, not chosen by guarden, so it drifts;
-  `soil sysctl --check` reports when the recorded value no longer matches the route. The
-  `[network] pasta_options` table is what the renderer writes as `Network=pasta:`, and an option
-  that removes the host mapping is refused, because a container that cannot reach the host is a
-  box where nothing reaches anything.
+  nowhere else. It is **pinned, not derived**: the `[network] pasta_options` set fixes the
+  container's gateway at `10.0.2.2` and `soil install` derives `ingress.alias` from it
+  (ADR-0018), so it cannot drift and no check reports one; `soil sysctl --check` instead warns
+  when the host's own routes overlap the reserved `10.0.2.0/24`. The set is what the renderer
+  writes as `Network=pasta:`, its shape is validated — a set missing `--map-gw`, `--ipv4-only`,
+  `-a`, `-n` or `-g` is refused — and an option that removes the host mapping is refused, because
+  a container that cannot reach the host is a box where nothing reaches anything.
 - The renderer converts Compose, unprivileged. The mutator never runs a converter, or any other
   program, over repository input.
 - Every edge states its `auth`: `database`, `secret` or `none`. There is no default.
@@ -218,9 +220,10 @@ a new ADR that supersedes it. The short version:
 - Every mutation that renders a shared file holds one lock across render, diff and install, or
   a stale render can install last and drop what the previous mutation granted. `guarden.toml` has
   three writers, not one — `weedr module add` appends to `[modules] enabled`, and `soil install`
-  writes the measured `ingress.alias` and seeds `[modules] enabled` from cloud-init — and two of
-  them share a key, so every one takes the `modules` lock, goes through the write protocol, and
-  re-reads the file under the lock rather than trusting what it saw before it. Queue state is durable under `/var/lib/guarden/queue`;
+  writes the derived `ingress.alias` (from the pinned `-g`, ADR-0018) and seeds
+  `[modules] enabled` from cloud-init — and two of them share a key, so every one takes the
+  `modules` lock, goes through the write protocol, and re-reads the file under the lock
+  rather than trusting what it saw before it. Queue state is durable under `/var/lib/guarden/queue`;
   only the locks are tmpfs, in `/run/guarden/locks`, and the lock directory is recreated at boot
   by a `tmpfiles.d` entry `soil install` writes.
 - **Lanes bound builds; `deploy-<service>` bounds deploys.** `build.lanes` is how many container

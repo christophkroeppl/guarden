@@ -70,9 +70,10 @@ converges and is idempotent. `soil` creates no service identity.
       `/usr/lib/guarden` root-owned, **creates the `guarden` and `hose` users**, **creates the
       `guarden` group** so every `root:guarden` path — the registry, every `overrides.toml` and
       all of `/etc/guarden` — is readable by the unprivileged programs that need it, records
-      `host.admin_user` if it is empty, **measures `ingress.alias` and writes the result into
-      `guarden.toml`**, and installs the credential materialiser units. There is no `soil users`
-      phase, and `install` creates no group beyond `guarden` and never an `edge`:
+      `host.admin_user` if it is empty, **derives `ingress.alias` from the pinned `[network]
+      pasta_options` and writes it into `guarden.toml`** (ADR-0018), and installs the credential
+      materialiser units. There is no `soil users` phase, and `install` creates no group beyond
+      `guarden` and never an `edge`:
       `weedr module add gate-traefik` does
 - [ ] **`soil install` refuses to start the edge without `ingress.alias`**, naming the key. A
       container that cannot reach the host loopback answers every route with a cause-less 502

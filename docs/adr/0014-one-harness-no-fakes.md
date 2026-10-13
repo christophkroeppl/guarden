@@ -83,4 +83,10 @@ reaching a dependency by the measured alias, a forwarded port answering from off
 nothing unprivileged binding below 1024, a clone of a live snapshot starting and recovering —
 because those were never fakes' to prove, and they are now the only tier that has to.
 
+> **Amended 2026-10-13 (ADR-0018):** the alias in that criterion is no longer measured. It is a
+> constant derived from the pinned `[network] pasta_options`, and the probe is deleted — podman
+> 5.7 refuses `--network pasta:` as root, which is what `soil install` runs as, and the image was
+> external. The criterion reads "a rootless container reaching a dependency **by the pinned
+> alias**", and it is the only check that exercises the mapping end to end.
+
 The change makes the tree match what it already claimed to be.

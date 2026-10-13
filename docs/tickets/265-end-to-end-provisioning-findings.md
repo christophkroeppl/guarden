@@ -10,6 +10,10 @@ diagnostic, and the second is a property of first boot.
 
 ## 1. The alias probe reports a false network claim for every failure cause
 
+> **Closed 2026-10-13 (ADR-0018):** the probe is deleted, so this diagnostic has no caller.
+> `ingress.alias` is derived from the pinned `[network] pasta_options` and no probe runs — no
+> image is needed and no network claim can be misreported. The finding below stands as history.
+
 On a host with no `podman`, `soil install --apply` says:
 
 ```

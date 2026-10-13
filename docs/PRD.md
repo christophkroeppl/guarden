@@ -381,12 +381,12 @@ install path is not yet).*
 
 ## 11. Open questions
 
-- Whether the pasta host-loopback alias is reliable enough to be the whole of inter-service
-  name resolution, or whether a loopback DNS server is needed. The alias is the container's
-  default gateway, which pasta maps onto the host's loopback in userspace by default, so the
-  question is narrower than it was: the address is derived from the host's route rather than
-  chosen, and it drifts. The golden VM must answer it before anything is built
-  on top of it.
+- **Answered (ADR-0018): the pasta host-loopback alias is the whole of inter-service name
+  resolution, and no loopback DNS server is needed.** The alias is the container's default
+  gateway; it used to be derived from the host's route and to drift, and it is now pinned — the
+  `[network] pasta_options` set fixes the gateway at `10.0.2.2` and `soil install` derives
+  `ingress.alias` from it, so the address is a constant on every host. The mapping was measured
+  on a real machine before anything was built on it.
 - Whether a btrfs-progs 5.14 clone of a live snapshot recovers acceptably for a database
   larger than anything on the current box.
 - Whether `keep_last` should be per state volume rather than per service.
