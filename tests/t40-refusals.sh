@@ -159,3 +159,8 @@ refuse_config '--no-map-gw' 'pasta_options = [ "--map-gw", "--no-map-gw" ]'
 refuse_config '--map-host-loopback none' \
     'pasta_options = [ "--map-gw", "--map-host-loopback", "none" ]'
 refuse_config '--map-host-loopback=none' 'pasta_options = [ "--map-host-loopback=none" ]'
+
+# `--no-map-gw` again, this time packed behind a comma inside one entry: podman
+# splits the value on commas and runs every piece, so a refusal that tested
+# whole entries would let this through while podman still honoured the option.
+refuse_config '--no-map-gw' 'pasta_options = [ "--map-gw,--no-map-gw" ]'

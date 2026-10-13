@@ -1602,7 +1602,9 @@ slices that the mutator installs into `/var/lib/guarden/shared/<name>/` for `roo
 
 **The renderer owns the container's network backend.** Every generated unit carries
 `Network=pasta:` followed by the `[network] pasta_options` from `guarden.toml`, verbatim and in
-order, and the renderer **replaces** any `Network=`, `PodmanArgs=`-adjacent network option or
+order, joined with commas — podman's documented separator: podman cuts the value at the first
+colon and splits the remainder on commas, and the probe makes the same join — and the renderer
+**replaces** any `Network=`, `PodmanArgs=`-adjacent network option or
 `network_mode` the unit source asked for rather than passing it through — the same treatment
 `PublishPort` gets, and for the same reason: a Compose `network_mode: host` that survived
 rendering would give a repository the host's whole network namespace, and a pasta option list
