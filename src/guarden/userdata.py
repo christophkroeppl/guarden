@@ -90,7 +90,7 @@ HEADER = """#cloud-config
 #
 # The golden VM is the harness that cannot be faked: a throwaway machine with
 # real tools, proving the claims the fast harness cannot — that a rootless
-# container reaches a dependency by the alias the probe measured, that nothing
+# container reaches a dependency by the pinned alias (ADR-0018), that nothing
 # unprivileged binds below 1024, and that a clone of a live data volume starts
 # and recovers. `tools/golden-vm` is the entry point and asserts none of it; a
 # runner that also decided what a pass was would be a harness whose result

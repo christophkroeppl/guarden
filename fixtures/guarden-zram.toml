@@ -3,8 +3,7 @@
 #
 # It is a fixture and not a constant, and it is a fixture rather than a
 # rewritten one so that a test does not have to edit a table to get past the one
-# value the probe writes. The alias below is a documentation address, and the VM
-# measures a real one (spec 7.1).
+# value `soil install` writes. The alias below is the pinned constant (spec 7.1).
 #
 # `size_percent` is 25 rather than the more flattering 50 because the golden VM is
 # 8GiB and the runner caps each cut at 4GiB: a device of half a cut is a large

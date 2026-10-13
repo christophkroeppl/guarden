@@ -1,11 +1,10 @@
-# The shipped environment table (spec 3.1) as `soil install` leaves it once the
-# probe has run: everything the shipped fixture has, with `ingress.alias` measured
-# rather than empty.
+# The shipped environment table (spec 3.1) as `soil install` leaves it:
+# everything the shipped fixture has, with `ingress.alias` derived from the
+# pinned `-g` rather than empty.
 #
 # It is a fixture and not a constant, and it is a fixture rather than a rewritten
-# one so that a test does not have to edit a table to get past the one value the
-# probe writes. The alias below is a documentation address, and the VM measures a
-# real one (spec 7.1).
+# one so that a test does not have to edit a table to get past the one value
+# `soil install` writes. The alias below is the pinned constant (spec 7.1).
 [host]
 domain = "example.com"
 interface = ""

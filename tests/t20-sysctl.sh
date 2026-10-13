@@ -118,11 +118,20 @@ assert_sysctl net.ipv6.conf.all.disable_ipv6 1
 
 # **The alias is not reported here any more.** It is no longer derived from the
 # host's default route — it is the `-g` the configuration pins, written by
-# `soil install` — so there is nothing about it that can drift and nothing for
-# `soil sysctl` to say. The block that used to sit here compared the recorded
-# alias with the default route and warned on an empty one; both went with the
-# probe, and the firewall's half of the claim (no rule matches the alias) lives
-# in the suites that read the rendered rules.
+# `soil install` — so there is nothing about it that can drift. What is here
+# instead is the pinned addressing's one host-side hazard: a host whose own
+# on-link routes overlap the reserved 10.0.2.0/24 makes the host and every
+# container disagree about what the range means. `soil sysctl --check` warns —
+# once, naming the remedy — rather than reporting drift, because the host is
+# not in a wrong state: its LAN is simply in the way (ADR-0018). The route is
+# planted and taken back, so the claims around this block run on a host that
+# has none.
+ip -4 route add 10.0.2.0/24 dev "$interface" scope link
+run soil sysctl --check
+assert_exit 0
+assert_stderr_has "overlaps the pinned pasta subnet"
+assert_stderr_has "choose another -a/-g range"
+ip -4 route del 10.0.2.0/24 dev "$interface" scope link
 
 # The persisted file holds only soil's keys, and a key in it that soil does not
 # own is a key soil rewrites away. The rewrite is of the file only: soil converges

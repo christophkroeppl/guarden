@@ -15,7 +15,10 @@
 . "$(dirname "$0")/lib.sh"
 scratch_host
 
-# programs and modules
+# programs and modules. The phase stops at the credential materialiser's
+# enable items — `systemctl enable` cannot converge under a staged prefix —
+# and this suite only needs the files the earlier items installed, so the
+# exit is the enable item's and not a failure of anything asserted here.
 run soil install --apply
 assert_exit 1
 assert_file_exists "$(host usr/lib/guarden/bin/soil)"

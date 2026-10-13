@@ -53,18 +53,20 @@ def _run(argv: list[str]) -> subprocess.CompletedProcess:
 
 
 def _ss(port: int) -> tuple[str, str, str]:
-    """The established socket on `port`, as `ss` reports it: line, local, peer.
+    """The accepted socket on `port`, as `ss` reports it: line, local, peer.
 
-    `-e` is load-bearing: it is what makes `ss` print the `uid:` field, and the
-    uid is one of the facts this helper exists to measure. The kernel's own
-    table is read as well, below, so the fact survives an `ss` that does not.
+    `-e` is load-bearing: it is what makes `ss` print the `uid:` field. The
+    kernel's own table is read as well, below, so the facts survive an `ss` that
+    does not.
 
-    The columns are found rather than counted: `ss` prints a `State` column with
-    no state filter and omits it when one is given, so the field whose address
-    ends in `:<port>` is the local end wherever the columns happen to start, and
-    the peer is the field beside it.
+    The `sport = :<port>` filter is load-bearing too: pasta's mapping leaves TWO
+    mirrored established sockets, the accepted one (local `127.0.0.1:<port>`) and
+    pasta's own client-side socket (peer `127.0.0.1:<port>`), both owned by the
+    same uid. Filtering on the local port is what makes "the field ending in
+    `:<port>` is the local end" true wherever the kernel's dump order puts the
+    other one; without it a healthy hop could read pasta's socket and fail.
     """
-    result = _run(["ss", "-tnpe", "state", "established"])
+    result = _run(["ss", "-tnpe", "state", "established", f"sport = :{port}"])
     for line in result.stdout.splitlines():
         fields = line.split()
         for index, field in enumerate(fields):

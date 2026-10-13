@@ -660,9 +660,9 @@ def check_ingress(document: manifest_mod.Manifest, context: Context) -> str:
     `AddHost=<name>:<alias>` is the whole of the name resolution there is, so a
     service that needs a name and an empty `ingress.alias` would render host
     entries that resolve to nothing. Empty is what the key is until `soil
-    install` measures it, so this is exit `1` — the host is not in the state the
-    render assumed. A service that needs no name is not refused for a missing
-    alias.
+    install` derives it from the pinned `-g`, so this is exit `1` — the host is
+    not in the state the render assumed. A service that needs no name is not
+    refused for a missing alias.
     """
     if not document.needs and not routed_names(context.service):
         return context.config.alias
@@ -670,7 +670,7 @@ def check_ingress(document: manifest_mod.Manifest, context: Context) -> str:
         raise errors.GuardenError(
             f"{context.config.path}: ingress.alias is empty and {context.service} renders host "
             f"entries, so every rendered AddHost= would resolve to nothing; `soil install` "
-            f"measures the alias and writes it there",
+            f"derives the alias from the pinned -g and writes it there (ADR-0018)",
             errors.HOST_NOT_AS_ASSUMED,
         )
     return context.config.alias

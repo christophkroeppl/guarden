@@ -43,6 +43,17 @@ export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 export GUARDEN_PREFIX=/
 config=/etc/guarden/guarden.toml
 
+# The hop below needs two machine facts, asserted here so a machine without them
+# fails with their names rather than with a hop that could not start: the
+# unprivileged user's subuid range, because only it may map container-root into
+# its own range, and pasta itself, which arrives as a podman Recommends and is
+# what `pasta:` runs. Neither is a fixture; both are read from the machine.
+run grep -c "^ubuntu:" /etc/subuid
+assert_exit 0
+assert_stdout_has "1"
+run pasta --version
+assert_exit 0
+
 # The pinned set, once. The design states it as a constant — the gateway the
 # alias is, the address the container holds, the subnet that puts the two
 # on-link — and the configuration under test and the container below each name
@@ -67,10 +78,12 @@ assert_file_has "$config" 'alias = ""'
 
 # The same table, whole again: the apply writes the `-g` value into
 # `ingress.alias` — not a measurement, a derivation — and the `--check` that
-# follows is what "already true" looks like from outside (spec 1.2). The two
-# fragments under it are the tie between this file and the hop below: the
-# container is run with the set the configuration actually pins, not with a set
-# retyped from the comment above it.
+# follows is what "already true" looks like from outside (spec 1.2). The
+# fragments under it tie this staged table to the container below: the set the
+# container runs is the one this file pins, piece for piece, so a template
+# change the hop does not follow shows up as a fragment that moved. `-g` is
+# tied by the alias assert, `--map-gw` by the hop succeeding at all, and the
+# rest by their own fragments here.
 stage_config guarden.toml
 run soil install --apply
 assert_exit 0
@@ -78,6 +91,7 @@ assert_stderr_empty
 assert_file_has "$config" 'alias = "10.0.2.2"'
 assert_file_has "$config" '"--ipv4-only"'
 assert_file_has "$config" '"10.0.2.100"'
+assert_file_has "$config" '"-n", "24"'
 run soil install --check
 assert_exit 0
 assert_stderr_empty
@@ -85,10 +99,12 @@ assert_stderr_empty
 # The container's gateway is pinned, but a pinned option is a promise about a
 # container's routing, and only a container can keep it. So the promise is
 # measured the way the retired probe measured it — one real rootless container
-# under `ubuntu`, one listener on the host's loopback — and the four facts are
-# the same four: the default route names the gateway, the gateway reaches the
-# host, the connection arrives owned by a uid, and its host-side source is
-# 127.0.0.1.
+# under `ubuntu`, one listener on the host's loopback — and the facts are the
+# ones a mapping fault can change: the default route names the gateway, the
+# gateway reaches the host, and the connection's host-side ends are both the
+# loopback. The uid the connection is owned by is recorded too, but it is the
+# state rather than a mutation-catcher: pasta's mirrored pair of sockets shares
+# it, so a broken mapping could not change it.
 apt_waits install -y busybox-static
 assert_executable /bin/busybox
 
@@ -135,7 +151,9 @@ assert_exit 0
 # The connection arrived and carried the container's payload ...
 assert_file_has "$hop_report" "peer=127.0.0.1"
 assert_file_has "$hop_report" "received=hop"
-# ... the host-side socket is owned by the unprivileged user's uid ...
+# ... the host-side socket is owned by the unprivileged user's uid (recorded
+# rather than relied on: both sockets of pasta's mirrored pair are the same
+# uid, so this is the state, not a mutation-catcher) ...
 assert_file_has "$hop_report" "uid=1000"
 # ... and both of its ends are the loopback, which is what the OUTPUT accept
 # rules are written to match. `ss` says it in its own words, and the kernel's
@@ -146,9 +164,9 @@ assert_file_has "$hop_report" "proc_local=127.0.0.1"
 assert_file_has "$hop_report" "proc_remote=127.0.0.1"
 
 # DNS still resolves inside the container: pasta forwards it, and the loopback
-# mapping the alias relies on does not swallow it. A container that cannot
-# resolve names is the box the old justification claimed the loopback deny would
-# make; the deny is there and this says the justification is still false.
+# mapping the alias relies on does not swallow it. This is evidence about
+# pasta's forwarder and not about the loopback deny — the firewall phase does
+# not run on a cut, so nothing here renders or reads a rule.
 run runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup example.com
 assert_exit 0
 assert_stdout_has "example.com"

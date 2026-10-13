@@ -8,13 +8,11 @@
 # "homepage"]`, so a suite that started from one of those could not tell "the
 # installer's selection was merged" from "the file already said this" — the
 # first assertion would be satisfied before the apply ran. And `ingress.alias`
-# is **measured**, because the alias is the one item of `soil install` that only
-# the probe can write, this repository ships no probe image, and a suite that
-# borrowed that item as its guaranteed non-zero exit would be asserting the
-# probe's absence rather than the phase's convergence. The address below is
-# TEST-NET-1 from RFC 5737: nothing measured it and nothing dials it here, and
-# `soil sysctl --check` reports it as drift on any host whose default route
-# says otherwise — which is the correct answer for a fixture.
+# holds the derived value the pinned set names: `soil install` writes it from
+# the `-g` in `[network] pasta_options` (ADR-0018), so a suite that borrowed
+# the alias item as its guaranteed non-zero exit would be asserting a state a
+# converged host does not have. The address below is the pinned one: nothing
+# measures it and nothing dials it here.
 [host]
 domain = "example.com"
 interface = ""

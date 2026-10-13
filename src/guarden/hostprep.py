@@ -1354,6 +1354,11 @@ def sysctl_items() -> list[Item]:
             persisted,
         )
     )
+    # The pinned addressing's one host-side hazard, reported and never
+    # corrected: the host's own on-link routes against the reserved subnet.
+    # The remedy is the operator's choice of another `-a`/`-g` range, so this
+    # is a warning rather than drift (ADR-0018, spec 6.1).
+    _warn_on_pinned_overlap()
     return items
 
 
@@ -2468,7 +2473,6 @@ def _warn_on_pinned_overlap() -> None:
 
 
 def _alias_is_derived() -> bool:
-    _warn_on_pinned_overlap()
     derived = _derived_alias()
     return bool(derived) and _alias() == derived
 

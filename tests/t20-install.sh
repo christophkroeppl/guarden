@@ -148,6 +148,7 @@ assert_exit 1
 [ "$(wc -l < "$GUARDEN_FIXTURES/stderr")" = 1 ] \
     || _fail "expected exactly one drift line, got $(wc -l < "$GUARDEN_FIXTURES/stderr")"
 assert_stderr_has "drift: ingress.alias"
+assert_stderr_has "the edge does not start without it"
 # And the converge puts the derived address back: an alias that is not the one
 # the pinned set names is repaired, not left, and the host that has it is
 # converged again.

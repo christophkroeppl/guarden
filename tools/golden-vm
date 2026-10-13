@@ -3,7 +3,7 @@
 #
 # The golden VM is the harness that cannot be faked: a throwaway machine with
 # real tools, proving that a rootless container reaches a dependency by the
-# alias the probe measured, that nothing unprivileged binds below 1024, that a
+# pinned alias (ADR-0018), that nothing unprivileged binds below 1024, that a
 # forwarded port answers from a second machine, and that a clone of a live data
 # volume starts and recovers. Minutes, manual or nightly (spec 11).
 #
