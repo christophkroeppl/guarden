@@ -31,12 +31,21 @@ file held — so a quoted value could pass the converge while the create path re
   does the same for `keep_last`, `weight`, the ladder buckets and `build.lanes`.
 - **`hostprep._retention_for` reads through those strict readers** for the row and the override
   alike, so the converge and the create path cannot disagree about what a number is.
-- **The refusal is pinned**: `t30-config.sh` stages `fixtures/guarden-badfree.toml` — the shipped
-  table with staging's floor written as a string — and asserts the named rejection
-  (`free_limit is not a number`, the file named, exit 1).
+- **The refusal is pinned on both readers**: `t30-config.sh` stages `fixtures/guarden-badfree.toml`
+  — the shipped table with staging's floor written as a string, the create path's refusal — and
+  `t20-storage.sh` closes with the same row under a registered service for the converge path,
+  `soil storage --check` exiting 1 and naming `free_limit`.
 - **The spec states the rule** (§3.1's comment and §8.1's `FREE_LIMIT` row): a TOML number and
   only a number, refused rather than coerced, so the same value cannot be spelled two ways by two
   programs.
+
+## The upgrade consequence
+
+A host whose `guarden.toml` was seeded by the old template carries quoted staging and preview
+rows. From this change on, `weedr service ingest` and `soil storage` refuse them with the key
+named (exit 1) until the operator unquotes them — which is the decision working as designed, not
+a regression: the quoted form was always a second spelling of the same number, and it is the
+spelling the strict rule retires.
 
 ## The history
 
