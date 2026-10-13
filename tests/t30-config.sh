@@ -29,9 +29,9 @@ assert_stdout_has "no services"
 # With the shipped table staged, the complaint is about the poke's tree rather
 # than about the configuration: that is what this ticket's first item claims, and
 # it is the only thing a staged host can say about the table before a service
-# exists. That a row's free_limit is read as a number when the shipped table
-# writes one as a float and two as strings is proven where a value is used, in
-# t30-create.sh.
+# exists. That every row of the shipped table writes free_limit as a TOML float,
+# and how both readers refuse the quoted form, is proven in the type-error cases
+# below.
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 2
 assert_one_diagnostic "error:"
@@ -58,6 +58,17 @@ stage_config guarden-badweight.toml
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 1
 assert_stderr_has "weight is not an integer"
+assert_stderr_has "guarden.toml"
+
+# **A number written as a string is refused, not coerced.** TOML's types are
+# distinct and its standard defines no conversion between them; Rust's serde,
+# the reference behaviour for typed configuration, refuses a string where a
+# number is required. The quoted spelling the shipped table once carried is a
+# rejected row now, and the message names the key and the file.
+stage_config guarden-badfree.toml
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 1
+assert_stderr_has "free_limit is not a number"
 assert_stderr_has "guarden.toml"
 
 # cap on a slot track: a rule the document states about a track, so exit 2, and
@@ -94,4 +105,4 @@ assert_stderr_has 'must carry a cap'
 # rounds to is proven where a value is actually used, in t30-create.sh.
 stage_config guarden.toml
 assert_file_has "$GUARDEN_PREFIX/etc/guarden/guarden.toml" 'free_limit = 0.10'
-assert_file_has "$GUARDEN_PREFIX/etc/guarden/guarden.toml" 'free_limit = "0.20"'
+assert_file_has "$GUARDEN_PREFIX/etc/guarden/guarden.toml" 'free_limit = 0.20'

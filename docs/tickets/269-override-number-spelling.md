@@ -1,32 +1,44 @@
-# 269: the override reader refuses a quoted number a track row accepts
+# 269: quoted numbers in configuration — resolved as strict
 
-**Blocked by:** nothing — on the frontier, and it needs a decision rather than a dependency.
+**Status:** resolved 2026-10-13. The rule: **a number is a TOML number.** A quoted
+`"0.20"` is a string — a different type — and is refused rather than coerced, in every reader,
+by both the create path and the converge. TOML's types are distinct and its standard defines no
+conversion between them; Rust's serde, the reference behaviour for typed configuration, refuses a
+string where a number is required. guarden does the same.
 
-**What to build:** a rule, or a wider reader. `overrides.toml`'s `[retention] free_limit` is read by
-`overrides._float`, which raises on any value that is not an `int` or a `float` — so
-`free_limit = "0.08"`, the spelling `docs/sysadmin.md` used to show, is refused by
-`weedr service ingest` at the moment the service is created. A `[[environments]]` row's
-`free_limit` is read by `config.float_value`, which accepts the quoted form because the shipped
-template writes `"0.20"` on two of its three rows. One admin-facing file accepts two spellings of a
-number and the other accepts one, and nothing states why.
+The decision came from the operator, who was asked to choose between widening the override reader
+and narrowing the row reader: *"align with toml standards. If toml has no standard, use rustlang
+standards."* TOML has none to align with, so the Rust behaviour decided it — the strict side.
 
-The asymmetry is undocumented rather than documented-wrong: spec §3.3 shows the
-override unquoted **by example** and states no rule. Spec §3.1 was worse than silent — its comment
-claimed the table held "a TOML float, not a string" while its own staging and preview rows, twelve
-lines below, wrote `free_limit = "0.20"`; the review of `0d23f92` found the self-contradiction and
-this branch made the comment spelling-neutral, but that leaves the rule itself unstated, which is
-this ticket's question.
+## What was wrong
 
-Whichever way it goes, the two readers have to agree: either both accept a number however it is
-written, or both refuse the quoted form and §3.1 and §3.3 say so by rule rather than by example.
+`overrides.toml`'s `[retention] free_limit` was read by `overrides._float`, which refuses any value
+that is not an `int` or a `float` — so `free_limit = "0.08"` was rejected by `weedr service ingest`
+at the moment a service was created. A `[[environments]]` row's `free_limit` was read by
+`config.float_value`, which **accepted** the quoted form, because the shipped template wrote
+`"0.20"` on two of its three rows. One admin-facing file accepted two spellings of a number and
+the other accepted one, and nothing stated which was right. The converge path
+(`hostprep._retention_for`) read its values loosely besides — `int()`/`float()` on whatever the
+file held — so a quoted value could pass the converge while the create path refused it.
 
-## What would settle it
+## What was changed
 
-Either `overrides._float` accepts a numeric string the way `config.float_value` does — one spelling
-rule across both readers, a number is a number however it is written — or it keeps refusing and
-spec 3.1 and 3.3 state the unquoted form by rule. That is a call about the admin surface, not a
-defect the suites can feel: no suite drives a quoted override today, and the refused form only ever
-cost an operator an error message at ingest time.
+- **The template and every fixture** spell `free_limit` as a TOML float; the quoted rows are gone
+  tree-wide (sixteen files across `src/guarden/templates`, `fixtures/`, `docs/spec.md`, `README.md`
+  and the suites).
+- **`config.float_value` refuses a string** — `isinstance(value, (int, float))` or a named
+  type error, no coercion branch. `config.int_value` (public now, the sibling for integer keys)
+  does the same for `keep_last`, `weight`, the ladder buckets and `build.lanes`.
+- **`hostprep._retention_for` reads through those strict readers** for the row and the override
+  alike, so the converge and the create path cannot disagree about what a number is.
+- **The refusal is pinned**: `t30-config.sh` stages `fixtures/guarden-badfree.toml` — the shipped
+  table with staging's floor written as a string — and asserts the named rejection
+  (`free_limit is not a number`, the file named, exit 1).
+- **The spec states the rule** (§3.1's comment and §8.1's `FREE_LIMIT` row): a TOML number and
+  only a number, refused rather than coerced, so the same value cannot be spelled two ways by two
+  programs.
 
-Found by the review of `c5f74b5`, which asked for the follow-up the commit message had claimed and
-the tree did not hold.
+## The history
+
+Found by the review of `c5f74b5` as an asymmetry, recorded here by `0d23f92`, its spec
+self-contradiction fixed by `37bddc1`, and closed strict by the operator's TOML/Rust decision.

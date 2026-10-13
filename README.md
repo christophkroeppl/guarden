@@ -210,7 +210,7 @@ name = "preprod"                  # any further track: append and use
 host_prefix = "preprod."
 gated = false
 weight = 500
-free_limit = "0.10"
+free_limit = 0.10
 keep_last = 0
 kind = "slot"
 ```

@@ -39,7 +39,7 @@ from pathlib import Path, PurePosixPath
 
 from guarden import conf, errors, packagelist, paths, users, volumes, zram
 from guarden import hosttool as h
-from guarden.config import TRACK_DEFAULTS, float_value
+from guarden.config import TRACK_DEFAULTS, float_value, int_value
 from guarden.hosttool import Item, hostpath, lock
 
 # --------------------------------------------------------------------------
@@ -983,31 +983,32 @@ def _retention_for(service: str, config: dict) -> tuple[int, str, dict[str, str]
     """
     registry = h.read_config(hostpath(*REGISTRY_DIR, f"{service}.toml"))
     row = h.track(config, registry.get("environment", ""))
-    keep_last = int(row.get("keep_last", 0)) if row else 0
-    # Through the same defaulting helper and the same normaliser the create
-    # path uses. `config.float_value` carries both: the row's value read as a
-    # number however it is spelled (the template quotes staging's and
-    # preview's `"0.20"`) and the same `0.10` default for a row that omits the
-    # key, so both paths spell every free_limit the same way -- a converge
-    # that wrote `0.20` over its own `0.2`, or `0.2` over its own `0.1`, is a
-    # `soil storage --check` failure on a volume the check had just converged
-    # itself (measured 2026-10-12).
+    where_row = f"the {registry.get('environment', '')} track"
+    # Through the same strict readers and the same normaliser the create path
+    # uses: a TOML number of the key's type, refused otherwise by
+    # `config.int_value`/`config.float_value` (TOML types are distinct; no
+    # coercion), defaulted from `TRACK_DEFAULTS` when a row omits a key, and
+    # normalised through `volumes.percentage` so both paths spell every
+    # free_limit the same way. Measured 2026-10-12: the two paths once
+    # disagreed on spelling, and `soil storage --check` reported the drift on
+    # a volume the check had just converged itself.
+    keep_last = int_value(row, "keep_last", where_row) if row else 0
     free_limit = volumes.percentage(
-        float_value(row, "free_limit", f"the {registry.get('environment', '')} track")
-        if row
-        else TRACK_DEFAULTS["free_limit"]
+        float_value(row, "free_limit", where_row) if row else TRACK_DEFAULTS["free_limit"]
     )
     buckets = {"weekly": "4", "monthly": "6", "quarterly": "2"}
 
     overrides = h.read_config(hostpath("etc", "guarden", "services", service, "overrides.toml"))
     retention = overrides.get("retention", {})
-    if "keep_last" in retention:
-        keep_last = int(retention["keep_last"])
-    if "free_limit" in retention:
-        free_limit = volumes.percentage(retention["free_limit"])
-    for bucket in buckets:
-        if bucket in retention:
-            buckets[bucket] = str(retention[bucket])
+    if retention:
+        where_ov = f"{service} overrides"
+        if "keep_last" in retention:
+            keep_last = int_value(retention, "keep_last", where_ov)
+        if "free_limit" in retention:
+            free_limit = volumes.percentage(float_value(retention, "free_limit", where_ov))
+        for bucket in buckets:
+            if bucket in retention:
+                buckets[bucket] = str(int_value(retention, bucket, where_ov))
     return keep_last, free_limit, buckets
 
 

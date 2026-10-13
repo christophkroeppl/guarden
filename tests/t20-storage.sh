@@ -223,16 +223,14 @@ assert_snapper_config myapp-production-pgdata TIMELINE_LIMIT_WEEKLY 0-4
 # than left to be discovered.
 seed /var/lib/guarden/registry/myapp-staging.toml \
     'name = "myapp-staging"' 'environment = "staging"'
-# The staging row as the shipped template spells it, quoted floor included:
-# the converge has to read the row as a number and write it in the create
-# path's spelling, and this is the one state every staging and preview
-# service on a real host is in. The production row stays beside it: the seed
-# replaces the file wholesale, and the pgdata configuration above still
-# answers to it.
+# The staging row with its floor as the shipped template spells it: a TOML
+# float, and the one state every staging and preview service on a real host is
+# in. The value is read through the strict reader the create path uses, and the
+# pin below proves the converge writes the create path's spelling.
 seed /etc/guarden/guarden.toml \
     '[[environments]]' 'name = "production"' 'keep_last = 7' 'free_limit = 0.10' \
     'kind = "slot"' \
-    '[[environments]]' 'name = "staging"' 'keep_last = 0' 'free_limit = "0.20"' \
+    '[[environments]]' 'name = "staging"' 'keep_last = 0' 'free_limit = 0.20' \
     'kind = "slot"'
 seed_snapper_config myapp-staging-data
 run soil storage --apply
@@ -242,9 +240,9 @@ assert_snapper_config myapp-staging-data FREE_LIMIT 0.2
 
 # The seeded row proves the reader; the writer is proved by perturbation, the
 # shape the root ladder uses above. `percentage` and `str` differ only on an
-# integral float, so no seeded value can tell the two normalisers apart -- a
-# live configuration written back to the raw quoted spelling and repaired by
-# a converge is the only thing that runs the writer.
+# integral float, so no seeded value can tell the two normalisers apart -- the
+# value snapper holds is written back to what the old bug produced and a
+# converge has to repair it, which is the only thing that runs the writer.
 run snapper -c myapp-staging-data set-config FREE_LIMIT=0.20
 assert_exit 0
 assert_snapper_config myapp-staging-data FREE_LIMIT 0.20
@@ -277,7 +275,7 @@ assert_snapper_config myapp-staging-data FREE_LIMIT 2
 seed /etc/guarden/guarden.toml \
     '[[environments]]' 'name = "production"' 'keep_last = 7' 'free_limit = 0.10' \
     'kind = "slot"' \
-    '[[environments]]' 'name = "preview"' 'keep_last = 1' 'free_limit = "0.20"' \
+    '[[environments]]' 'name = "preview"' 'keep_last = 1' 'free_limit = 0.20' \
     'kind = "instance"'
 seed /var/lib/guarden/registry/myapp-preview.toml \
     'name = "myapp-preview"' 'environment = "preview"'

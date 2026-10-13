@@ -193,7 +193,7 @@ def _bool(table: dict, key: str, where: str) -> bool:
     return value
 
 
-def _int(table: dict, key: str, where: str) -> int:
+def int_value(table: dict, key: str, where: str) -> int:
     value = table.get(key, 0)
     if isinstance(value, bool) or not isinstance(value, int):
         raise _type_error(where, key, "an integer")
@@ -201,29 +201,25 @@ def _int(table: dict, key: str, where: str) -> int:
 
 
 def float_value(table: dict, key: str, where: str) -> float:
-    """A number, written as one or as a numeric string.
+    """A number, as TOML's types mean one: `0.10`, never `"0.10"`.
 
-    The shipped table in spec 3.1 does both: `free_limit = 0.10` on the
-    production row and `free_limit = "0.20"` on the other two. Both are read as
-    numbers rather than one being refused, because a retention value that is
-    sometimes 0.1 and sometimes "0.2" is one two programs would round
-    differently, and refusing one row would refuse the shipped configuration.
+    TOML's types are distinct — a float and a string are different values — and
+    its standard defines no conversion between them. Rust's serde, the
+    reference behaviour for typed configuration, refuses a string where a
+    number is required; so does this, with the table and key named and the
+    host's own file treated like the input it is (spec 1.2). Coercing would
+    resurrect the class this repository has already paid for: two readers that
+    disagree about which spellings are numbers produce a value that is
+    sometimes `0.2` and sometimes `"0.20"`, which `snapper set-config` — a
+    string comparison — reports as drift on a volume the check had just
+    written itself (measured 2026-10-12).
 
-    Public because there are two readers of the same row: this module's own
-    track reader and `hostprep._retention_for`, whose converge has to default
-    and normalise exactly as the create path did or `soil storage --check`
-    reports a volume it had just written itself as drifted (measured
-    2026-10-12, one default deeper than the first fix).
+    Public because there are two readers of the same row: this module's track
+    reader and `hostprep._retention_for`'s converge, and one house rule means
+    they cannot drift apart. `int_value` is its sibling for integer keys.
     """
     value = table.get(key, TRACK_DEFAULTS["free_limit"])
-    if isinstance(value, bool):
-        raise _type_error(where, key, "a number")
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            raise _type_error(where, key, "a number") from None
-    if not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise _type_error(where, key, "a number")
     return float(value)
 
@@ -293,7 +289,7 @@ def load(path: Any = None) -> Config:
         tunnel_domain=_str(ingress, "tunnel_domain", f"{where_file} [ingress]"),
         publication_range=(span[0], span[1]),
         modules=tuple(enabled),
-        lanes=_int(build, "lanes", f"{where_file} [build]"),
+        lanes=int_value(build, "lanes", f"{where_file} [build]"),
         tracks=tuple(tracks),
         share=_share(share, where_file),
         firewall=_firewall(firewall, where_file),
@@ -420,9 +416,9 @@ def _tracks(rows: Any, where_file: Any) -> list[Track]:
                 name=name,
                 host_prefix=_str(row, "host_prefix", where),
                 gated=_bool(row, "gated", where),
-                weight=_int(row, "weight", where),
+                weight=int_value(row, "weight", where),
                 free_limit=float_value(row, "free_limit", where),
-                keep_last=_int(row, "keep_last", where),
+                keep_last=int_value(row, "keep_last", where),
                 kind=kind,
                 fork_from=_str(row, "fork_from", where),
                 cap=_cap(row, where),

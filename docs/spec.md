@@ -387,11 +387,11 @@ name = "production"
 host_prefix = ""                 # route host is myapp.$DOMAIN
 gated = true                     # refuses to start on a missing or placeholder credential
 weight = 1000                    # CPUWeight and IOWeight in generated units
-free_limit = 0.10                # snapper FREE_LIMIT: the free-space floor (§8.1), read as a
-                             # number however it is written -- this row's TOML float or the
-                             # quoted form the rows below use. Both are a FRACTION of the
-                             # filesystem's free space, this row a tenth and the rows below a
-                             # fifth; snapper reads a value above 1 as an absolute size
+free_limit = 0.10                # snapper FREE_LIMIT: the free-space floor (§8.1), and a TOML
+                             # float -- types are types, so a quoted "0.10" is a rejected row
+                             # and never a number read loosely. A FRACTION of the filesystem's
+                             # free space: this row a tenth, the rows below a fifth; a value
+                             # above 1 is an absolute size instead
 keep_last = 7                    # the daily bucket's maximum, NOT a total (§8.1)
 kind = "slot"                    # one service per workload
 fork_from = ""                   # the track this one forks from; empty starts empty (§8.3)
@@ -401,7 +401,7 @@ name = "staging"
 host_prefix = "staging."
 gated = false
 weight = 100
-free_limit = "0.20"
+free_limit = 0.20
 keep_last = 0                     # daily bucket off; weekly/monthly/quarterly still apply
 kind = "slot"
 fork_from = "production"
@@ -411,7 +411,7 @@ name = "preview"
 host_prefix = "preview."
 gated = false
 weight = 10
-free_limit = "0.20"
+free_limit = 0.20
 keep_last = 0
 kind = "instance"                # one service per workload, one instance per ref, under cap
 fork_from = "staging"
@@ -2463,7 +2463,7 @@ the create-time values and `t20-storage`'s on the converged ones:
 | `TIMELINE_LIMIT_YEARLY` | `0` | |
 | `NUMBER_LIMIT` | `2-10` | for the `number`-tagged snapshots only; a range, so the free-space pass has a floor |
 | `NUMBER_LIMIT_IMPORTANT` | `8-12` | the **minimum** is what survives disk pressure; see §8.5 |
-| `FREE_LIMIT` | from the volume's track `free_limit`, or its `overrides.toml` | snapper reads it as a **fraction of the whole filesystem** — a value above `1` is an absolute size instead, and snapper's own default is `0.2`, a fifth — and it is the free space that must **remain**: the number-cleaner starts deleting marked and unmarked snapshots when less than that much is free. So `0.10` means "prune once under a tenth of the filesystem remains free", which is the conservative end, and the shipped tracks put production tighter than staging |
+| `FREE_LIMIT` | from the volume's track `free_limit`, or its `overrides.toml` | snapper reads it as a **fraction of the whole filesystem** — a value above `1` is an absolute size instead, and snapper's own default is `0.2`, a fifth — and it is the free space that must **remain**: the number-cleaner starts deleting marked and unmarked snapshots when less than that much is free. The value is a TOML number and only a number: both readers refuse a quoted string rather than coercing it (§3.1), so the same value cannot be spelled two ways by two programs. So `0.10` means "prune once under a tenth of the filesystem remains free", which is the conservative end, and the shipped tracks put production tighter than staging |
 
 The `TIMELINE_LIMIT_*` values are the volume's **ladder**: how many snapshots to keep per time
 bucket, aged between buckets by snapper as they get older. A daily cadence fills the daily
