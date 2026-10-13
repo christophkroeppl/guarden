@@ -3,7 +3,7 @@
 Status: ready-for-agent. Branch: `develop`.
 
 Companion documents: [`CONTEXT.md`](../CONTEXT.md) is the vocabulary and is not negotiable.
-Decisions that were hard to reverse are in [`docs/adr/`](./adr/). Why the system is shaped
+Why the system is shaped
 this way is in [`docs/PRD.md`](./PRD.md). The security model and its limits are in
 [`SECURITY.md`](../SECURITY.md). [`docs/sysadmin.md`](./sysadmin.md) is the 3am runbook.
 

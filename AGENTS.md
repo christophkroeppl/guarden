@@ -41,7 +41,7 @@ Parts talk over files and paths. There is no internal HTTP API and no socket bet
 
 ## Binding decisions
 
-`docs/adr/0001`–`0018` are binding. `docs/spec.md` is the contract, and where the code and the
+The decisions are binding. `docs/spec.md` is the contract, and where the code and the
 spec disagree the code is wrong. Do not re-litigate them in a change; if one is wrong, write
 a new ADR that supersedes it. The short version:
 
