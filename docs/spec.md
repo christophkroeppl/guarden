@@ -2448,6 +2448,7 @@ rewrites nothing else in them:
 | `NUMBER_MIN_AGE` | `3600` | in **seconds**, snapper's unit for this key, and the reason is so that a brand-new snapshot cannot be reaped before the reconciler has seen it |
 | `NUMBER_CLEANUP` | `yes` | snapper prunes; guarden never deletes |
 | `TIMELINE_CLEANUP` | `yes` | so the nightly schedule is snapper's own |
+| `TIMELINE_CREATE` | `no` | snapper's default is `yes`, which lets the distribution's `snapper-timeline.timer` take snapshots **guarden never made** — hourly, on every configuration it can see. guarden's own snapshots are the only ones the design has, and one such uninvited snapshot is what turned a service-tree chown's walk into an EROFS (measured 2026-10-12); the cleanup half of the timeline mechanism is wanted, the creation half is not |
 | `TIMELINE_LIMIT_HOURLY` | `0` | guarden snapshots on a daily schedule, so an hourly bucket is the operator's to fill by hand |
 | `TIMELINE_LIMIT_DAILY` | `0-<keep_last>` | from the track's `keep_last` |
 | `TIMELINE_LIMIT_WEEKLY` | `0-4` | |
@@ -2497,6 +2498,15 @@ different mechanisms:
 - **An on-demand snapshot** — a fork source, or an operator's "before the risky change" — is
   tagged `number`, and `NUMBER_LIMIT`, `NUMBER_LIMIT_IMPORTANT` and the marks decide. These are
   the ones a fork can be taken from, so they are the ones worth protecting.
+
+**Snapper's subtree is snapper's, and every walk owes it an exception.** A snapshot is a
+read-only btrfs subvolume, so any recursive operation over a path that can contain one —
+`service._make_tree`'s chown walk over the service tree above all, and the removal paths that
+follow it — skips any path with `.snapshots` among its parts (`paths.SNAPSHOTS`); a chown on a
+snapshot is an EROFS and a `rmtree` cannot delete it, which is why the destructive paths delete
+the snapper configuration first (`snapper delete-config` takes the subtree with it). Measured
+2026-10-12, once in sixty runs, when the distribution's timeline timer had written a snapshot
+no guarden path knew about.
 
 `--tag` is not a flag. The kind follows from why the snapshot was taken, because that is what
 determines who is allowed to delete it later.

@@ -386,7 +386,7 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
     for directory in directories:
         directory.mkdir(parents=True, exist_ok=True)
     for path in [tree, *sorted(tree.rglob("*"))]:
-        if ".snapshots" in path.parts:
+        if paths.SNAPSHOTS in path.parts:
             # snapper's subtree: the snapshots are read-only btrfs subvolumes
             # (a chown raises EROFS -- measured 2026-10-12, `weedr service
             # ingest` reconciling a service whose instance already carried a
@@ -412,7 +412,7 @@ def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
     if (directory / "compose.yaml").is_file():
         shutil.copy2(directory / "compose.yaml", home / "compose.yaml")
     for path in [home, *sorted(home.rglob("*"))]:
-        if ".snapshots" in path.parts:
+        if paths.SNAPSHOTS in path.parts:
             # The same snapper subtree the service walk skips: read-only, and
             # snapper's to own. The home is not snapshotted today, and the
             # guard keeps the two walks agreeing if that changes.

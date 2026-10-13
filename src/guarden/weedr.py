@@ -40,6 +40,7 @@ from guarden import (
     tool,
     units,
     users,
+    volumes,
 )
 from guarden import config as config_mod
 from guarden import hosttool as h
@@ -430,6 +431,16 @@ def _purge(args) -> int:
             errors.HOST_NOT_AS_ASSUMED,
         )
     for volume in record.volume_list():
+        if volume.kind == volumes.SUBVOLUME:
+            # The snapper configuration goes first, exactly as instance
+            # removal does it (`previews.forget`): `delete-config` removes the
+            # configuration and its `.snapshots` subtree, and that subtree can
+            # hold read-only snapshot subvolumes a plain `rmtree` cannot touch
+            # -- measured 2026-10-12 after the distribution's timeline timer
+            # was found writing snapshots guarden never made.
+            config = paths.snapper_config(resolved.name, volume.name)
+            if snapper.configuration_exists(config):
+                tool.run(["snapper", "--config", config, "delete-config"])
         service._drop(paths.volume(resolved.name, volume.kind, volume.name))
     sys.stdout.write(f"destroyed every volume of {resolved.name}\n")
     return 0

@@ -198,6 +198,16 @@ CANONICAL: tuple[tuple[str, str | None], ...] = (
     ("NUMBER_MIN_AGE", "3600"),
     ("NUMBER_CLEANUP", "yes"),
     ("TIMELINE_CLEANUP", "yes"),
+    # Snapper's timeline mechanism has two halves and guarden wants one of
+    # them: the cleanup ladder ages guarden's own routine snapshots into the
+    # weekly, monthly and quarterly buckets, while `TIMELINE_CREATE` would let
+    # the distribution's `snapper-timeline.timer` take snapshots hourly on
+    # every configuration -- snapshots guarden never made, never recorded and
+    # never expected. Measured 2026-10-12: one such snapshot in an instance
+    # volume no guarden path writes, which turned a service-tree chown into an
+    # EROFS on one run in sixty. Off, explicitly, because snapper's default is
+    # `yes` -- guarden's own snapshots are the only ones the design has.
+    ("TIMELINE_CREATE", "no"),
     ("TIMELINE_LIMIT_HOURLY", "0"),
     ("TIMELINE_LIMIT_DAILY", None),
     ("TIMELINE_LIMIT_WEEKLY", "0-4"),

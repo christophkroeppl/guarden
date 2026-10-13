@@ -185,7 +185,15 @@ def snapshot(name: str, vol: str, number: int, escaped_ref: str | None = None) -
     runbook quotes it because a hand-rolled `chattr` leaves no record, and the
     verb is here so that nobody has to.
     """
-    return volume(name, STATE, vol, escaped_ref) / ".snapshots" / str(number) / "snapshot"
+    return volume(name, STATE, vol, escaped_ref) / SNAPSHOTS / str(number) / "snapshot"
+
+
+# snapper's fixed subvolume name, one constant because three modules match on
+# it: this module builds paths through it, `lineage` creates and measures the
+# subvolume, and `service`'s tree walks skip it -- a snapshot inside is a
+# read-only btrfs subvolume, so a chown there is an EROFS (measured
+# 2026-10-12) and snapper's subtree is never the service's to own.
+SNAPSHOTS = ".snapshots"
 
 
 def lock_path(name: str) -> Path:

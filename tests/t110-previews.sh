@@ -70,6 +70,12 @@ run runuser -u myapp-staging -- touch \
     /var/lib/guarden/services/myapp-staging/bulk/chainstate/scratch
 assert_exit 0
 
+# A snapshot in the orphan's volume, planted before the next ingest so the
+# walk's .snapshots skip is exercised every run, not only when the
+# distribution's timeline timer happened to have written one.
+run snapper --config myapp-preview-orphan-data create --cleanup-algorithm number --description 'planted for the walk'
+assert_exit 0
+
 run weedr service ingest myapp-preview/feature-a --from poke myapp@9f2c1ab
 assert_exit 0
 assert_stdout_has "forked myapp-preview/feature-a from myapp-staging"
@@ -311,3 +317,11 @@ run weedr service ingest shelf-staging --from poke shelf@3ab91d7
 assert_exit 2
 assert_stderr_has "must not carry a cap"
 stage_config guarden.toml
+
+# Planted so the purge's configuration-first ordering is what this run proves.
+run snapper --config myapp-staging-data create --cleanup-algorithm number --description 'planted for the purge'
+assert_exit 0
+run script -qec 'weedr service purge myapp-staging' /dev/null
+assert_exit 0
+assert_stdout_has "destroyed every volume of myapp-staging"
+assert_file_missing /var/lib/guarden/services/myapp-staging
