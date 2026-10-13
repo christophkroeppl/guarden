@@ -690,6 +690,13 @@ new gateway, a VPS migration or a VPN changes nothing about it. The one host sta
 collide with it is a route of your own inside the reserved `10.0.2.0/24`; `soil sysctl --check`
 warns when one exists, and the remedy is the range change below — not an edit to the alias.
 
+**A mapping that stops working has no host-side check.** ADR-0018 states the trade plainly: with
+the alias derived from configuration, nothing on the host can tell a working mapping from a broken
+one — the first symptom is a 502 at the edge, or a refused connection inside a container, and
+nothing in guarden's reporting says why. What catches a podman or pasta change before your users
+do is the golden VM's hop suite (`tests/t130-alias.sh`), which runs the real container against the
+real listener.
+
 Those are the edge's three ingress ports and there are no others. Every other number in
 `weedr port list` — 8096, 32400, 5001, 20000 and the rest — is a publication a service exposes
 on loopback for the edge to dial. Those get no forwarding rule and need none.
@@ -719,11 +726,13 @@ once** (or its consumers re-rendered), or its containers resolve their dependenc
 gateway and fail. One service at a time, through whatever re-renders it — `weedr service add`'s
 reconcile or the next `furrow deploy` — and every preview instance with it.
 
-The check that says it is done — no rendered consumer unit names anything but the pinned
-address:
+The check that says it is done — no rendered consumer unit names anything but the alias your
+config pins. It reads the alias out of `guarden.toml` rather than hardcoding the default, so it
+stays true on the range-change path below:
 
 ```sh
-grep -rI 'AddHost=' /var/lib/guarden/services/*/home/ | grep -v '10\.0\.2\.2$'
+alias=$(sed -n 's/^alias = "\(.*\)"$/\1/p' /etc/guarden/guarden.toml | head -1)
+grep -rI 'AddHost=' /var/lib/guarden/services/*/home/ | grep -v ":$alias$"
 # nothing printed: every consumer unit resolves its providers through the pinned alias
 ```
 

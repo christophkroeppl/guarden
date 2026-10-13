@@ -179,3 +179,20 @@ verified pre-existing by that review:
   never removes, so a host upgraded across a module rename keeps the old
   directory and `available()` still lists it. Pre-release, no such host in
   the harness; a migration note for whoever ships one.
+
+## The pinned-alias round's ledger (2026-10-13, from its review)
+
+Verified pre-existing by the docs review of `566ecc6` and left out of scope
+for it, as the same policy requires:
+
+- `docs/spec.md:1422–1434` — the zram-device paragraph sits inside the
+  `weedr` verb-list code fence (1361–1444), byte-identical in the parent,
+  misplaced by the same `caa414d` that wedged the probe list and the
+  swappiness block (both repaired by `566ecc6` because its own edits forced
+  them out). The paragraph belongs in §6.1's install bullet beside the zram
+  item, and the fence should hold the verb list alone.
+- The stub-resolver accept is cited as ADR-0015 in
+  `docs/adr/0004-connectivity.md:93`, `:124`, `docs/spec.md:2252`, `:2289`,
+  `SECURITY.md:318`, `:329`; it is ADR-0016's subject (0015 is the
+  second-terminator/pinned-artefact ADR). `SECURITY.md:230`'s tunnel
+  citation is correct and shows the distinction the others lost.

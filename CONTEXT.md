@@ -179,9 +179,9 @@ _Avoid_: gate, proxy, ingress controller
 **alias**:
 The one address a rootless container can reach the host on. Pasta maps the container's default
 gateway to the host's loopback, so the alias is that gateway address and it is a *name a consumer
-resolves* — `AddHost=<provider>:<alias>` — never a firewall destination. It is derived from the
-host's default route rather than chosen by guarden, which is why it is measured into
-`guarden.toml` and checked for drift rather than assumed.
+resolves* — `AddHost=<provider>:<alias>` — never a firewall destination. It is pinned, not
+measured: `soil install` derives it from the `-g` in `[network] pasta_options` and writes it into
+`guarden.toml`, so it is a constant no host's route can drift (ADR-0018).
 _Avoid_: host-gateway, host.containers.internal, publication
 
 ## Programs
