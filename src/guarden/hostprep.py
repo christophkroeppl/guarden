@@ -1410,7 +1410,7 @@ def _select_variant(family: str | None = None) -> None:
     2.7 does not use the alternatives system. `find_tool` in the ferm binary
        matches `^(.*tables)(.*)$` and prefers `$1-legacy$2` across `/usr/sbin`,
        `/sbin` and `$PATH`, so the list states the variant ferm WRITES rather than
-       the variant ferm writes. `_rendered_rules_readable` is what proves the
+       the one an operator is used to. `_rendered_rules_readable` is what proves the
        two agree.
     """
     argv = packagelist.variant_argv("set", family)

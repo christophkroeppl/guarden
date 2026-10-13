@@ -65,7 +65,7 @@ is the informative half and the clause is what makes it actionable; there is one
 the line and both `--check` and `--apply` go through it, so the two modes cannot differ.
 
 `--json` is available on exactly these verbs, and on no other: `weedr service list`, `weedr
-service status`, `weedr secret list`, `weedr port list`, `weedr firewall list`, `weedr module
+service status`, `weedr secret list`, `weedr secret materialise`, `weedr port list`, `weedr firewall list`, `weedr module
 list`, `weedr project list`, `weedr project keys`, `weedr share list`, `stakes list`, `stakes query`, `furrow queue
 list`, `furrow status`. `--json` on a write verb, and `--json` on a verb not in this list, is
 exit `2`.
@@ -78,7 +78,8 @@ change to this table and not a compatible addition.
 |---|---|
 || `weedr service list` | `services` — one object per service, each with `name`, `workload`, `project`, `environment`, `uid`, `source`, `deployed_sha`, `publication`, `edges`, `ports`, `volumes`, `instances`, `gate`, `warnings`, `route_hosts`, `route_destinations`. The nested objects are specified too, because a top-level name whose contents are open is not a field set: `publication` is `{ container, port }` pairs plus `api`; `edges` is `{ service, port, as, auth, publications }` per declared edge; `ports` is `{ requested, granted, pending }`; `volumes` is `{ name, kind, config, snapshots: { total, marked, oldest, newest, limits }, removed }` per declared volume; `instances` is `{ ref, created, seed }` per instance; `gate` is the `[gate]` table verbatim — `{ state, reason?, checked? }` — or `null` when the gate has never been evaluated, and `null` is **not** the same as `state: "ready"`. This is the field the runbook's "blocked, never started, crashed" triage reads, so it is in the table rather than folded into a status string. And `warnings` is a list of one-line strings, **including the two host invariants and the two host-lock state reports**, because those are what §6.2 says this verb reports ||
 | `weedr service status` | one object: `name`, `ref` (null on a slot track), `unit_state`, `active_state`, `sub_state`, `publications`, `edges`, `snapshots`, `instances`, `gate`, `warnings` |
-| `weedr secret list` | `secrets` — one object per key, each with `name`, `set` (bool), `source` (`planted` \| `generated`), `example` (bool). **Never a value** |
+|| `weedr secret list` | `secrets` — one object per key, each with `name`, `set` (bool), `source` (`planted` \\| `generated`), `example` (bool). **Never a value** ||
+|| `weedr secret materialise` | `materialised` — one object per key, each with `name`, `service`, `blob`, `status` ||
 | `weedr port list` | `services` — one object per service, each with `name`, `requested`, `granted`, `pending` |
 | `weedr firewall list` | `rules` — one object per **rule text after deduplication**, each with `rule`, `chain`, `file`, `granted` (bool), `requested_by` (a list of `{ service, name }`). One object per rule rather than one per service is the whole shape: deduplication is a property of the set (§7.7), and a per-service list would report the same line twice and imply two rules |
 | `weedr module list` | `enabled`, `available` — each a list of module names |
@@ -332,6 +333,9 @@ alias = ""  # the address a rootless container can reach the host on. Empty unti
   # start without it. Per §7.1 this is the gateway address pasta maps,
   # and it is a NAME the consumer resolves -- never a firewall
   # destination
+tunnel_domain = ""  # the public zone for tunneled routes. Empty until the operator
+  # sets it; `roots` constructs `preview.<tunnel_domain>` hostnames from it,
+  # and `weedr` refuses to install `cloudflared` without it
 publication_range = [20000, 32767]  # loopback ports guarden may allocate
 forwarded = [ "80/tcp", "443/tcp", "443/udp" ]  # what soil forwards to the edge
 
@@ -561,6 +565,9 @@ add = ["video", "render"]  # supplementary groups for the service user
 
 [mounts]
 allow = ["/dev/dri"]  # host paths this service's units may bind-mount
+
+[expose]
+tunnel = ["web"]  # route labels published through the tunnel instead of the edge
 ```
 
 `keep_last` and `free_limit` override the track's defaults. `groups.add` gives the service
@@ -570,6 +577,8 @@ host path outside the service's own volumes and `/etc/guarden` becomes bind-moun
 renderer refuses every other one, and an entry here is a grant in the same sense a port is.
 `firewall.allow` is the same shape of grant in the same file and for the same reason: the
 manifest asks, the admin decides, and the repository cannot widen it (§7.7).
+`expose.tunnel` names route labels that are published through the tunnel instead of the edge;
+the track's `expose` field already defaults to `edge`, so no `[expose] edge` key is needed.
 
 Nothing else is overridable. Routes, edges, state volumes, the unit source and the credential
 schema are the repository's, and this file does not touch them.
@@ -1528,8 +1537,8 @@ service from the module's own unit source, installs the units, creates any group
 (`gate-traefik` owns `edge` and adds the edge's service user to it), and converges the edge's forwarding
 by invoking `soil firewall --apply`.
 
-**The mutator does not write `20-ingress-nat.conf`; it calls the program that does.**
-revision of this step had the mutator re-render the file itself, which put a second writer on a
+**The mutator does not write `20-ingress-nat.conf`; it calls the program that does.** An
+earlier revision had the mutator re-render the file itself, which put a second writer on a
 file the layout table says has exactly one, and did it with no `firewall` lock — the precise
 stale-render failure the lock exists to prevent. Calling `soil` is not a violation of the
 renderer's separation either: the rule that the mutator never runs a program **over
@@ -1547,8 +1556,7 @@ have. A module ships services, and a service's ports and firewall rules come fro
 and an admin's `overrides.toml` like any other service's (§7.7). The
 `ingress` a module declares is the module's **own** contribution
 to the forwarded set, which is configuration rather than a grant, and it is the one ingress list
-the design has: `[ingress] forwarded` in `guarden.toml` is not read by anything and is not in the
-shipped table.
+the design has: `[ingress] forwarded` in `guarden.toml` is validated but not currently consumed — the edge's forwarded ports come from the module's `[[services]]` ingress declaration.
 
 `weedr module remove <name>` is the inverse, and its steps are stated because a half-removed
 module is the failure this verb exists to prevent. In order, under the `modules` lock and the
@@ -1743,8 +1751,8 @@ The steps, in this order, and the order is the point :
   reference the manifest names.
 
   **`weedr service build` takes no `--from`, and that is the fix rather than a restriction.** It
-  used to take one, and the staging confinement written for `weedr service add --from` was never
-  copied to it — a separate verb on the same sudoers rule, simply not mentioned, and
+  takes no `--from` because the staging confinement written for `weedr service add --from` was
+  never copied to it — a separate verb on the same sudoers rule, simply not mentioned, and
   `podman build` executes arbitrary `RUN` steps, so an unconfined `build --from <dir>` let a
   `guarden` program, or a poke key through the `(guarden)` hop, run code as any service uid from
   a tree it chose. A build has exactly one tree it is ever allowed to build and it is the
@@ -1757,7 +1765,7 @@ The steps, in this order, and the order is the point :
   own podman secret store with a value that is neither empty, nor prefixed `EXAMPLE-`, nor
   equal to `changeme`. It records the verdict in the registry and returns. It is a mutator verb
   because the store is inside the service's `0700` home and only root can read it
-  revision had `furrow` evaluate the gate, which no permitted verb could support, since the only
+  — and `furrow` never evaluates the gate, which no permitted verb could support, since the only
   secret-reading verb on its rule returns booleans and never a value.
 
   **A blocked gate does not fail the deploy.** The deploy has done what it was asked: the
@@ -1823,7 +1831,7 @@ each capability its own verb:
 
 - **No flag on a granted verb widens authority.** `weedr service ingest` takes `--from poke
   <project>@<sha>` and nothing else; the grant is `weedr port open`, a different verb that is not
-  on the rule. So a poke can create a service and leave its ports pending, which is §7.5\'s
+  on the rule. So a poke can create a service and leave its ports pending, which is §7.5's
   rule arriving through the mechanism that enforces it.
 - **Nothing on the rule destroys data.** `weedr service remove` moves volumes aside; the verb
   that deletes them is `weedr service purge`, and it is not on the rule. No program that answers
@@ -1879,8 +1887,8 @@ in `/etc/ssh/authorized_keys.d/hose` is the only place a project name appears at
 
 The same reasoning fixes the second hole. `hose drop <ref>` **derives** the service name from
 the project and the ref through the allowlist and never accepts one; it calls `furrow preview
-drop <name> <ref>` with a name it computed. The previous signature took a free-form `<name>`,
-which let a key for one project drop any preview instance on the box.
+drop <name> <ref>` with a name it computed. A free-form `<name>` would let a key for one project
+drop any preview instance on the box.
 
 The only network-facing program, holding no privilege beyond a sudoers rule naming exactly:
 `furrow deploy`, `furrow preview drop`, `furrow queue list`, `furrow status`, `weedr project
@@ -1935,6 +1943,7 @@ which `furrow` deleted a tree it cannot write to was wrong in the same way the c
 whatever that deploy exited with, so a failed deploy does not leave a tree behind either. The
 per-project parent directory survives for the next poke and is removed by `weedr project revoke`.
 A `furrow deploy --from` invoked by hand at a terminal leaves the tree, because the caller is a
+human who chose the path, and `furrow` prints a `warning:` naming the path it did not remove.
 
 Unpacking is hardened: extracted as the `hose` user under `umask 022`, with no absolute member
 names, no `..` component, no preserved ownership, and no symlink followed. A member that
@@ -2025,8 +2034,7 @@ live in a root-owned `<name>.target` per service:
 
 The edges are `Wants=`, not `Requires=`. A provider that is down does not prevent its consumers
 from starting; the consumer's first dial fails and it retries. A hard requirement would let one
-dead database take down everything that declares it. **No boot wave and no fixed delay**: a
-**No boot wave and no fixed delay**: a service with no edges starts in parallel with everything else, and the graph is a dependency
+dead database take down everything that declares it. **No boot wave and no fixed delay**: a service with no edges starts in parallel with everything else, and the graph is a dependency
 graph, not a sequence. The deploy order in §6.6 is the binding decision.
 
 ---
@@ -2145,10 +2153,9 @@ reaches `POSTROUTING`. On the way back, connection tracking unwinds the destinat
 and rewrites the reply's source to the public address the client dialled, so the reply leaves
 with the source the client expects and is accepted. A rule of the form
 `-o <ingress-if> -d 127.0.0.1 --dport <pub> -j MASQUERADE` matches **no packet in either
-direction**: the forwarded packet is local, and the reply's destination is the client.
-revision of this document required that rule on the grounds that a loopback source is
-unacceptable to an external client; that reasoning was wrong, and the requirement has been
-removed rather than kept as a harmless superstition, because a rule that claims to be
+direction**: the forwarded packet is local, and the reply's destination is the client. A
+loopback source is acceptable to an external client — the requirement to the contrary was
+removed because it was a superstition, not a constraint, and a rule that claims to be
 load-bearing and is not is worse than no rule at all.
 
 Two things about a loopback destination are worth stating because they surprise operators:
@@ -2248,7 +2255,7 @@ which is the whole of what makes this rule safe to render unconditionally.
 **This is what the deny must not be confused with.** The drop is on `-d 127.0.0.0/8`, and
 it does not touch outbound traffic: a package update, a git fetch and a call to the outside
 world leave on the real interface and are unaffected. **It did touch name resolution, and an
-earlier revision of this document claimed it did not.** The claim rested on pasta's exclusion
+this document claimed it did not.** The claim rested on pasta's exclusion
 of its DNS forward from the loopback mapping ("traffic identified as DNS, originally directed
 to the `--map-host-loopback` address … is not translated to loopback, but rather handled in the
 same way as if specified as `--dns-forward`"), and that is true — **of traffic from inside a
@@ -2438,7 +2445,7 @@ operator owns:
   no track to read a default from. Their ladder is left as the distribution shipped it. Nothing
   snapshots them on a schedule, so their limits govern only what a human gets who runs `snapper`
   by hand there, and that is a human's own housekeeping rather than a policy guarden owns. An
-  
+  earlier revision applied the skip rule to these two as well, which meant every
   `soil storage --apply` emitted two warnings and never converged the host at all.
 - **Anything else** is a configuration guarden did not create, so it is **skipped with a
   `warning:` line naming it** and left byte-for-byte alone. This is the "every configuration it
@@ -2560,8 +2567,8 @@ no inter-process coordination at all.
 
 **Three facts about that read are normative, and all three are measured on snapper 0.10.6, the
 version `soil packages` installs.** They are here because
-wrote the option after the command and expected a list, and every reader written from it read
-nothing:
+an early implementation wrote the option after the command and expected a list, and every
+reader written from it read nothing:
 
 - **`--machine-readable` is a global option and precedes the command.** Written after `list` it
   is not an option of `list` at all, and the tool answers `Unknown option '--machine-readable'
@@ -2811,7 +2818,7 @@ next ordinary run can inherit what the gate observed. The cache lives outside th
   unit exists, the snapshot carries the mark, the rule is in the file, the package was not
   installed. An assertion about an argv that left no state is dropped rather than ported.
 - **What the VM proves that nothing else could:** that a rootless container reaches a dependency
-  **by the pinned alias **, and that the connection arrives on the host with the
+  by the pinned alias, and that the connection arrives on the host with the
   consumer's uid as the socket owner; that a non-member cannot connect to a declared port; that a
   clone of a live data volume starts and recovers; that **a forwarded port answers from a second
   machine**; that nothing unprivileged can bind below 1024; and that a lock is a file and a rename
