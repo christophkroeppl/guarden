@@ -242,7 +242,7 @@ assert_exit 0
 render=$GUARDEN_FIXTURES/render
 unit=$render/units/web.container
 assert_file_exists "$unit"
-assert_file_has "$unit" "Secret=DB_PASSWORD,type=file"
+assert_file_has "$unit" "Secret=DB_PASSWORD,type=mount"
 assert_file_has "$unit" "Secret=SESSION_SIGNING_KEY,type=env"
 assert_file_lacks "$unit" "LoadCredentialEncrypted"
 if grep -rl LoadCredentialEncrypted "$render" >"$GUARDEN_FIXTURES/leaked" 2>/dev/null; then

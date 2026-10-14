@@ -1652,7 +1652,7 @@ Repository YAML is parsed with `safe_load` only. The default loader constructs a
 Python objects, and the mutator must never run anything over repository input.
 
 For a `@sensitive` or `@required` key, `loom` emits a **credential request** and never a value:
-`Secret=<KEY>,type=file` in the `[Container]` table, and nothing else. Podman resolves `<KEY>`
+`Secret=<KEY>,type=mount` in the `[Container]` table, and nothing else. Podman resolves `<KEY>`
 from that service's own secret store and presents it inside the container at
 `/run/secrets/<KEY>`. A key the manifest's schema marks as needing an environment variable gets
 `type=env` instead, and the application reads the variable. No value ever passes through the

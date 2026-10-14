@@ -15,12 +15,12 @@ The four annotations that carry meaning, and what each one does here:
 | `@example` | the example the gate rejects while it is still present |
 
 **`@type env` is how a key says its application needs a variable.** It is the one
-place the renderer emits `Secret=<KEY>,type=env` instead of `type=file`, and it
+place the renderer emits `Secret=<KEY>,type=env` instead of `type=mount`, and it
 is read off the key's own annotation because the schema is the only document
-either side of this that a project controls. Every other key is a file, which is
-the default and the safe one: a secret presented at `/run/secrets/<KEY>` is
-readable only by the container, and one presented as a variable is in its
-environment.
+either side of this that a project controls. Every other key is presented as a
+file — podman's `type=mount`, the default and the safe one: a secret presented at
+`/run/secrets/<KEY>` is readable only by the container, and one presented as a
+variable is in its environment.
 
 **The defaults fail closed, and getting them wrong fails in the harmless
 direction** (spec 4). varlock's `@defaultSensitive` is true unless the file says
@@ -51,8 +51,15 @@ ANNOTATION = re.compile(r"^@(?P<name>[A-Za-z][A-Za-z0-9]*)(?:[ \t]*=[ \t]*|[ \t]
 # than refused — the same way an annotation guarden does not know is ignored.
 DECLARATION = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)(=(?P<value>.*))?$")
 
-INFILE = "file"
-INENV = "env"
+# The two podman `--secret` injection types guarden emits, spelled exactly as
+# podman spells them because the value is interpolated straight into
+# `Secret=<KEY>,type=<injection>` in the unit. **`mount` presents the secret at
+# `/run/secrets/<KEY>`; `env` puts it in the environment.** podman 5.7 rejects
+# `type=mount` ("type file is invalid: parsing secret") -- the value guarden used
+# to emit -- and every unit carrying one failed to start, which no test caught
+# because the suites asserted the rendered text and never started a container.
+TYPE_MOUNT = "mount"
+TYPE_ENV = "env"
 
 
 @dataclass(frozen=True)
@@ -60,7 +67,7 @@ class Key:
     name: str
     required: bool
     sensitive: bool
-    injection: str = INFILE
+    injection: str = TYPE_MOUNT
     example: str | None = None
 
     @property
@@ -168,7 +175,7 @@ def _key(
     else:
         required = True
 
-    injection = INENV if raw["type"].lower() == INENV else INFILE
+    injection = TYPE_ENV if raw["type"].lower() == TYPE_ENV else TYPE_MOUNT
     return Key(
         name=raw["name"],
         required=required,

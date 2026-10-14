@@ -16,4 +16,4 @@ Environment=APP_HOST=${domain}
 Environment=APP_MODE=production
 Volume=data:/var/lib/app
 PublishPort=8080:8080
-Secret=STOLEN,type=file
+Secret=STOLEN,type=mount

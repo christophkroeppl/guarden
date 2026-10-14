@@ -255,8 +255,8 @@ assert_file_has "$render/units/guarden.env" "DB_HOST=pgprov-staging"
 assert_file_has "$render/units/guarden.env" "DB_PORT=$db_pub"
 assert_file_has "$render/units/guarden.env" "SECRET_HOST=pgprov-staging"
 assert_file_has "$render/units/guarden.env" "SECRET_PORT=$vault_pub"
-assert_file_has "$render/units/web.container" "Secret=DB_PASSWORD,type=file"
-assert_file_has "$render/units/web.container" "Secret=SECRET_SECRET,type=file"
+assert_file_has "$render/units/web.container" "Secret=DB_PASSWORD,type=mount"
+assert_file_has "$render/units/web.container" "Secret=SECRET_SECRET,type=mount"
 # The credential arrives as a request and never as a value, and the renderer's
 # `LoadCredentialEncrypted=` would be a unit its own user manager cannot start.
 assert_file_lacks "$render/units/web.container" "$db_value"

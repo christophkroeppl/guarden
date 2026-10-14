@@ -22,7 +22,7 @@ running.
       blobs into the owning service's podman secret store — two units in total, not two per
       service
 - [ ] A podman secret's name is what the container sees, and **injection as a file is the
-      default, not as an environment variable.** `loom` emits `Secret=<KEY>,type=file` in the
+      default, not as an environment variable.** `loom` emits `Secret=<KEY>,type=mount` in the
       `[Container]` table **and nothing else**, podman resolves `<KEY>` from that service's own
       secret store, and the container reads `/run/secrets/<KEY>`. One injected as an
       environment variable is visible in `/proc/<pid>/environ`, is routinely echoed by frameworks

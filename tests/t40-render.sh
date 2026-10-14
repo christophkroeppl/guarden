@@ -102,11 +102,11 @@ assert_file_has "$staged/units/web.container" "IOWeight=100"
 # A credential *request* and never a value. Podman resolves the key from the
 # service's own secret store and presents it at /run/secrets/<KEY>; a key whose
 # application needs a variable gets type=env.
-assert_file_has "$unit" "Secret=APP_SECRET,type=file"
+assert_file_has "$unit" "Secret=APP_SECRET,type=mount"
 assert_file_has "$unit" "Secret=SESSION_KEY,type=env"
 # ... and for a `database` edge, the role's own password in the consumer's store,
 # named as the uppercased `as:` prefix plus _PASSWORD.
-assert_file_has "$unit" "Secret=DB_PASSWORD,type=file"
+assert_file_has "$unit" "Secret=DB_PASSWORD,type=mount"
 
 # **There is no LoadCredentialEncrypted=, and the absence is asserted.** These
 # units run in the service user's user manager, which cannot read the 0600 root

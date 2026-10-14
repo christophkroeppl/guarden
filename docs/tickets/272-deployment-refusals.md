@@ -47,7 +47,7 @@ Two ways out, and the choice is a decision worth recording:
 
 - **Per-service keys, planted by hand**: `weedr secret set rustfs-production
   RUSTFS_ACCESS_KEY` and `… RUSTFS_SECRET_KEY`, declared `@required @sensitive`
-  in the provider's `.env.schema`, so the renderer emits `Secret=<KEY>,type=file`
+  in the provider's `.env.schema`, so the renderer emits `Secret=<KEY>,type=mount`
   and podman presents both at `/run/secrets/<KEY>`. This works today and is what
   the deployment will use. The cost is that the credential is **not minted per
   consumer** — every consumer that declares the RustFS edge must be given the

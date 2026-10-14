@@ -37,7 +37,7 @@ at `.guarden/.env.schema:9–13` were plain lines, which `secretschema` skips �
 it reads comment lines only (closed 2026-10-12 in `t-names`: the five lines
 are comment-prefixed now, so the path above is the defect that remains). The
 renderer strips the container's
-`Secret=TUNNEL_CREDENTIAL,type=file` as an owned key and re-emits it from the
+`Secret=TUNNEL_CREDENTIAL,type=mount` as an owned key and re-emits it from the
 schema alone, so the rendered cloudflared unit requests no credential at all — and
 nothing in `tests/` asserts one. That is the state to build from: the path is
 `.guarden/.env.schema`, the annotations are comments, and the acceptance is an

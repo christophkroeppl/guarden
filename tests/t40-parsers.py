@@ -206,7 +206,7 @@ def schema() -> None:
     key = defaults.keys[0]
     check(key.required is True, "a key is required unless the schema says otherwise")
     check(key.sensitive is True, "a key is a credential unless the schema says otherwise")
-    check(key.injection == secretschema.INFILE, "a key is a file unless it says otherwise")
+    check(key.injection == secretschema.TYPE_MOUNT, "a key is a file unless it says otherwise")
 
     decorated = secretschema.loads(
         "// @defaultSensitive=false\n"
@@ -233,7 +233,7 @@ def schema() -> None:
     check(by_name["SESSION_SIGNING_KEY"].required is False,
           "a key with no value is not required under infer")
     check(by_name["SESSION_SIGNING_KEY"].sensitive is True, "a bare @sensitive is on")
-    check(by_name["SESSION_SIGNING_KEY"].injection == secretschema.INENV,
+    check(by_name["SESSION_SIGNING_KEY"].injection == secretschema.TYPE_ENV,
           "@type env is the one that is not a file")
     check(by_name["LOG_LEVEL"].sensitive is False, "@defaultSensitive=false is read")
     check([key.name for key in decorated.requests()]

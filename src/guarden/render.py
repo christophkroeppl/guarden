@@ -1083,7 +1083,7 @@ def _secret_requests(
 ) -> list[str]:
     """A credential *request* and never a value (spec 6.3).
 
-    `Secret=<KEY>,type=file` in `[Container]` and nothing else: podman resolves
+    `Secret=<KEY>,type=mount` in `[Container]` and nothing else: podman resolves
     `<KEY>` from that service's own secret store and presents it at
     `/run/secrets/<KEY>`. A key whose application needs a variable gets
     `type=env`, which is what the schema's `@type env` means. An edge adds its
@@ -1101,7 +1101,7 @@ def _secret_requests(
     """
     out: list[str] = [f"{key.name},type={key.injection}" for key in schema.requests()]
     out.extend(
-        f"{edges.credential_key(edge.auth, edge)},type=file"
+        f"{edges.credential_key(edge.auth, edge)},type={secretschema.TYPE_MOUNT}"
         for edge in document.needs
         if edge.auth in (edges.AUTH_DATABASE, edges.AUTH_SECRET)
     )

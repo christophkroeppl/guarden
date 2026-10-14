@@ -854,7 +854,7 @@ There is no `guarden-creds.service`; a runbook that named one would send an oper
 unit that does not exist and conclude the blobs had been re-materialised. The renderer
 emits a *credential request* and never a value, because it has none. For a key the
 manifest's schema marks `@required` or `@sensitive`, the generated unit carries
-`Secret=<KEY>,type=file` in the `[Container]` table **and nothing else**, and podman resolves
+`Secret=<KEY>,type=mount` in the `[Container]` table **and nothing else**, and podman resolves
 `<KEY>` from that service's own secret store and presents it at `/run/secrets/<KEY>`. A key
 whose application needs a variable gets `type=env` instead, and it is the application that
 decides, not the repository.

@@ -77,7 +77,7 @@ It refuses to render anything it cannot fully resolve.
 - [ ] `${domain}` is the only substitution, taken from `host.domain`; no host environment
       variable and no service name reaches a rendered unit
 - [ ] **For a key the schema marks `@required` or `@sensitive`, a credential *request* is
-      emitted and never a value:** `Secret=<KEY>,type=file` in the `[Container]` table and
+      emitted and never a value:** `Secret=<KEY>,type=mount` in the `[Container]` table and
       **nothing else**, which podman resolves from that service's own secret store and presents
       at `/run/secrets/<KEY>`. A key whose application needs a variable gets `type=env`. The
       renderer has no value to emit, and no test asserts one
