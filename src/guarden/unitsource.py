@@ -194,12 +194,21 @@ def format_line(key: str, value: str, path: Path) -> str:
             f"{path}: the value of {key}= has a space in it and {key} does not take a "
             f"quoted value: {value!r}"
         )
-    if key == "Exec":
+    if key in ("Exec", "Environment"):
         # **Refuse a value that is ONE quoted argument, which is the shape that
         # collapses.** Quadlet passes a quoted value through as a single argv
         # token, so `Exec="--a=1 --b=2"` hands the process one flag it does not
         # recognise and it discards all of it -- measured by running the generator
         # on both shapes.
+        #
+        # **`Environment=` has the identical trap and it is not a command line.**
+        # `Environment="A=1 B=2"` renders as `--env "A=1\x20B=2"` -- ONE variable
+        # named `A` whose value is `1 B=2`, and neither `B` nor anything after it
+        # exists. Measured: the unquoted form renders `--env A=1 --env B=2` and
+        # the container sees both. A Compose file's `environment:` map is several
+        # assignments, the converter joins them with spaces, and quoting that
+        # join is what silently dropped every key but the first -- which is how a
+        # real service was deployed with one malformed variable.
         #
         # **Segment quoting is a different thing and must be allowed.** An earlier
         # version of this refused any one-token value containing a space, which
@@ -217,11 +226,11 @@ def format_line(key: str, value: str, path: Path) -> str:
             arguments = shlex.split(value)
         except ValueError as exc:
             raise errors.GuardenError(
-                f"{path}: the value of Exec= cannot be read as arguments: {exc}"
+                f"{path}: the value of {key}= cannot be read as arguments: {exc}"
             ) from None
         if len(arguments) == 1 and " " in arguments[0] and value.strip()[:1] in ('"', "'"):
             raise errors.GuardenError(
-                f"{path}: Exec= is one quoted argument holding {arguments[0].count(' ') + 1} "
+                f"{path}: {key}= is one quoted argument holding {arguments[0].count(' ') + 1} "
                 f"words, and quadlet passes a quoted value through as a SINGLE argv token: "
                 f"the process would receive one flag it does not recognise and discard it. "
                 f"Write the arguments unquoted and space-separated."

@@ -132,11 +132,29 @@ def refusals() -> None:
         check("does not take a quoted value" in exc.message, "a spaced value names the reason")
     else:
         FAILURES.append("a spaced value: accepted")
+    # **`Environment=` is a list of assignments and is never quoted.** A quoted
+    # value collapses to a SINGLE `--env`, so `Environment="A=1 B=2"` gives the
+    # container one variable named `A` whose value is `1 B=2` and no `B` at all --
+    # measured: the unquoted form renders `--env A=1 --env B=2` and the container
+    # sees both. A Compose file's `environment:` map is exactly this list, so the
+    # quoting silently dropped every key but the first.
+    check(
+        unitsource.format_line("Environment", "A=1 B=2", Path("/tmp/web.container"))
+        == "Environment=A=1 B=2",
+        "a multi-assignment Environment= stays unquoted so quadlet splits it",
+    )
     check(
         unitsource.format_line("Environment", "A=hello world", Path("/tmp/web.container"))
-        == 'Environment="A=hello world"',
-        "a quotable key quotes its value",
+        == "Environment=A=hello world",
+        "a spaced Environment= value is not quoted either",
     )
+    try:
+        unitsource.format_line("Environment", '"A=1 B=2"', Path("/tmp/web.container"))
+    except errors.GuardenError as exc:
+        check(exc.code == 2, f"a wholly quoted Environment=: exit {exc.code}, expected 2")
+        check("SINGLE argv token" in exc.message, "a quoted Environment= names the reason")
+    else:
+        FAILURES.append("a wholly quoted Environment=: accepted")
     # **`Exec=` is never quoted, and one quoted argument is refused.** A quoted
     # value collapses to a SINGLE argv token, which the process receives as one
     # unrecognised flag and discards -- measured by running the quadlet generator
