@@ -74,3 +74,24 @@ service, `--from <service>`). A repository reaches the host through a **poke**:
 `weedr service ingest <name> --from poke <project>@<sha>` (spec §5.3,
 `docs/sysadmin.md:221`). `soil` phases are run one at a time — `soil install
 --apply`, then `soil packages --apply`, and so on.
+
+## Addendum 2026-10-14: bases-mcp is a stdio server, not a service
+
+`bases-mcp/develop/src/main.rs` is a **stdio** MCP server (`rmcp::transport::stdio`):
+it is spawned by its client, opens no socket and has no HTTP surface. A guarden
+service is a long-running unit with a published port, a route, a healthcheck and a
+snapshot ladder, and none of those describe this program. So its blocker is not
+"a missing `compose.yaml`" — it is a **shape** decision the repository has to make
+first (stay stdio and be spawned by its consumer; move to HTTP/SSE; or wrap it
+deliberately). Recorded in the repository's own ticket
+(`bases-mcp/TICKET-guarden-deploy.md`), sharpened the same day.
+
+## Addendum 2026-10-14: the agent images are private
+
+`ghcr.io/nousresearch/hermes-agent:2026.9.3` — the image guarden's own reference
+unit pins — refuses an anonymous pull (`unable to retrieve auth token: invalid
+username/password: unauthorized`), measured against the registry token endpoint
+with `docker.io/library/postgres` as the public control. So `hermes-production`
+and `zeroclaw-production` (deployment 260) cannot be pulled on a fresh host until
+a credential, a public image or a documented build step is chosen. Filed as 278 —
+a missing input, not a guarden defect.
