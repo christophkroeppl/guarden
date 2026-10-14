@@ -209,6 +209,7 @@ class Registry:
     source: str = SOURCE_MANUAL
     installed_by: str | None = None
     deployed_sha: str | None = None
+    source_hash: str | None = None
     publication: dict[str, int] = field(default_factory=dict)
     edges: dict[str, dict] = field(default_factory=dict)
     provides: list[str] = field(default_factory=list)
@@ -252,6 +253,8 @@ class Registry:
             document["installed_by"] = self.installed_by
         if self.deployed_sha:
             document["deployed_sha"] = self.deployed_sha
+        if self.source_hash:
+            document["source_hash"] = self.source_hash
         if self.publication:
             document["publication"] = dict(self.publication)
         if self.edges:
@@ -319,6 +322,7 @@ class Registry:
             source=document.get("source", SOURCE_MANUAL),
             installed_by=document.get("installed_by"),
             deployed_sha=document.get("deployed_sha"),
+            source_hash=document.get("source_hash"),
             publication=dict(document.get("publication") or {}),
             edges={name: dict(edge or {}) for name, edge in (document.get("edges") or {}).items()},
             provides=list(provides),

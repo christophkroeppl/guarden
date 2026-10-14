@@ -126,7 +126,8 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     check_hosts(resolved.name, manifest, resolved.track)
 
     existing = registry.load(resolved.name)
-    if existing is not None and _converged(existing, resolved, manifest, project):
+    source_hash = _source_hash(directory) if source.kind == "poke" else ""
+    if existing is not None and _converged(existing, resolved, manifest, project, source_hash):
         outcome.converged = True
         outcome.uid = existing.uid
         return outcome
@@ -166,6 +167,8 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # is the only copy a consumer can read: the provider's own tree is 0700 to
     # the provider and loom runs as guarden.
     record.provides = list(manifest.provides)
+    if source_hash:
+        record.source_hash = source_hash
     # spec 3.4: what the manifest asked for, in manifest order. A grant is matched
     # against this and against nothing else, so `weedr port open` can refuse a port
     # no repository asked for.
@@ -341,8 +344,10 @@ def _project_from(source: Source) -> str:
     return record.project
 
 
-def _converged(record, resolved, manifest: manifest_mod.Manifest, project: str) -> bool:
+def _converged(record, resolved, manifest: manifest_mod.Manifest, project: str, source_hash: str = "") -> bool:
     if record.project != project or record.environment != resolved.track.name:
+        return False
+    if source_hash and record.source_hash != source_hash:
         return False
     if resolved.escaped_ref and resolved.escaped_ref not in record.instances:
         return False
@@ -396,6 +401,33 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
             continue
         conf.set_owner(path, owner)
         os.chmod(path, TREE_MODE)
+
+
+
+def _source_hash(directory: Path) -> str:
+    """The content hash of the unit source, for the convergence check.
+
+    `_copy_source` copies exactly two things out of a staging tree: `.guarden/`
+    and `compose.yaml`. Those are also the only inputs the renderer reads, so a
+    hash over them is the exact predicate for "would the rendered units be the
+    same as last time". `deployed_sha` (the poke commit) is not: re-ingesting the
+    same commit after editing the compose file is a change the operator made and
+    the convergence check must see it.
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    for rel in [".guarden", "compose.yaml"]:
+        path = directory / rel
+        if path.is_dir():
+            for f in sorted(path.rglob("*")):
+                if f.is_file() and paths.SNAPSHOTS not in f.parts:
+                    h.update(f.relative_to(directory).as_posix().encode())
+                    h.update(f.read_bytes())
+        elif path.is_file():
+            h.update(rel.encode())
+            h.update(path.read_bytes())
+    return h.hexdigest()
 
 
 def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
