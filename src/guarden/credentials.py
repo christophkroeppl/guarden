@@ -199,9 +199,29 @@ def materialise(service: str | None = None) -> list[str]:
         stored = value(name, key)
         if stored is None:
             continue
-        where = _service_cwd(name)
+        # **One bad blob must not abort the rest.** This loop is the host's whole
+        # credential path, and it has failed twice for reasons that had nothing to
+        # do with the blob being materialised: a `-f` podman does not accept
+        # (ticket 287), and a stale blob whose service home had been removed. Both
+        # times the unit went `failed` and EVERY service's credentials stopped
+        # reaching podman, which is a much larger blast radius than the one entry
+        # at fault. A service whose home is gone is reported and skipped; the
+        # others still materialise.
+        try:
+            where = _service_cwd(name)
+        except errors.GuardenError as exc:
+            done.append(f"{name}: skipped ({exc})")
+            continue
+        # **`podman secret rm` has no `-f`.** It was passed here, so the removal
+        # always failed with `unknown shorthand flag: 'f'`, the `create` that
+        # followed failed with `secret name in use`, and because this loop is not
+        # caught the first already-existing secret aborted the whole unit --
+        # `guarden-creds-boot.service` failed and NO service's credentials reached
+        # podman. Measured: a bare `podman secret rm <key>` removes it (its id is
+        # printed and it is gone). `call` rather than `run` because a secret that
+        # is not there is the normal first-materialise case and must not raise.
         tool.call(
-            ["runuser", "-u", name, "--", "podman", "secret", "rm", "-f", key], cwd=where
+            ["runuser", "-u", name, "--", "podman", "secret", "rm", key], cwd=where
         )
         tool.run(
             ["runuser", "-u", name, "--", "podman", "secret", "create", key, "-"],
