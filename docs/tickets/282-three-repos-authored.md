@@ -15,7 +15,8 @@ and `NUXT_AGENT_API_KEY`, both `@required @sensitive`), and
 plus `/run/secrets/DB_PASSWORD`, exports the two schema secrets from their files,
 execs the image CMD). The three Containerfiles gained a `COPY` of the entrypoint.
 
-**Verified by rendering, not by reading.** The manifest was staged and ingested as
+**Verified by rendering, not by reading — which is syntax, not deployability.** The
+manifest was staged and ingested as
 `supplements-staging` on the deploy VM: it renders all three units, the
 `AddHost=postgres-production:10.0.2.2` edge, `DB_HOST`/`DB_PORT` in the
 EnvironmentFile, `Secret=DB_PASSWORD,type=mount`, and both schema secrets as
@@ -26,13 +27,30 @@ EnvironmentFile, `Secret=DB_PASSWORD,type=mount`, and both schema secrets as
 - The authored `healthcheck:` blocks used a JS one-liner, and **a compose
   healthcheck with a space is refused** — `HealthCmd` is not a quotable systemd
   key (ticket 281). Removed; the images' own `HEALTHCHECK` is what runs.
-- The image references are `supplements-<app>:latest`, which is a **local tag**.
-  Whether the host's build produces that tag is unverified — `weedr service build`
-  is declared in the service tuple but has **no handler** (`weedr.py`: it falls
-  through to `cli.pending()`), so the build verb is not implemented and the tag the
-  host would produce cannot be checked. Flagged rather than guessed.
+- The image references are `supplements-<app>:latest` — an **explicit unresolved
+  input, not a checked item.** `weedr service build` is declared in the service
+  tuple but has **no handler** (`weedr.py`: it falls through to `cli.pending()`), so
+  the tag the host would produce cannot be produced or checked, and the reference
+  carries no digest. The first deploy therefore either fails image-not-found or —
+  the worse case — satisfies the reference from a stale image already in the
+  service's local rootless storage and boots the wrong version **silently**. The
+  deploy must **fail closed** when the tag cannot be produced, rather than letting a
+  mutable local tag stand in for it. The adversarial review called this the weakest
+  claim in the round (286), and it is: "all three units render" certifies syntax for
+  an artifact that cannot be built or booted.
 
-## bases-mcp — verdict (a): it is not a guarden service
+## bases-mcp — verdict (a): not a guarden-COMPATIBLE service
+
+**Wording corrected after the adversarial review (286).** "It is not a service"
+closes a platform question by relabelling it as an application property. The
+accurate statement is that it is not a **guarden-compatible** service: guarden
+models only long-running, network-reachable, image-based units with `db`/`secret`
+edges, and a stdio server is none of those. The distinction matters because the
+exclusion **recurs** — the MCP ecosystem is stdio clients spawning subprocesses, so
+every MCP server meets this wall, not just this one. Either guarden grows a stdio
+kind (with `Restart=no`/on-demand activation semantics and an app-side `Send`-ify of
+the `Rc<Vault>`), or it stays HTTP-only **by design and documents it** so the
+exclusion is not re-litigated per repository.
 
 Both implementations are **stdio** MCP servers:
 
