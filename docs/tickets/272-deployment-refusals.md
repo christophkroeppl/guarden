@@ -86,12 +86,14 @@ first (stay stdio and be spawned by its consumer; move to HTTP/SSE; or wrap it
 deliberately). Recorded in the repository's own ticket
 (`bases-mcp/TICKET-guarden-deploy.md`), sharpened the same day.
 
-## Addendum 2026-10-14: the agent images are private
+## Addendum 2026-10-14: the agent images -- corrected, see 278
 
-`ghcr.io/nousresearch/hermes-agent:2026.9.3` — the image guarden's own reference
-unit pins — refuses an anonymous pull (`unable to retrieve auth token: invalid
-username/password: unauthorized`), measured against the registry token endpoint
-with `docker.io/library/postgres` as the public control. So `hermes-production`
-and `zeroclaw-production` (deployment 260) cannot be pulled on a fresh host until
-a credential, a public image or a documented build step is chosen. Filed as 278 —
-a missing input, not a guarden defect.
+**Superseded the same day — see 278.** `ghcr.io/nousresearch/hermes-agent:2026.9.3`
+refuses an anonymous pull, but the cause was a **wrong registry host**, not a
+private package: the official image is `docker.io/nousresearch/hermes-agent`
+(published 2026-10-14, tags `v0.22.0`/`v0.22.1`/`stable`/`latest`) and pulls with
+no credential. The sibling agent image `ghcr.io/openclaw/openclaw:2026.9.3` is
+public too and was pulled successfully. So `hermes-production` and
+`zeroclaw-production` are both deployable, and the reference unit's `ghcr.io` tag
+is the thing to fix. The corrected runtime shape (data at `/opt/data`, `gateway
+run`, port 8642, s6-supervised) is in 278.
