@@ -43,7 +43,7 @@ stage_service() {
         "service = \"$1\"" "workload = \"myapp\"" "project = \"myapp\"" \
         "environment = \"staging\"" "uid = 1101" "created = \"2026-09-30T09:00:00Z\"" \
         '[publication]' 'web = 20114' 'node = 20115' \
-        '[edges."postgres-staging:5432"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+        '[edges."postgres-staging:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
         'publications = [ 20007 ]'
 }
 stage_service myapp-staging
@@ -75,7 +75,7 @@ seed "$registry/myapp-staging.toml" \
     'service = "myapp-staging"' 'workload = "myapp"' 'project = "myapp"' \
     'environment = "staging"' 'uid = 1101' 'created = "2026-09-30T09:00:00Z"' \
     '[publication]' 'web = 20114' 'node = 20115' \
-    '[edges."postgres-staging:5432"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    '[edges."postgres-staging:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
     'publications = [ 20007 ]'
 seed "$GUARDEN_FIXTURES/dri/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/"
 seed "$GUARDEN_FIXTURES/dri/.guarden/quadlet/web.container" "[Container]" \

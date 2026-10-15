@@ -35,8 +35,8 @@ def credential_key(kind: str, edge: manifest_mod.Edge) -> str:
     example-placeholder comparison both match on, so it carries no port. Two edges
     of one service that shared a prefix would share a value, and `as:` being the
     prefix is what makes that unexpressible: the schema declares one credential per
-    prefix. The PORT distinguishes two edges in the REGISTRY (see `edge_key`), which
-    is where two edges of one provider are told apart.
+    prefix. The PORT and the AS distinguish two edges in the REGISTRY (see
+    `edge_key`), which is where two edges of one provider are told apart.
     """
     suffix = "SECRET" if kind == AUTH_SECRET else "PASSWORD"
     return f"{edge.variable}_{suffix}"
@@ -67,20 +67,28 @@ def check(consumer: str, document: manifest_mod.Manifest) -> None:
         _offered(consumer, edge, provider)
 
 
-def edge_key(provider: str, port: int) -> str:
+def edge_key(provider: str, port: int, as_: str = "") -> str:
     """The key one `needs:` entry is recorded under.
 
-    Two entries may name ONE provider on two ports — a provider with a database
-    and a vault container offers two publications — and keyed by the provider
-    alone the second silently replaced the first. The provider name and the port
-    together are unique per entry, and both are in every caller's hands.
+    Three entries may name ONE provider, on two ports and one of them twice: a
+    provider with a database and a vault container offers two publications, and a
+    consumer may ask it for a database twice under two `as:` prefixes. The
+    provider and the port alone told apart only the first two, so a second edge
+    that shared the port silently replaced the first, and the consumer lost the
+    publication and the credential the overwritten entry had. The `as:` prefix
+    is the third part: it is the variable name a `needs:` entry declares, it is
+    unique per manifest, and it is in every caller's hands beside the provider
+    and the port.
+
+    A key written by an earlier guarden carries only provider and port, and is
+    still read, so `provider_of` reads it back and an empty prefix keeps it.
     """
-    return f"{provider}:{port}"
+    return f"{provider}:{port}:{as_}"
 
 
 def provider_of(key: str) -> str:
     """The provider name inside an edge key."""
-    return key.rsplit(":", 1)[0]
+    return key.rsplit(":", 2)[0]
 
 
 def _offered(consumer: str, edge, provider) -> None:
@@ -124,7 +132,7 @@ def install(entry: registry.Registry, document: manifest_mod.Manifest) -> list[s
             warnings += said
             if publication is not None:
                 warnings += _credential(entry, edge, provider, container, publication)
-        entry.edges[edge_key(edge.service, edge.port)] = {
+        entry.edges[edge_key(edge.service, edge.port, edge.prefix)] = {
             "port": edge.port,
             "as": edge.prefix,
             "auth": edge.auth,

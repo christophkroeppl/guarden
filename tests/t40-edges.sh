@@ -35,7 +35,7 @@ seed "$registry/myapp-staging.toml" \
     'service = "myapp-staging"' 'workload = "myapp"' 'project = "myapp"' \
     'environment = "staging"' 'uid = 1101' 'created = "2026-09-30T09:00:00Z"' \
     '[publication]' 'web = 20114' \
-    '[edges."postgres-staging:5432"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    '[edges."postgres-staging:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
     'publications = [ 20007 ]'
 
 project=$GUARDEN_FIXTURES/project
@@ -129,7 +129,7 @@ seed "$registry/myapp-staging.toml" \
     'service = "myapp-staging"' 'workload = "myapp"' 'project = "myapp"' \
     'environment = "staging"' 'uid = 1101' 'created = "2026-09-30T09:00:00Z"' \
     '[publication]' 'web = 20114' \
-    '[edges."postgres-staging:5432"]' 'port = 5432' 'as = "db"' 'auth = "database"'
+    '[edges."postgres-staging:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"'
 run loom render "$project" --service myapp-staging --out "$render"
 assert_exit 1
 assert_stderr_has "publication"
@@ -141,7 +141,7 @@ seed "$registry/myapp-staging.toml" \
     'service = "myapp-staging"' 'workload = "myapp"' 'project = "myapp"' \
     'environment = "staging"' 'uid = 1101' 'created = "2026-09-30T09:00:00Z"' \
     '[publication]' 'web = 20114' \
-    '[edges."postgres-staging:5432"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    '[edges."postgres-staging:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
     'publications = [ 20007 ]'
 stage_config guarden.toml
 run loom render "$project" --service myapp-staging --out "$render"

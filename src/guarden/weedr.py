@@ -18,6 +18,7 @@ import time
 
 from guarden import (
     cli,
+    compose,
     conf,
     credentials,
     edgeconf,
@@ -26,6 +27,7 @@ from guarden import (
     firewallrules,
     gate,
     lineage,
+    manifest as manifest_mod,
     modules,
     names,
     paths,
@@ -33,12 +35,14 @@ from guarden import (
     projects,
     reconcile,
     registry,
+    render,
     report,
     service,
     snapper,
     snapshotid,
     tool,
     units,
+    unitsource,
     users,
     volumes,
 )
@@ -53,6 +57,16 @@ EDGE_MODE = 0o2750
 
 DASHBOARD_MODE = 0o755
 DASHBOARD_MODULE = "homepage"
+
+# The reference prefix a built image is tagged with, and the name it is tagged
+# after (spec 6.6 step 2, spec 6.2). `localhost/` says the image is local and
+# needs no registry, which is the one thing a rootless `podman build` in a
+# service's own store guarantees; the tag is the service, so two services' images
+# cannot collide and a redeploy overwrites the one it is replacing. Both halves
+# are pinned here because the mutator's build and the renderer's `Image=` have to
+# name the same image, and two literals would be the copy that drifts.
+LOCAL_REFERENCE = "localhost"
+BUILD_TAG = "latest"
 
 SERVICE = (
     ("ingest", "create or reconcile a service from a poke's staged tree"),
@@ -538,6 +552,60 @@ def _stop(args) -> int:
     resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
     service.stop_units(resolved.name, resolved.escaped_ref)
     sys.stdout.write(f"stopped {resolved.name}\n")
+    return 0
+
+
+def _build(args) -> int:
+    """`podman build` as the service user, from the service's own tree.
+
+    The image is tagged `localhost/<service>:latest`, matching the `Image=`
+    the renderer emits (spec 6.6 step 2). The build context is the service's
+    home, which holds `compose.yaml` or `.guarden/quadlet/` — exactly the tree
+    the renderer reads. `runuser -u <service>` runs podman with the service's
+    uid and subuid range, so the container can map root. A failure exits `1`
+    and names the verb; a success prints the image reference.
+    """
+    config = config_mod.load()
+    resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
+    record = registry.load(resolved.name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{resolved.name} has no registry entry, so there is nothing to build",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+
+    # The service's home is the build context: it holds compose.yaml or quadlet/
+    home = paths.service_home(resolved.name)
+    if not home.is_dir():
+        raise errors.GuardenError(
+            f"{resolved.name} has no home at {home}, so there is no tree to build",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+
+    # Resolve the unit source to confirm there is a build instruction and
+    # to read the image reference the manifest names.
+    manifest = manifest_mod.read(home / manifest_mod.MANIFEST_REL)
+    if not (home / compose.COMPOSE_REL).is_file() and not (home / render.QUADLET_DIR).is_dir():
+        raise errors.GuardenError(
+            f"{resolved.name} has no unit source in its home, so there is nothing to build",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+
+    # Read the image reference the unit will use. For a build, the reference
+    # is `localhost/<service>:latest`. A redeploy overwrites it.
+    image_ref = f"{LOCAL_REFERENCE}/{resolved.name}:{BUILD_TAG}"
+
+                                                                      
+    podman = ["runuser", "-u", resolved.name, "--", "podman", "build", "--tag", image_ref, "."]
+    result = tool.call(podman, cwd=home)
+    if not result.ok:
+        detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
+        raise errors.GuardenError(
+            f"build {resolved.name}: podman build exited {result.returncode}: {detail}",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+
+    sys.stdout.write(f"{image_ref}\n")
     return 0
 
 
@@ -1223,6 +1291,7 @@ HANDLERS = {
     "weedr service gate": _gate,
     "weedr service start": _start,
     "weedr service stop": _stop,
+    "weedr service build": _build,
     "weedr service list": _list,
     "weedr service snapshot": _snapshot,
     "weedr service fork": _fork,
