@@ -6,11 +6,11 @@
 project: twin
 units: .guarden/quadlet/
 needs:
-  - service: pgprov-staging
+  - service: pgdual-staging
     as: db
     port: 5432
     auth: database
-  - service: pgprov-staging
-    as: replica
+  - service: pgdual-staging
+    as: secret
     port: 5432
-    auth: database
+    auth: secret
