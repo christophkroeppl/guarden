@@ -348,7 +348,6 @@ def _share(table: dict, where_file: Any) -> Share:
 
 def _firewall(table: dict, where_file: Any) -> Firewall:
     """`[firewall] admin_dropin`, controls the admin drop-in file."""
-    where = f"{where_file} [firewall]"
     value = table.get("admin_dropin", FIREWALL_DEFAULTS["admin_dropin"])
     if not isinstance(value, bool):
         raise _type_error(str(where_file), "firewall.admin_dropin", "a boolean")

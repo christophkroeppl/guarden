@@ -1551,7 +1551,11 @@ def _verify_ssh_accept_position() -> bool:
                 break
 
                                                              
-    if not first_rule_in_ssh_chain or not first_rule_in_ssh_chain.startswith("proto tcp dport ") or not first_rule_in_ssh_chain.endswith(" jump ACCEPT;"):
+    if (
+        not first_rule_in_ssh_chain
+        or not first_rule_in_ssh_chain.startswith("proto tcp dport ")
+        or not first_rule_in_ssh_chain.endswith(" jump ACCEPT;")
+    ):
         return False
 
     # Now check the assembled ruleset via ferm --shell /dev/null
@@ -1759,7 +1763,8 @@ def _admin_dropin() -> str:
             "#",
             "# This file is installed when [firewall] admin_dropin = true (the default).",
             "# An admin may edit this file directly, or a module may add rules during install.",
-            "# Rules in this file are loaded by ferm between 20-ingress-nat.conf and 50-services.conf.",
+            "# Rules in this file are loaded by ferm between 20-ingress-nat.conf and "
+            "50-services.conf.",
             "#",
             "# The file is owned by root:guarden with mode 0640. Edit with care --",
             "# changes here take effect on the next `soil firewall --apply` or when",

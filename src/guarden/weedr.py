@@ -27,7 +27,6 @@ from guarden import (
     firewallrules,
     gate,
     lineage,
-    manifest as manifest_mod,
     modules,
     names,
     paths,
@@ -48,6 +47,9 @@ from guarden import (
 from guarden import config as config_mod
 from guarden import hosttool as h
 from guarden import images as images_mod
+from guarden import (
+    manifest as manifest_mod,
+)
 from guarden import (
     share as share_mod,
 )
@@ -638,7 +640,8 @@ def _build(args) -> int:
 
     if not built:
         raise errors.GuardenError(
-            f"{resolved.name} has no unit source with a build instruction, so there is nothing to build",
+            f"{resolved.name} has no unit source with a build instruction, "
+            "so there is nothing to build",
             errors.HOST_NOT_AS_ASSUMED,
         )
 

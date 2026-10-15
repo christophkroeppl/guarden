@@ -47,7 +47,7 @@ purge() {
 }
 
 cleanup() {
-    purge pgprov-staging needful-staging needy-staging ghost-staging redis-staging \
+    purge pgprov-staging needful-staging needy-staging twin-staging ghost-staging redis-staging \
         nowhere-staging
     rm -f "$conf"
 }
@@ -342,3 +342,52 @@ assert_file_missing "$creds/ghost-staging/DB_PASSWORD.cred"
 # above, encrypted and unreadable at rest.
 assert_file_exists "$creds/needful-staging/DB_PASSWORD.cred"
 assert_mode "$creds/needful-staging/DB_PASSWORD.cred" 600
+
+
+
+
+
+
+
+stage_poke twin 9f2c1ab
+run weedr service ingest twin-staging --from poke twin@9f2c1ab
+assert_exit 0
+twin_registry=$registry/twin-staging.toml
+# Both edges recorded under their own three-part keys
+assert_file_has "$twin_registry" '[edges."pgprov-staging:5432:db"]'
+assert_file_has "$twin_registry" '[edges."pgprov-staging:5432:replica"]'
+# Each edge carries its own credential
+assert_file_has "$twin_registry" 'as = "db"'
+assert_file_has "$twin_registry" 'as = "replica"'
+assert_file_has "$twin_registry" 'auth = "database"'
+# Both dial the same provider publication
+twin_db_dialed=$(dialed_publication "$twin_registry" 5432)
+[ "$twin_db_dialed" = "$db_pub" ] \
+    || _fail "the twin's db edge dials $twin_db_dialed and the provider binds $db_pub"
+# Each edge gets its own credential blob
+assert_file_exists "$creds/twin-staging/DB_PASSWORD.cred"
+assert_file_exists "$creds/twin-staging/REPLICA_PASSWORD.cred"
+assert_mode "$creds/twin-staging/DB_PASSWORD.cred" 600
+assert_mode "$creds/twin-staging/REPLICA_PASSWORD.cred" 600
+# The two credentials are distinct
+run systemd-creds decrypt --with-key=host "$creds/twin-staging/DB_PASSWORD.cred"
+assert_exit 0
+twin_db_value=$(cat "$GUARDEN_STDOUT")
+run systemd-creds decrypt --with-key=host "$creds/twin-staging/REPLICA_PASSWORD.cred"
+assert_exit 0
+twin_replica_value=$(cat "$GUARDEN_STDOUT")
+[ "$twin_db_value" != "$twin_replica_value" ] \
+    || _fail "two edges on one provider+port share a credential value"
+# The render succeeds — both edges resolve to the same publication
+run loom render /var/lib/guarden/services/twin-staging/home \
+    --service twin-staging --out "$GUARDEN_FIXTURES/twin-render"
+assert_exit 0
+assert_file_has "$GUARDEN_FIXTURES/twin-render/units/guarden.env" "DB_PORT=$db_pub"
+assert_file_has "$GUARDEN_FIXTURES/twin-render/units/guarden.env" "REPLICA_PORT=$db_pub"
+# Both edges' credentials are requested in the rendered unit
+assert_file_has "$GUARDEN_FIXTURES/twin-render/units/web.container" "Secret=DB_PASSWORD,type=mount"
+assert_file_has "$GUARDEN_FIXTURES/twin-render/units/web.container" "Secret=REPLICA_PASSWORD,type=mount"
+# The twin's uid appears on the db publication (provider + needful + needy + twin = 4)
+twin_uid=$(getent passwd twin-staging | cut -d: -f3)
+assert_file_has "$conf" \
+    "mod owner uid-owner $twin_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"

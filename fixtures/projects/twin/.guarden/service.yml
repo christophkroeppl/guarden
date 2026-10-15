@@ -1,0 +1,16 @@
+# A consumer with two edges to the SAME provider on the SAME port under different
+# `as:` prefixes. The old two-part key `provider:port` would collide these two
+# edges into one registry entry, silently dropping the first. The three-part key
+# `provider:port:as` keeps them separate, so each gets its own publication and
+# credential.
+project: twin
+units: .guarden/quadlet/
+needs:
+  - service: pgprov-staging
+    as: db
+    port: 5432
+    auth: database
+  - service: pgprov-staging
+    as: replica
+    port: 5432
+    auth: database
