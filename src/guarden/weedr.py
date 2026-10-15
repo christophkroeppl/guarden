@@ -42,12 +42,12 @@ from guarden import (
     snapshotid,
     tool,
     units,
-    unitsource,
     users,
     volumes,
 )
 from guarden import config as config_mod
 from guarden import hosttool as h
+from guarden import images as images_mod
 from guarden import (
     share as share_mod,
 )
@@ -558,12 +558,12 @@ def _stop(args) -> int:
 def _build(args) -> int:
     """`podman build` as the service user, from the service's own tree.
 
-    The image is tagged `localhost/<service>:latest`, matching the `Image=`
-    the renderer emits (spec 6.6 step 2). The build context is the service's
-    home, which holds `compose.yaml` or `.guarden/quadlet/` — exactly the tree
-    the renderer reads. `runuser -u <service>` runs podman with the service's
-    uid and subuid range, so the container can map root. A failure exits `1`
-    and names the verb; a success prints the image reference.
+    The image is tagged with the reference the unit source declares for each
+    container (spec 6.6 step 2). The build context is the service's home, which
+    holds the unit source tree — exactly the tree the renderer reads.
+    `runuser -u <service>` runs podman with the service's uid and subuid range,
+    so the container can map root. A failure exits `1` and names the verb; a
+    success prints the image reference(s) built.
     """
     config = config_mod.load()
     resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
@@ -574,7 +574,7 @@ def _build(args) -> int:
             errors.HOST_NOT_AS_ASSUMED,
         )
 
-    # The service's home is the build context: it holds compose.yaml or quadlet/
+    # The service's home is the build context: it holds the unit source tree.
     home = paths.service_home(resolved.name)
     if not home.is_dir():
         raise errors.GuardenError(
@@ -582,30 +582,68 @@ def _build(args) -> int:
             errors.HOST_NOT_AS_ASSUMED,
         )
 
-    # Resolve the unit source to confirm there is a build instruction and
-    # to read the image reference the manifest names.
+    # Read the manifest to find the unit source and the containers it declares.
     manifest = manifest_mod.read(home / manifest_mod.MANIFEST_REL)
-    if not (home / compose.COMPOSE_REL).is_file() and not (home / render.QUADLET_DIR).is_dir():
+    source = render.resolve_unit_source(home, manifest)
+
+    built: list[str] = []
+    for container in source.containers():
+        # A Compose service with `build:` or a quadlet unit with `Build*`
+        # keys is a container that builds. The renderer reads the same
+        # source, so the image reference it carries is the one the build tags.
+        unit = source.units[container]
+        declared = unit.one("Container", "Image")
+        if declared and declared.strip():
+            # The container declares an image — it is a pull, not a build.
+            continue
+        # The unit declares no image. Check if it declares a build instruction.
+        has_build = False
+        if (home / compose.COMPOSE_REL).is_file():
+            # Compose: check for `build:` key.
+            doc = compose.document(home / compose.COMPOSE_REL)
+            body = compose.services(doc, home / compose.COMPOSE_REL).get(container, {})
+            has_build = "build" in body
+        else:
+            # Quadlet: check for `Build*` keys.
+            for key in unit.keys("Container"):
+                if key.startswith("Build"):
+                    has_build = True
+                    break
+        if not has_build:
+            continue
+
+        # Get the reference the build should tag — the one the unit source
+        # declares, or the local one for a pure build with no image:.
+        image_ref = images_mod.declared_or_built(home, resolved.name, container)
+
+        podman = [
+            "runuser",
+            "-u",
+            resolved.name,
+            "--",
+            "podman",
+            "build",
+            "--tag",
+            image_ref,
+            ".",
+        ]
+        result = tool.call(podman, cwd=home)
+        if not result.ok:
+            detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
+            raise errors.GuardenError(
+                f"build {resolved.name}: podman build exited {result.returncode}: {detail}",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        built.append(image_ref)
+
+    if not built:
         raise errors.GuardenError(
-            f"{resolved.name} has no unit source in its home, so there is nothing to build",
+            f"{resolved.name} has no unit source with a build instruction, so there is nothing to build",
             errors.HOST_NOT_AS_ASSUMED,
         )
 
-    # Read the image reference the unit will use. For a build, the reference
-    # is `localhost/<service>:latest`. A redeploy overwrites it.
-    image_ref = f"{LOCAL_REFERENCE}/{resolved.name}:{BUILD_TAG}"
-
-                                                                      
-    podman = ["runuser", "-u", resolved.name, "--", "podman", "build", "--tag", image_ref, "."]
-    result = tool.call(podman, cwd=home)
-    if not result.ok:
-        detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
-        raise errors.GuardenError(
-            f"build {resolved.name}: podman build exited {result.returncode}: {detail}",
-            errors.HOST_NOT_AS_ASSUMED,
-        )
-
-    sys.stdout.write(f"{image_ref}\n")
+    for ref in built:
+        sys.stdout.write(f"{ref}\n")
     return 0
 
 
