@@ -18,7 +18,6 @@ import time
 
 from guarden import (
     cli,
-    compose,
     conf,
     credentials,
     edgeconf,
@@ -590,28 +589,23 @@ def _build(args) -> int:
 
     built: list[str] = []
     for container in source.containers():
-        # A Compose service with `build:` or a quadlet unit with `Build*`
-        # keys is a container that builds. The renderer reads the same
-        # source, so the image reference it carries is the one the build tags.
-        unit = source.units[container]
-        declared = unit.one("Container", "Image")
-        if declared and declared.strip():
-            # The container declares an image — it is a pull, not a build.
-            continue
-        # The unit declares no image. Check if it declares a build instruction.
-        has_build = False
-        if (home / compose.COMPOSE_REL).is_file():
-            # Compose: check for `build:` key.
-            doc = compose.document(home / compose.COMPOSE_REL)
-            body = compose.services(doc, home / compose.COMPOSE_REL).get(container, {})
-            has_build = "build" in body
-        else:
-            # Quadlet: check for `Build*` keys.
-            for key in unit.keys("Container"):
-                if key.startswith("Build"):
-                    has_build = True
-                    break
-        if not has_build:
+        # A container builds when its own tree carries a Containerfile. The
+        # reference it is tagged with is the one the unit source declares (spec
+        # 6.6 step 2), so a declared `Image=` is the TAG and not a claim that
+        # this is a pull: the renderer writes the same value into `Image=`, and
+        # the two halves agree because both read it from the source.
+        #
+        # The `build:` key is refused by the renderer (spec 6.3), so the file is
+        # the only thing that can say "build me". A tree with no Containerfile is
+        # a pull whatever the unit declares, and skipping it is right — but
+        # skipping a tree that HAS one because its unit also declares an image
+        # would make the whole verb useless for the one shape guarden allows.
+        source.units[container]
+        context_file = next(
+            (home / name for name in ("Containerfile", "Dockerfile") if (home / name).is_file()),
+            None,
+        )
+        if context_file is None:
             continue
 
         # Get the reference the build should tag — the one the unit source
@@ -627,6 +621,8 @@ def _build(args) -> int:
             "build",
             "--tag",
             image_ref,
+            "-f",
+            str(context_file),
             ".",
         ]
         result = tool.call(podman, cwd=home)

@@ -248,11 +248,13 @@ def provision(consumer: str, provider: registry.Registry, container: str,
     else:
         db_names = [container_name]
     podman = ["runuser", "-u", provider.service, "--", "podman"]
-    running = tool.call([*podman, "ps", "--filter", f"name=^{container_name}$", "--format", "{{.Names}}"])
+    listing = [*podman, "ps", "--filter", f"name=^{container_name}$", "--format", "{{.Names}}"]
+    running = tool.call(listing)
     if container_name not in running.stdout.split():
         return [
             errors.warn(
-                f"the container {container_name} of {provider.service} is not running, so no role and no "
+                f"the container {container_name} of {provider.service} is not running, "
+                f"so no role and no "
                 f"database were created for {consumer}; the credential is planted and a deploy "
                 f"that starts {provider.service} creates them"
             )

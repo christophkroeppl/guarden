@@ -1145,7 +1145,8 @@ def _environment_file(document: manifest_mod.Manifest, edge_ports: list[tuple[st
             if edge.databases:
                 for db_name in edge.databases:
                     user = f"{provider}-{db_name}"
-                    rows.append((f"{edge.variable}_{db_name.upper()}", edge.service, publication, user))
+                    name = f"{edge.variable}_{db_name.upper()}"
+                    rows.append((name, edge.service, publication, user))
             else:
                 rows.append((edge.variable, edge.service, publication, None))
     return render_template("guarden.env.j2", rows=rows)
