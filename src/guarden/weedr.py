@@ -595,12 +595,11 @@ def _build(args) -> int:
         # this is a pull: the renderer writes the same value into `Image=`, and
         # the two halves agree because both read it from the source.
         #
-        # The `build:` key is refused by the renderer (spec 6.3), so the file is
-        # the only thing that can say "build me". A tree with no Containerfile is
-        # a pull whatever the unit declares, and skipping it is right — but
-        # skipping a tree that HAS one because its unit also declares an image
-        # would make the whole verb useless for the one shape guarden allows.
-        source.units[container]
+        # A tree with no Containerfile is a pull whatever the unit declares,
+        # and skipping it is right — but skipping a tree that HAS one because
+        # its unit also declares an image would make the whole verb useless for
+        # the one shape guarden allows: a unit that declares Image= AND carries
+        # a Containerfile.
         context_file = next(
             (home / name for name in ("Containerfile", "Dockerfile") if (home / name).is_file()),
             None,
