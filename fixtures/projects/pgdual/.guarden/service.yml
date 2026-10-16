@@ -1,0 +1,13 @@
+# A provider of two kinds on ONE port, so a consumer can hold two edges to it
+# on the same port under different `as:` prefixes. The old two-part key
+# `provider:port` would collide those two edges into one registry entry,
+# silently dropping the first. The three-part key `provider:port:as` keeps them
+# separate, so each gets its own publication and credential.
+project: pgdual
+units: .guarden/quadlet/
+provides:
+  - db
+  - secret
+ports:
+  - container: db
+    port: 5432

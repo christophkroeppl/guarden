@@ -633,14 +633,27 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
     mutator records the edge's publications when it installs the edge. An edge
     with no allocated publication is exit `1` — the host has not been asked yet —
     rather than a loopback port the renderer invented.
+
+    **The lookup falls back to the old two-part key.** A registry written by an
+    earlier guarden carries only `provider:port`, and the three-part key
+    `provider:port:as` was introduced to disambiguate two edges on one provider
+    and port. The old key is still read so that an upgrade does not break existing
+    edges — the `as:` prefix is unique per manifest, so the three-part key
+    cannot collide with the old one.
     """
     out: list[tuple[str, int]] = []
     for edge in document.needs:
-        stored = (context.record.edges.get(edges.edge_key(edge.service, edge.port)) or {}).get(
-            "publications"
-        ) or []
+                                           
+        key = edges.edge_key(edge.service, edge.port, edge.prefix)
+        stored = context.record.edges.get(key) or {}
+        if not stored.get("publications"):
+            # Fall back to the old two-part key for registries written by an
+            # earlier guarden that only had `provider:port`.
+            key = edges.edge_key(edge.service, edge.port, "")
+            stored = context.record.edges.get(key) or {}
         numbers = [
-            value for value in stored if isinstance(value, int) and not isinstance(value, bool)
+            value for value in (stored.get("publications") or [])
+            if isinstance(value, int) and not isinstance(value, bool)
         ]
         if not numbers:
             raise errors.GuardenError(

@@ -27,7 +27,6 @@ from guarden import config as config_mod
 from guarden import manifest as manifest_mod
 from guarden import modules as modules_mod
 from guarden import overrides as overrides_mod
-
 from guarden.hosttool import warn
 
 SERVICES_CONF = paths.FIREWALL / "50-services.conf"

@@ -47,8 +47,8 @@ purge() {
 }
 
 cleanup() {
-    purge pgprov-staging needful-staging needy-staging multidb-staging ghost-staging \
-        redis-staging nowhere-staging
+    purge pgprov-staging pgdual-staging needful-staging needy-staging multidb-staging \
+        twin-staging ghost-staging redis-staging nowhere-staging
     rm -f "$conf"
 }
 trap cleanup EXIT
@@ -60,6 +60,7 @@ cleanup
 ensure_accounts
 stage_config guarden-measured.toml
 stage_poke pgprov 9f2c1ab
+stage_poke pgdual 9f2c1ab
 stage_poke needful 9f2c1ab
 stage_poke needy 9f2c1ab
 stage_poke unpublished 9f2c1ab
@@ -97,6 +98,15 @@ done
 # consumer can read, so it is what the kind check below is really reading.
 assert_file_has "$registry/pgprov-staging.toml" 'kinds = ["db", "secret"]'
 
+# A second provider whose two kinds share ONE port, so a consumer can hold two
+# edges to it on the same port under different `as:` prefixes — the case the
+# three-part key exists for.
+run weedr service ingest pgdual-staging --from poke pgdual@9f2c1ab
+assert_exit 0
+pgdual_pub=$(sed -n 's/^db = \([0-9]*\)$/\1/p' "$registry/pgdual-staging.toml")
+[ -n "$pgdual_pub" ] || _fail "pgdual-staging names a db container and no publication was allocated"
+assert_file_has "$registry/pgdual-staging.toml" 'kinds = ["db", "secret"]'
+
 # The consumer: two edges to one provider, `auth: database` and `auth: secret`.
 run weedr service ingest needful-staging --from poke needful@9f2c1ab
 assert_exit 0
@@ -113,8 +123,8 @@ provider_uid=$(getent passwd pgprov-staging | cut -d: -f3)
 
 # The edge's publication is the provider's own number, copied — not allocated again.
 consumer_registry=$registry/needful-staging.toml
-assert_file_has "$consumer_registry" '[edges."pgprov-staging:5432"]'
-assert_file_has "$consumer_registry" '[edges."pgprov-staging:8200"]'
+assert_file_has "$consumer_registry" '[edges."pgprov-staging:5432:db"]'
+assert_file_has "$consumer_registry" '[edges."pgprov-staging:8200:secret"]'
 assert_file_has "$consumer_registry" 'as = "db"'
 assert_file_has "$consumer_registry" 'auth = "database"'
 assert_file_has "$consumer_registry" 'port = 5432'
@@ -384,3 +394,52 @@ assert_mode "$creds/multidb-staging/DB_PASSWORD.cred" 600
 multidb_uid=$(getent passwd multidb-staging | cut -d: -f3)
 assert_file_has "$conf" \
     "mod owner uid-owner $multidb_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"
+
+
+
+
+
+
+stage_poke twin 9f2c1ab
+run weedr service ingest twin-staging --from poke twin@9f2c1ab
+assert_exit 0
+twin_registry=$registry/twin-staging.toml
+# Both edges recorded under their own three-part keys — one provider, one port
+assert_file_has "$twin_registry" '[edges."pgdual-staging:5432:db"]'
+assert_file_has "$twin_registry" '[edges."pgdual-staging:5432:secret"]'
+# Each edge carries its own kind and credential
+assert_file_has "$twin_registry" 'as = "db"'
+assert_file_has "$twin_registry" 'as = "secret"'
+assert_file_has "$twin_registry" 'auth = "database"'
+assert_file_has "$twin_registry" 'auth = "secret"'
+# Both dial the same provider publication
+twin_db_dialed=$(dialed_publication "$twin_registry" 5432)
+[ "$twin_db_dialed" = "$pgdual_pub" ] \
+    || _fail "the twin's db edge dials $twin_db_dialed and the provider binds $pgdual_pub"
+# Each edge gets its own credential blob
+assert_file_exists "$creds/twin-staging/DB_PASSWORD.cred"
+assert_file_exists "$creds/twin-staging/SECRET_SECRET.cred"
+assert_mode "$creds/twin-staging/DB_PASSWORD.cred" 600
+assert_mode "$creds/twin-staging/SECRET_SECRET.cred" 600
+# The two credentials are distinct
+run systemd-creds decrypt --with-key=host "$creds/twin-staging/DB_PASSWORD.cred"
+assert_exit 0
+twin_db_value=$(cat "$GUARDEN_STDOUT")
+run systemd-creds decrypt --with-key=host "$creds/twin-staging/SECRET_SECRET.cred"
+assert_exit 0
+twin_secret_value=$(cat "$GUARDEN_STDOUT")
+[ "$twin_db_value" != "$twin_secret_value" ] \
+    || _fail "two edges on one provider+port share a credential value"
+# The render succeeds — both edges resolve to the same publication
+run loom render /var/lib/guarden/services/twin-staging/home \
+    --service twin-staging --out "$GUARDEN_FIXTURES/twin-render"
+assert_exit 0
+assert_file_has "$GUARDEN_FIXTURES/twin-render/units/guarden.env" "DB_PORT=$pgdual_pub"
+assert_file_has "$GUARDEN_FIXTURES/twin-render/units/guarden.env" "SECRET_PORT=$pgdual_pub"
+# Both edges' credentials are requested in the rendered unit
+assert_file_has "$GUARDEN_FIXTURES/twin-render/units/web.container" "Secret=DB_PASSWORD,type=mount"
+assert_file_has "$GUARDEN_FIXTURES/twin-render/units/web.container" "Secret=SECRET_SECRET,type=mount"
+# The twin's uid appears on the db publication (provider + needful + needy + twin = 4)
+twin_uid=$(getent passwd twin-staging | cut -d: -f3)
+assert_file_has "$conf" \
+    "mod owner uid-owner $twin_uid daddr 127.0.0.1 proto tcp dport $pgdual_pub jump ACCEPT;"

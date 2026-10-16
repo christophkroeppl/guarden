@@ -31,6 +31,9 @@ assert_subcommands weedr project list add remove keys grant revoke
 assert_subcommands furrow preview drop
 assert_subcommands furrow queue list show
 
+guarden_prefix
+stage_config guarden-measured.toml
+
 run soil --help
 assert_exit 0
 run weedr --help
@@ -63,10 +66,13 @@ assert_file_has "$GUARDEN_ROOT/pyproject.toml" 'stakes = "guarden.stakes:main"'
 # verb. A test that could not tell the two apart would be worth nothing.
 # `start` is not the verb here any more: ticket 60 gave it a body, because the
 # gate it re-evaluates is the reason a start is a mutator verb.
+# The build verb now has a body, so it fails on "no registry entry" rather than
+# "not implemented". This is a parser test, so we assert the parser accepts it
+# and the verb runs to the registry check.
 run weedr service build myapp-production
 assert_exit 1
 assert_one_diagnostic "error:"
-assert_stderr_has "weedr service build is not implemented"
+assert_stderr_has "no registry entry"
 assert_stdout_empty
 
 # A rejected input is exit 2, and names the thing it is about.

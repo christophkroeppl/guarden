@@ -131,7 +131,7 @@ def render_tunnel(routes: list[dict], config) -> str:
 
     previews = []
     if config.tunnel_domain:
-        for service_name, entries in slices().items():
+        for _service_name, entries in slices().items():
             for route in entries:
                 if route.get("destination") == "tunnel" and route.get("ref"):
                     # This is a tunnel route for a preview instance

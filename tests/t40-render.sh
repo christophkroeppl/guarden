@@ -28,13 +28,13 @@ seed "$registry/app-production.toml" \
     'service = "app-production"' 'workload = "app"' 'project = "app"' \
     'environment = "production"' 'uid = 1101' 'created = "2026-09-30T09:00:00Z"' \
     '[publication]' 'web = 20114' \
-    '[edges."postgres-production:5432"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    '[edges."postgres-production:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
     'publications = [ 20007 ]'
 seed "$registry/app-staging.toml" \
     'service = "app-staging"' 'workload = "app"' 'project = "app"' \
     'environment = "staging"' 'uid = 1102' 'created = "2026-09-30T09:00:00Z"' \
     '[publication]' 'web = 20116' \
-    '[edges."postgres-production:5432"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    '[edges."postgres-production:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
     'publications = [ 20007 ]'
 
 project=$GUARDEN_FIXTURES/project

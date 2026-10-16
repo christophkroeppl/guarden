@@ -51,6 +51,19 @@ TREE_MODE = 0o700
 ADMIN_UNITS_MODE = 0o755
 GUARDEN_GROUP = "guarden"
 
+# The build context: the files `podman build` reads besides the unit source.
+#
+# A Containerfile is the thing `weedr service build` exists to read, and it is
+# not the unit source, so a home that copies only `.guarden/` and
+# `compose.yaml` has no build context at all — `podman build .` in it answers
+# `125` (no such file or directory) on every run. The file's own name is the
+# one podman resolves when no `-f` is given, so it is the entry in this list.
+# A `.dockerignore` is listed too, because a build that copies the whole home
+# needs it to leave the rootless image store and the secret database out of the
+# context — those are the two things in the home that are large and not the
+# build's.
+BUILD_INPUTS = (Path("Containerfile"), Path(".dockerignore"))
+
 
 @dataclass(frozen=True)
 class Source:
@@ -358,7 +371,13 @@ def _project_from(source: Source) -> str:
     return record.project
 
 
-def _converged(record, resolved, manifest: manifest_mod.Manifest, project: str, source_hash: str = "") -> bool:
+def _converged(
+    record,
+    resolved,
+    manifest: manifest_mod.Manifest,
+    project: str,
+    source_hash: str = "",
+) -> bool:
     if record.project != project or record.environment != resolved.track.name:
         return False
     if source_hash and record.source_hash != source_hash:
@@ -445,18 +464,37 @@ def _source_hash(directory: Path) -> str:
 
 
 def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
-    """The repository's `.guarden/` and compose file into the service's home.
+    """The repository's `.guarden/`, compose file and build context into a home.
 
     A repository ships either `compose.yaml` at its root or `.guarden/quadlet/`
     and exactly one of them, and this is the copy that makes
     `add --from <service>` a copy of that service's manifest and unit source
     rather than a re-derivation of them.
+
+    **The whole tree, not the two files, because the build verb reads it.** A
+    home that holds only `.guarden/` and `compose.yaml` is a home with no
+    Containerfile, and `weedr service build` runs `podman build` with that home
+    as its context — so a service whose unit source declares a build would fail
+    with `125` (no such file or directory) on every run. The Containerfile is a
+    build input and it lives beside the unit source, so the context is copied
+    with them; the tree's own layout is unchanged, and the renderer still reads
+    exactly what it read before.
+
+    **What is not copied: the snapper subtree and anything root-owned.** The
+    guard below walks the same `.snapshots` the service walk skips, because the
+    home is not snapshotted today and a build context that carried snapper's
+    read-only subvolume would be a context `podman build` cannot copy.
     """
     home = paths.service_home(name)
     if (directory / ".guarden").is_dir():
         shutil.copytree(directory / ".guarden", home / ".guarden", dirs_exist_ok=True)
-    if (directory / "compose.yaml").is_file():
-        shutil.copy2(directory / "compose.yaml", home / "compose.yaml")
+    for relative in ("compose.yaml", *BUILD_INPUTS):
+        source = directory / relative
+        target = home / relative
+        if source.is_dir():
+            shutil.copytree(source, target, dirs_exist_ok=True)
+        elif source.is_file():
+            shutil.copy2(source, target)
     for path in [home, *sorted(home.rglob("*"))]:
         if paths.SNAPSHOTS in path.parts:
             # The same snapper subtree the service walk skips: read-only, and
