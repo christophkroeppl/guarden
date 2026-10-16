@@ -47,8 +47,8 @@ purge() {
 }
 
 cleanup() {
-    purge pgprov-staging needful-staging needy-staging ghost-staging redis-staging \
-        nowhere-staging
+    purge pgprov-staging needful-staging needy-staging multidb-staging ghost-staging \
+        redis-staging nowhere-staging
     rm -f "$conf"
 }
 trap cleanup EXIT
@@ -342,3 +342,45 @@ assert_file_missing "$creds/ghost-staging/DB_PASSWORD.cred"
 # above, encrypted and unreadable at rest.
 assert_file_exists "$creds/needful-staging/DB_PASSWORD.cred"
 assert_mode "$creds/needful-staging/DB_PASSWORD.cred" 600
+
+# ---------------------------------------------------------------------------
+# A multi-database edge: `databases:` on one needs entry
+# ---------------------------------------------------------------------------
+#
+# A second edge to the same provider and the same port is refused by the
+# provider's own kind list — `as:` must name a kind, and `db` is already
+# used — so a consumer that needs several databases has exactly one way to
+# say it: a list on one edge. That is the shape asserted here, in the three
+# places the list lands: the registry record, the rendered environment, and
+# the one credential the edge mints.
+
+
+stage_poke multidb 9f2c1ab
+run weedr service ingest multidb-staging --from poke multidb@9f2c1ab
+assert_exit 0
+assert_file_has "$registry/multidb-staging.toml" 'databases = ["odoo", "btcpay"]'
+
+# The rendered environment names each database's own role. The role and the
+# database are `{provider.service}-{db_name}`, so the consumer addresses them
+# by name and never by position.
+multidb_home=/var/lib/guarden/services/multidb-staging/home
+multidb_render=$GUARDEN_FIXTURES/multidb-render
+run loom render "$multidb_home" --service multidb-staging --out "$multidb_render"
+assert_exit 0
+assert_file_has "$multidb_render/units/guarden.env" "DB_ODOO_HOST=pgprov-staging"
+assert_file_has "$multidb_render/units/guarden.env" "DB_ODOO_PORT=$db_pub"
+assert_file_has "$multidb_render/units/guarden.env" "DB_ODOO_USER=pgprov-staging-odoo"
+assert_file_has "$multidb_render/units/guarden.env" "DB_BTCPAY_HOST=pgprov-staging"
+assert_file_has "$multidb_render/units/guarden.env" "DB_BTCPAY_USER=pgprov-staging-btcpay"
+assert_file_has "$multidb_render/units/web.container" "Secret=DB_PASSWORD,type=mount"
+
+# One password for the edge: the two databases share it, which is what the
+# naming in provision() says and the trade-off the fixture's own comment names.
+assert_file_exists "$creds/multidb-staging/DB_PASSWORD.cred"
+assert_mode "$creds/multidb-staging/DB_PASSWORD.cred" 600
+
+# The consumer is granted on the publication once, not once per database: the
+# databases live in the provider's container, so the reach rule is unchanged.
+multidb_uid=$(getent passwd multidb-staging | cut -d: -f3)
+assert_file_has "$conf" \
+    "mod owner uid-owner $multidb_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"

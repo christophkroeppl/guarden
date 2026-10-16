@@ -1,0 +1,11 @@
+# One container: a multi-database edge is a claim about the credential and the
+# rendered environment, not about the number of containers.
+[Unit]
+Description=the consumer's web container
+
+[Container]
+Image=docker.io/library/nginx:1.27
+Network=pasta:--map-gw
+
+[Service]
+Restart=always

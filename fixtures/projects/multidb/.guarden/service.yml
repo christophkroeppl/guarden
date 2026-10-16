@@ -1,0 +1,21 @@
+# A consumer of `pgprov` that needs TWO databases from one edge.
+#
+# `databases:` is the key that makes several databases from one provider
+# expressible at all: a second edge to the same provider and the same port is
+# refused by the provider's own kind list (`as:` must name a kind, and `db` is
+# already used), so the only way to say "two databases" is a list on one edge.
+#
+# The role and the database are named `{provider.service}-{db_name}` — here
+# `pgprov-staging-odoo` and `pgprov-staging-btcpay` — and one password is minted
+# for the edge and shared by both. That sharing is the trade-off this fixture
+# makes visible rather than a claim that it is free.
+project: multidb
+units: .guarden/quadlet/
+needs:
+  - service: pgprov-staging
+    as: db
+    port: 5432
+    auth: database
+    databases:
+      - odoo
+      - btcpay

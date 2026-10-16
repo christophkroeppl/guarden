@@ -214,6 +214,18 @@ def provision(consumer: str, provider: registry.Registry, container: str,
     named `{provider.service}-{db_name}`. The password is minted once per edge
     and reused for all databases.
 
+    **That sharing is a deliberate simplification and not a free one.** The edge
+    gets one credential, so every database it provisions is reachable with the
+    same password: a leak of the consumer's secret is a leak of all of them, and
+    there is no per-database isolation. Nor is there a rotation path —
+    `credentials.plant` plants only what is absent, so the value minted on the
+    first ingest is the value until the service is removed. A deployment that
+    needs isolation between its databases must either give each its own edge
+    (possible only when the provider offers the kind twice, which today it does
+    not) or mint its own credentials outside guarden. Written down here because
+    the shape of the rendered variables — one `DB_PASSWORD` for several
+    databases — reads like a per-database secret and is not.
+
     **The only engine-aware code in guarden, and it is this function.** `ENGINE` is a
     constant named here and nowhere else, and a provider older than `MIN_VERSION` is
     refused rather than degraded to. A container which is not running is a warning and
