@@ -68,6 +68,13 @@ if [[ $EUID -ne 0 ]]; then
     die "this script must be run as root (sudo)"
 fi
 
+# Concurrent-run guard: two simultaneous invocations (cloud-init retrying
+# while an operator runs it manually) must not interleave repo clone/update
+# and soil applies. Taken after the root check and argument parsing so
+# that --help and the usage error work without root.
+exec 9>/run/guarden-install.lock
+flock 9
+
 if ! python3 -c "import yaml, jinja2" 2>/dev/null; then
     log "bootstrapping Python dependencies (yaml, jinja2)"
     if command -v apt-get &>/dev/null; then
@@ -94,11 +101,7 @@ else
 fi
 
 soil_cmd() {
-    if command -v soil &>/dev/null; then
-        soil "$@"
-    else
-        (cd "$REPO_DIR" && PYTHONPATH=src python3 -m guarden.soil "$@")
-    fi
+    (cd "$REPO_DIR" && PYTHONPATH=src python3 -m guarden.soil "$@")
 }
 
 for phase in "${PHASE_ORDER[@]}"; do
