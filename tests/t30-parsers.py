@@ -388,9 +388,9 @@ def edge_overrides() -> None:
     # sides are compared against service names: a key that is not one can never
     # match, and a value that is not one can never resolve.
     for body, what in (
-        ('[edge_overrides]\n"Not a name" = "postgres-pinned"\n', "a key that is not a service name"),
-        ('[edge_overrides]\npostgres = 5\n', "a value that is not a string"),
-        ('[edge_overrides]\npostgres = "Not a name"\n', "a value that is not a service name"),
+        ('[edge_overrides]\n"Not a name" = "postgres-pinned"\n', "invalid key"),
+        ('[edge_overrides]\npostgres = 5\n', "non-string value"),
+        ('[edge_overrides]\npostgres = "Not a name"\n', "invalid value"),
     ):
         _seed_overrides(body)
         try:
