@@ -136,6 +136,7 @@ packages = [
     "podman",
     "python3-yaml",
     "python3-jinja2",
+    "python3-pip",
     # The conversion machinery's initramfs hook runs under dracut; `soil
     # storage` refuses explicitly on a host without it (other initramfs
     # generators convert offline from a rescue environment instead), and
