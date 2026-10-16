@@ -31,7 +31,10 @@ set -euo pipefail
 REPO_URL="${GUARDEN_REPO_URL:-https://github.com/christophkroeppl/guarden.git}"
 REPO_BRANCH="${GUARDEN_REPO_BRANCH:-develop}"
 REPO_DIR="${GUARDEN_REPO_DIR:-/usr/local/src/guarden}"
-PHASE_ORDER=("packages" "storage" "sysctl" "firewall" "install" "units")
+# install runs before packages on a fresh host: soil packages installs the
+# pinned podlet, whose record is seeded by soil install. On a host where
+# install already ran (cloud-init, previous run), the order is irrelevant.
+PHASE_ORDER=("install" "packages" "storage" "sysctl" "firewall" "units")
 
 CHECK_MODE=0
 HAS_DRIFT=0
@@ -139,15 +142,18 @@ for phase in "${PHASE_ORDER[@]}"; do
         result=$?
         set -e
 
-        if [[ $result -eq 75 ]]; then
-            banner
-            printf '[install]  btrfs root conversion staged.\n'
-            printf '[install]  REBOOT now, then re-run:\n'
-            printf '[install]    curl -fsSL %s\n' \
-                "https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash"
-            banner
-            exit 75
-        elif [[ $result -ne 0 ]]; then
+        # soil storage exits 1 (not 75) when staging a reboot — h.error()
+        # uses EXIT_NOT_CONVERGED. The reboot marker file is the signal.
+        if [[ $result -ne 0 ]]; then
+            if [[ -f /var/lib/guarden/soil/reboot-required ]]; then
+                banner
+                printf '[install]  btrfs root conversion staged.\n'
+                printf '[install]  REBOOT now, then re-run:\n'
+                printf '[install]    curl -fsSL %s\n' \
+                    "https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash"
+                banner
+                exit 75
+            fi
             die "soil storage --apply failed (exit $result)"
         fi
     else

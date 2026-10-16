@@ -48,14 +48,14 @@ grep -q 'must be run as root' "$script" || fail "root check error message missin
 pass "root check present in script source"
 
                                                   
-grep -q 'PHASE_ORDER=("packages" "storage" "sysctl" "firewall" "install" "units")' "$script" \
-    || fail "phase order does not match hostprep.PHASES"
+grep -q 'PHASE_ORDER=("install" "packages" "storage" "sysctl" "firewall" "units")' "$script" \
+    || fail "phase order missing install-before-packages for podlet record"
 pass "phase order matches hostprep.PHASES"
 
 # 7. The script handles exit code 75 (btrfs conversion reboot)
-grep -q 'exit 75' "$script" || fail "exit 75 handling missing"
-grep -q 'reboot' "$script" || fail "reboot message missing"
-pass "btrfs conversion exit 75 handling present"
+grep -q 'reboot-required' "$script" || fail "reboot marker check missing"
+grep -q 'exit 75' "$script" || fail "exit 75 message missing"
+pass "btrfs conversion reboot marker handling present"
 
                                                     
 grep -q 'flock' "$script" || fail "flock concurrent-run guard missing"
