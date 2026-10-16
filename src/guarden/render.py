@@ -1113,15 +1113,28 @@ def _secret_requests(
 
 
 def _environment_file(document: manifest_mod.Manifest, edge_ports: list[tuple[str, int]]) -> str:
-    """`<AS>_HOST` and `<AS>_PORT` for every edge. The host is the provider's own
-    service name, with no suffix and no alias, and there is no name map and no
-    `/etc/hosts` (spec 7.3)."""
-    rows = [
-        (edge.variable, edge.service, publication)
-        for edge in document.needs
-        for provider, publication in edge_ports
-        if provider == edge.service
-    ]
+    """`<AS>_HOST` and `<AS>_PORT` for every edge, or `<AS>_<DB>_HOST`,
+    `<AS>_<DB>_PORT` and `<AS>_<DB>_USER` for each database of a
+    multi-database edge.
+
+    The host is the provider's own service name, with no suffix and no alias,
+    and there is no name map and no `/etc/hosts` (spec 7.3).
+
+    For a multi-database edge the consumer also needs:
+    - `<AS>_<DB>_USER`: the role name, `{provider.service}-{db_name}`
+    - `<AS>_PASSWORD`: the edge's password, available as a Secret
+    """
+    rows = []
+    for edge in document.needs:
+        for provider, publication in edge_ports:
+            if provider != edge.service:
+                continue
+            if edge.databases:
+                for db_name in edge.databases:
+                    user = f"{provider}-{db_name}"
+                    rows.append((f"{edge.variable}_{db_name.upper()}", edge.service, publication, user))
+            else:
+                rows.append((edge.variable, edge.service, publication, None))
     return render_template("guarden.env.j2", rows=rows)
 
 

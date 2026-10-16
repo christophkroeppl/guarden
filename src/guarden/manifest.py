@@ -56,7 +56,7 @@ TOP_LEVEL_KEYS = {
 # here — whether a container exists, whether a port is in range and whether a
 # host is a label are the checks of the tickets that consume those blocks.
 BLOCK_KEYS = {
-    "needs": {"service", "as", "port", "auth"},
+    "needs": {"service", "as", "port", "auth", "databases"},
     "ports": {"container", "port"},
     "routes": {"container", "port", "host", "auth"},
     "widgets": {"container", "file"},
@@ -101,6 +101,9 @@ VOLUME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 # string, and the closed form is what stops a manifest writing a prefix that
 # becomes an odd environment variable.
 AS_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# A database name: the role and the database are named after it, so it has to
+# be a valid postgres identifier.
+DB_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 # The route host, after the track's prefix, is a set of labels. The pattern is
 # closed rather than a list of prohibitions because a wildcard was the shape that
 # would have been dangerous.
@@ -113,12 +116,17 @@ PORT_MAX = 65535
 
 @dataclass(frozen=True)
 class Edge:
-    """One `needs:` entry: an edge to another service."""
+    """One `needs:` entry: an edge to another service.
+
+    When `databases` is set, the edge provisions one role/database pair per
+    name. The credential is minted once per edge and reused for all.
+    """
 
     service: str
     prefix: str
     port: int
     auth: str
+    databases: tuple[str, ...] = ()
 
     @property
     def variable(self) -> str:
@@ -404,15 +412,49 @@ def _needs(value: Any, path: Path) -> list[Edge]:
                 f"the manifest {path}: the needs entry for {service!r} has `auth: {auth!r}`, "
                 f"and there is no default: it is one of {', '.join(AUTH_KINDS)}"
             )
+        databases = _databases(entry.get("databases"), service, path)
         out.append(
             Edge(
                 service=service,
                 prefix=prefix,
                 port=_port(entry.get("port"), f"the needs entry for {service!r}", path),
                 auth=str(auth),
+                databases=databases,
             )
         )
     return out
+
+
+def _databases(value: Any, service: str, path: Path) -> tuple[str, ...]:
+    """Parse the optional `databases:` key on a needs entry.
+
+    Returns a tuple of database names (possibly empty). Each name becomes a
+    role+database pair in the provider. Names must be valid postgres
+    identifiers and must be unique within the edge.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise errors.GuardenError(
+            f"the manifest {path}: the needs entry for {service!r} has a "
+            f"`databases` key that is not a list"
+        )
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not DB_NAME_RE.match(item):
+            raise errors.GuardenError(
+                f"the manifest {path}: a databases entry {item!r} for "
+                f"{service!r} must be a name matching {DB_NAME_RE.pattern}"
+            )
+        if item in seen:
+            raise errors.GuardenError(
+                f"the manifest {path}: the databases list for {service!r} "
+                f"contains {item!r} more than once"
+            )
+        seen.add(item)
+        out.append(item)
+    return tuple(out)
 
 
 def _publications(value: Any, path: Path) -> list[Publication]:

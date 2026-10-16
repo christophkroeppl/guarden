@@ -167,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
             metavar="SOURCE",
             nargs="+",
             required=True,
-            help="`<service>`, or `poke <project>@<sha>`; never a path",
+            help="`<service>`, `poke <project>@<sha>`, or a local directory path",
         )
 
     for verb, help_text in (

@@ -128,6 +128,7 @@ def install(entry: registry.Registry, document: manifest_mod.Manifest) -> list[s
             "port": edge.port,
             "as": edge.prefix,
             "auth": edge.auth,
+            "databases": list(edge.databases),
             "publications": [] if publication is None else [publication],
         }
     return warnings
@@ -201,13 +202,17 @@ def _credential(entry: registry.Registry, edge, provider, container, publication
     if edge.auth == AUTH_SECRET and not credentials.planted(provider.service, key):
         credentials.plant(provider.service, key, stored)
     if edge.auth == AUTH_DATABASE:
-        return provision(entry.service, provider, container, stored)
+        return provision(entry.service, provider, container, stored, edge.databases)
     return []
 
 
 def provision(consumer: str, provider: registry.Registry, container: str,
-              password: str) -> list[str]:
+              password: str, databases: tuple[str, ...] = ()) -> list[str]:
     """One role and one database in the provider, both named after the consumer.
+
+    When `databases` is non-empty, one role+database pair is created per name,
+    named `{provider.service}-{db_name}`. The password is minted once per edge
+    and reused for all databases.
 
     **The only engine-aware code in guarden, and it is this function.** `ENGINE` is a
     constant named here and nowhere else, and a provider older than `MIN_VERSION` is
@@ -217,23 +222,28 @@ def provision(consumer: str, provider: registry.Registry, container: str,
     a two-command deploy. The credential is planted either way, so what the warning
     costs is the role and nothing else.
     """
-    name = f"{provider.service}-{container}"
+    container_name = f"{provider.service}-{container}"
+    if databases:
+        db_names = [f"{provider.service}-{db_name}" for db_name in databases]
+    else:
+        db_names = [container_name]
     podman = ["runuser", "-u", provider.service, "--", "podman"]
-    running = tool.call([*podman, "ps", "--filter", f"name=^{name}$", "--format", "{{.Names}}"])
-    if name not in running.stdout.split():
+    running = tool.call([*podman, "ps", "--filter", f"name=^{container_name}$", "--format", "{{.Names}}"])
+    if container_name not in running.stdout.split():
         return [
             errors.warn(
-                f"the container {name} of {provider.service} is not running, so no role and no "
+                f"the container {container_name} of {provider.service} is not running, so no role and no "
                 f"database were created for {consumer}; the credential is planted and a deploy "
                 f"that starts {provider.service} creates them"
             )
         ]
-    psql = [*podman, "exec", "-i", name, "psql", "-U", PSQL_USER, "-d", PSQL_USER]
-    _check_version(name, [*psql, "-Atc", "SHOW server_version_num"])
-    done = tool.call([*psql, "-v", "ON_ERROR_STOP=1", SQL_ON_STDIN], stdin=_ddl(consumer, password))
+    psql = [*podman, "exec", "-i", container_name, "psql", "-U", PSQL_USER, "-d", PSQL_USER]
+    _check_version(container_name, [*psql, "-Atc", "SHOW server_version_num"])
+    ddl = "\n".join(_ddl(name, password) for name in db_names)
+    done = tool.call([*psql, "-v", "ON_ERROR_STOP=1", SQL_ON_STDIN], stdin=ddl)
     if not done.ok:
         raise errors.GuardenError(
-            f"{name}: {ENGINE} refused the role and the database for {consumer}: "
+            f"{container_name}: {ENGINE} refused the role and the database for {consumer}: "
             f"{errors.oneline(done.stderr.strip() or done.stdout.strip())}",
             errors.HOST_NOT_AS_ASSUMED,
         )

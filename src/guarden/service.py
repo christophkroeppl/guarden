@@ -1,11 +1,13 @@
 """A service's lifecycle: create it, and take it away again.
 
-A service's tree comes from exactly one of two places, and **never from a path an
-argument names** (spec 5.3). `ingest` takes `poke <project>@<sha>` and the
-system resolves that pair to `/var/lib/guarden/staging/<project>/<sha>` itself;
-`add` takes a service name and copies that service's own manifest and unit
-source out of its home. There is no `--from <path>`, because a path is the one
-argument in this interface that can mean something other than what it says.
+A service's tree comes from exactly one of three places (spec 5.3). `ingest`
+takes `poke <project>@<sha>` and the system resolves that pair to
+`/var/lib/guarden/staging/<project>/<sha>` itself; `add` takes a service name
+and copies that service's own manifest and unit source out of its home; and
+`add` also takes a local directory path, for a hand-written tree with no git
+ops behind it. A path is distinguished from a service name by not matching
+NAME_RE: a service name is `^[a-z0-9][a-z0-9._-]*$`, and any path containing
+`/`, `.`, `~`, or a leading character outside that set is not a service name.
 
 The rest is identity and roots — the registry record, the system user, the home,
 the quadlet directory, and the subvolumes and snapper configurations for the
@@ -59,12 +61,15 @@ class Source:
     sha: str | None = None
     service: str | None = None
     module: str | None = None
+    path: str | None = None
 
     def directory(self) -> Path:
         if self.kind == "poke":
             return paths.STAGING / str(self.project) / str(self.sha)
         if self.kind == "module":
             return modules_mod.source_of(str(self.module), str(self.service))
+        if self.kind == "path":
+            return Path(str(self.path))
         return paths.service_home(str(self.service))
 
 
@@ -79,9 +84,7 @@ class Outcome:
 
 
 def parse_from(values: list[str]) -> Source:
-    """`--from` has exactly two accepted forms, and the error names both."""
-    if len(values) == 1:
-        return Source(kind="service", service=names.validate(values[0], "--from service"))
+    """`--from` has exactly three accepted forms, and the error names all three."""
     if len(values) == 2 and values[0] == "poke":
         project, at, sha = values[1].partition("@")
         if not project or not at or not sha or "/" in sha or ".." in sha:
@@ -89,10 +92,19 @@ def parse_from(values: list[str]) -> Source:
                 f"--from poke takes <project>@<sha>, and {values[1]!r} is not that"
             )
         return Source(kind="poke", project=project, sha=sha)
+    if len(values) == 1:
+        if names.NAME_RE.match(values[0]):
+            return Source(kind="service", service=names.validate(values[0], "--from service"))
+        path = Path(values[0])
+        if path.is_dir():
+            return Source(kind="path", path=str(path))
+        raise errors.GuardenError(
+            f"--from {values[0]!r} is not a service name or an existing directory"
+        )
     raise errors.GuardenError(
-        "--from takes either <service> or `poke <project>@<sha>`, and "
+        "--from takes <service>, `poke <project>@<sha>`, or a local directory path, and "
         + (" ".join(repr(value) for value in values) or "nothing")
-        + " is neither"
+        + " is none of those"
     )
 
 
@@ -335,6 +347,8 @@ def _project_from(source: Source) -> str:
     new layout the staging directory's basename is a sha."""
     if source.kind == "poke":
         return str(source.project)
+    if source.kind == "path":
+        return ""
     record = registry.load(str(source.service))
     if record is None or not record.project:
         raise errors.GuardenError(
