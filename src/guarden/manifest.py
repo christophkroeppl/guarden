@@ -108,7 +108,14 @@ DB_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 # closed rather than a list of prohibitions because a wildcard was the shape that
 # would have been dangerous.
 HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")
-PROVIDES_KINDS = ("db", "secret")
+# What a provider may `provide:`. The first two are the CREDENTIAL kinds: a
+# consumer edges to them with `auth: database` or `auth: secret` and receives a
+# minted value, and the provider can verify it. The rest are REACHABILITY kinds:
+# a consumer edges to them with `auth: none` and receives only the host and the
+# port, which is what one service needs from a sibling that serves an HTTP or an
+# RPC API. A kind is in this tuple or a provider cannot name it, so adding a
+# service to the stack is adding a name here.
+PROVIDES_KINDS = ("db", "secret", "bitcoin", "nbxplorer", "btcpay", "nostr")
 AUTH_KINDS = ("database", "secret", "none")
 PORT_MIN = 1
 PORT_MAX = 65535
