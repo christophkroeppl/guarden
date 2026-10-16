@@ -301,11 +301,135 @@ def keys() -> None:
     check(conf.toml_value({"a": 1}) == "{ a = 1 }", "an inline table")
 
 
+def edge_overrides() -> None:
+    """`[edge_overrides]`: the operator's pin, and the order it is read in.
+
+    The order is the whole of this module and it is asserted here rather than in
+    a shell suite because a precedence that is wrong is a silent one — the
+    consumer dials the other database and nothing says so. The pin beats the
+    track's own default because that is the only reason to write one; the track's
+    default beats the name as written because that is the identity fallback.
+    """
+    from guarden import config as config_mod
+    from guarden import edgeresolve, paths
+
+    providers = _write_file(
+        "guarden.toml",
+        "[[environments]]\n"
+        'name = "staging"\n'
+        'kind = "slot"\n'
+        "[[environments]]\n"
+        'name = "production"\n'
+        'kind = "slot"\n'
+        "[providers.staging]\n"
+        'postgres = "postgres-staging"\n'
+        "[providers.production]\n"
+        'postgres = "postgres-production"\n',
+    )
+    config = config_mod.load(providers)
+
+    # The pin wins over the track's own default, on the track the default is for.
+    _seed_overrides('[edge_overrides]\npostgres = "postgres-pinned"\n')
+    check(
+        edgeresolve.resolve(config, "staging", "postgres") == "postgres-pinned",
+        "an override beats the track's [providers] default",
+    )
+    check(
+        edgeresolve.resolve(config, "production", "postgres") == "postgres-pinned",
+        "an override is host-wide and names no track",
+    )
+
+    # With no pin, the track's own default answers.
+    _seed_overrides("[edge_overrides]\n")
+    check(
+        edgeresolve.resolve(config, "staging", "postgres") == "postgres-staging",
+        "the track's default answers when there is no pin",
+    )
+    check(
+        edgeresolve.resolve(config, "production", "postgres") == "postgres-production",
+        "the other track's default answers for itself",
+    )
+
+    # And a name neither table holds is the name as written, which is why a
+    # manifest naming a full service name needs no entry in either.
+    check(
+        edgeresolve.resolve(config, "staging", "postgres-production") == "postgres-production",
+        "an unmapped name is the name as written",
+    )
+    check(
+        edgeresolve.resolve(config, "staging", "rustfs") == "rustfs",
+        "a name no table holds is unchanged",
+    )
+
+    # The closed key set, at the top level and inside the one table. An unknown
+    # key is refused by name rather than ignored, for the reason `overrides.py`
+    # gives: a silently ignored pin is a pin an operator believes is in effect.
+    # `resolve` is the public entry and it reaches the table, so the refusal is
+    # observed where an operator's next render would observe it.
+    _seed_overrides('[edge_overrides]\npostgres = "postgres-pinned"\n[aliases]\npostgres = "x"\n')
+    try:
+        edgeresolve.resolve(config, "staging", "postgres")
+    except errors.GuardenError as exc:
+        check(exc.code == 1, "an unknown overrides key is the host, so exit 1")
+        check("aliases" in exc.message, "the unknown key is named")
+    else:
+        FAILURES.append("an unknown overrides key was accepted")
+
+    _seed_overrides("[edge_overrides]\npostgres = 5\n")
+    try:
+        edgeresolve.resolve(config, "staging", "postgres")
+    except errors.GuardenError as exc:
+        check(exc.code == 1, "a non-table overrides value is the host, so exit 1")
+        check("edge_overrides" in exc.message, "the table is named")
+    else:
+        FAILURES.append("a non-table overrides value was accepted")
+
+    # Both sides are service names and both are validated as such, because both
+    # sides are compared against service names: a key that is not one can never
+    # match, and a value that is not one can never resolve.
+    for body, what in (
+        ('[edge_overrides]\n"Not a name" = "postgres-pinned"\n', "a key that is not a service name"),
+        ('[edge_overrides]\npostgres = 5\n', "a value that is not a string"),
+        ('[edge_overrides]\npostgres = "Not a name"\n', "a value that is not a service name"),
+    ):
+        _seed_overrides(body)
+        try:
+            edgeresolve.resolve(config, "staging", "postgres")
+        except errors.GuardenError as exc:
+            check(exc.code == 1, f"{what} is the host, so exit 1")
+            check("postgres" in exc.message or "logical" in exc.message, f"{what} is named")
+        else:
+            FAILURES.append(f"{what} was accepted")
+
+    # An absent file is an empty table and not a failure: `soil install` seeds it
+    # once so the path exists, and every read is a read.
+    paths.OVERRIDES_TOML.unlink()
+    check(
+        edgeresolve.resolve(config, "staging", "postgres") == "postgres-staging",
+        "an absent overrides file leaves the track's default in force",
+    )
+
+
+def _write_file(name: str, body: str) -> Path:
+    path = Path(tempfile.mkdtemp()) / name
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def _seed_overrides(body: str) -> None:
+    """Write the staged override file, the seam `GUARDEN_PREFIX` provides."""
+    from guarden import paths
+
+    paths.OVERRIDES_TOML.parent.mkdir(parents=True, exist_ok=True)
+    paths.OVERRIDES_TOML.write_text(body, encoding="utf-8")
+
+
 def main() -> int:
     manifests()
     escaping()
     registries()
     keys()
+    edge_overrides()
     for failure in FAILURES:
         sys.stderr.write(f"error: {failure}\n")
     return 1 if FAILURES else 0

@@ -41,6 +41,7 @@ from guarden import (
     compose,
     conf,
     edgeconf,
+    edgeresolve,
     edges,
     errors,
     names,
@@ -155,6 +156,18 @@ class Context:
             if instance is not None and instance.publication:
                 return dict(instance.publication)
         return dict(self.record.publication)
+
+    def provider(self, logical: str) -> str:
+        """The concrete service `logical` names on this host and track.
+
+        The renderer's half of the one consult point: the mutator resolved the
+        same name when it wrote the edge's registry key, so `edge_publications`
+        below looks the key up by the answer this returns. Reading the override
+        file here is what makes a pin effective on the very next render, which
+        is the property the file exists for — a pin an operator has to re-ingest
+        to apply is not a pin.
+        """
+        return edgeresolve.resolve(self.config, self.track.name, logical)
 
     def unit_dir(self) -> Path:
         home = paths.service_home(self.service)
@@ -601,7 +614,7 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
     exit `1` naming both services and both kinds.
     """
     for edge in document.needs:
-        concrete = context.config.resolve_provider(context.track.name, edge.service)
+        concrete = context.provider(edge.service)
         if concrete == context.service:
             raise errors.GuardenError(
                 f"the manifest {document.source} needs {edge.service!r}, which is the service "
@@ -649,7 +662,7 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
     """
     out: list[tuple[str, str, int]] = []
     for edge in document.needs:
-        concrete = context.config.resolve_provider(context.track.name, edge.service)
+        concrete = context.provider(edge.service)
 
         key = edges.edge_key(concrete, edge.port, edge.prefix)
         stored = context.record.edges.get(key) or {}
@@ -1171,7 +1184,7 @@ def _order_target(document: manifest_mod.Manifest, context: Context | None) -> s
     providers: list[str] = []
     if context is not None:
         for edge in document.needs:
-            concrete = context.config.resolve_provider(context.track.name, edge.service)
+            concrete = context.provider(edge.service)
             if concrete not in providers:
                 providers.append(concrete)
     return render_template(

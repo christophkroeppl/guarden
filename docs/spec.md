@@ -136,6 +136,9 @@ to it.
 /usr/bin/  symlinks to bin/, one per program
 /etc/guarden/  configuration, root-owned
   guarden.toml  host configuration, including the environment table
+  overrides.toml  the operator's edge overrides: logical provider -> concrete service.
+  Root-owned 0640 root:guarden, seeded empty by `soil install` only when absent, and
+  written by no program afterwards. See §3.1.
   projects.toml  project -> repository, ref -> allowed environments
   projects.d/<project>.toml  a per-project copy, which wins over the file above
   services/<name>/overrides.toml  admin grants: ports, firewall rules, retention, groups, mounts
@@ -462,6 +465,17 @@ postgres = "postgres-production"
 ```
 
 Each `[providers.<track>]` table maps a logical provider name to the concrete service that serves it in that track. `Config.resolve_provider(track, logical)` returns the concrete name, or `logical` unchanged when there is no mapping — so a manifest that names a full service name (`postgres-production`) keeps working, and a host with no `[providers]` table behaves exactly as before. The resolution runs in the mutator and the renderer, at every point a `needs:` entry becomes a provider lookup, an edge key, a hostname or a `Wants=` edge; both sides resolve from the same table, so the key the mutator writes is the key the renderer reads.
+
+#### `[edge_overrides]` — the operator's pin
+
+`/etc/guarden/overrides.toml` is the host-level exception to the per-track default. It holds one table:
+
+```toml
+[edge_overrides]
+postgres = "postgres-staging"   # on this host, postgres always means staging
+```
+
+Precedence: **explicit override > `[providers]` environment default > literal name**. The override is host-wide and names no track — it applies to every service on the host that names the logical provider. The file is `0640 root:guarden` so that `loom`, running as `guarden`, can read it; it is seeded empty by `soil install` only when absent, and no program writes it afterwards. A pin that an operator has to re-ingest to apply is not a pin: the renderer reads the file on every render, so a pin is effective on the very next `loom render`.
 
 The manifest refuses `environment:` and `track:` by name (spec 4): the host decides the environment. This table is where that decision is expressed — the repository names the logical provider, and the root-owned track table says which concrete service answers it per track.
 

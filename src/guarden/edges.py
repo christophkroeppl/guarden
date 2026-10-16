@@ -15,7 +15,7 @@ against, so the variable, the rule and the bind cannot disagree.
 from __future__ import annotations
 
 from guarden import config as config_mod
-from guarden import credentials, errors, paths, registry, tool
+from guarden import credentials, edgeresolve, errors, paths, registry, tool
 from guarden import manifest as manifest_mod
 
 AUTH_DATABASE = "database"
@@ -44,7 +44,14 @@ def credential_key(kind: str, edge: manifest_mod.Edge) -> str:
 
 
 def resolve_name(config: config_mod.Config, environment: str, edge: manifest_mod.Edge) -> str:
-    return config.resolve_provider(environment, edge.service)
+    """The concrete provider this edge dials: the host's pin, then the track's.
+
+    The one consult point for a `needs:` entry's provider name, because the
+    mutator writes the registry key from it and the renderer reads it back by
+    the same name. See `edgeresolve` for the two tables and the order between
+    them.
+    """
+    return edgeresolve.resolve(config, environment, edge.service)
 
 
 def check(consumer: str, document: manifest_mod.Manifest, environment: str,

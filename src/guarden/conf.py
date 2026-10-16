@@ -116,7 +116,15 @@ def lock(*names: str) -> Iterator[None]:
 
 
 def read_toml(path: Path) -> dict[str, Any]:
-    """Read a file guarden owns. A file that will not parse is the host, so `1`."""
+    """Read a file guarden owns. A file that will not parse is the host, so `1`.
+
+    **Only `FileNotFoundError` is an empty document.** A `PermissionError` is a
+    failure and must not be, because the failure it hides is a specific one: a
+    `0640 root:root` file that a program running as `guarden` cannot read would
+    otherwise read as an absent file, and the program would resolve with no
+    overrides at all — a pin silently doing nothing, on a host where the one
+    thing the file exists for is to be in effect.
+    """
     try:
         with open(path, "rb") as handle:
             return tomllib.load(handle)

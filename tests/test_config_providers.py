@@ -1,5 +1,5 @@
-import tempfile
 import pathlib
+import tempfile
 
 from guarden import config as config_mod
 

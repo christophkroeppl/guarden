@@ -23,11 +23,13 @@ registry `install` reads a track from.
 
 from __future__ import annotations
 
+import grp
 import hashlib
 import ipaddress
 import lzma
 import os
 import platform
+import pwd
 import shutil
 import stat
 import tarfile
@@ -111,6 +113,10 @@ INSTALL_DIRECTORIES = (
 # `install`, and a service's own user belongs to `weedr service add`.
 PROGRAM_USERS = ("guarden", "hose")
 PROGRAM_GROUP = "guarden"
+
+# `overrides.toml`'s mode, stated rather than inherited from the write protocol's
+# `mkdir`: the unprivileged programs read it, so the group bit is load-bearing.
+OVERRIDES_MODE = 0o640
 
 # The packages come from `packages/packages.toml` and not from a tuple here,
 # because the cloud-init user-data is rendered from the same file and a second
@@ -2122,6 +2128,74 @@ def _seed_config() -> None:
     with lock("modules"):
         gid = users.group_id(PROGRAM_GROUP)
         conf.write_file(h.config_path(), h.template("guarden.toml"), 0o640, (0, gid))
+        _seed_overrides(gid)
+
+
+def _seed_overrides(gid: int) -> None:
+    """Write the empty override table once, `0640 root:guarden`.
+
+    `soil install` is the file's only writer and it writes it **only when it is
+    absent**. An operator's pin is what `overrides.toml` exists to hold, and a
+    converge that rewrote the file would lose the one edit that matters — so
+    the check is `exists()`, not "is it empty", and an empty file an operator
+    left behind is left behind.
+
+    The mode and the owner are stated rather than inherited from the write
+    protocol's `mkdir`, for the reason the `/etc/guarden` rows in
+    `install_items` state theirs: the unprivileged programs resolve provider
+    names too, and `loom` runs as `guarden`, so a `0640 root:root` file would
+    make every override the renderer reads unreadable.
+    """
+    path = paths.OVERRIDES_TOML
+    if path.exists():
+        return
+    conf.write_toml(path, {"edge_overrides": {}}, OVERRIDES_MODE, (0, gid))
+    try:
+        os.chmod(path.parent, 0o751)
+    except OSError:
+        pass
+
+
+def _overrides_moded(mode: int, owner: str, group: str) -> bool:
+    """Whether the file carries the mode and the owner spec 2.1's row states.
+
+    An absent file does not hold: the seed item above creates it, and a phase
+    that reported it converged would be a phase that did not.
+    """
+    path = paths.OVERRIDES_TOML
+    if not path.is_file():
+        return False
+    try:
+        info = path.stat()
+        wanted_owner = pwd.getpwnam(owner).pw_uid
+        wanted_group = grp.getgrnam(group).gr_gid
+    except KeyError:
+        return False
+    return (info.st_mode & 0o7777) == mode and (info.st_uid, info.st_gid) == (
+        wanted_owner,
+        wanted_group,
+    )
+
+
+def _converge_overrides_mode(mode: int, owner: str, group: str) -> None:
+    """Set the mode and the owner, and nothing else — never the content.
+
+    **Only the mode and the owner are touched, because the content is the
+    operator's.** A converge that wrote the file would be a converge that
+    erased a pin; the pin is the reason the file exists.
+    """
+    path = paths.OVERRIDES_TOML
+    if not path.is_file():
+        _seed_overrides(grp.getgrnam(PROGRAM_GROUP).gr_gid)
+    try:
+        os.chown(path, pwd.getpwnam(owner).pw_uid, grp.getgrnam(group).gr_gid)
+    except (KeyError, OSError) as exc:
+        h.error(f"{path} could not be owned by {owner}:{group}: {exc}")
+        return
+    try:
+        os.chmod(path, mode)
+    except OSError as exc:
+        h.error(f"{path} could not be set to {mode:04o}: {exc.strerror}")
 
 
 def _enabled_modules() -> list[str]:
@@ -2244,6 +2318,20 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
     ]
     items += [
         Item("the host configuration exists", lambda: config_path.is_file(), _seed_config),
+        # The operator's edge overrides, seeded **only when absent** by the item
+        # above, and this row states the mode and the owner the file has to
+        # carry. It is separate from that item rather than part of it because a
+        # pin an operator wrote is not something a converge may rewrite: the
+        # seed checks `exists()` and leaves the file alone, and this row is what
+        # notices when the mode or the owner says otherwise. `loom` runs as
+        # `guarden` and reads the file, so a `0640 root:root` is a pin that
+        # silently does nothing — the exact failure the mode exists to prevent.
+        Item(
+            "the operator's edge overrides are 0640 root:guarden, so `loom` running "
+            "as guarden can read a pin",
+            lambda: _overrides_moded(OVERRIDES_MODE, "root", PROGRAM_GROUP),
+            lambda: _converge_overrides_mode(OVERRIDES_MODE, "root", PROGRAM_GROUP),
+        ),
         Item("guarden's programs are installed root-owned", _programs_installed,
              _install_programs),
         # The installed copies carry an interpreter line, which is what makes

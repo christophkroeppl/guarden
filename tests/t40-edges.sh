@@ -182,3 +182,82 @@ seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/"
 run loom render "$project" --service myapp-staging --out "$render"
 assert_exit 2
 assert_stderr_has "absent.yml"
+
+seed "$registry/postgres-pinned.toml" \
+    'service = "postgres-pinned"' 'workload = "postgres"' 'project = "postgres"' \
+    'environment = "staging"' 'uid = 1102' 'created = "2026-09-30T09:00:00Z"' \
+    '[provides]' 'kinds = [ "db" ]' '[publication]' 'db = 20008'
+seed "$registry/myapp-pinned.toml" \
+    'service = "myapp-pinned"' 'workload = "myapp"' 'project = "myapp"' \
+    'environment = "staging"' 'uid = 1103' 'created = "2026-09-30T09:00:00Z"' \
+    '[publication]' 'web = 20117' \
+    '[edges."postgres-pinned:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    'publications = [ 20008 ]'
+
+# Without the pin, `postgres-staging` is the provider: no `[providers]` table is
+# staged on this host, so the name as written is the answer.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/" \
+    "state:" "  - data" "needs:" "  - service: postgres-staging" "    as: db" \
+    "    port: 5432" "    auth: database"
+run loom render "$project" --service myapp-staging --out "$render"
+assert_exit 0
+assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-staging"
+assert_file_has "$render/units/web.container" "AddHost=postgres-staging:10.0.2.2"
+assert_file_has "$render/system/guarden-order.target" "Wants=postgres-staging.target"
+
+# The pin is written, and the **same manifest** renders the pinned provider on
+# the next render. No re-ingest and no re-deploy: a pin that needed one would
+# not be a pin, and the renderer reading the file is what makes it effective.
+seed "$GUARDEN_PREFIX/etc/guarden/overrides.toml" \
+    "[edge_overrides]" 'postgres-staging = "postgres-pinned"'
+run loom render "$project" --service myapp-staging --out "$render"
+assert_exit 0
+assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-pinned"
+assert_file_has "$render/units/web.container" "AddHost=postgres-pinned:10.0.2.2"
+assert_file_has "$render/system/guarden-order.target" "Wants=postgres-pinned.target"
+assert_file_lacks "$render/units/guarden.env" "DB_HOST=postgres-staging"
+
+# The pin is keyed by the LOGICAL name the manifest writes, so a manifest that
+# names `postgres` (the logical name `[providers]` exists for) is pinned too,
+# and a manifest that already names a full service name is not — there is no
+# logical name left to match.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/" \
+    "state:" "  - data" "needs:" "  - service: postgres" "    as: db" \
+    "    port: 5432" "    auth: database"
+seed "$registry/myapp-logical.toml" \
+    'service = "myapp-logical"' 'workload = "myapp"' 'project = "myapp"' \
+    'environment = "staging"' 'uid = 1104' 'created = "2026-09-30T09:00:00Z"' \
+    '[publication]' 'web = 20118' \
+    '[edges."postgres-pinned:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    'publications = [ 20008 ]'
+seed "$GUARDEN_PREFIX/etc/guarden/overrides.toml" \
+    "[edge_overrides]" 'postgres = "postgres-pinned"'
+run loom render "$project" --service myapp-logical --out "$render"
+assert_exit 0
+assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-pinned"
+assert_file_has "$render/system/guarden-order.target" "Wants=postgres-pinned.target"
+
+# A pin for a logical name no manifest declares changes nothing, and the pin is
+# per host rather than per track: the production consumer reads the same file.
+seed "$registry/myapp-prod-pinned.toml" \
+    'service = "myapp-prod-pinned"' 'workload = "myapp"' 'project = "myapp"' \
+    'environment = "production"' 'uid = 1105' 'created = "2026-09-30T09:00:00Z"' \
+    '[publication]' 'web = 20119' \
+    '[edges."postgres-pinned:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    'publications = [ 20008 ]'
+run loom render "$project" --service myapp-prod-pinned --out "$render"
+assert_exit 0
+assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-pinned"
+assert_file_lacks "$render/units/guarden.env" "postgres-production"
+
+# A pin whose value is not a service name is refused rather than rendered: a
+# silently ignored pin is one an operator believes is in effect, and the
+# diagnostic names the file.
+seed "$GUARDEN_PREFIX/etc/guarden/overrides.toml" \
+    "[edge_overrides]" 'postgres-staging = "Not a name"'
+run loom render "$project" --service myapp-staging --out "$render"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "overrides.toml"
+assert_stderr_has "Not a name"
+assert_file_missing "$render"

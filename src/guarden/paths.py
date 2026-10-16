@@ -29,6 +29,12 @@ PREFIX = Path(os.environ.get("GUARDEN_PREFIX") or "/")
 ETC = PREFIX / "etc"
 ETC_GUARDEN = ETC / "guarden"
 GUARDEN_TOML = ETC_GUARDEN / "guarden.toml"
+# spec 3.1b: the operator's edge overrides, `0640 root:guarden`, written by no
+# program. It sits beside `guarden.toml`; `soil install` seeds it empty once, so
+# the path exists for an operator to edit, and every later read of it is a read
+# and takes no lock (spec 3.5). The unprivileged programs run as `guarden` and
+# read it, which is why it is group-readable.
+OVERRIDES_TOML = ETC_GUARDEN / "overrides.toml"
 ETC_SERVICES = ETC_GUARDEN / "services"
 PROJECTS_TOML = ETC_GUARDEN / "projects.toml"
 FIREWALL = ETC_GUARDEN / "firewall"
