@@ -28,9 +28,9 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/christophkroeppl/guarden.git"
-REPO_BRANCH="develop"
-REPO_DIR="/usr/local/src/guarden"
+REPO_URL="${GUARDEN_REPO_URL:-https://github.com/christophkroeppl/guarden.git}"
+REPO_BRANCH="${GUARDEN_REPO_BRANCH:-develop}"
+REPO_DIR="${GUARDEN_REPO_DIR:-/usr/local/src/guarden}"
 PHASE_ORDER=("packages" "storage" "sysctl" "firewall" "install" "units")
 
 CHECK_MODE=0
@@ -91,9 +91,9 @@ fi
 
 if [[ -d "$REPO_DIR/.git" ]]; then
     log "updating repo at $REPO_DIR"
-    git -C "$REPO_DIR" fetch --quiet origin
-    git -C "$REPO_DIR" checkout --quiet "$REPO_BRANCH"
-    git -C "$REPO_DIR" pull --quiet origin "$REPO_BRANCH"
+    git -C "$REPO_DIR" fetch --quiet origin 2>/dev/null || true
+    git -C "$REPO_DIR" checkout --quiet "$REPO_BRANCH" 2>/dev/null || true
+    git -C "$REPO_DIR" pull --quiet origin "$REPO_BRANCH" 2>/dev/null || true
 else
     log "cloning guarden repo to $REPO_DIR"
     mkdir -p "$(dirname "$REPO_DIR")"
