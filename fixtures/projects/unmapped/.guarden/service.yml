@@ -1,0 +1,9 @@
+# A consumer that declares a service name NOT in the providers table.
+# The name passes through unchanged — identity resolution.
+project: unmapped
+units: .guarden/quadlet/
+needs:
+  - service: unmapped-staging
+    as: db
+    port: 5432
+    auth: database

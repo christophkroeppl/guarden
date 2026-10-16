@@ -601,13 +601,14 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
     exit `1` naming both services and both kinds.
     """
     for edge in document.needs:
-        if edge.service == context.service:
+        concrete = context.config.resolve_provider(context.track.name, edge.service)
+        if concrete == context.service:
             raise errors.GuardenError(
                 f"the manifest {document.source} needs {edge.service!r}, which is the service "
                 f"that declared it: a self-edge has no consumer and is nearly always a "
                 f"copy-paste"
             )
-        provider = registry.load(edge.service)
+        provider = registry.load(concrete)
         if provider is None:
             raise errors.GuardenError(
                 f"{context.service} needs {edge.service!r} as {edge.prefix!r}, and there is "
@@ -619,13 +620,13 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
         if edge.prefix not in provider.provides:
             raise errors.GuardenError(
                 f"{context.service} needs {edge.service!r} as {edge.prefix!r}, and "
-                f"{edge.service} offers {', '.join(provider.provides) or 'nothing'}: the "
+                f"{concrete} offers {', '.join(provider.provides) or 'nothing'}: the "
                 f"consumer wants the kind {edge.prefix!r} and the provider does not list it",
                 errors.HOST_NOT_AS_ASSUMED,
             )
 
 
-def edge_publications(document: manifest_mod.Manifest, context: Context) -> list[tuple[str, int]]:
+def edge_publications(document: manifest_mod.Manifest, context: Context) -> list[tuple[str, str, int]]:
     """`<AS>_PORT` for every edge, from the consumer's own registry.
 
     A publication is an allocation, so it is in the registry and not in either
@@ -634,6 +635,11 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
     with no allocated publication is exit `1` — the host has not been asked yet —
     rather than a loopback port the renderer invented.
 
+    Each row is `(logical, concrete, port)`: the logical name the manifest wrote,
+    the concrete provider name the host resolved it to, and the publication. The
+    caller uses the concrete name for `AddHost=` and the environment file's
+    `_HOST`, and the logical name to match the row back to its `needs:` entry.
+
     **The lookup falls back to the old two-part key.** A registry written by an
     earlier guarden carries only `provider:port`, and the three-part key
     `provider:port:as` was introduced to disambiguate two edges on one provider
@@ -641,15 +647,16 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
     edges — the `as:` prefix is unique per manifest, so the three-part key
     cannot collide with the old one.
     """
-    out: list[tuple[str, int]] = []
+    out: list[tuple[str, str, int]] = []
     for edge in document.needs:
-                                           
-        key = edges.edge_key(edge.service, edge.port, edge.prefix)
+        concrete = context.config.resolve_provider(context.track.name, edge.service)
+
+        key = edges.edge_key(concrete, edge.port, edge.prefix)
         stored = context.record.edges.get(key) or {}
         if not stored.get("publications"):
             # Fall back to the old two-part key for registries written by an
             # earlier guarden that only had `provider:port`.
-            key = edges.edge_key(edge.service, edge.port, "")
+            key = edges.edge_key(concrete, edge.port, "")
             stored = context.record.edges.get(key) or {}
         numbers = [
             value for value in (stored.get("publications") or [])
@@ -663,7 +670,7 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
                 f"a loopback port",
                 errors.HOST_NOT_AS_ASSUMED,
             )
-        out.append((edge.service, min(numbers)))
+        out.append((edge.service, concrete, min(numbers)))
     return out
 
 
@@ -812,7 +819,7 @@ def build(
     mounts = check_volumes(document, source)
     check_mount_paths(mounts, source, context)
 
-    edge_ports: list[tuple[str, int]] = []
+    edge_ports: list[tuple[str, str, int]] = []
     routed: list[str] = []
     if context is not None:
         check_edges(document, context)
@@ -938,7 +945,7 @@ def _container_unit(
     context: Context | None,
     merged: Unit | None,
     ports: dict[str, tuple[int, int]],
-    edge_ports: list[tuple[str, int]],
+    edge_ports: list[tuple[str, str, int]],
     routed: list[str],
     schema: secretschema.Schema,
     domain: str,
@@ -978,7 +985,7 @@ def _container_unit(
         # edge to, and — for the edge itself — every routed service, because a
         # route target is `<service>:<publication>` and the edge has no other
         # way to turn that name into an address.
-        hosts = [provider for provider, _ in sorted(edge_ports)]
+        hosts = [concrete for _, concrete, _ in sorted(edge_ports)]
         hosts.extend(name for name in routed if name not in hosts)
         if hosts:
             unit.put(
@@ -1125,30 +1132,31 @@ def _secret_requests(
     return ordered
 
 
-def _environment_file(document: manifest_mod.Manifest, edge_ports: list[tuple[str, int]]) -> str:
+def _environment_file(document: manifest_mod.Manifest, edge_ports: list[tuple[str, str, int]]) -> str:
     """`<AS>_HOST` and `<AS>_PORT` for every edge, or `<AS>_<DB>_HOST`,
     `<AS>_<DB>_PORT` and `<AS>_<DB>_USER` for each database of a
     multi-database edge.
 
-    The host is the provider's own service name, with no suffix and no alias,
-    and there is no name map and no `/etc/hosts` (spec 7.3).
+    The host is the concrete provider service name the host resolved the
+    logical name to, with no suffix and no alias, and there is no name map
+    and no `/etc/hosts` (spec 7.3).
 
     For a multi-database edge the consumer also needs:
-    - `<AS>_<DB>_USER`: the role name, `{provider.service}-{db_name}`
+    - `<AS>_<DB>_USER`: the role name, `{concrete_provider}-{db_name}`
     - `<AS>_PASSWORD`: the edge's password, available as a Secret
     """
     rows = []
     for edge in document.needs:
-        for provider, publication in edge_ports:
-            if provider != edge.service:
+        for logical, concrete, publication in edge_ports:
+            if logical != edge.service:
                 continue
             if edge.databases:
                 for db_name in edge.databases:
-                    user = f"{provider}-{db_name}"
+                    user = f"{concrete}-{db_name}"
                     name = f"{edge.variable}_{db_name.upper()}"
-                    rows.append((name, edge.service, publication, user))
+                    rows.append((name, concrete, publication, user))
             else:
-                rows.append((edge.variable, edge.service, publication, None))
+                rows.append((edge.variable, concrete, publication, None))
     return render_template("guarden.env.j2", rows=rows)
 
 
@@ -1160,10 +1168,16 @@ def _order_target(document: manifest_mod.Manifest, context: Context | None) -> s
     the file. The edges are `Wants=`, not `Requires=`: a provider that is down
     does not stop its consumers, the consumer's first dial fails and it retries.
     """
+    providers: list[str] = []
+    if context is not None:
+        for edge in document.needs:
+            concrete = context.config.resolve_provider(context.track.name, edge.service)
+            if concrete not in providers:
+                providers.append(concrete)
     return render_template(
         "guarden-order.target.j2",
         service=context.service if context else "",
-        providers=sorted(edge.service for edge in document.needs),
+        providers=sorted(providers),
     )
 
 

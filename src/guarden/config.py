@@ -29,7 +29,7 @@ pasta_options`; a read is a read, and it takes no lock (spec 3.5).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from guarden import conf, durations, errors, paths, zram
@@ -48,6 +48,7 @@ TOP_LEVEL_KEYS = {
     "environments",
     "share",
     "firewall",
+    "providers",
 }
 TRACK_KEYS = {
     "name",
@@ -177,9 +178,13 @@ class Config:
     backend: str = BACKEND
     pasta_options: tuple[str, ...] = PASTA_OPTIONS
     zram: zram.Zram | None = None
+    providers: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def track(self, name: str) -> Track | None:
         return next((track for track in self.tracks if track.name == name), None)
+
+    def resolve_provider(self, track: str, logical: str) -> str:
+        return (self.providers or {}).get(track, {}).get(logical, logical)
 
     @property
     def network(self) -> str:
@@ -299,6 +304,7 @@ def load(path: Any = None) -> Config:
     tracks = _tracks(document.get("environments", []), where_file)
     return Config(
         path=str(where_file),
+        providers=_providers(document.get("providers", {}), where_file),
         domain=_str(host, "domain", f"{where_file} [host]"),
         interface=_str(host, "interface", f"{where_file} [host]"),
         admin_user=_str(host, "admin_user", f"{where_file} [host]"),
@@ -435,6 +441,24 @@ def _unpinned_pasta(where_file: Any, piece: str) -> errors.GuardenError:
         f"default --no-map-gw when the literal --map-gw token is absent, and `soil install` "
         f"derives ingress.alias from -g"
     )
+
+
+def _providers(table: Any, where_file: Any) -> dict[str, dict[str, str]]:
+    if not isinstance(table, dict):
+        raise _type_error(str(where_file), "providers", "a table")
+    out: dict[str, dict[str, str]] = {}
+    for track, mapping in table.items():
+        if not isinstance(mapping, dict):
+            raise _type_error(str(where_file), f"providers.{track}", "a table")
+        resolved: dict[str, str] = {}
+        for logical, concrete in mapping.items():
+            if not isinstance(concrete, str) or not concrete:
+                raise _type_error(
+                    str(where_file), f"providers.{track}.{logical}", "a service name"
+                )
+            resolved[logical] = concrete
+        out[track] = resolved
+    return out
 
 
 def _tracks(rows: Any, where_file: Any) -> list[Track]:

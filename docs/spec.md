@@ -449,6 +449,22 @@ track; either is exit `2` naming the track. An empty `fork_from` is a track that
 This is the one place a track refers to another track, and it is a field rather than a name guarden
 recognises, so adding a track is appending a row and nothing else.
 
+#### `[providers]` — environment-aware edge targets
+
+A `needs:` entry names a logical provider (`service: postgres`). The host resolves it to a concrete service name per track, so one manifest deploys unchanged into staging and production while each environment dials its own provider:
+
+```toml
+[providers.staging]
+postgres = "postgres-staging"
+
+[providers.production]
+postgres = "postgres-production"
+```
+
+Each `[providers.<track>]` table maps a logical provider name to the concrete service that serves it in that track. `Config.resolve_provider(track, logical)` returns the concrete name, or `logical` unchanged when there is no mapping — so a manifest that names a full service name (`postgres-production`) keeps working, and a host with no `[providers]` table behaves exactly as before. The resolution runs in the mutator and the renderer, at every point a `needs:` entry becomes a provider lookup, an edge key, a hostname or a `Wants=` edge; both sides resolve from the same table, so the key the mutator writes is the key the renderer reads.
+
+The manifest refuses `environment:` and `track:` by name (spec 4): the host decides the environment. This table is where that decision is expressed — the repository names the logical provider, and the root-owned track table says which concrete service answers it per track.
+
 `admin_user` is a login name, resolved to a uid. It is the only uid besides the service uids
 that the firewall names, and it is the uid allowed to reach the edge's API.
 

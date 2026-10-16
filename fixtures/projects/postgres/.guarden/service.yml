@@ -1,0 +1,9 @@
+# A provider of the `database` kind, named `postgres` so the providers table
+# can map the logical name `postgres` to a concrete per-environment name.
+project: postgres
+units: .guarden/quadlet/
+provides:
+  - db
+ports:
+  - container: db
+    port: 5432

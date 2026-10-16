@@ -147,7 +147,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # does not offer, and a route host another service already holds, are the two
     # things in this ordering that would otherwise leave a system user and a
     # subvolume behind on the way out.
-    edges.check(resolved.name, manifest)
+    edges.check(resolved.name, manifest, resolved.track.name, config)
     check_hosts(resolved.name, manifest, resolved.track)
 
     existing = registry.load(resolved.name)
@@ -241,7 +241,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # minted first, so an edge adopting `DB_PASSWORD` reuses that value rather than
     # minting a second one over it. On a gated track step 9 mints nothing and the
     # edge's own value is what exists.
-    outcome.warnings += edges.install(record, manifest)
+    outcome.warnings += edges.install(record, manifest, config)
 
     with conf.lock("registry"):
         registry.save(record, root_owner)

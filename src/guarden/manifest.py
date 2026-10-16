@@ -125,6 +125,12 @@ PORT_MAX = 65535
 class Edge:
     """One `needs:` entry: an edge to another service.
 
+    `service` is a logical provider name. The host resolves it to a concrete
+    service name per track via `[providers]` in `guarden.toml` — a manifest
+    that names `postgres` resolves to `postgres-staging` in staging and
+    `postgres-production` in production. An unresolved name is used unchanged,
+    so a manifest naming a full service name keeps working.
+
     When `databases` is set, the edge provisions one role/database pair per
     name. The credential is minted once per edge and reused for all.
     """

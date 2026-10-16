@@ -443,3 +443,54 @@ assert_file_has "$GUARDEN_FIXTURES/twin-render/units/web.container" "Secret=SECR
 twin_uid=$(getent passwd twin-staging | cut -d: -f3)
 assert_file_has "$conf" \
     "mod owner uid-owner $twin_uid daddr 127.0.0.1 proto tcp dport $pgdual_pub jump ACCEPT;"
+
+                                                                             
+                                             
+                                                                             
+ 
+                                                                              
+                                                                        
+                                                                           
+           
+
+                                                                              
+stage_config guarden-providers.toml
+stage_poke postgres 9f2c1ab
+stage_poke needful-providers 9f2c1ab
+run weedr service ingest postgres-staging --from poke postgres@9f2c1ab
+assert_exit 0
+run weedr service ingest needful-staging --from poke needful-providers@9f2c1ab
+assert_exit 0
+
+# The edge is keyed by the CONCRETE name, not the logical one.
+assert_file_has "$registry/needful-staging.toml" '[edges."postgres-staging:5432:db"]'
+
+# The rendered host is the concrete name.
+needful_home=/var/lib/guarden/services/needful-staging/home
+needful_render=$GUARDEN_FIXTURES/needful-providers-render
+run loom render "$needful_home" --service needful-staging --out "$needful_render"
+assert_exit 0
+assert_file_has "$needful_render/units/guarden.env" "DB_HOST=postgres-staging"
+assert_file_has "$needful_render/units/web.container" "AddHost=postgres-staging:10.0.2.2"
+assert_file_has "$needful_render/system/guarden-order.target" "Wants=postgres-staging.target"
+
+# The same logical name in production resolves to the concrete production name.
+run weedr service ingest postgres-production --from poke postgres@9f2c1ab
+assert_exit 0
+run weedr service ingest needful-production --from poke needful-providers@9f2c1ab
+assert_exit 0
+
+prod_home=/var/lib/guarden/services/needful-production/home
+prod_render=$GUARDEN_FIXTURES/needful-providers-prod-render
+run loom render "$prod_home" --service needful-production --out "$prod_render"
+assert_exit 0
+assert_file_has "$prod_render/units/guarden.env" "DB_HOST=postgres-production"
+assert_file_has "$prod_render/units/web.container" "AddHost=postgres-production:10.0.2.2"
+assert_file_has "$prod_render/system/guarden-order.target" "Wants=postgres-production.target"
+
+# An unmapped name passes through unchanged — a manifest naming a full
+# service name directly keeps working.
+stage_poke unmapped 9f2c1ab
+run weedr service ingest unmapped-staging --from poke unmapped@9f2c1ab
+assert_exit 0
+assert_file_has "$registry/unmapped-staging.toml" '[edges."unmapped-staging:5432:db"]'

@@ -14,6 +14,7 @@ against, so the variable, the rule and the bind cannot disagree.
 
 from __future__ import annotations
 
+from guarden import config as config_mod
 from guarden import credentials, errors, paths, registry, tool
 from guarden import manifest as manifest_mod
 
@@ -42,7 +43,12 @@ def credential_key(kind: str, edge: manifest_mod.Edge) -> str:
     return f"{edge.variable}_{suffix}"
 
 
-def check(consumer: str, document: manifest_mod.Manifest) -> None:
+def resolve_name(config: config_mod.Config, environment: str, edge: manifest_mod.Edge) -> str:
+    return config.resolve_provider(environment, edge.service)
+
+
+def check(consumer: str, document: manifest_mod.Manifest, environment: str,
+          config: config_mod.Config) -> None:
     """Refuse an edge the provider does not offer, before anything is created.
 
     Both service names and both kinds are in the diagnostic, because "the edge is
@@ -61,7 +67,7 @@ def check(consumer: str, document: manifest_mod.Manifest) -> None:
     to say so.
     """
     for edge in document.needs:
-        provider = registry.load(edge.service)
+        provider = registry.load(resolve_name(config, environment, edge))
         if provider is None:
             continue
         _offered(consumer, edge, provider)
@@ -103,7 +109,8 @@ def _offered(consumer: str, edge, provider) -> None:
     )
 
 
-def install(entry: registry.Registry, document: manifest_mod.Manifest) -> list[str]:
+def install(entry: registry.Registry, document: manifest_mod.Manifest,
+            config: config_mod.Config) -> list[str]:
     """Every `needs:` entry: the publication it dials, its registry record and its
     credential. Mutates `entry.edges` in memory; returns the warnings.
 
@@ -115,7 +122,8 @@ def install(entry: registry.Registry, document: manifest_mod.Manifest) -> list[s
     """
     warnings: list[str] = []
     for edge in document.needs:
-        provider = registry.load(edge.service)
+        provider_name = resolve_name(config, entry.environment, edge)
+        provider = registry.load(provider_name)
         publication: int | None = None
         if provider is None:
             warnings.append(
@@ -132,7 +140,7 @@ def install(entry: registry.Registry, document: manifest_mod.Manifest) -> list[s
             warnings += said
             if publication is not None:
                 warnings += _credential(entry, edge, provider, container, publication)
-        entry.edges[edge_key(edge.service, edge.port, edge.prefix)] = {
+        entry.edges[edge_key(provider_name, edge.port, edge.prefix)] = {
             "port": edge.port,
             "as": edge.prefix,
             "auth": edge.auth,
