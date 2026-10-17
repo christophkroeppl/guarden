@@ -299,8 +299,8 @@ assert_stderr_empty
 #
 # **The document is asserted in the file the plan names, not in the plan.** The
 # runner prints `user-data <path>` and does not echo the document — the artefact is
-# the committed `tools/cloud-init/user-data.yaml`, and a plan that reprinted it
-# would put a second copy of the document in this suite's output. So the path comes
+# the render at that path, and a plan that reprinted it would put a second copy of
+# the document in this suite's output. So the path comes
 # out of the plan and the claim about the document is asked of the document.
 tool golden-vm --print
 assert_exit 0

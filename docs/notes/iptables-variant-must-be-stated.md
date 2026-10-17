@@ -256,7 +256,7 @@ shared machine even while the harness bug stands.
 - **`src/guarden/hostprep.py`** — the two items in `firewall_items`, in that
   order, plus `_host_variant`, `_variant_selected`, `_select_variant`,
   `_rendered_rules_readable`, `_firewall_applied`.
-- **`src/guarden/userdata.py`** / **`tools/cloud-init/user-data.yaml`** — the
+- **`src/guarden/userdata.py`** / **`src/guarden/templates/cloud-init/`** — the
   rendered cloud-init document records both halves (what the host's `iptables`
   names, and what ferm would load) into the evidence directory **before any
   phase runs**, so a machine that boots into the two halves disagreeing says so

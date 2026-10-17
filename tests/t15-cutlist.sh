@@ -8,8 +8,8 @@
 # premise ticket 200 states. Measured 2026-10-12, on the first rebuilt golden:
 # the cut list carried none of `ferm`, `fail2ban` and `podman`, and
 # `t100-homepage` and `t150-auth` detonated before anything had applied the
-# phase that installs them. The rendered `tools/cloud-init/user-data.yaml` has
-# its own keeper (`t130-packages.sh` compares it against this same command);
+# phase that installs them. The rendered document has its own keeper
+# (`t130-packages.sh` renders it and holds it to this same command);
 # this is that keeper for the harness's cut list, and in the one direction that
 # matters: every substrate package must be baked, while the cut list may carry
 # the harness's own extras on top.

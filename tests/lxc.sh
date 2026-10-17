@@ -475,7 +475,7 @@ packages:
   # of that rebuild were different classes and were fixed elsewhere --
   # `t110-previews` needed the `/var/lib/guarden` traverse (`df0b268`) and
   # `t130-packages` died on a rolled-back golden transaction, not on this
-  # list. The rendered `tools/cloud-init/user-data.yaml` carries the raw
+  # list. The rendered document carries the raw
   # substrate; `t15-cutlist.sh` holds this list to `soil packages --list`, so a
   # package added to the one list cannot miss the other.
   - ferm
