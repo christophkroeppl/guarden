@@ -13,9 +13,14 @@
 # operator to reboot and re-run — the conversion is a state machine
 # that picks up where it left off.
 #
-# Cloud-init detection: if the host was already provisioned by cloud-init
-# (guarden's user-data or any cloud-init), the packages phase is skipped
-# because the system packages are already installed.
+# There is no cloud-init detection, and none is needed: every phase is
+# check-then-apply, so a phase that is already converged is skipped no matter
+# what converged it -- cloud-init, a previous run of this script, or a human.
+# On a host cloud-init provisioned, `soil packages --check` finds the substrate
+# already installed and the phase reports "already converged" without applying;
+# on a fresh host it reports drift and applies. The check is the detection, and
+# it is more precise than asking whether cloud-init ran: it asks whether the
+# host is in the target state, which is the only question that matters.
 #
 # Options:
 #   --check   report drift for every phase without making changes

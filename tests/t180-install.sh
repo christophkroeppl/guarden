@@ -66,15 +66,19 @@ grep -q 'PYTHONPATH=src python3 -m guarden.soil' "$script" \
     || fail "soil_cmd does not use checkout"
 pass "soil_cmd always uses checkout"
 
-                                                                       
-template="$root/tools/cloud-init/template.yaml"
+# The template lives with the installed templates so soil can render it on a
+# host; tools/render-user-data is a thin wrapper over the CLI, not a second
+# renderer. The '## template: jinja' marker is for cloud-init's own jinja
+# pass, which we do not use -- the renderer pre-renders, so the marker must
+# be absent from both the template and any render.
+template="$root/src/guarden/templates/cloud-init/template.yaml"
 [[ -f "$template" ]] || fail "cloud-init template.yaml not found"
-grep -q 'template: jinja' "$template" || fail "template.yaml has no jinja header"
-grep -q 'install.sh' "$template" || fail "template.yaml does not run install.sh"
+grep -q 'template: jinja' "$template" && fail "template.yaml carries a cloud-init jinja marker the renderer does not need"
+grep -q 'install.sh' "$template" || fail "template.yaml does not run install.sh (vps profile)"
 
 renderer="$root/tools/render-user-data"
 [[ -x "$renderer" ]] || fail "tools/render-user-data not found or not executable"
-grep -q 'provision.sh' "$renderer" || fail "render-user-data does not inline provision.sh"
+grep -q 'guarden.soil' "$renderer" || fail "render-user-data does not forward to soil packages --render-user-data"
 
 # The `--branch VALUE` space form must parse: a `for arg in "$@"` loop expands
 # the list once, so `shift` cannot consume the value and it is re-iterated into
@@ -92,9 +96,22 @@ echo "$branch_out" | grep -q 'unknown argument' \
     || fail "an unknown argument is not refused"
 pass "--branch parses in both forms, unknown arguments refused"
 
-provision="$root/tools/cloud-init/provision.sh"
+provision="$root/src/guarden/templates/cloud-init/provision.sh"
 [[ -f "$provision" ]] || fail "provision.sh not found"
 grep -q 'git clone' "$provision" || fail "provision.sh does not clone the repo"
+
+# The renderer must produce a document that names install.sh and the branch,
+# and must not carry the golden-VM half (the evidence directory and the phase
+# sequence) in the vps document.
+vps_doc=$(mktemp)
+PYTHONPATH="$root/src" python3 -m guarden.soil packages \
+    --render-user-data "$vps_doc" --profile vps --branch feat/testing >/dev/null 2>&1 \
+    || fail "vps profile could not be rendered"
+grep -q 'install.sh' "$vps_doc" || fail "vps document does not run install.sh"
+grep -q 'feat/testing' "$vps_doc" || fail "vps document does not carry the branch"
+grep -q 'guarden-evidence' "$vps_doc" && fail "vps document carries the golden-VM evidence directory"
+grep -q 'soil packages --apply' "$vps_doc" && fail "vps document carries the golden-VM phase sequence"
+rm -f "$vps_doc"
 pass "cloud-init template + renderer + provision.sh consistent"
 
 printf 't180-install: all checks passed\n'
