@@ -1134,7 +1134,7 @@ def _converge_ingress() -> None:
 def _sync_routes() -> None:
     """`roots sync`, as `guarden`: a route change the edge reads without a restart."""
     result = tool.call(["runuser", "-u", units.GUARDEN_USER, "--",
-                        str(paths.BIN / "roots"), "sync"])
+                        str(paths.BIN / "roots"), "sync"], cwd="/tmp")
     if not result.ok:
         detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
         sys.stderr.write(
@@ -1154,7 +1154,7 @@ def _sync_dashboard() -> None:
     if DASHBOARD_MODULE not in config.modules or not paths.DASHBOARD.is_dir():
         return
     result = tool.call(["runuser", "-u", units.GUARDEN_USER, "--",
-                        str(paths.BIN / "twig"), "sync"])
+                        str(paths.BIN / "twig"), "sync"], cwd="/tmp")
     if not result.ok:
         detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
         sys.stderr.write(

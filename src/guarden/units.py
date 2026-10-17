@@ -78,7 +78,7 @@ def render_units(source: Path, service: str, escaped_ref: str | None = None) -> 
     ]
     if escaped_ref:
         argv.extend(["--instance", escaped_ref])
-    tool.run(argv)
+    tool.run(argv, cwd="/tmp")
     if not out.is_dir():
         raise errors.GuardenError(
             f"{source} rendered nothing for {service}: {LOOM} wrote no units into {out}",

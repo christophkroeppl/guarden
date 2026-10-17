@@ -25,7 +25,7 @@ AUTH_NONE = "none"
 ENGINE = "postgres"
 PSQL_USER = "postgres"
 MIN_VERSION = 100000
-SQL_ON_STDIN = "-f -"
+SQL_ON_STDIN: tuple[str, ...] = ("-f", "-")
 VALUE_ALPHABET = "-_"
 
 
@@ -264,7 +264,7 @@ def provision(consumer: str, provider: registry.Registry, container: str,
         db_names = [container_name]
     podman = ["runuser", "-u", provider.service, "--", "podman"]
     listing = [*podman, "ps", "--filter", f"name=^{container_name}$", "--format", "{{.Names}}"]
-    running = tool.call(listing)
+    running = tool.call(listing, cwd="/tmp")
     if container_name not in running.stdout.split():
         return [
             errors.warn(
@@ -277,7 +277,7 @@ def provision(consumer: str, provider: registry.Registry, container: str,
     psql = [*podman, "exec", "-i", container_name, "psql", "-U", PSQL_USER, "-d", PSQL_USER]
     _check_version(container_name, [*psql, "-Atc", "SHOW server_version_num"])
     ddl = "\n".join(_ddl(name, password) for name in db_names)
-    done = tool.call([*psql, "-v", "ON_ERROR_STOP=1", SQL_ON_STDIN], stdin=ddl)
+    done = tool.call([*psql, "-v", "ON_ERROR_STOP=1", "-f", "-"], stdin=ddl)
     if not done.ok:
         raise errors.GuardenError(
             f"{container_name}: {ENGINE} refused the role and the database for {consumer}: "
@@ -321,7 +321,7 @@ def _ddl(role: str, password: str) -> str:
     `[A-Za-z0-9_-]` — the one assumption this function makes about its own input, so it
     is checked here rather than trusted.
     """
-    if not password or not password.replace(VALUE_ALPHABET, "").isalnum():
+    if not password or not all(c.isalnum() or c in VALUE_ALPHABET for c in password):
         raise errors.GuardenError(
             f"the minted password for the role {role!r} is not [A-Za-z0-9_-]",
             errors.HOST_NOT_AS_ASSUMED,
