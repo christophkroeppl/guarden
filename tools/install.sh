@@ -19,6 +19,7 @@
 #
 # Options:
 #   --check   report drift for every phase without making changes
+#   --branch  clone and run from this branch (default: develop)
 #
 # Exit codes:
 #   0   converged (or already converged, or --check with no drift)
@@ -56,6 +57,14 @@ for arg in "$@"; do
     case "$arg" in
         --check)
             CHECK_MODE=1
+            ;;
+        --branch)
+            shift
+            REPO_BRANCH="${1:-}"
+            [[ -n "$REPO_BRANCH" ]] || die "--branch needs a value"
+            ;;
+        --branch=*)
+            REPO_BRANCH="${arg#--branch=}"
             ;;
         -h|--help)
             sed -n '2,/^set -euo/p' "$0" | head -n -1 | sed 's/^# \{0,1\}//'

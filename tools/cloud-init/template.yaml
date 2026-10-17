@@ -1,0 +1,32 @@
+## template: jinja
+#cloud-config
+#
+# Rendered by tools/render-user-data from this template, packages/packages.toml
+# and tools/cloud-init/provision.sh. Do not edit the rendered output.
+#
+# Option A: cloud-init provisions (packages + repo clone), install.sh converges.
+# The repo is cloned first, so install.sh runs from it and no script has to be
+# fetched a second time. The btrfs conversion needs up to two reboots, and
+# install.sh is a state machine that resumes after each one.
+#
+# Rendered values:
+#   repo_url, repo_branch, repo_dir - where the repo is cloned from and to
+#   provision_script               - provision.sh, placeholders resolved
+#   packages                       - the substrate list for the host's family
+
+package_update: true
+package_upgrade: false
+
+packages: {{ packages | tojson(indent=2) }}
+
+write_files:
+  - path: /usr/local/bin/guarden-provision.sh
+    permissions: "0755"
+    content: |
+{{ provision_script | indent(6, first=True) }}
+
+runcmd:
+  - /usr/local/bin/guarden-provision.sh
+  - bash "{{ repo_dir }}/tools/install.sh"
+
+final_message: "guarden provisioned after $UPTIME seconds"
