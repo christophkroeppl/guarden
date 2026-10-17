@@ -2063,6 +2063,44 @@ def _install_templates() -> None:
                      str(path), str(target))
 
 
+def _packagelist_source() -> Path:
+    """The one package list: the checkout's `packages/`, or the installed copy.
+
+    Same order and reason as `_modules_source`: a converge that read a stale
+    installed list would be a different program on a developer's box than on a
+    host.
+    """
+    beside = _source_tree().parent / "packages"
+    return beside if beside.is_dir() else paths.PACKAGES
+
+
+def _install_packagelist() -> None:
+    source = _packagelist_source() / packagelist.LIST_NAME
+    target = paths.PACKAGES / packagelist.LIST_NAME
+    if source == target:
+        return
+    h.run_or_die("install", "-d", "-m", "0755", "-o", "root", "-g", "root",
+                 str(paths.PACKAGES))
+    h.run_or_die("install", "-m", "0644", "-o", "root", "-g", "root",
+                 str(source), str(target))
+
+
+def _packagelist_installed() -> bool:
+    """Whether the one package list is where the installed programs read it.
+
+    Contents, not existence: an edited list keeps its name, so a host that
+    never re-installed it answers for a different set of packages than the
+    checkout's.
+    """
+    source = _packagelist_source() / packagelist.LIST_NAME
+    target = paths.PACKAGES / packagelist.LIST_NAME
+    if source == target:
+        return target.is_file()
+    if not target.is_file():
+        return False
+    return target.read_bytes() == source.read_bytes()
+
+
 def _install_modules() -> None:
     source = _modules_source()
     for module in sorted(path for path in source.iterdir() if path.is_dir()):
@@ -2355,6 +2393,15 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             _link_programs,
         ),
         Item("guarden's templates are installed", _templates_installed, _install_templates),
+        # The one package list, where the installed programs read it: a host whose
+        # `/usr/bin/soil` answers "the package list is missing" has a broken
+        # interface, and the checkout's `packages/` is not on an installed
+        # program's path — it reads `parents[2]/packages/` from itself.
+        Item(
+            "the package list is installed where the installed programs read it",
+            _packagelist_installed,
+            _install_packagelist,
+        ),
         # The module directory is guarden's own installation and root-owned: a
         # module is data that ships with the programs, and `weedr module add`
         # reads it months after this phase last ran.

@@ -66,6 +66,16 @@ assert_file_exists /usr/lib/guarden/bin/weedr
 assert_file_exists /usr/lib/guarden/bin/hose
 assert_file_has /etc/tmpfiles.d/guarden-tmpfiles.conf "d /run/guarden"
 
+# The one package list, where the installed programs read it: `soil packages`
+# from the checkout finds `packages/packages.toml` beside the source tree, and
+# from the installed copy it finds `/usr/lib/guarden/packages/` — which nothing
+# installed until now, so `/usr/bin/soil packages --check` answered "the package
+# list is missing" on every converged host.
+assert_file_exists /usr/lib/guarden/packages/packages.toml
+run /usr/bin/soil packages --list
+assert_exit 0
+assert_stdout_has "python3-yaml"
+
 # The two program users and the one group, and nothing else. What the account is
 # is the claim, not the argv that made it: a system account with no login shell,
 # no home and the guarden group as its primary group. `--no-create-home` is

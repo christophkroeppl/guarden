@@ -90,6 +90,9 @@ USR_LIB_GUARDEN = USR_LIB / "guarden"
 BIN = USR_LIB_GUARDEN / "bin"
 LIBDIR = USR_LIB_GUARDEN / "lib"
 MODULES = USR_LIB_GUARDEN / "modules"
+# The one package list, where the installed programs read it: packagelist
+# searches `parents[2]/packages/` from the installed copy, which is here.
+PACKAGES = USR_LIB_GUARDEN / "packages"
 USR_BIN = PREFIX / "usr" / "bin"
 
 LOCKS = PREFIX / "run" / "guarden" / "locks"
