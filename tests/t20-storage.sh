@@ -82,6 +82,24 @@ assert_file_has /etc/apt/apt.conf.d/80guarden-snapper "DPkg::Pre-Invoke"
 assert_file_has /etc/apt/apt.conf.d/80guarden-snapper "snapper -c root create"
 assert_file_exists /var/lib/guarden/soil
 
+# The pre-mount hook must recover the journal **before** btrfs-convert: a forced
+# stop (`lxc stop --force`, a provider's reset button, a power cut) leaves
+# needs_recovery set, btrfs-convert refuses with "source filesystem requires
+# recovery, run e2fsck first", and systemd-fsck runs AFTER this hook — so without
+# the fsck the conversion never succeeds and the state machine retries forever
+# on a host whose root stays ext4. Order is the claim: fsck first, convert
+# second.
+hook="$GUARDEN_ROOT/src/guarden/templates/convert/dracut/99guarden-convert/guarden-convert-hook.sh"
+assert_file_has "$hook" "e2fsck -y"
+fsck_line=$(grep -n 'e2fsck -y' "$hook" | head -n1 | cut -d: -f1)
+convert_line=$(grep -n 'btrfs-convert --uuid' "$hook" | head -n1 | cut -d: -f1)
+if [ -z "$fsck_line" ] || [ -z "$convert_line" ] || [ "$fsck_line" -ge "$convert_line" ]; then
+    _fail "the conversion hook must fsck the journal before btrfs-convert"
+fi
+assert_file_has \
+    "$GUARDEN_ROOT/src/guarden/templates/convert/dracut/99guarden-convert/module-setup.sh" \
+    "e2fsck"
+
 # The distribution's packaged cleanup timer is disabled and guarden's own oneshot
 # replaces it, because snapper takes no lock that `snapper modify` participates in
 # and its cleaner reuses one reference to the snapshot list across all three

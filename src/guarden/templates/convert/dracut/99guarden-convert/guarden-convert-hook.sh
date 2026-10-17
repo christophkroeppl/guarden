@@ -2,7 +2,7 @@
 # guarden-convert: one-shot offline ext4 -> btrfs conversion (dracut pre-mount hook).
 # Sourced by dracut — never call `exit`, and keep all names ic_* to avoid
 # clobbering dracut's shell state. Minimal initrd: only sed/cat/mkdir/mount/
-# umount/findfs/blkid are guaranteed (no tr/awk/head).
+# umount/findfs/blkid/e2fsck are guaranteed (no tr/awk/head).
 
 ic_emit() { # <priority> <msg>
   echo "<$1>guarden-convert: $2" >/dev/kmsg 2>/dev/null || true
@@ -31,6 +31,22 @@ ic_convert() {
     return
     ;;
   esac
+
+  # The journal has to be recovered before btrfs-convert will accept the
+  # source: a forced stop — `lxc stop --force`, a provider's reset button, a
+  # power cut — leaves needs_recovery set, and the convert then refuses with
+  # "source filesystem requires recovery, run e2fsck first". systemd-fsck runs
+  # AFTER this hook, so the recovery has to happen here. e2fsck exits 0 clean,
+  # 1 corrected, 2 corrected and a reboot wanted (this boot is that reboot);
+  # 4+ means uncorrected damage, and converting a damaged source would bake the
+  # damage into btrfs, so the conversion stops and the boot continues on ext4
+  # for the next `--apply`.
+  ic_fsck=0
+  e2fsck -y "$ic_dev" || ic_fsck=$?
+  if [ "$ic_fsck" -ge 4 ]; then
+    ic_err "$ic_dev: fsck could not repair it (exit $ic_fsck); not converting"
+    return
+  fi
 
   ic_log "converting $ic_dev (ext4) to btrfs offline (uuid+label preserved)..."
   if ! btrfs-convert --uuid copy --copy-label --no-progress "$ic_dev"; then

@@ -10,7 +10,7 @@ depends() {
 }
 
 install() {
-  inst_multiple btrfs-convert btrfs findfs blkid
+  inst_multiple btrfs-convert btrfs findfs blkid e2fsck
   # hostonly builds skip btrfs on an ext4 host; clear it so the module installs
   hostonly="" instmods btrfs
   mkdir -p "$initdir/etc"
