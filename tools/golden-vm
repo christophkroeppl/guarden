@@ -161,14 +161,36 @@ scp -q "$user_data" "$remote@$target:/var/tmp/guarden-user-data.yaml"
 ssh -o ConnectTimeout="$connect_timeout" "$remote@$target" \
     "cloud-init schema --config-file /var/tmp/guarden-user-data.yaml" \
     || die "the cloud-init user-data is not valid cloud-config"
-# Apply the document's `runcmd` on the running target, once.
+# Apply the whole document on the running target, module by module, once.
 #
 # **`cloud-init --file` is not a command, and this line used to run it.** On
 # cloud-init 26.1 the subcommands are init, modules, single, query, features,
 # analyze, devel, collect-logs, clean, status and schema; `--file` printed usage
-# and exited, so the document was never applied here and the sequence appended
-# after it was the only thing that converged. `cc_runcmd` writes the document's
-# `runcmd` to a script and `scripts-user` executes it — the pair that actually
-# runs it, and the reason the appended copy is gone rather than merely unused.
+# and exited, so the document was never applied and the sequence appended after
+# it was the only thing that converged.
+#
+# **And `cc_runcmd` alone — the first fix — applied ONE module, not the
+# document.** Review round 2 caught it: on a target that did not boot from the
+# document, `write_files` never creates /var/lib/guarden-evidence and
+# `packages:` never installs pasta/btrfs-progs, so verify-substrate.sh dies at
+# its first redirect (or FATALs on missing pasta) under `set -eu` before any
+# phase runs. The chain therefore mirrors the boot order — packages, then
+# write_files, then the runcmd script, then its execution:
+#
+#   cc_package_update_upgrade_install  packages: — the substrate, so
+#                                       verify-substrate's pasta/btrfs checks
+#                                       can pass on a target without them
+#   cc_write_files                     write_files: — the evidence directory,
+#                                       whose only creator in the tree is
+#                                       writing PROVENANCE into it
+#   cc_runcmd                          writes the document's runcmd to a script
+#   scripts-user                       executes it — the pair that actually runs
+#
+# `--frequency always` on the first three: all are PER_INSTANCE and already ran
+# on a target that booted from the document; the runner targets both.
+DOC=/var/tmp/guarden-user-data.yaml
 ssh -o ConnectTimeout="$connect_timeout" "$remote@$target" \
-    "cloud-init single --name cc_runcmd --frequency always --file /var/tmp/guarden-user-data.yaml && cloud-init single --name scripts-user --frequency always"
+    "cloud-init single --name cc_package_update_upgrade_install --frequency always --file $DOC && \
+     cloud-init single --name cc_write_files --frequency always --file $DOC && \
+     cloud-init single --name cc_runcmd --frequency always --file $DOC && \
+     cloud-init single --name scripts-user --frequency always"

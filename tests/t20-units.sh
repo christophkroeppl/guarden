@@ -61,7 +61,24 @@ assert_exit 0
 assert_file_has /etc/systemd/system/guarden-snapshot.service \
     "ExecStart=/usr/lib/guarden/bin/weedr service snapshot --all"
 assert_file_has /etc/systemd/system/guarden-pin-sync.service \
-    "ExecStart=/usr/bin/flock -w 30 /run/guarden/locks/snapshots.lock /usr/lib/guarden/bin/weedr pin sync"
+    "ExecStart=/usr/lib/guarden/bin/weedr pin sync"
+assert_file_lacks /etc/systemd/system/guarden-snapshot.service \
+    "ExecStart=/usr/bin/flock"
+assert_file_lacks /etc/systemd/system/guarden-pin-sync.service \
+    "ExecStart=/usr/bin/flock"
+
+# An installed unit is not an installed behaviour, and this one is the reason:
+# the reconciler takes the snapshots lock itself (`reconcile.run` holds
+# `conf.lock("snapshots")`), and the `flock(1)` wrapper this used to carry
+# opened a second file description on the same key, so every start blocked on
+# the wrapper's own hold forever. No suite ever started the service, so the
+# files could be perfect while the unit was dead. 124 is `timeout`'s own code —
+# the start did not complete, which is the defect, not an environment fact.
+run timeout 60 systemctl start guarden-pin-sync.service
+if [ "$GUARDEN_EXIT" -eq 124 ]; then
+    _fail "guarden-pin-sync.service did not complete in 60s: the snapshots lock is held by a second wrapper"
+fi
+assert_exit 0
 
 # All three are enabled *and* running, and the two claims are separate: an
 # enabled timer that was not started waits for nothing, and a started timer that

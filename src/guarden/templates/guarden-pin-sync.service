@@ -12,8 +12,12 @@ After=snapperd.service
 
 [Service]
 Type=oneshot
-# The same lock the cleanup unit takes, and the reason both take it: snapper
+# The reconciler takes the snapshots key itself — `reconcile.run` holds
+# `conf.lock("snapshots")` across the whole run — so this must not sit behind
+# an `flock(1)` wrapper: a wrapper opens a second file description on the same
+# key and the program then blocks against the wrapper's own hold forever. The
+# key is the cleanup unit's key and the reason it exists is unchanged: snapper
 # takes no lock that `snapper modify` participates in, and its cleaner reuses
 # one reference to the snapshot list across all three passes, so a mark written
 # during a running cleanup is lost silently with no error anywhere.
-ExecStart=/usr/bin/flock -w 30 /run/guarden/locks/snapshots.lock /usr/lib/guarden/bin/weedr pin sync
+ExecStart=/usr/lib/guarden/bin/weedr pin sync
