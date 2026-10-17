@@ -86,10 +86,15 @@ planned_phases=$(awk '$1 == "phases" { $1 = ""; sub(/^ +/, ""); print }' "$GUARD
 [ "$planned_phases" = "$phases" ] \
     || _fail "the plan runs [$planned_phases], soil list says [$phases]"
 
-# The committed document is what a reviewer reads and what the machine boots, and
-# it is the rendered one — so a zram package that leaked into the list would show
-# up here rather than only on a rebuilt machine.
-committed=$GUARDEN_ROOT/tools/cloud-init/user-data.yaml
-assert_file_has "$committed" "#cloud-config"
-assert_file_lacks "$committed" "systemd-zram-generator"
-assert_file_lacks "$committed" "zram"
+# **The document is rendered here, not read from a tracked file.** It used to be
+# committed and this read the committed copy; a render is a build output, so the
+# check is now that the renderer produces a document without the package rather
+# than that a committed one is current. A zram package that leaked into the list
+# would show up here rather than only on a rebuilt machine.
+rendered=$GUARDEN_FIXTURES/user-data.rendered.yaml
+PYTHONPATH="$GUARDEN_ROOT/src" python3 -m guarden.soil packages \
+    --render-user-data "$rendered" --profile golden-vm >/dev/null 2>&1 \
+    || _fail "the user-data could not be rendered"
+assert_file_has "$rendered" "#cloud-config"
+assert_file_lacks "$rendered" "systemd-zram-generator"
+assert_file_lacks "$rendered" "zram"

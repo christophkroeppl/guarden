@@ -23,13 +23,19 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
 
 target=${GUARDEN_VM_TARGET:-}
-# The user-data is rendered from `packages/packages.toml` rather than read from a
-# file that can go stale, because a document whose packages were copied by hand
-# is a second copy of the list and a package added to one is not installed on the
-# machine the ticket's claims are proven on. `tools/cloud-init/user-data.yaml`
-# is the rendered artefact and is committed for a human to read; regenerating it
-# is `--render` and happens here, so what is passed is what the list says today.
-user_data="$root/tools/cloud-init/user-data.yaml"
+# **The document is rendered at use time and never read from a tracked file.**
+#
+# It used to default to `tools/cloud-init/user-data.yaml` and refuse to boot when
+# a fresh render differed from it. That check existed only because the rendered
+# file was tracked, and a tracked render is a second copy of the package list
+# that goes stale the moment the list changes: every package added meant a
+# regeneration commit whose whole content was a rebuild of a file this tool can
+# produce. The template and `packages/packages.toml` are the source of truth and
+# this renders from them, so what is booted is current by construction.
+#
+# `--user-data PATH` still names a file to use as given, which is what a
+# fixture and a hand-written document need.
+user_data=""
 family=""
 print_only=0
 remote=root
@@ -90,31 +96,27 @@ done
 phases=$(PYTHONPATH="$root/src" python3 -m guarden.soil list | cut -d' ' -f1)
 phases_line=$(printf '%s' "$phases" | tr '\n' ' ')
 
-# The command the machine runs: converge every phase, then report drift for
-# every phase. A run that ends with drift is a run that failed.
-sequence=""
-for phase in $phases; do
-    sequence="$sequence soil $phase --apply;"
-done
-for phase in $phases; do
-    sequence="$sequence soil $phase --check;"
-done
-sequence="${sequence%;}"
+# **The sequence is the document's, and this script no longer builds one.** It
+# used to assemble its own copy of `soil <phase> --apply; ...` and append it to
+# the ssh command, so a target that booted from the document converged all six
+# phases twice: once in the document's `runcmd`, once from here. The document is
+# the one statement of the sequence and this reads it from the same source that
+# renders the document, so the plan this prints and the plan the machine runs
+# are the same string rather than two that agree by inspection.
+sequence=$(PYTHONPATH="$root/src" python3 -c \
+    'from guarden import userdata; print(userdata.sequence())')
 
-# The document is rendered from `packages/packages.toml` and checked against the
-# committed one, and the committed path is what is passed. Both halves matter:
-# passing a temporary render would mean the file a reviewer reads in the
-# repository is not the file the machine boots, and passing the committed file
-# unchecked would mean a package added to the list and not re-rendered boots a
-# machine missing it. So the render is the check and the committed file is the
-# artefact, and a stale one is refused with the command that fixes it.
+# **The document is rendered, and the render is the document.** There is no
+# committed copy to compare against any more: the template and the package list
+# are the source of truth, so a fresh render is current by construction and a
+# stale artefact is not a state this can be in.
 #
 # The renderer is silenced on success: this script's own stdout is the plan, and
 # AGENTS.md's rule is that a diagnostic is one line. A render that succeeded has
 # nothing to say, so its chatter is discarded rather than prefixed.
 rendered=$(mktemp)
 trap 'rm -f "$rendered"' EXIT
-render_args=(--render-user-data "$rendered")
+render_args=(--render-user-data "$rendered" --profile golden-vm)
 [ -n "$family" ] && render_args+=(--family "$family")
 
 render_output=$(PYTHONPATH="$root/src" python3 -m guarden.soil packages "${render_args[@]}" 2>&1) || {
@@ -122,15 +124,11 @@ render_output=$(PYTHONPATH="$root/src" python3 -m guarden.soil packages "${rende
     die "the cloud-init user-data could not be rendered from packages/packages.toml"
 }
 
-if [ "$user_data" = "$root/tools/cloud-init/user-data.yaml" ]; then
-    if ! diff -q "$rendered" "$user_data" >/dev/null 2>&1; then
-        die "$user_data is not what packages/packages.toml renders. Re-render it:
-     PYTHONPATH=$root/src python3 -m guarden.soil packages \\
-         --render-user-data $user_data${family:+ --family $family}"
-    fi
-else
+if [ -n "$user_data" ]; then
     [ -f "$user_data" ] || die "the cloud-init user-data is missing: $user_data"
     [ -r "$user_data" ] || die "the cloud-init user-data is not readable: $user_data"
+else
+    user_data=$rendered
 fi
 
 if [ "$print_only" = 1 ]; then
@@ -147,5 +145,21 @@ printf 'phases     %s\n' "$phases_line"
 printf 'running   %s\n' "$sequence"
 
 scp -q "$user_data" "$remote@$target:/var/tmp/guarden-user-data.yaml"
+# **Validate before applying.** `cloud-init schema` is the real validator and it
+# lives on the machine rather than on the host, so this is where a document that
+# is not valid cloud-config is caught — before it is applied, not after a boot
+# that half-worked.
 ssh -o ConnectTimeout="$connect_timeout" "$remote@$target" \
-    "cloud-init --file /var/tmp/guarden-user-data.yaml; $sequence"
+    "cloud-init schema --config-file /var/tmp/guarden-user-data.yaml" \
+    || die "the cloud-init user-data is not valid cloud-config"
+# Apply the document's `runcmd` on the running target, once.
+#
+# **`cloud-init --file` is not a command, and this line used to run it.** On
+# cloud-init 26.1 the subcommands are init, modules, single, query, features,
+# analyze, devel, collect-logs, clean, status and schema; `--file` printed usage
+# and exited, so the document was never applied here and the sequence appended
+# after it was the only thing that converged. `cc_runcmd` writes the document's
+# `runcmd` to a script and `scripts-user` executes it — the pair that actually
+# runs it, and the reason the appended copy is gone rather than merely unused.
+ssh -o ConnectTimeout="$connect_timeout" "$remote@$target" \
+    "cloud-init single --name cc_runcmd --frequency always --file /var/tmp/guarden-user-data.yaml && cloud-init single --name scripts-user --frequency always"

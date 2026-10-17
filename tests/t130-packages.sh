@@ -82,10 +82,15 @@ assert_exit 0
 assert_file_exists "$GUARDEN_FIXTURES/user-data.yaml"
 assert_file_has "$GUARDEN_FIXTURES/user-data.yaml" "python3-yaml"
 assert_file_has "$GUARDEN_FIXTURES/user-data.yaml" "python3-jinja2"
-# Nothing from PyPI: no `pip`, no `venv`, no `.whl`, and no index. The document is
-# a cloud-init one and a machine that fetched from PyPI at boot would be a machine
-# whose state depends on a network nobody controls.
-assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "pip"
+# Nothing from PyPI: no `pip install`, no `venv`, no `.whl`, and no index. The
+# document is a cloud-init one and a machine that fetched from PyPI at boot would
+# be a machine whose state depends on a network nobody controls.
+#
+# **`pip install`, not the bare `pip`.** The substrate list carries the
+# distribution's own `python3-pip` (packages/packages.toml), which is a package
+# name in a list and not a fetch — a bare `pip` assertion fails on it, which is
+# what happened when that package was added.
+assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "pip install"
 assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" ".whl"
 assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "pypi"
 assert_file_lacks "$GUARDEN_FIXTURES/user-data.yaml" "index-url"

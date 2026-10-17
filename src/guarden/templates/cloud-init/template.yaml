@@ -1,3 +1,4 @@
+{% if profile == 'golden-vm' %}
 #cloud-config
 #
 # Rendered by `tools/render-user-data` from packages/packages.toml. Do not edit
@@ -61,38 +62,41 @@
 package_update: true
 package_upgrade: false
 
+{% else %}
+#cloud-config
+#
+# Rendered by `soil packages --render-user-data` from this template and
+# `packages/packages.toml`. Do not edit the package list here: this file is
+# generated from the one in the repository, and a package named in both is a
+# package that can drift.
+#
+# **This document provisions a host; it does not converge one.** It installs the
+# substrate the phases need, clones the repository, and hands the rest to
+# `tools/install.sh`, which owns convergence and knows how to resume: the btrfs
+# conversion reboots twice, and a cloud-init runcmd that tried to span a reboot
+# would be a document that silently stopped half way.
+#
+# Re-running is safe and is the expected recovery. `install.sh` asks each phase
+# whether it has converged and applies only the ones that have not, so a second
+# run after a reboot — or after this document — converges the remainder rather
+# than starting again.
+#
+# Nothing here is fetched from PyPI. Every package comes from the distribution's
+# own repository; the one artefact from outside is the pinned `podlet` release,
+# which `soil packages` verifies against the SHA256 recorded in the repository.
+
+package_update: true
+package_upgrade: false
+{% endif %}
 packages:
   # substrate: what `soil packages` converges, from packages.toml
-  - btrfs-progs
-  - snapper
-  - ferm
-  - fail2ban
-  - podman
-  - python3-yaml
-  - python3-jinja2
-  - python3-pip
-  - dracut-core
-
+{% for package in substrate %}  - {{ package }}
+{% endfor %}{% if harness %}
   # harness: the throwaway machine's check tooling, and no host's
-  - passt
-  - subvolume-subtools
-  - snapper-support
-  - python3
-  - git
-  - rsync
-  - ca-certificates
-  - curl
-  - jq
-  - iptables
-  - nftables
-  - iproute2
-  - iputils-ping
-  - dnsutils
-  - netcat-openbsd
-  - nginx
-  - postgresql-client
-  - libpq-dev
+{% for package in harness %}  - {{ package }}
+{% endfor %}{% endif %}
 
+{% if profile == 'golden-vm' %}
 write_files:
   # The evidence the run leaves behind. The ticket requires a tarball of
   # journals, unit states and `soil --check`, and a directory that already
@@ -110,60 +114,35 @@ write_files:
       image: ubuntu 26.04 (resolute)
       provisioned by cloud-init; guarden itself is converged by `soil`
 
-runcmd:
-  # Verify the substrate the checks depend on, loudly and early. If pasta is
-  # missing, every networking claim is unprovable and the run must say so at
-  # the point of failure rather than eleven separate "not run" verdicts later.
-  - |
-    set -eu
-    {
-      echo "podman: $(podman --version 2>/dev/null || echo MISSING)"
-      echo "pasta:  $(command -v pasta || echo MISSING)"
-      echo "btrfs:  $(btrfs --version 2>/dev/null || echo MISSING)"
-      echo "kernel: $(uname -r)"
-      echo "os:     $(. /etc/os-release && echo "$PRETTY_NAME")"
-      echo "cgroup: $(stat -fc %T /sys/fs/cgroup 2>/dev/null || echo unknown)"
-    } > /var/lib/guarden-evidence/substrate.txt
-    cat /var/lib/guarden-evidence/substrate.txt
-    if ! command -v pasta >/dev/null 2>&1; then
-      echo "FATAL: pasta is absent; the rootless-network claims cannot be proven" >&2
-      exit 1
-    fi
-    if ! command -v btrfs >/dev/null 2>&1; then
-      echo "FATAL: btrfs-progs is absent; soil storage cannot converge" >&2
-      exit 1
-    fi
 
-  # **Which iptables table the firewall rules go in, recorded before any phase
-  # runs.** `soil firewall` converges the variant the package list names and
-  # refuses to report a converged firewall whose rules the host's own `iptables`
-  # cannot read, but a machine booting into the two halves disagreeing should say
-  # so here, where nothing has been converged on top of it yet.
-  #
-  # Both halves are recorded, and separately on purpose: `update-alternatives`
-  # records which variant `/usr/sbin/iptables` NAMES, while ferm resolves its own
-  # binary when loading a policy and prefers the `-legacy` names. The two can
-  # disagree on a healthy host, and on the golden they did — which is the whole
-  # of docs/notes/iptables-variant-must-be-stated.md.
+runcmd:
+  # Verify the substrate the checks depend on, loudly and early.
   - |
-    set -eu
-    vf=/var/lib/guarden-evidence
-    echo "iptables name:   $(iptables --version 2>/dev/null || echo MISSING)" >>"$vf/substrate.txt"
-    ferm --shell /dev/null >"$vf/.ferm-sh" 2>&1 || true
-    echo "ferm would load: $(head -1 "$vf/.ferm-sh" | cut -d' ' -f1)" >>"$vf/substrate.txt"
-    echo "alternatives:    $(iptables --version | sed 's/.*(//;s/)//')" >>"$vf/substrate.txt"
-    iptables-legacy-save -t filter >"$vf/.legacy" 2>/dev/null || true
-    echo "legacy chains:   $(grep -c '^-N' "$vf/.legacy")" >>"$vf/substrate.txt"
-    nft list tables >"$vf/.nft" 2>/dev/null || true
-    echo "nft tables:      $(wc -w <"$vf/.nft")" >>"$vf/substrate.txt"
-    rm -f "$vf/.ferm-sh" "$vf/.legacy" "$vf/.nft"
-    tail -5 "$vf/substrate.txt"
+{{ verify_substrate | indent(4, first=True) }}
+
+  # Which iptables table the firewall rules go in, before any phase runs.
+  - |
+{{ record_iptables | indent(4, first=True) }}
 
   # Converge every phase, then check every phase. The order and the phase list
   # are `soil list`'s, read from the program at render time, so this line and
   # the program cannot disagree about what converged state is.
   - |
     set -eu
-    soil packages --apply;soil storage --apply;soil sysctl --apply;soil firewall --apply;soil install --apply;soil units --apply;soil packages --check;soil storage --check;soil sysctl --check;soil firewall --check;soil install --check;soil units --check
+    {{ sequence }}
+{% else %}
 
-final_message: "guarden golden VM ready after $UPTIME seconds"
+write_files:
+  # The clone step, tracked in the repository and inlined here so the bytes a
+  # machine runs and the bytes in the repository are the same.
+  - path: /usr/local/bin/guarden-provision.sh
+    permissions: "0755"
+    content: |
+{{ provision_script | indent(6, first=True) }}
+
+runcmd:
+  - /usr/local/bin/guarden-provision.sh
+  - bash "{{ repo_dir }}/tools/install.sh" --branch "{{ repo_branch }}"
+{% endif %}
+
+final_message: "{{ final_message }}"

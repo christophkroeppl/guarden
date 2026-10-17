@@ -77,10 +77,50 @@ check_at=$(grep -boE 'soil packages --check' "$user_data" | head -1 | cut -d: -f
 # Nothing from PyPI and no wheel: the document is what a machine boots from, and a
 # boot that fetched from an index nobody controls is a host whose state depends on
 # a network. The packages come from the distribution or not at all.
-assert_file_lacks "$user_data" "pip"
+#
+# **`pip install`, not the bare `pip`.** The substrate list carries the
+# distribution's own `python3-pip`, which is a package name in a list and not a
+# fetch — a bare `pip` assertion fails on it.
+assert_file_lacks "$user_data" "pip install"
 assert_file_lacks "$user_data" ".whl"
 assert_file_lacks "$user_data" "pypi"
 assert_file_lacks "$user_data" "index-url"
+
+# **The vps profile, and the same template.** One template renders two documents
+# and the vps one is what a real host boots: it installs the substrate, clones
+# the repository and hands convergence to `install.sh`, because the btrfs
+# conversion reboots twice and a cloud-init `runcmd` that tried to span a reboot
+# would be a document that stopped half way. What has to hold is that it renders,
+# that it does not carry the golden VM's half, and that the branch a caller names
+# is the branch it clones and installs from.
+vps=$GUARDEN_FIXTURES/user-data.vps.yaml
+run soil packages --render-user-data "$vps" --profile vps --branch feat/testing
+assert_exit 0
+assert_file_has "$vps" "#cloud-config"
+assert_file_has "$vps" "install.sh"
+assert_file_has "$vps" 'REPO_BRANCH="feat/testing"'
+assert_file_has "$vps" '--branch "feat/testing"'
+# The golden VM's half is absent. An evidence directory and a phase sequence are
+# the harness machine's; a host that ran them would be a host converging a
+# second time on top of install.sh's, which is the double-run the document
+# stopped doing.
+assert_file_lacks "$vps" "/var/lib/guarden-evidence"
+assert_file_lacks "$vps" "soil packages --apply"
+
+# The profile is a closed set and not a free string: a name that is neither of
+# the two is exit 2 and writes nothing, so a caller cannot boot a document with
+# a silently empty half.
+run soil packages --render-user-data "$GUARDEN_FIXTURES/bad.yaml" --profile nonsense
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_file_missing "$GUARDEN_FIXTURES/bad.yaml"
+
+# `-` is stdout, which is what a caller piping the document uses. The rendered
+# document is what has to come back, so the first line is the one cloud-init
+# reads rather than a diagnostic about a file.
+run soil packages --render-user-data -
+assert_exit 0
+assert_stdout_has "#cloud-config"
 
 # A document naming a phase that does not exist is not a phase list. Both entries
 # are exit 2, and this is the assertion for the closed set: the document and the

@@ -1,18 +1,34 @@
-"""The cloud-init user-data, rendered from the one package list.
+"""The cloud-init user-data, rendered from one template and the one package list.
 
-spec 6.1's six phases are the whole of what a fresh box needs, and the order
-they run in is the order `soil list` prints. This module turns that into the one
-document a cloud-init-capable machine boots from, and it renders the package
-list from `packages/packages.toml` rather than carrying one of its own — because
-a package named here and not there is a box that installs three things and
-converges on a fourth, with nothing reporting the difference.
+spec 6.1's six phases are the whole of what a fresh box needs, and the order they
+run in is the order `soil list` prints. This module renders the document a
+cloud-init-capable machine boots from, in one of two profiles:
+
+    golden-vm   the throwaway harness machine. Substrate + harness packages, an
+                evidence directory, and the six phases run directly.
+    vps         a fresh host. Substrate packages, a repo clone, and install.sh,
+                which owns convergence and resumes across the btrfs reboots.
+
+**One template, two profiles.** The document used to be built twice: by string
+concatenation in this module, and by a second jinja2 template under `tools/`.
+Two renderers for one document is the drift this repository fights, so there is
+now one template (`templates/cloud-init/template.yaml`) and this module is the
+one renderer. The two profiles differ in the header, in whether the harness
+packages are installed, and in what `runcmd` does; everything else is shared, so
+a change to the package list or the phase sequence lands in both at once.
 
 **What the rendered document does and does not do.** It installs the substrate
-and the throwaway machine's harness tools, then runs every phase's `--apply` and
-every phase's `--check`. It does **not** create the program users, write
-`/usr/lib/guarden`, or set `ingress.alias`: `soil install` owns those, and a
-document that pre-empted them would make the phases untestable — a phase that
-finds its own work already done is a phase that proves nothing.
+and, for the golden VM, the throwaway machine's harness tools. It does **not**
+create the program users, write `/usr/lib/guarden`, or set `ingress.alias`:
+`soil install` owns those, and a document that pre-empted them would make the
+phases untestable — a phase that finds its own work already done is a phase that
+proves nothing.
+
+**The VPS profile does not converge.** It clones the repository and runs
+`tools/install.sh`, which owns convergence and knows how to resume: the btrfs
+conversion reboots twice, and a cloud-init `runcmd` that tried to span a reboot
+would be a document that silently stopped half way. Re-running `install.sh` is
+the expected recovery.
 
 **No PyPI, no wheel, no venv.** Every line of the package list comes from the
 distribution's own repository. The one artefact fetched from outside a
@@ -23,12 +39,17 @@ that fetched anything else would be a second, unpinned fetch path.
 
 from __future__ import annotations
 
-from guarden import packagelist
+from pathlib import Path
 
-# The packages the substrate needs come first and the harness tools after, with
-# a comment between them, so a reader of the rendered document can tell which is
-# which without cross-referencing the list.
-_SUBSTRATE_NOTE = "  # substrate: what `soil packages` converges, from packages.toml"
+from guarden import packagelist, paths
+
+GOLDEN_VM = "golden-vm"
+VPS = "vps"
+PROFILES = (GOLDEN_VM, VPS)
+
+DEFAULT_REPO_URL = "https://github.com/christophkroeppl/guarden.git"
+DEFAULT_REPO_BRANCH = "develop"
+DEFAULT_REPO_DIR = "/usr/local/src/guarden"
 
 
 def phases() -> tuple[str, ...]:
@@ -48,6 +69,11 @@ def sequence() -> str:
     The checks are not optional and not a separate step: a boot that applied
     everything and never asked is a boot that reported success without having
     looked, which is the failure mode this document exists to rule out.
+
+    **This is the one statement of the sequence.** `tools/golden-vm` used to
+    build its own copy and append it to the ssh command, so every golden-VM boot
+    converged all six phases twice; it now relies on the document's `runcmd`,
+    which is this.
     """
     names = phases()
     apply = ";".join(f"soil {phase} --apply" for phase in names)
@@ -55,177 +81,103 @@ def sequence() -> str:
     return f"{apply};{check}"
 
 
-def package_block(family: str | None = None) -> str:
-    """The `packages:` block, substrate first and harness tools after.
+def templates_dir() -> Path:
+    """Where the cloud-init templates live: the checkout, or the installed copy.
 
-    Rendered from the one list, so a package added to `packages.toml` and not to
-    this file is a package that reaches the machine by exactly one path.
-
-    **The conditional roles are not rendered, and that is the design rather than
-    an omission.** They carry the packages a *configured* host installs when its
-    operator's guarden.toml asks for the thing they provide — the zram
-    generator is the one there is today. A machine being provisioned is not yet
-    a configured host, so baking them in would put the generator on every
-    golden-VM image and make "absent means absent: no package" untestable on the
-    machine that has to test it. The phase installs one the moment the knob is
-    there, which is the same path a real host takes.
+    Same order and the same reason as `hostprep.template`: on a checkout — which
+    is what a development tree and the VPS-prep case are — the file being read
+    and the file being edited are the same one, and on an installed host it is
+    the copy `soil install` put under `/usr/lib/guarden/templates/`.
     """
-    substrate = packagelist.package_names(family)
-    harness = packagelist.harness_names(family)
-    lines = ["packages:"]
-    lines.append(_SUBSTRATE_NOTE)
-    lines.extend(f"  - {package}" for package in substrate)
-    if harness:
-        lines.append("")
-        lines.append("  # harness: the throwaway machine's check tooling, and no host's")
-        lines.extend(f"  - {package}" for package in harness)
-    return "\n".join(lines) + "\n"
+    beside = Path(__file__).resolve().parent / "templates" / "cloud-init"
+    if (beside / "template.yaml").is_file():
+        return beside
+    return paths.TEMPLATES / "cloud-init"
 
 
-HEADER = """#cloud-config
-#
-# Rendered by `tools/render-user-data` from packages/packages.toml. Do not edit
-# the package list here: this file is generated from the one in the repository,
-# and a package named in both is a package that can drift.
-#
-# The golden VM is the harness that cannot be faked: a throwaway machine with
-# real tools, proving the claims the fast harness cannot — that a rootless
-# container reaches a dependency by the pinned alias (ADR-0018), that nothing
-# unprivileged binds below 1024, and that a clone of a live data volume starts
-# and recovers. `tools/golden-vm` is the entry point and asserts none of it; a
-# runner that also decided what a pass was would be a harness whose result
-# nobody could audit.
-#
-# This document only PROVISIONS and then CONVERGES. It installs what the soil
-# phases run over, and it installs nothing guarden owns: it does not create the
-# program users, does not write /usr/lib/guarden, and does not set the ingress
-# alias. `soil install` does those, and a document that pre-empted them would
-# make the phases untestable — a phase that finds its own work already done is a
-# phase that proves nothing.
-#
-# It fetches nothing from PyPI and no wheel. Everything below is a distribution
-# package, and the one artefact from outside a distribution repository — the
-# pinned `podlet` release — is fetched by `soil packages` and verified against
-# the SHA256 recorded in this repository.
-#
-# What it must get right, and why:
-#
-# - podman must be new enough for pasta. Podman 5.0 made pasta the default
-#   rootless network; below that, rootless containers get slirp4netns and the
-#   pinned alias's premise does not hold. Ubuntu 26.04 ships 5.x, so `pasta` is a
-#   plain package install and the binary is /usr/bin/pasta. Installing it
-#   explicitly rather than relying on Recommends is deliberate: a golden VM that
-#   silently lost pasta to a Recommends change would report "not run" for every
-#   networking claim, which is how ticket 15's eleven checks came back unproven
-#   in the first place.
-#
-# - btrfs-progs and snapper are needed because `soil storage` converges a btrfs
-#   layout and a snapper value set. Ticket 15 measured a real deviation here
-#   (5.16.2), so the version is recorded rather than assumed.
-#
-# - `sysctl` and the kernel modules the sysctl phase writes (route_localnet on
-#   the ingress interface, IPv6 off) must be loadable. The sysctl phase is
-#   `route_localnet` on one interface; a machine that cannot set it will report
-#   drift forever and that is a real answer, not a harness failure.
-#
-# - iproute2 and nftables-family tooling because `soil firewall` converges ferm
-#   and the inspection in ticket 140 reads the installed `nat PREROUTING` chain.
-#   **The chain ferm installs is in iptables-LEGACY, and that is ferm's own
-#   choice** -- ferm 2.7 prefers the `iptables-legacy*` names when resolving the
-#   xtables binary it loads a policy with, measured on the golden by reading the
-#   argv out of `ferm --shell`. Both families of tooling are therefore installed:
-#   the nft ones for what an operator reading nft sees, and the legacy table for
-#   the rules actually in force. See
-#   docs/notes/iptables-variant-must-be-stated.md.
-#
-# The runcmd step below records which table the rules go in before any phase
-# runs, so a machine booting into the two halves disagreeing says so there rather
-# than after six phases report success.
+def _script(name: str) -> str:
+    """One tracked script, read for inlining.
 
-package_update: true
-package_upgrade: false
-
-"""
-
-FOOTER = """
-write_files:
-  # The evidence the run leaves behind. The ticket requires a tarball of
-  # journals, unit states and `soil --check`, and a directory that already
-  # exists is the difference between a run that reports and a run that
-  # silently produced nothing.
-  - path: /var/lib/guarden-evidence
-    permissions: "0755"
-
-  # A marker recording what this machine actually was, so a stale evidence
-  # directory from an earlier image cannot be mistaken for this run's result.
-  - path: /var/lib/guarden-evidence/PROVENANCE
-    permissions: "0644"
-    content: |
-      guarden golden VM user-data, rendered from packages/packages.toml
-      image: ubuntu 26.04 (resolute)
-      provisioned by cloud-init; guarden itself is converged by `soil`
-
-runcmd:
-  # Verify the substrate the checks depend on, loudly and early. If pasta is
-  # missing, every networking claim is unprovable and the run must say so at
-  # the point of failure rather than eleven separate "not run" verdicts later.
-  - |
-    set -eu
-    {{
-      echo "podman: $(podman --version 2>/dev/null || echo MISSING)"
-      echo "pasta:  $(command -v pasta || echo MISSING)"
-      echo "btrfs:  $(btrfs --version 2>/dev/null || echo MISSING)"
-      echo "kernel: $(uname -r)"
-      echo "os:     $(. /etc/os-release && echo "$PRETTY_NAME")"
-      echo "cgroup: $(stat -fc %T /sys/fs/cgroup 2>/dev/null || echo unknown)"
-    }} > /var/lib/guarden-evidence/substrate.txt
-    cat /var/lib/guarden-evidence/substrate.txt
-    if ! command -v pasta >/dev/null 2>&1; then
-      echo "FATAL: pasta is absent; the rootless-network claims cannot be proven" >&2
-      exit 1
-    fi
-    if ! command -v btrfs >/dev/null 2>&1; then
-      echo "FATAL: btrfs-progs is absent; soil storage cannot converge" >&2
-      exit 1
-    fi
-
-  # **Which iptables table the firewall rules go in, recorded before any phase
-  # runs.** `soil firewall` converges the variant the package list names and
-  # refuses to report a converged firewall whose rules the host's own `iptables`
-  # cannot read, but a machine booting into the two halves disagreeing should say
-  # so here, where nothing has been converged on top of it yet.
-  #
-  # Both halves are recorded, and separately on purpose: `update-alternatives`
-  # records which variant `/usr/sbin/iptables` NAMES, while ferm resolves its own
-  # binary when loading a policy and prefers the `-legacy` names. The two can
-  # disagree on a healthy host, and on the golden they did — which is the whole
-  # of docs/notes/iptables-variant-must-be-stated.md.
-  - |
-    set -eu
-    vf=/var/lib/guarden-evidence
-    echo "iptables name:   $(iptables --version 2>/dev/null || echo MISSING)" >>"$vf/substrate.txt"
-    ferm --shell /dev/null >"$vf/.ferm-sh" 2>&1 || true
-    echo "ferm would load: $(head -1 "$vf/.ferm-sh" | cut -d' ' -f1)" >>"$vf/substrate.txt"
-    echo "alternatives:    $(iptables --version | sed 's/.*(//;s/)//')" >>"$vf/substrate.txt"
-    iptables-legacy-save -t filter >"$vf/.legacy" 2>/dev/null || true
-    echo "legacy chains:   $(grep -c '^-N' "$vf/.legacy")" >>"$vf/substrate.txt"
-    nft list tables >"$vf/.nft" 2>/dev/null || true
-    echo "nft tables:      $(wc -w <"$vf/.nft")" >>"$vf/substrate.txt"
-    rm -f "$vf/.ferm-sh" "$vf/.legacy" "$vf/.nft"
-    tail -5 "$vf/substrate.txt"
-
-  # Converge every phase, then check every phase. The order and the phase list
-  # are `soil list`'s, read from the program at render time, so this line and
-  # the program cannot disagree about what converged state is.
-  - |
-    set -eu
-    {sequence}
-
-final_message: "guarden golden VM ready after $UPTIME seconds"
-"""
+    The scripts over ten lines live in the repository rather than in the
+    template, so the bytes a machine runs and the bytes in the repository are
+    the same, and a script can be read and linted on its own.
+    """
+    return (templates_dir() / name).read_text(encoding="utf-8")
 
 
-def render(family: str | None = None) -> str:
-    """The whole document: the header, the rendered packages, and the run."""
-    body = HEADER + package_block(family) + FOOTER.format(sequence=sequence())
-    return body
+def _provision_script(repo_url: str, branch: str, repo_dir: str) -> str:
+    """`provision.sh` with its placeholders resolved to this render's values.
+
+    The clone target is a placeholder rather than a jinja variable because the
+    script is also readable on its own, where `{{ }}` would be a syntax error in
+    a shell script and a jinja variable would be a name the reader has to go
+    looking for.
+    """
+    return (
+        _script("provision.sh")
+        .replace("__REPO_URL__", repo_url)
+        .replace("__REPO_BRANCH__", branch)
+        .replace("__REPO_DIR__", repo_dir)
+    )
+
+
+def render(
+    profile: str = GOLDEN_VM,
+    family: str | None = None,
+    branch: str = DEFAULT_REPO_BRANCH,
+    repo_url: str = DEFAULT_REPO_URL,
+    repo_dir: str = DEFAULT_REPO_DIR,
+) -> str:
+    """The whole document for one profile: the template, rendered.
+
+    A profile that is not one of the two is exit 2 rather than a document with a
+    silently empty half, and a missing template says which path it looked for
+    rather than raising a bare `TemplateNotFound`.
+    """
+    if profile not in PROFILES:
+        from guarden import errors
+
+        raise errors.GuardenError(
+            f"the profile {profile!r} is not one of {', '.join(PROFILES)}",
+            errors.REJECTED_INPUT,
+        )
+
+    try:
+        import jinja2
+    except ImportError:
+        from guarden import errors
+
+        raise errors.GuardenError(
+            "python3-jinja2 is not importable; it is the distribution's package, "
+            "installed by `soil packages`",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+
+    directory = templates_dir()
+    environment = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(str(directory)),
+        keep_trailing_newline=True,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        autoescape=False,
+    )
+    template = environment.get_template("template.yaml")
+
+    golden = profile == GOLDEN_VM
+    return template.render(
+        profile=profile,
+        substrate=packagelist.package_names(family),
+        harness=packagelist.harness_names(family) if golden else [],
+        sequence=sequence() if golden else "",
+        verify_substrate=_script("verify-substrate.sh") if golden else "",
+        record_iptables=_script("record-iptables.sh") if golden else "",
+        provision_script="" if golden else _provision_script(repo_url, branch, repo_dir),
+        repo_url=repo_url,
+        repo_branch=branch,
+        repo_dir=repo_dir,
+        final_message=(
+            "guarden golden VM ready after $UPTIME seconds"
+            if golden
+            else "guarden provisioned after $UPTIME seconds"
+        ),
+    )

@@ -26,3 +26,12 @@ __pycache__/
 *.dump
 evidence/
 .lxc-state/
+
+# A rendered cloud-init document is a build output, not a source. What a change
+# is made to is the template under `src/guarden/templates/cloud-init/` and
+# `packages/packages.toml`; `soil packages --render-user-data` produces the
+# document from them. A committed render is a second copy of the package list
+# that goes stale the moment the list changes, so no render is tracked and these
+# two patterns are where one lands by convention.
+tools/cloud-init/user-data.yaml
+user-data.*.yaml

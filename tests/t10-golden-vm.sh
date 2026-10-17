@@ -30,7 +30,13 @@ assert_stdout_has "--target"
 # which tests the runner rather than the state of the checkout.
 tool golden-vm --print
 assert_exit 0
-assert_stdout_has "tools/cloud-init/user-data.yaml"
+# **The plan names a render, not a tracked file.** It used to name
+# `tools/cloud-init/user-data.yaml` and refuse to boot when a fresh render
+# differed from it; the render is now the document, so what the plan has to
+# prove is that one is produced and that it is the list's rather than a copy.
+assert_stdout_has "packages storage sysctl firewall install units"
+assert_stdout_has "soil packages --apply"
+assert_stdout_has "soil units --check"
 
 mkdir -p "$GUARDEN_FIXTURES/cloud-init"
 printf '%s\n' '#cloud-config' 'packages: [btrfs-progs, snapper]' >"$GUARDEN_FIXTURES/cloud-init/user-data.yaml"

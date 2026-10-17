@@ -1,115 +1,37 @@
-#!/usr/bin/env python3
-"""Render tools/cloud-init/template.yaml into cloud-init user-data.
+#!/usr/bin/env bash
+# Render the cloud-init user-data from the repository's own template.
+#
+# **A thin wrapper, and deliberately so.** The renderer, the package list, the
+# phase sequence and the template all live in the program: this finds the
+# checkout they live in and forwards. It used to carry its own copy of the
+# parsing and the jinja rendering, which is exactly the drift it now exists to
+# avoid — a second renderer is a second answer to what the document says.
+#
+# This is what the VPS-prep case uses, where the operator has a checkout and no
+# installed host:
+#
+#   tools/render-user-data --profile vps --branch develop --output user-data.yaml
+#   tools/render-user-data --profile vps --branch feat/testing > user-data.yaml
+#   tools/render-user-data --profile golden-vm --output user-data.yaml
+#   tools/render-user-data                     # the golden VM document, to stdout
+#
+# `--output` is the old spelling and maps to the program's positional PATH; with
+# no `--output` the document goes to stdout, which is what it did before.
+set -euo pipefail
 
-Reads packages/packages.toml for the per-family package list, inlines
-tools/cloud-init/provision.sh with its placeholders resolved, and renders
-the jinja2 template. The output is a cloud-init user-data document ready
-to pass to a VPS provider.
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-Usage:
-    tools/render-user-data [--branch BRANCH] [--family FAMILY] [--output PATH]
+output=""
+forward=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --output) output="${2-}"; shift 2 ;;
+        --output=*) output="${1#--output=}"; shift ;;
+        *) forward+=("$1"); shift ;;
+    esac
+done
 
-    --branch BRANCH    Git branch to provision from (default: develop)
-    --family FAMILY    Distribution family: debian, fedora, arch
-                       (default: detected from /etc/os-release)
-    --output PATH      Write to PATH (default: stdout)
-
-The template uses '## template: jinja' so cloud-init processes it. The
-scripts it inlines are tracked in the repository, so the bytes a machine
-runs and the bytes in the repository are the same.
-"""
-
-from __future__ import annotations
-
-import argparse
-import sys
-from pathlib import Path
-
-import jinja2
-import tomllib
-
-
-REPO_URL = "https://github.com/christophkroeppl/guarden.git"
-DEFAULT_BRANCH = "develop"
-REPO_DIR = "/usr/local/src/guarden"
-
-
-def packages_for(family: str) -> list[str]:
-    """The substrate package list for a distribution family."""
-    toml_path = Path(__file__).parent.parent / "packages" / "packages.toml"
-    data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
-    families = data.get("families", {})
-    if family not in families:
-        sys.exit(f"error: no family '{family}' in packages.toml")
-    return families[family].get("packages", [])
-
-
-def detect_family() -> str:
-    """Best-effort detection of the distribution family."""
-    os_release = Path("/etc/os-release")
-    if not os_release.is_file():
-        return "debian"
-    content = os_release.read_text(encoding="utf-8").lower()
-    if "ubuntu" in content or "debian" in content:
-        return "debian"
-    if "fedora" in content or "rhel" in content:
-        return "fedora"
-    if "arch" in content:
-        return "arch"
-    return "debian"
-
-
-def provision_script(branch: str, repo_url: str, repo_dir: str) -> str:
-    """provision.sh with its placeholders resolved to this render's values."""
-    path = Path(__file__).parent / "cloud-init" / "provision.sh"
-    text = path.read_text(encoding="utf-8")
-    return (
-        text.replace("__REPO_URL__", repo_url)
-        .replace("__REPO_BRANCH__", branch)
-        .replace("__REPO_DIR__", repo_dir)
-    )
-
-
-def render(branch: str, family: str, repo_url: str = REPO_URL,
-           repo_dir: str = REPO_DIR) -> str:
-    """Render the cloud-init template with resolved values."""
-    template_path = Path(__file__).parent / "cloud-init" / "template.yaml"
-    environment = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(str(template_path.parent)),
-        keep_trailing_newline=True,
-        trim_blocks=True,
-        lstrip_blocks=True,
-        autoescape=False,
-    )
-    template = environment.get_template(template_path.name)
-    return template.render(
-        repo_url=repo_url,
-        repo_branch=branch,
-        repo_dir=repo_dir,
-        provision_script=provision_script(branch, repo_url, repo_dir),
-        packages=packages_for(family),
-    )
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--branch", default=DEFAULT_BRANCH)
-    parser.add_argument("--family", default=None)
-    parser.add_argument("--output", default=None)
-    parser.add_argument("--repo-url", default=REPO_URL)
-    parser.add_argument("--repo-dir", default=REPO_DIR)
-    args = parser.parse_args()
-
-    family = args.family or detect_family()
-    output = render(args.branch, family, args.repo_url, args.repo_dir)
-
-    if args.output:
-        Path(args.output).write_text(output, encoding="utf-8")
-        print(f"wrote {args.output}")
-    else:
-        print(output)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+exec env PYTHONPATH="${root}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+    python3 -m guarden.soil packages \
+    --render-user-data "${output:--}" \
+    ${forward[@]+"${forward[@]}"}

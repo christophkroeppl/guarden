@@ -106,6 +106,36 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="write the cloud-init user-data rendered from that list to PATH",
     )
+    packages.add_argument(
+        "--profile",
+        metavar="NAME",
+        default=userdata.GOLDEN_VM,
+        help=(
+            "which document `--render-user-data` writes: golden-vm, the harness "
+            f"machine, or vps, a fresh host (default: {userdata.GOLDEN_VM})"
+        ),
+    )
+    packages.add_argument(
+        "--branch",
+        metavar="NAME",
+        default=userdata.DEFAULT_REPO_BRANCH,
+        help=(
+            "the branch the rendered vps document clones and installs from "
+            f"(default: {userdata.DEFAULT_REPO_BRANCH})"
+        ),
+    )
+    packages.add_argument(
+        "--repo-url",
+        metavar="URL",
+        default=userdata.DEFAULT_REPO_URL,
+        help="the repository the rendered vps document clones (a fork, when testing)",
+    )
+    packages.add_argument(
+        "--repo-dir",
+        metavar="PATH",
+        default=userdata.DEFAULT_REPO_DIR,
+        help="where the rendered vps document clones it to",
+    )
     modules = parser.add_argument_group(
         "module selection",
         "what `soil install` records into guarden.toml's [modules] enabled",
@@ -185,17 +215,39 @@ def _package_list(family: str | None) -> int:
     return EXIT_OK
 
 
-def _render_user_data(path: str, family: str | None) -> int:
+def _render_user_data(
+    path: str,
+    family: str | None,
+    profile: str,
+    branch: str,
+    repo_url: str,
+    repo_dir: str,
+) -> int:
     """Write the document a cloud-init machine boots from, rendered from the list.
 
     A path this program cannot write is a rejected input — the caller named one
     that does not exist or is not writable — and it says so rather than writing
     a document nobody will boot.
+
+    The profile decides which document: `golden-vm` is the harness machine that
+    converges the six phases itself, `vps` is a fresh host that clones the
+    repository and hands convergence to `install.sh`. The branch is the one the
+    `vps` document clones and installs from, which is what makes testing a
+    feature branch on a real host possible.
+
+    `-` is stdout, which is how a caller that wants to pipe the document rather
+    than keep it writes one; anything else is a path, and the line naming it goes
+    to stderr so `-` stays pipeable.
     """
     try:
-        document = userdata.render(family)
+        document = userdata.render(profile, family, branch, repo_url, repo_dir)
     except packagelist.UnknownFamily as exc:
         return _reject(str(exc))
+    except errors.GuardenError as exc:
+        return _reject(str(exc))
+    if path == "-":
+        sys.stdout.write(document)
+        return EXIT_OK
     target = Path(path)
     if target.exists() and target.is_dir():
         return _reject(f"{target} is a directory, not a file to write the user-data to")
@@ -204,7 +256,7 @@ def _render_user_data(path: str, family: str | None) -> int:
         target.write_text(document, encoding="utf-8")
     except OSError as exc:
         return _reject(f"{target} could not be written: {exc.strerror}")
-    sys.stdout.write(f"rendered {target}\n")
+    sys.stderr.write(f"rendered {target}\n")
     sys.stdout.write(f"family   {family or 'this host'}\n")
     sys.stdout.write(f"phases   {' '.join(userdata.phases())}\n")
     return EXIT_OK
@@ -386,7 +438,14 @@ def main(argv: list[str] | None = None) -> int:
             return _reject("--modules is `soil install`'s, and it converges nothing.")
         if args.list:
             return _package_list(args.family)
-        return _render_user_data(args.render_user_data, args.family)
+        return _render_user_data(
+            args.render_user_data,
+            args.family,
+            args.profile,
+            args.branch,
+            args.repo_url,
+            args.repo_dir,
+        )
 
     if args.family:
         return _reject("--family is `soil packages`'s, and only with --list or "
