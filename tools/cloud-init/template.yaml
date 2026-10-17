@@ -27,6 +27,6 @@ write_files:
 
 runcmd:
   - /usr/local/bin/guarden-provision.sh
-  - bash "{{ repo_dir }}/tools/install.sh"
+  - bash "{{ repo_dir }}/tools/install.sh" --branch "{{ repo_branch }}"
 
 final_message: "guarden provisioned after $UPTIME seconds"

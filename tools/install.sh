@@ -53,8 +53,8 @@ banner() {
     printf '[install] ════════════════════════════════════════\n'
 }
 
-for arg in "$@"; do
-    case "$arg" in
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --check)
             CHECK_MODE=1
             ;;
@@ -64,16 +64,17 @@ for arg in "$@"; do
             [[ -n "$REPO_BRANCH" ]] || die "--branch needs a value"
             ;;
         --branch=*)
-            REPO_BRANCH="${arg#--branch=}"
+            REPO_BRANCH="${1#--branch=}"
             ;;
         -h|--help)
             sed -n '2,/^set -euo/p' "$0" | head -n -1 | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
-            die "unknown argument: $arg"
+            die "unknown argument: $1"
             ;;
     esac
+    shift
 done
 
 if [[ $EUID -ne 0 ]]; then

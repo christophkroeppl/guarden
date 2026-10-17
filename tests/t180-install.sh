@@ -76,6 +76,22 @@ renderer="$root/tools/render-user-data"
 [[ -x "$renderer" ]] || fail "tools/render-user-data not found or not executable"
 grep -q 'provision.sh' "$renderer" || fail "render-user-data does not inline provision.sh"
 
+# The `--branch VALUE` space form must parse: a `for arg in "$@"` loop expands
+# the list once, so `shift` cannot consume the value and it is re-iterated into
+# the unknown-argument arm. Both forms must reach the root check.
+# Output is captured rather than piped: under `set -o pipefail` the pipeline
+# returns install.sh's own exit 1, so `| grep -q` would fail even on a match.
+branch_out=$(bash "$script" --branch develop 2>&1 || true)
+echo "$branch_out" | grep -q 'must be run as root' \
+    || fail "--branch VALUE (space form) does not parse"
+branch_out=$(bash "$script" --branch=develop 2>&1 || true)
+echo "$branch_out" | grep -q 'must be run as root' \
+    || fail "--branch=VALUE (equals form) does not parse"
+branch_out=$(bash "$script" --bogus 2>&1 || true)
+echo "$branch_out" | grep -q 'unknown argument' \
+    || fail "an unknown argument is not refused"
+pass "--branch parses in both forms, unknown arguments refused"
+
 provision="$root/tools/cloud-init/provision.sh"
 [[ -f "$provision" ]] || fail "provision.sh not found"
 grep -q 'git clone' "$provision" || fail "provision.sh does not clone the repo"
