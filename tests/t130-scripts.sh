@@ -86,6 +86,26 @@ assert_file_lacks "$user_data" ".whl"
 assert_file_lacks "$user_data" "pypi"
 assert_file_lacks "$user_data" "index-url"
 
+# **Every write_files entry must carry content.** An entry with no `content` or
+# `source` makes cloud-init write a BLANK FILE (read_url_or_decode's "empty URL
+# and content" special case), so an entry whose path is a directory leaves a
+# 0-byte regular file in its place: every write into that "directory" then fails
+# ENOTDIR, and under the shellified runcmd's `set -eu` that kills the whole
+# document — phases never run. This is how /var/lib/guarden-evidence shipped as
+# a blank file; the directory is a side effect of writing PROVENANCE into it
+# (util.write_file ensures the parent exists), never an entry of its own.
+# Parsing with python rather than grep: the shape is what matters, not a line.
+python3 - "$user_data" <<'PYEOF'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+empty = [e.get("path") for e in doc.get("write_files", [])
+         if not e.get("content") and not e.get("source") and not e.get("encoding")]
+if empty:
+    print(f"write_files entries with no content (they write blank files): {empty}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+[ $? -eq 0 ] || _fail "write_files has a content-less entry (writes a blank file)"
+
 # **The vps profile, and the same template.** One template renders two documents
 # and the vps one is what a real host boots: it installs the substrate, clones
 # the repository and hands convergence to `install.sh`, because the btrfs

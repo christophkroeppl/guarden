@@ -98,15 +98,20 @@ packages:
 
 {% if profile == 'golden-vm' %}
 write_files:
-  # The evidence the run leaves behind. The ticket requires a tarball of
-  # journals, unit states and `soil --check`, and a directory that already
-  # exists is the difference between a run that reports and a run that
-  # silently produced nothing.
-  - path: /var/lib/guarden-evidence
-    permissions: "0755"
-
-  # A marker recording what this machine actually was, so a stale evidence
-  # directory from an earlier image cannot be mistaken for this run's result.
+  # The evidence the run leaves behind: the directory holds substrate.txt
+  # (written by verify-substrate.sh) and this marker.
+  #
+  # **There is no separate entry for the directory itself.** A write_files entry
+  # with no `content` writes a BLANK FILE (cloud-init's read_url_or_decode:
+  # "empty URL and content -> write a blank file"), so an entry for
+  # /var/lib/guarden-evidence would leave a 0-byte regular file there and every
+  # redirect into evidence/substrate.txt fails ENOTDIR under `set -eu`, killing
+  # the whole shellified runcmd before any phase runs. Writing this file is what
+  # creates the directory: util.write_file has ensure_dir_exists=True and
+  # ensures os.path.dirname(filename) exists first.
+  #
+  # The marker also keeps a stale evidence directory from an earlier image from
+  # being mistaken for this run's result.
   - path: /var/lib/guarden-evidence/PROVENANCE
     permissions: "0644"
     content: |
