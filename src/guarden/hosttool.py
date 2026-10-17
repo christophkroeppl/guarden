@@ -370,10 +370,22 @@ GUARDEN_TOML = ("etc", "guarden", "guarden.toml")
 
 
 def read_config(path: Path) -> dict:
-    if not path.is_file():
+    """The host configuration, or `{}` for a host that has none.
+
+    An absent file is an unconfigured host and answers `{}`. A file this user
+    may not open is neither absent nor unconfigured, and answering `{}` for it
+    made a check report every item in the phase as drifted on the strength of a
+    table it had never read — the denial is about the host, so it is left to
+    raise and the caller answers it as one.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except IsADirectoryError:
         return {}
     try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
+        return tomllib.loads(raw)
     except tomllib.TOMLDecodeError as exc:
         error(f"{path}: {exc}")
         return {}

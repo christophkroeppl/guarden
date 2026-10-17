@@ -185,6 +185,20 @@ def _reject(message: str) -> int:
     return EXIT_REJECTED
 
 
+def _unreadable(exc: OSError) -> int:
+    """A host file this run cannot open, answered the way every other host
+    finding is answered: one line naming it, not a stack trace (spec 1.2).
+
+    Both modes read the host before they judge it — building the items reads the
+    configuration, asking an item reads the file it is about — and either read can
+    land on a file this user may not open. The answer is the same either way: this
+    host is not in the state the operator assumed, and it cannot be made so from
+    here.
+    """
+    error(f"cannot read {exc.filename or 'a host file'}: {exc.strerror}")
+    return EXIT_NOT_CONVERGED
+
+
 def _package_list(family: str | None) -> int:
     """Print what this family needs, from the one list, and exit 0.
 
@@ -324,9 +338,16 @@ def _check(
     # operator on an unsupported distribution gets one line and a fix instead of a
     # stack trace. `--apply` does not need the same guard: it builds the same
     # items under the same rejection handler in `_apply`, and `_prepare` answers
-    # 2 for a phase step that rejects its input.
+    # 2 for a phase step that rejects its input. The asking of each item belongs
+    # in this same guard: asking reads the host too, and a file this user may not
+    # open is a host finding rather than a stack trace.
     try:
         items = _collect(phases, family, modules)
+        drifted = 0
+        for item in items:
+            if not item.holds():
+                drift_line(item.what)
+                drifted += 1
     except packagelist.UnknownFamily as exc:
         return _reject(str(exc))
     except errors.GuardenError as exc:
@@ -339,11 +360,8 @@ def _check(
             return _reject(exc.message)
         error(exc.message)
         return EXIT_NOT_CONVERGED
-    drifted = 0
-    for item in items:
-        if not item.holds():
-            drift_line(item.what)
-            drifted += 1
+    except OSError as exc:
+        return _unreadable(exc)
     return EXIT_NOT_CONVERGED if drifted else EXIT_OK
 
 
@@ -369,8 +387,14 @@ def _apply(
                 return _reject(exc.message)
             error(exc.message)
             return EXIT_NOT_CONVERGED
+        except OSError as exc:
+            return _unreadable(exc)
         for item in phase_items:
-            if item.holds():
+            try:
+                held = item.holds()
+            except OSError as exc:
+                return _unreadable(exc)
+            if held:
                 continue
             if ready:
                 try:

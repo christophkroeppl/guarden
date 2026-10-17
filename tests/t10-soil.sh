@@ -101,3 +101,42 @@ carrying=$(grep -c 'does not hold on this host$' "$GUARDEN_STDERR" || true)
 [ "${total:-0}" -gt 1 ] || _fail "the phase reported ${total:-0} drift lines, so this says nothing"
 [ "${total:-0}" = "${carrying:-0}" ] \
     || _fail "$total drift lines and ${carrying:-0} of them say which side of the requirement the host is on"
+
+# --------------------------------------------------------------------------
+# a host the check may not read, which is a finding and not a stack trace
+# --------------------------------------------------------------------------
+#
+# `--check` reads the host before it judges it, and it does not oblige its
+# caller to be root: an operator may ask from anywhere, and on a converged host
+# that is what the file configuration of every item is. A file the asking may not
+# open is the host not being in the assumed state, so it is answered the way
+# every other finding is answered -- one line naming the file -- rather than a
+# Python traceback (spec 1.2).
+#
+# Both reads carry the same guard, because building the items reads the
+# configuration and asking an item reads the file it is about: unguarded, the
+# first of the two was a traceback on every converged host a non-root caller
+# asked about, and `packages` reads the configuration while it builds.
+#
+# The seeded configuration is root:guarden 0640 and the caller is `nobody`,
+# which is the condition a real host produces for any caller not in the group.
+# The program has to come from a copy of its own: the tree is root's, so a
+# caller outside the group cannot import from it.
+guarden_prefix
+stage_config guarden.toml
+code=$(mktemp -d)
+chmod 0755 "$code"
+cp -r "$GUARDEN_ROOT/src/guarden" "$code/guarden"
+# Beside the module, which is the list's second search location and the one a
+# relocated tree satisfies.
+cp "$GUARDEN_ROOT/packages/packages.toml" "$code/guarden/packages.toml"
+# The suite keeps its fixtures in a private directory of its own, so `nobody`
+# needs a way in: otherwise the denial is the directory's, and a denied parent
+# is not the condition being asserted here. The file is what refuses.
+chmod 0755 "$(dirname "$GUARDEN_PREFIX")" "$GUARDEN_PREFIX"
+run runuser -u nobody -- env -C / GUARDEN_PREFIX="$GUARDEN_PREFIX" \
+    PYTHONPATH="$code" python3 -m guarden.soil --check
+assert_exit 1
+assert_stderr_lacks "Traceback"
+assert_one_diagnostic "error:"
+assert_stderr_has "cannot read"
