@@ -114,8 +114,17 @@ sequence=$(PYTHONPATH="$root/src" python3 -c \
 # The renderer is silenced on success: this script's own stdout is the plan, and
 # AGENTS.md's rule is that a diagnostic is one line. A render that succeeded has
 # nothing to say, so its chatter is discarded rather than prefixed.
-rendered=$(mktemp)
-trap 'rm -f "$rendered"' EXIT
+# **The render survives `--print`.** The plan names the document and the caller
+# reads it at that path, so a `mktemp` the exit trap removes would be a plan
+# naming a file that is already gone — which is exactly what `--print` did the
+# moment the document stopped being a tracked file. A boot uses a `mktemp` and
+# cleans up, because by then the document has been read and booted.
+if [ "$print_only" = 1 ]; then
+    rendered=${GUARDEN_RENDER:-${TMPDIR:-/tmp}/guarden-user-data.yaml}
+else
+    rendered=$(mktemp)
+    trap 'rm -f "$rendered"' EXIT
+fi
 render_args=(--render-user-data "$rendered" --profile golden-vm)
 [ -n "$family" ] && render_args+=(--family "$family")
 

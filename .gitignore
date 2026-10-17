@@ -31,7 +31,7 @@ evidence/
 # is made to is the template under `src/guarden/templates/cloud-init/` and
 # `packages/packages.toml`; `soil packages --render-user-data` produces the
 # document from them. A committed render is a second copy of the package list
-# that goes stale the moment the list changes, so no render is tracked and these
-# two patterns are where one lands by convention.
-tools/cloud-init/user-data.yaml
-user-data.*.yaml
+# that goes stale the moment the list changes, so no render is tracked and this
+# pattern is the shape a render lands in — `user-data.yaml`, `user-data.vps.yaml`,
+# `guarden-user-data.yaml`, and whatever a caller names with `--output`.
+*user-data*.yaml

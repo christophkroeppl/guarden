@@ -481,6 +481,7 @@ packages:
   - ferm
   - fail2ban
   - podman
+  - python3-pip
 CLOUD
 }
 
