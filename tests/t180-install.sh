@@ -66,11 +66,19 @@ grep -q 'PYTHONPATH=src python3 -m guarden.soil' "$script" \
     || fail "soil_cmd does not use checkout"
 pass "soil_cmd always uses checkout"
 
-                                                                        
-userdata="$root/tools/cloud-init/user-data-vps.yaml"
-[[ -f "$userdata" ]] || fail "user-data-vps.yaml not found"
-grep -q 'install.sh' "$userdata" || fail "user-data-vps.yaml does not reference install.sh"
-grep -q 'curl' "$userdata" || fail "user-data-vps.yaml does not use curl"
-pass "cloud-init user-data-vps.yaml references install.sh via curl"
+                                                                       
+template="$root/tools/cloud-init/template.yaml"
+[[ -f "$template" ]] || fail "cloud-init template.yaml not found"
+grep -q 'template: jinja' "$template" || fail "template.yaml has no jinja header"
+grep -q 'install.sh' "$template" || fail "template.yaml does not run install.sh"
+
+renderer="$root/tools/render-user-data"
+[[ -x "$renderer" ]] || fail "tools/render-user-data not found or not executable"
+grep -q 'provision.sh' "$renderer" || fail "render-user-data does not inline provision.sh"
+
+provision="$root/tools/cloud-init/provision.sh"
+[[ -f "$provision" ]] || fail "provision.sh not found"
+grep -q 'git clone' "$provision" || fail "provision.sh does not clone the repo"
+pass "cloud-init template + renderer + provision.sh consistent"
 
 printf 't180-install: all checks passed\n'
