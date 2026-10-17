@@ -82,16 +82,23 @@ grep -q 'guarden.soil' "$renderer" || fail "render-user-data does not forward to
 
 # The `--branch VALUE` space form must parse: a `for arg in "$@"` loop expands
 # the list once, so `shift` cannot consume the value and it is re-iterated into
-# the unknown-argument arm. Both forms must reach the root check.
-# Output is captured rather than piped: under `set -o pipefail` the pipeline
-# returns install.sh's own exit 1, so `| grep -q` would fail even on a match.
-branch_out=$(bash "$script" --branch develop 2>&1 || true)
-echo "$branch_out" | grep -q 'must be run as root' \
-    || fail "--branch VALUE (space form) does not parse"
-branch_out=$(bash "$script" --branch=develop 2>&1 || true)
-echo "$branch_out" | grep -q 'must be run as root' \
+# the unknown-argument arm. Proven without depending on privilege.
+#
+# `--help` is appended so the script exits during argument parsing, before the
+# root check. The old test grepped for "must be run as root", which only appears
+# when the caller is not root -- in a VM the suite runs as root, so the root
+# check never fires and the script proceeds past it, red-herring the assertion.
+# A correctly-consumed branch reaches `--help` and exits 0; a leaked value lands
+# in the unknown-argument arm and exits 2. Output is captured rather than piped
+# for the same reason as before: under `set -o pipefail` the pipeline returns
+# install.sh's own non-zero, so `| grep -q` would fail even on a match.
+branch_out=$(bash "$script" --branch develop --help 2>&1 || true)
+echo "$branch_out" | grep -q 'one-shot guarden host installer' \
+    || fail "--branch VALUE (space form) does not parse (got: $(echo "$branch_out" | head -1))"
+branch_out=$(bash "$script" --branch=develop --help 2>&1 || true)
+echo "$branch_out" | grep -q 'one-shot guarden host installer' \
     || fail "--branch=VALUE (equals form) does not parse"
-branch_out=$(bash "$script" --bogus 2>&1 || true)
+branch_out=$(bash "$script" --bogus --help 2>&1 || true)
 echo "$branch_out" | grep -q 'unknown argument' \
     || fail "an unknown argument is not refused"
 pass "--branch parses in both forms, unknown arguments refused"
