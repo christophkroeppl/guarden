@@ -145,7 +145,7 @@ def read_toml(path: Path) -> dict[str, Any]:
         ) from exc
 
 
-def set_owner(path, owner: tuple[int, int]) -> None:
+def set_owner(path, owner: tuple[int, int], follow: bool = True) -> None:
     """Give a file to the user and group that own it.
 
     Skipped when the process is not root. chown to another user is exactly the
@@ -153,10 +153,13 @@ def set_owner(path, owner: tuple[int, int]) -> None:
     fast harness does not, so the harness proves the **mode** and the golden VM
     proves the **owner**. Skipping it only when the euid is not 0 means a root
     run cannot quietly lose a `chown` that should have worked.
+
+    `follow=False` owns the link itself rather than what it points at, which is
+    the only answer for a link whose target is not in the tree at all.
     """
     if os.geteuid() != 0:
         return
-    os.chown(path, owner[0], owner[1])
+    os.chown(path, owner[0], owner[1], follow_symlinks=follow)
 
 
 def write_file(path: Path, text: str, mode: int, owner: tuple[int, int] | None = None) -> None:

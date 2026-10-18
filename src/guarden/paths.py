@@ -102,6 +102,9 @@ PROC_SYS = PREFIX / "proc" / "sys"
 # units and drop-ins go (ADR-0003): the home's own directory is searched first,
 # so a root-owned drop-in here survives a regeneration.
 QUADLET = Path(".config/containers/systemd")
+# podman's own store inside a service's home. Root-relative, the way QUADLET is:
+# a walk of the service tree must leave it exactly as podman made it.
+PODMAN_STORE = Path(".local/share/containers")
 
 # /usr/lib/guarden/templates, where `soil install` puts them. The override is
 # the same kind of seam as GUARDEN_PREFIX and for the same reason: the render has

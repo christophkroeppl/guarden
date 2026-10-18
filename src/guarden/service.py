@@ -48,6 +48,21 @@ from guarden import modules as modules_mod
 from guarden import overrides as overrides_mod
 
 TREE_MODE = 0o700
+
+
+def _in_podman_store(path: Path, root: Path) -> bool:
+    """Whether `path` sits under podman's own store inside a service tree.
+
+    The store is not guarden's to mode or to own: its overlay carries the
+    image's own permissions, and a walk that imposed the tree's `0700` on it
+    left the container unable to read its own entrypoint, because a container's
+    root is subuid-mapped and not the service uid (measured 2026-10-18,
+    `postgres:17-alpine` on app-vm, dying on
+    `/usr/local/bin/docker-entrypoint.sh`). The store is podman's; the tree
+    around it is guarden's.
+    """
+    store = root / paths.PODMAN_STORE
+    return path == store or store in path.parents
 ADMIN_UNITS_MODE = 0o755
 GUARDEN_GROUP = "guarden"
 
@@ -432,6 +447,26 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
             # `OSError: [Errno 30] Read-only file system`) and their ownership
             # is snapper's, not the service user's.
             continue
+        if _in_podman_store(path, tree):
+            # Podman's store is podman's to own. Its overlay carries the
+            # image's own modes and owners, and re-moding it to 0700 under the
+            # service uid left the container unable to stat its own entrypoint
+            # -- the container's root is subuid-mapped, not the service uid --
+            # so `postgres:17-alpine` died with `permission denied` on
+            # `/usr/local/bin/docker-entrypoint.sh` (measured 2026-10-18,
+            # app-vm). See `_in_podman_store`.
+            continue
+        if path.is_symlink():
+            # A link's target is not the tree's to own, and may not exist at
+            # all: podman's image store carries links such as
+            # `/usr/bin/pinentry` whose target the image does not ship, and a
+            # chown follows a link by default -- so walking into one raised
+            # FileNotFoundError and stopped the whole create (measured
+            # 2026-10-18, `weedr service ingest postgres-staging` after the
+            # first pull had populated `home/.local/share/containers`). The
+            # link itself is the tree's; it is owned, and not followed.
+            conf.set_owner(path, owner, follow=False)
+            continue
         conf.set_owner(path, owner)
         os.chmod(path, TREE_MODE)
 
@@ -500,6 +535,20 @@ def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
             # The same snapper subtree the service walk skips: read-only, and
             # snapper's to own. The home is not snapshotted today, and the
             # guard keeps the two walks agreeing if that changes.
+            continue
+        if _in_podman_store(path, home):
+            # The same store the service walk leaves alone, and for the same
+            # reason: a re-ingest walks a home that already carries it.
+            continue
+        if path.is_symlink():
+            # The same link the service walk will not follow. The home already
+            # carries podman's image store by the time a service is re-ingested,
+            # and that store holds links whose target the image does not ship
+            # (`usr/bin/pinentry -> pinentry-curses` in postgres:17-alpine,
+            # measured 2026-10-18): a chown follows a link by default, so
+            # walking into one ended the create with FileNotFoundError. The
+            # link is the tree's; its target is the image's.
+            conf.set_owner(path, owner, follow=False)
             continue
         conf.set_owner(path, owner)
 
