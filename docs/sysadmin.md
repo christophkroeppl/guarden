@@ -227,9 +227,54 @@ weedr service list [--json]
 weedr service status <name[/ref]> [--json]
 ```
 
-`--from` is **required** and names a service or a poke, never a folder. A service is created from
+`--from` is **required** and names a service, a poke, or a directory. A service is created from
 a manifest and guarden never infers where one is
 where one is.
+
+### Deploying a service by hand
+
+`--from <directory>` is the path a third-party image takes: the images you do not build, and
+the ones no repository pokes. A directory qualifies when it holds `.guarden/service.yml` at its
+root, and that is all guarden asks of the *content*. Two things it asks of the *location*, and
+both are easy to miss:
+
+* **The directory must be readable by the service user.** `weedr service ingest` resolves the
+  source through `runuser`, so a manifest under `/root` is not merely inconvenient — it is
+  invisible, and the error reads as if the file did not exist:
+  `error: the manifest /root/x/.guarden/service.yml does not exist`. Put it under `/opt` or
+  another `a+rX` path and `chmod -R a+rX` it.
+
+* **A declared volume is mounted by name, never by path.** `state:` and `bulk:` declare volumes
+  by name, and the unit source has to mount that name:
+  `Volume=data:/var/lib/postgresql/data`, not
+  `Volume=/var/lib/guarden/services/<svc>/state/data:...`. A host path is a *path* mount and
+  satisfies nothing, so the create is refused with
+  `the manifest declares the volume 'data', and the unit source does not mount it`. guarden
+  resolves the name to the real path when it renders.
+
+The credential keys a manifest needs are declared in `.guarden/.env.schema` with the varlock
+syntax (`@required`, `@sensitive`, `@type env`) — see §6.5. A key with `@type env` reaches the
+container as a variable, which is what an image like postgres reads; a key without it arrives as
+a file the image will not look at.
+
+Three things that bite on a first hand deployment, none of them a bug in the manifest:
+
+* **Plant a credential before you start.** `weedr secret set` encrypts into
+  `/etc/guarden/creds/<svc>/<KEY>.cred` and asks the credential materialiser to run, which is
+  only possible while the service user's manager is alive. If the service has never started, or
+  its user manager died, `systemctl start guarden-creds-boot.service` fills podman's store from
+  what is planted.
+* **Give the volume an owner the image accepts.** A volume is created `0700` under the service
+  uid, and an image that runs as its own uid cannot write it:
+  `mkdir: can't create directory '/var/lib/postgresql/data/pgdata': Permission denied`. The
+  step is `podman unshare chown -R <image uid>:<image uid> <volume>`, run as the service user
+  (tickets 273 and 277). Point the image's data directory at a *subdirectory* of the mount, or
+  it collides with snapper's root-owned `.snapshots`.
+* **A re-ingest after an edit is a no-op** (ticket 275). `source_hash` is computed only for a
+  poke, so an edited manifest re-ingests as `converged` and installs nothing. The registry entry
+  has to go first: `rm /var/lib/guarden/registry/<svc>.toml`, then ingest again. The note below
+  about `weedr service add` being the reconcile command holds for a poke and for the units a
+  render changes — it does **not** hold for this case.
 
 Names carry the environment: `myapp-production`, `other-app-staging`, `postgres-production`,
 `traefik-production`. The name is the service name everywhere — no suffix, no alias. A consumer
