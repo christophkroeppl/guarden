@@ -194,6 +194,32 @@ seed "$registry/myapp-pinned.toml" \
     '[edges."postgres-pinned:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
     'publications = [ 20008 ]'
 
+# The record is keyed by the provider **the mutator resolved when it installed
+# the edge** — a `[providers]` row or an earlier pin in force at that moment —
+# and the pin is read on every render (spec 3.1), so a pin written after the
+# install moves the name without moving the record. The render must still find
+# the allocation the mutator wrote for this `needs:` entry: `as:` is unique per
+# manifest, so the entry carrying this edge's port and `as` under any provider
+# name is this edge's record and nothing else's. A port the box holds is read; a
+# port it would have to invent is still refused.
+seed "$registry/myapp-latepin.toml" \
+    'service = "myapp-latepin"' 'workload = "myapp"' 'project = "myapp"' \
+    'environment = "staging"' 'uid = 1106' 'created = "2026-09-30T09:00:00Z"' \
+    '[publication]' 'web = 20121' \
+    '[edges."postgres-staging:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    'publications = [ 20007 ]'
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/" \
+    "state:" "  - data" "needs:" "  - service: postgres" "    as: db" \
+    "    port: 5432" "    auth: database"
+seed "$GUARDEN_PREFIX/etc/guarden/overrides.toml" \
+    "[edge_overrides]" 'postgres = "postgres-pinned"'
+run loom render "$project" --service myapp-latepin --out "$render"
+assert_exit 0
+assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-pinned"
+assert_file_has "$render/units/guarden.env" "DB_PORT=20007"
+assert_file_has "$render/units/web.container" "AddHost=postgres-pinned:10.0.2.2"
+assert_file_lacks "$render/units/guarden.env" "DB_HOST=postgres-staging"
+
 # Without the pin, `postgres-staging` is the provider: no `[providers]` table is
 # staged on this host, so the name as written is the answer.
 seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/" \
