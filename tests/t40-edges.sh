@@ -281,6 +281,11 @@ assert_file_lacks "$render/units/guarden.env" "postgres-production"
 # diagnostic names the file.
 seed "$GUARDEN_PREFIX/etc/guarden/overrides.toml" \
     "[edge_overrides]" 'postgres-staging = "Not a name"'
+# The claim under test is that **this** render produced nothing, so the
+# directory the earlier renders left behind goes first: a refusal writes
+# nowhere, and reusing `$render` here would make the assertion about the old
+# render instead of this one.
+rm -rf "$render"
 run loom render "$project" --service myapp-staging --out "$render"
 assert_exit 1
 assert_one_diagnostic "error:"
