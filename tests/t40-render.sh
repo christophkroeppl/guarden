@@ -12,7 +12,9 @@
 # rendered unit and template set is under `$GUARDEN_PREFIX` or
 # `$GUARDEN_FIXTURES`. The unit source is hand-written quadlet, so no
 # converter is driven and no fetch happens; `loom` runs unprivileged and
-# writes only into `--out`.
+# writes only into `--out`. A Compose source carrying several `environment:`
+# keys is `tests/t300-environment.sh`'s subject, because that case needs the
+# converter this suite deliberately does not drive.
 
 . "$(dirname "$0")/lib.sh"
 
