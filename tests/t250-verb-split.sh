@@ -105,8 +105,11 @@ assert_exit 0
 assert_stdout_has "converged"
 assert_stderr_empty
 
-# Editing the compose file makes the service NOT converged
-seed /var/lib/guarden/staging/myapp/9f2c1ab/compose.yaml "services:" "  web:" "    image: docker.io/library/nginx:1.28"
+# Editing the compose file makes the service NOT converged. It is edited rather
+# than replaced: the render has to still mount every volume the manifest
+# declares (`chainstate` among them), or the refusal would be about the manifest
+# and not about the hash.
+sed -i 's|nginx:1.27|nginx:1.28|' /var/lib/guarden/staging/myapp/9f2c1ab/compose.yaml
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 0
 assert_stdout_lacks "converged"
