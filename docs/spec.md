@@ -1695,6 +1695,26 @@ The renderer refuses, with the directive named: `PodmanArgs=`, `--privileged`, `
 `network_mode: container:`, and any host-path bind outside the service's own volumes,
 `/etc/guarden`, and the paths the admin listed in `mounts.allow`.
 
+**The user-namespace directive is refused as repository input, and it is guarden's own line
+to write.** The refusal covers it in both vocabularies and in both of quadlet's spellings —
+`userns_mode` above, `Userns=` and `UserNS=` for a hand-written quadlet file — and no
+manifest, unit source or converter output ever reaches a generated unit carrying one. What
+may carry one is the render itself: `UserNS=keep-id:uid=…,gid=…`,
+emitted at the service's first start from the user `podman image inspect` reports for the
+image the installed units name — a name, and a bare number's group, resolved against the
+image's own `/etc/passwd` and `/etc/group` — and recorded in the registry as `owner_uid` and
+`owner_gid`. An image that declares no user of its own is answered from the handoff its
+entrypoint names — the `gosu` or `su-exec` user the entrypoint would switch to, never a
+passwd row chosen by itself — and records root, and renders no line, when neither yields a
+user: the default map already moves container root onto the service identity, and a line
+carrying only the pinned pair would stop an entrypoint that drops privileges rather than
+fix its owner. A unit source that sets `User=` on a service whose line is rendered is
+refused with the key named, because an explicit `--user` beats the pin and would run the
+container outside the mapping the line exists to create. That record is the line's only
+source: a later start reads it instead of probing again, a record edited by hand renders
+through instead of being probed over, and no file's ownership is ever changed to agree with
+a container (ADR-0019).
+
 **A `firewall:` entry is validated here and installed nowhere.** The renderer checks the closed
 shape of §4 and refuses the same malformed input it refuses everywhere else, and it writes the
 entry into the registry as a *request* for the mutator to read — it renders no firewall rule,
@@ -1835,7 +1855,9 @@ The steps, in this order, and the order is the point :
   So `furrow` reports `warning: deployed, waiting for the credential gate — reason: …` and
   **exits `0`**. A red X on every push until the operator plants credentials is noise, and noise
   teaches people to want the gate gone. The operator then plants the credentials and runs
-  `weedr service start <name>`, which re-evaluates the gate and starts if it now passes. **No
+  `weedr service start <name>`, which re-evaluates the gate, probes the image's declared
+  user once when the registry holds no probed owner — rendering guarden's `UserNS=keep-id`
+  line into the units from it (§6.3) — and starts if the gate now passes. **No
   second push is needed**, and the gate's verdict — which until now existed only in the journal
   — is a field in the registry.
 
