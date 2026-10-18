@@ -36,6 +36,11 @@ run soil packages --apply
 assert_not_rejected
 run soil install --apply
 assert_not_rejected
+# `source = "gitops"` below means a poke of a project this host registered —
+# that is the receiver's own precondition (spec 6.7) and what ticket 291 makes
+# the label conditional on — so the project is registered before the poke.
+run weedr project add myapp --repository https://example.invalid/myapp.git
+assert_exit 0
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 0
 assert_stdout_has "myapp-production"
