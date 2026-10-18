@@ -147,8 +147,14 @@ for verb in probe evidence; do
     n=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- "aptlock $verb" || true)
     [ "$n" -ge 1 ] || _fail "the runner no longer asks the guest for 'aptlock $verb'"
 done
-grep -vE '^[[:space:]]*#' "$runner" | grep -qF -- "note: apt lock evidence on %s, waited %ss:" \
-    || _fail "the runner no longer prints its evidence block under a line that names it"
+# `grep -c`, not `grep -q`, for the same SIGPIPE reason the signature loop
+# gives: a `grep -q` that exits on its first match can leave the `grep -vE`
+# upstream writing into a closed pipe, and under `pipefail` the pipeline then
+# reads as a failed match — which is exactly how this pin failed the first time
+# it was written (measured: "the runner no longer prints its evidence block
+# under a line that names it", on a line the runner carried all along).
+note=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- "note: apt lock evidence on %s, waited %ss:" || true)
+[ "$note" -ge 1 ] || _fail "the runner no longer prints its evidence block under a line that names it"
 returns=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '^[[:space:]]*return "\$rc"[[:space:]]*$' || true)
 [ "$returns" = 1 ] || _fail "the runner does not return the suite's own code exactly once; a failure could be recorded as a pass"
 passes=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE 'line pass "\$name"[[:space:]]*$' || true)
