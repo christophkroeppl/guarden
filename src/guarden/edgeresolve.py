@@ -80,9 +80,14 @@ def _table(where: Path) -> dict[str, str]:
         try:
             names.validate(logical, "an edge override's logical provider name")
             names.validate(concrete, f"the service name {logical!r} is overridden to")
-        except errors.GuardenError:
+        except errors.GuardenError as exc:
+            # The entry itself is the thing the operator has to find and fix, so
+            # the refusal carries the reason the name failed **and** the value
+            # that failed: a diagnostic that names only the file sends the
+            # operator hunting a line the message will not describe.
             raise errors.GuardenError(
-                f"{where}: [{TABLE}] maps a logical provider name to a service name",
+                f"{where}: [{TABLE}] maps a logical provider name to a service name"
+                f": {exc.message}",
                 errors.HOST_NOT_AS_ASSUMED,
             ) from None
         out[logical] = concrete
