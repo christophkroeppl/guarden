@@ -1,0 +1,7 @@
+# The consumer's own unit, so `AddHost=` lands on a unit the provider name
+# flows into rather than on nothing.
+[Unit]
+Description=the providers-table consumer's web container
+
+[Container]
+Image=docker.io/library/nginx:1.27
