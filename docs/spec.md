@@ -1067,12 +1067,20 @@ that fact**, not a silent choice of a gated track. An omitted environment segmen
 never create a gated service.
 
 `weedr service create <name> [--env <environments>]` is that exception. Its `--env` is a
-comma-separated list of environments, and with no flag it defaults to `production`. It may
+comma-separated list, and with no flag it defaults to `production`. It may
 default where `add` may not because of what the verb is: an operator at a terminal, asking by
 hand for a service that does not exist, through a verb on no sudoers rule that needs a real
 root shell. The name it created is printed with the uid
 (`created myapp-production uid 123 from <template>`), so a default that resolved to a gated
 track is seen in the output rather than inferred.
+
+**"A service that does not exist" is enforced rather than assumed.** A name the registry
+already holds is exit `1` naming that entry, asked for **every** environment in the list
+*before* any of them is created, and `create` never overwrites a service: the record, the
+volumes, the `provides` and the instances that name carries are not this verb's to discard.
+`1` and not `2`, because the name is well-formed input and §1.2 writes `2` for nothing else,
+and what refuses it is the host's own state — the entry that already exists — which is how
+`weedr service remove` answers an instance list and `weedr service purge` an absent record.
 
 **No verb on the privileged surface carries a flag that widens authority, and this is structural
 rather than conventional.** A sudoers rule that names a command without an argument
@@ -1160,8 +1168,9 @@ root-owned path it shipped is not a caller naming a location, and one case depen
 distinction: `weedr module add` creates the module's declared services from the unit source in
 `/usr/lib/guarden/modules/<name>/`, which guarden shipped and root owns. It reads that path
 itself, takes no `--from` form for it, and offers no way for anyone to name a different one. So
-the two-place rule holds for every caller — operator, `furrow` and `hose` alike — without
-implying that `weedr` may not read its own installation.
+the rule above — a tree comes from exactly one of those three places, never from a path an
+argument names — holds for every caller, operator, `furrow` and `hose` alike, without implying
+that `weedr` may not read its own installation.
 
 Two consequences, and they are the reason this is the shape rather than a preference:
 

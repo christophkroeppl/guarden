@@ -432,11 +432,15 @@ replaced a staging-confinement design that was correct and needless. `--from <di
 caller choose a location, and the only question was how much checking to wrap around it — a
 `realpath` resolution, a symlink refusal, a uid-conditional allowance, a confinement clause in
 the mutator as well as the deployer because `guarden` could write the queue and hand the root
-mutator a tree it controlled. A service's tree now comes from exactly two places and neither is a
-location: a poke's staged tree, via `weedr service ingest <name> --from poke <project>@<sha>`,
-where the mutator builds the path itself from a project validated against `projects.toml` and a
-hex sha; or a copy of another service's, via `weedr service add <name> --from <service>`, which
-is root-only. `weedr service build` takes no `--from` at all, which also closes the
+mutator a tree it controlled. A service's tree now comes from exactly three places and none of
+them is a location: a poke's staged tree, via `weedr service ingest <name> --from poke
+<project>@<sha>`, where the mutator builds the path itself from a project validated against
+`projects.toml` and a hex sha; a copy of another service's, via `weedr service add <name>
+--from <service>`, which is root-only; or a template guarden ships root-owned in
+`/usr/lib/guarden/templates/services/`, via `weedr service create <name> [--template
+<template>]`, which is root-only, takes no `--from` at all and refuses a name the registry
+already holds rather than overwriting it. `weedr service build` takes no `--from` at all, which
+also closes the
 `podman-build` escalation it previously was — a build may only ever build the service's own tree.
 
 Because `--from <service>` is root-only and is not on the `guarden` rule, a branch cannot create
