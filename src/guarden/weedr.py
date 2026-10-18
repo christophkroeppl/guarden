@@ -495,9 +495,35 @@ def _create_service(args) -> int:
     It creates a name that does not exist yet, and refuses one that does
     (`service.refuse_existing`, exit 1): `create` is the verb that makes a
     service, never the verb that overwrites one.
+
+    Two refusals of the **input** come first, before the configuration is
+    read, before the template is chosen and before root is asked for, so each
+    is exit 2 with one line (spec 1.2) and neither can reach a machine. A
+    name carrying a `/<ref>` is one: spec 5.1 and the verb table in 5.3 give
+    the ref to `ingest` and `add`, and `create <name>` takes a plain name --
+    accepting one appended `-ENV` to the whole argument, so the suffix landed
+    in the ref, `--env` was ignored for the track before the slash, the ref
+    was rewritten and the template's units were copied into `home/<ref>/`
+    while the parent's record was saved. An `--env` naming one environment
+    twice is the other: the same name resolved twice passed the whole-list
+    check that saw no entry yet, the first create succeeded and printed, and
+    the second refused the record it had just written -- a run exiting 1 for
+    work it reported as done.
     """
-    config = config_mod.load()
+    if "/" in args.name:
+        raise errors.GuardenError(
+            f"create takes a plain service name, so {args.name!r} takes no /<ref>",
+            errors.REJECTED_INPUT,
+        )
     envs = [env.strip() for env in args.environments.split(",") if env.strip()] or ["production"]
+    repeated = sorted({env for env in envs if envs.count(env) > 1})
+    if repeated:
+        raise errors.GuardenError(
+            f"--env names {', '.join(repr(env) for env in repeated)} more than once; "
+            "a create request names each environment once",
+            errors.REJECTED_INPUT,
+        )
+    config = config_mod.load()
     resolved = [
         names.resolve(
             f"{args.name}-{env}" if not args.name.endswith(f"-{env}") else args.name,
