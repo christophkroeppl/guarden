@@ -2667,7 +2667,7 @@ table could not fork at all. A `fork_from` naming the track's own name is refuse
 `fork_from` may name a `kind = "slot"` or `kind = "instance"` track; the fork itself refuses an
 instance source for a `state` volume, because an instance's volumes are not the service's (§8.4).
 
-`--from` overrides, and names `<service>[@<number>]`. There is no manifest key for this, and a
+`--from` overrides, and names `<service>[@<timestamp>]`. There is no manifest key for this, and a
 manifest containing one is refused by name.
 
 Adding a service on a track that forks takes a snapshot of the source if it has none newer than
@@ -2679,7 +2679,7 @@ then the instance seeded.
 
 ### 8.4 Forks
 
-`weedr service fork <target> [--from <source>[@<number>]]`:
+`weedr service fork <target> [--from <source>[@<timestamp>]]`:
 
 1. Validate the complete set: for every **state** volume of the target, resolve the source
   snapshot — the target's recorded `seed` for that volume, or the one at or before the
