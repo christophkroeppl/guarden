@@ -17,6 +17,7 @@ With the tunnel module, `roots` also renders a tunnel ingress file into
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 
 from guarden import cli, conf, edgeconf, errors, names, paths, registry, render
@@ -108,6 +109,41 @@ def write(service: str, body: str) -> None:
     conf.write_file(paths.EDGE_DYNAMIC / file_name(service), body, 0o640)
 
 
+def _quote_ref(escaped_ref: str) -> str:
+    r"""`escaped_ref` as a regex fragment: its `\xNN` byte escapes kept, the
+    rest quoted.
+
+    cloudflared's `ingress.path` is a regex, and `systemd_escape` already
+    leaves a ref in a form the engine reads byte for byte: a byte outside the
+    safe set is `\xNN`, a hex escape matching that raw byte of the request
+    path, while what it passes through raw is the safe set — and `.` among
+    those is a metacharacter. So the `\xNN` runs stay as they are and
+    everything else goes through `re.escape`.
+    """
+    parts = re.split(r"(\\x[0-9a-fA-F]{2})", escaped_ref)
+    return "".join(
+        part if index % 2 else re.escape(part) for index, part in enumerate(parts)
+    )
+
+
+def _ingress_path(ref: str) -> str:
+    r"""A preview ref as cloudflared's `ingress.path`: quoted, anchored, and
+    written to survive the template's double-quoted YAML scalar.
+
+    `^/<quoted>(/|$)` because ingress matching is first-match-wins and the
+    `http_status:404` catch-all is last: an unanchored `/abc` answers `/abcd`
+    and a raw `.` answers every request on the preview hostname, so whichever
+    preview renders first wins every contested path.
+
+    The backslashes are doubled because `path:` is written between double
+    quotes, where `\xNN` is itself an escape — undoubled it decodes in transit
+    and hands the regex a bare `-` instead of `systemd_escape`'s output,
+    undoing the escaping the ref's validation depends on.
+    """
+    pattern = f"^/{_quote_ref(names.systemd_escape(ref))}(/|$)"
+    return pattern.replace("\\", "\\\\")
+
+
 def render_tunnel(routes: list[dict], config) -> str:
     """The host's tunnel ingress, as `cloudflared` reads it.
 
@@ -135,11 +171,10 @@ def render_tunnel(routes: list[dict], config) -> str:
             for route in entries:
                 if route.get("destination") == "tunnel" and route.get("ref"):
                     # This is a tunnel route for a preview instance
-                    escaped_ref = names.systemd_escape(route["ref"])
                     previews.append({
                         "hostname": f"preview.{config.tunnel_domain}",
                         "service": f"http://{route.get('target', '')}",
-                        "path": f"/{escaped_ref}",
+                        "path": _ingress_path(route["ref"]),
                     })
 
     if not rows and not previews:
