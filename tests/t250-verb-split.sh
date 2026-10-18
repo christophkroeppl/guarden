@@ -160,3 +160,88 @@ assert_stderr_has "create requires root"
 assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/otherapp-staging.toml
 rmdir /usr/lib/guarden/templates/services/staged
+
+# --- create's happy path: the name is not a service yet ----------------------
+#
+# The three things `create` promises, each asked of the machine rather than of
+# a record: the system account, the registry entry, and the template's quadlet
+# files in the service's own unit directory. The unit's owner and mode are
+# asserted here because a copy that keeps the template's `root:root 0644` is a
+# file the service's own podman generator cannot read -- and a service's home is
+# `0700` to its owner (spec 2.1), so nothing root-owned belongs in it
+# (AGENTS.md). `units.install` installs every rendered unit `0640` under the
+# record's uid, and a template's copy has to land the same way.
+
+install -d -m 0755 /usr/lib/guarden/templates/services/probe
+seed /usr/lib/guarden/templates/services/probe/probe.container \
+    "[Container]" \
+    "Image=docker.io/library/nginx:1.27"
+unit=/var/lib/guarden/services/probeapp-staging/home/.config/containers/systemd/probe.container
+
+run weedr service create probeapp-staging --env staging --template probe
+assert_exit 0
+assert_stdout_has "created probeapp-staging"
+assert_stdout_has "from probe"
+assert_stderr_empty
+assert_passwd probeapp-staging
+assert_file_exists /var/lib/guarden/registry/probeapp-staging.toml
+assert_file_has /var/lib/guarden/registry/probeapp-staging.toml 'source = "manual"'
+assert_file_exists "$unit"
+assert_owner "$unit" "probeapp-staging:$(id -gn probeapp-staging)"
+assert_mode "$unit" 640
+run weedr service list
+assert_exit 0
+assert_stdout_has "probeapp-staging"
+
+# --- create refuses a name the registry already holds -------------------------
+#
+# The refusal is exit 1, and the choice is settled by the same line spec 1.2
+# draws for everything else: `2` is the **input** rejected and spec 1.2 writes
+# `2` for nothing else, and the name here is well-formed; `0` would report work
+# that did not happen. What refuses it is the host's own state -- a registry
+# entry that already exists -- which is how `weedr service remove` answers an
+# instance list and `weedr service purge` an absent record: both `1`, the host
+# is not in the state the request assumed.
+#
+# The record is **compared**, not just read back, because the defect this
+# asserts against was a data loss rather than a wrong exit code: `create`
+# rebuilt a fresh registry record and saved it over whatever the name held, so
+# an `ingest`ed service lost its project, source hash, volumes, provides and
+# instances to a second `create` -- and the template's units were copied into
+# its live home beside them, which is what the last assertion names.
+
+cp /var/lib/guarden/registry/myapp-production.toml \
+    "$GUARDEN_FIXTURES/myapp-production.toml"
+
+run weedr service create myapp-production --env production --template probe
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "already has a registry entry"
+assert_stdout_empty
+cmp -s /var/lib/guarden/registry/myapp-production.toml \
+    "$GUARDEN_FIXTURES/myapp-production.toml" \
+    || _fail "create rewrote the record it was meant to refuse"
+assert_file_missing \
+    /var/lib/guarden/services/myapp-production/home/.config/containers/systemd/probe.container
+
+# The same refusal for the name `create` itself just made: the check is on the
+# registry entry, not on who wrote it, so the verb cannot be run twice over any
+# service -- a second `create probeapp-staging` answers the same line and
+# leaves the account, the record and the unit it created the first time.
+cp /var/lib/guarden/registry/probeapp-staging.toml \
+    "$GUARDEN_FIXTURES/probeapp-staging.toml"
+run weedr service create probeapp-staging --env staging --template probe
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "probeapp-staging already has a registry entry"
+assert_stdout_empty
+cmp -s /var/lib/guarden/registry/probeapp-staging.toml \
+    "$GUARDEN_FIXTURES/probeapp-staging.toml" \
+    || _fail "the second create rewrote the record it was meant to refuse"
+assert_owner "$unit" "probeapp-staging:$(id -gn probeapp-staging)"
+assert_mode "$unit" 640
+
+# The template goes the way `staged` did above: a test installs what its own
+# assertions need and takes it away again, so nothing here depends on the order
+# suites happen to run in.
+rm -rf /usr/lib/guarden/templates/services/probe
