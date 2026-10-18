@@ -260,6 +260,12 @@ assert_file_missing /var/lib/guarden/services/probeapp-production
 # the whole-list check saw no entry yet, the first create succeeded and
 # printed, and the second refused the record it had just written -- a run that
 # exits 1 for work it reports as done.
+#
+# And the same collision from **different** values, which is why the guard is
+# on the resolved names: `--env` is matched against the name's tail, so
+# `svc-foo-staging` already ends in `-foo-staging` and in `-staging`, both
+# values leave the name unchanged and both resolve to one service. Counting
+# the raw strings cannot see that one at all.
 
 run weedr service create refusedapp-production/feat --env production --template probe
 assert_exit 2
@@ -281,6 +287,24 @@ assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/dupapp-staging.toml
 assert_file_missing /var/lib/guarden/services/dupapp-staging
 assert_no_passwd dupapp-staging
+
+# Two **different** values resolving to one name, and the refusal is the same
+# one: `svc-foo-staging` takes the unchanged-suffix branch for both values, so
+# the request is one name asked for twice. The run that had no guard here
+# created the name, printed `created ...` and then refused the record it had
+# just written -- exit 1 for work it reported as done -- so both halves are
+# reported by one line, because the assertions below stop at the first failure.
+run weedr service create svc-foo-staging --env foo-staging,staging --template probe
+[ "$GUARDEN_EXIT" = 2 ] || _fail "distinct --env values resolved to one name and the run went ahead: exit $GUARDEN_EXIT, stdout: $(tr '\n' ' ' <"$GUARDEN_STDOUT")"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "--env names"
+assert_stderr_has "svc-foo-staging"
+assert_stderr_lacks "usage:"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/svc-foo-staging.toml
+assert_file_missing /var/lib/guarden/services/svc-foo-staging
+assert_no_passwd svc-foo-staging
 
 # The template goes the way `staged` did above: a test installs what its own
 # assertions need and takes it away again, so nothing here depends on the order
