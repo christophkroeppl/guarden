@@ -220,7 +220,7 @@ own programs call it, so `rm` is not something a script, a unit, or anything run
 ```sh
 weedr service ingest <name[/ref]> --from poke <project>@<sha>
 weedr service add <name[/ref]> --from <service>
-weedr service create <name> [--env <environments>]
+weedr service create <name> [--env <environments>] [--template <template>]
 weedr service remove <name[/ref]>      # alias: rm
 weedr service purge <name>             # the only destructive verb
 weedr service start|stop|restart <name[/ref]>
@@ -238,14 +238,70 @@ from a template's quadlet files and no manifest at all — and guarden never inf
 
 `weedr service create <name>` is the path a third-party image takes: the images you do not
 build, and the ones no repository pokes. It takes no `--from` — it builds a service from a
-template installed root-owned in `/usr/lib/guarden/templates/services/`. The template provides
-the quadlet files; guarden provides the identity, the tree and the registry record.
+template named by `--template`, or picked at a terminal when the flag is omitted, in the
+installed set at `/usr/lib/guarden/templates/services/`. The template provides the quadlet
+files; guarden provides the identity, the tree and the registry record.
+
+#### templates
+
+A template is one directory in that set, holding quadlet files and nothing else: `create`
+walks it and writes **every file in it** into the service's own unit directory
+(`home/.config/containers/systemd/`), `0640` under the service uid, which is where a rendered
+unit lands. A `.guarden/` or a `compose.yaml` put in here would land beside the units rather
+than where the renderer reads, and nothing would look at it. The file name is the unit's name,
+and the user manager is per service uid, so two services created from one template do not
+share a unit.
+
+**No set ships.** `soil install` builds `/usr/lib/guarden/templates/` from
+`src/guarden/templates/`, and that tree has no `services/` subdirectory, so on a host that has
+just been installed `create` is refused before anything else is asked of it:
+
+```
+weedr service create myapp --env staging --template postgres
+error: the template 'postgres' does not exist at /usr/lib/guarden/templates/services/postgres; /usr/lib/guarden/templates/services holds none
+
+weedr service create myapp --env staging
+error: no template was chosen; /usr/lib/guarden/templates/services holds none
+```
+
+Both are exit `1`: what is missing is on the host and not in the argument. With templates
+installed and `--template` omitted, the verb takes the set's only entry without asking, asks
+at a terminal when there is more than one, and when stdin is not a terminal says so rather
+than reading an answer from it:
+
+```
+error: create needs a terminal to answer its prompts; run it interactively
+```
+
+`examples/services/` in this repository carries two copyable ones — `postgres`, a third-party
+database, and `vaultwarden`, a self-hosted web service. Install them with:
+
+```sh
+install -d -m 0755 /usr/lib/guarden/templates/services
+cp -r examples/services/postgres examples/services/vaultwarden /usr/lib/guarden/templates/services/
+```
+
+`soil install` copies the checkout's own template tree over that directory without deleting
+what the checkout does not carry, and `soil install --check` compares the other way — the
+installed tree against the checkout — so a set installed by hand is neither overwritten nor
+reported as drift.
+
+A template declares nothing guarden reads: no `state:` and no `bulk:`, no `ports:`, no
+`schema:`. The consequences are the bullets below — no volume, no publication, no firewall
+rule, and a credential the gate has nothing to check against.
 
 It makes a name that does not exist yet. A name the registry already holds is refused with
 exit `1` naming the entry, **before** anything is created and for every environment in an
 `--env` list at once, so a second `create` can never overwrite the record, the volumes, the
 `provides` or the instances that name carries. Replacing a service is `weedr service remove
-<name>` first, and bringing it a manifest is `weedr service add`.
+<name>` first, and bringing it a manifest is `weedr service add <name> --from <service>` —
+which copies **that service's** `.guarden/`, `compose.yaml`, `Containerfile` and
+`.dockerignore` out of its home and reconciles from them. That is the whole of what `add`
+copies, and no verb reads a directory you wrote: `ingest` takes a poke, `add` takes a service,
+`create` takes a template name resolved inside the template set — the three forms and nothing
+else. **A manifest you wrote for a third-party image therefore has nowhere to land.** Until one
+arrives from another service, the template's quadlet files are what runs, and the service has
+no `state:` and no `bulk:` volumes at all.
 
 * **A declared volume is mounted by name, never by path.** `state:` and `bulk:` declare volumes
   by name, and the unit source has to mount that name:
@@ -269,7 +325,11 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   `/etc/guarden/creds/<svc>/<KEY>.cred` and asks the credential materialiser to run, which is
   only possible while the service user's manager is alive. If the service has never started, or
   its user manager died, `systemctl start guarden-creds-boot.service` fills podman's store from
-  what is planted.
+  what is planted. This is the one that bites hardest on a template-created service, which has
+  no `.guarden/.env.schema` for the gate to read: `weedr service start` evaluates an empty
+  schema and answers `not-required` on an ungated track and `ready` on a gated one, so a
+  `Secret=` naming a key nobody planted is refused by podman when the container starts and not
+  by `[gate] reason`. There is no blocked state to look at — plant first, then start.
 * **Give the volume an owner the image accepts.** A volume is created `0700` under the service
   uid, and an image that runs as its own uid cannot write it:
   `mkdir: can't create directory '/var/lib/postgresql/data/pgdata': Permission denied`. The
@@ -286,12 +346,17 @@ Three things that bite on a first hand deployment, none of them a bug in the man
 
 Names carry the environment: `myapp-production`, `other-app-staging`, `postgres-production`,
 `traefik-production`. The name is the service name everywhere — no suffix, no alias. A consumer
-resolves it as it stands. `weedr service add myapp` with no environment defaults to **staging**,
-never a gated track, and prints the resolved name. The environments that exist are the
-`[[environments]]` entries in `/etc/guarden/guarden.toml`; a name whose last segment is not one
-of them is refused. Operations on a track with `gated = true` are **refused outright, with no
-flag that overrides them** — the only way to allow one is for you to remove the root-owned
-`/etc/guarden/allow-gated-drop` marker yourself.
+resolves it as it stands. `weedr service add myapp` with no environment defaults to **the first
+track in table order with `gated = false` and `kind = "slot"`** — `staging` in the shipped
+table, and never a gated one — and prints the resolved name; if no such track exists the name
+is exit `1` naming that fact rather than a silent choice of a gated track. The environments
+that exist are the `[[environments]]` entries in `/etc/guarden/guarden.toml`; a name whose last
+segment is not one of them is refused. **Two** operations on a track with `gated = true` are
+refused outright with no flag that overrides them — `weedr service remove` and `weedr service
+purge` — and the only way to allow either is for you to remove the root-owned
+`/etc/guarden/allow-gated-drop` marker yourself. Nothing else about a gated track is refused:
+creating one, deploying to it, building it and snapshotting it are ordinary work, and the
+credential gate is what stands between a push and a running container.
 
 `weedr service add` is idempotent and it is the reconcile command. Running it against a converged
 service prints `converged` and changes nothing; running it after editing a manifest re-renders
@@ -661,11 +726,12 @@ weedr firewall close wg-production wireguard-peer
 
 ```
 RULE                                  CHAIN         STATE      SERVICES
--p udp --dport 51820 -j ACCEPT       guarden-svc   installed  wg-production
--p tcp --dport 22 -j ACCEPT          guarden-svc   pending    myapp-staging
+-p udp --dport 51820 -j ACCEPT       guarden-svc   installed  wg-production wireguard-peer, wg-staging wireguard-peer
+-p tcp --dport 22 -j ACCEPT          guarden-svc   pending    myapp-staging admin-ssh
 ```
 
-Every rule is listed **once**, with every service that asked for it behind it, because two
+Every rule is listed **once**, with every service that asked for it behind it — each entry
+written `<service> <the name the manifest gave the rule>` — because two
 services asking for the same line get one rule. `weedr firewall close` on one of them leaves
 the rule in force while the other still asks; the rule goes when the last one closes. The grant
 lives in `[firewall] allow` in that service's `overrides.toml`, and it is removed with the
@@ -964,9 +1030,13 @@ proceeds.
 
 ```sh
 weedr service snapshot <name>                       # does not stop anything
-weedr service fork <target[/ref]> --from <service>[@<number>]
+weedr service fork <target[/ref]> --from <service>[@<timestamp>]
 weedr service rollback <name[/ref]> --to <timestamp>   # refused outright on a gated track
 ```
+
+The `@` suffix on `--from` is a **time**, not a snapshot number: `2026-09-29T18:03:11Z`. A bare
+number is refused with exit `2`, because one service with several state volumes has a different
+number in each configuration and no single number names the set (spec §8.6).
 
 There are two kinds of snapshot and they are governed differently, so read which one you have
 before you trust it. A **routine** snapshot, made by the nightly `--all`, is tagged `timeline`
