@@ -199,6 +199,36 @@ def refuse(body: dict[str, Any], container: str, path: Path) -> None:
                 f"the unit source {path}: the service {container!r} asks for {key}: "
                 f"{_shown(body[key])}, and {why}"
             )
+    _refuse_templated_ports(body, container, path)
+
+
+def _refuse_templated_ports(body: dict[str, Any], container: str, path: Path) -> None:
+    """A `ports:` entry carrying `${...}`, refused before the converter sees it.
+
+    The converter parses the host-IP field before any substitution, so
+    `127.0.0.1:${PORT:-19069}:8069` dies in *its* parser with "invalid IP address
+    syntax" — a message about an IP address that is written correctly — and the
+    reader is sent to the wrong line. Guarden answers instead, naming the
+    construct, and it does so before podlet runs: a guarden host allocates the
+    loopback publication itself from the manifest's ingress, so a repository's
+    published port is not the thing that decides where a service is reached.
+    """
+    entries = body.get("ports") or []
+    if not isinstance(entries, list):
+        raise errors.GuardenError(
+            f"the unit source {path}: the service {container!r} has a `ports:` that is not a list"
+        )
+    for entry in entries:
+        if isinstance(entry, dict):
+            shown = ", ".join(f"{key}={value}" for key, value in entry.items())
+        else:
+            shown = str(entry)
+        if "${" in shown:
+            raise errors.GuardenError(
+                f"the unit source {path}: the service {container!r} has a ports entry "
+                f"{shown!r} carrying ${{...}}: a port's host-IP cannot be templated, and "
+                f"guarden allocates the loopback publication from the manifest's ingress"
+            )
 
 
 def mounts(body: dict[str, Any], container: str, path: Path) -> list[Mount]:
