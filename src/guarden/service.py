@@ -24,7 +24,9 @@ renamed is a data problem and not a cosmetic one.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,13 +36,16 @@ from guarden import (
     edges,
     errors,
     gate,
+    images,
     names,
     paths,
     previews,
     publications,
     registry,
+    render,
     tool,
     units,
+    unitsource,
     users,
     volumes,
 )
@@ -795,6 +800,356 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
     if not directory.is_dir():
         return []
     return sorted(path.stem for path in directory.glob("*.container"))
+
+
+def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
+    """Probe once, record, and put guarden's `Userns=` line into the units
+    before they are started (ADR-0019).
+
+    `weedr service start` calls this in front of `start_units`. A first start
+    probes the image's declared user as the service user, writes the answer
+    into the registry as `owner_uid`/`owner_gid`, and re-renders so the unit
+    carries `UserNS=keep-id:uid=...,gid=...` before the container it is about
+    to start — the line is rendered, never hand-written, so the refusal of a
+    repository's own `Userns=` is untouched (spec 6.3).
+
+    A later start finds the record and does not probe again, and re-renders
+    only when an installed unit does not hold exactly the line the record
+    renders — so the line is stable across starts, re-renders and re-ingests,
+    an edited record is rendered through rather than overwritten by a second
+    probe, and a record with the probe removed is the probe's condition again.
+    """
+    record = registry.load(name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{name} has no registry entry, so there is nothing to start",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if record.owner_uid is None or record.owner_gid is None:
+        uid, gid = probe_owner(name, record, escaped_ref)
+        with conf.lock("registry"):
+            current = registry.load(name)
+            if current is None:
+                raise errors.GuardenError(
+                    f"{name} lost its registry entry while its image user was being probed",
+                    errors.HOST_NOT_AS_ASSUMED,
+                )
+            current.owner_uid = uid
+            current.owner_gid = gid
+            registry.save(current, (0, users.group_id(GUARDEN_GROUP)))
+        record = current
+    pinned = render.owner_line(record)
+    if pinned is not None:
+        # A pin and a source's own `User=` cannot both decide the container's
+        # user — an explicit `--user` beats keep-id's init-forcing — so the
+        # refusal happens here as well as in the render: this is the path that
+        # answers the start, and it answers with the input code rather than
+        # through the renderer's exit plumbing.
+        for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
+            render.refuse_pinned_user(
+                unitsource.parse(path), pinned, f"{name}: the unit {path.name}"
+            )
+    if not _carries_owner_line(name, escaped_ref, record):
+        units.install(_unit_source(name, record), name, escaped_ref)
+
+
+def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int, int]:
+    """The uid and gid the service's image declares, read at first start.
+
+    `podman image inspect` gives `Config.User` — a number, a `uid:gid`, a name,
+    or nothing — and a name (and a bare number's gid) is resolved against the
+    image's OWN `/etc/passwd` and `/etc/group`, read by running the image as
+    container root: a probe that started the container as the declared user
+    could not answer the one case that matters, an image whose declared user
+    does not exist in it. A missing image is pulled first, once, because the
+    start below needs it either way.
+
+    Exit `1` when the image is not on the host and cannot be pulled — the
+    filesystem — and `2` when the image names a user or group it does not
+    carry: the declaration is the input, and it is rejected where it is
+    visible. Every one of these is one line naming the service (spec 1.2).
+    """
+    reference = _installed_reference(name, escaped_ref)
+    user, entrypoint, command = _image_config(name, record, reference)
+    declared = user
+    if not declared or declared == "0":
+        # The stock postgres and alpine shape: no USER of the image's own. The
+        # answer is the handoff the entrypoint names — the app user a gosu or
+        # su-exec would switch to — and never a passwd row picked by itself:
+        # every row of a base image is a system account, and pinning one would
+        # force init onto a uid the application never asked for. Nothing
+        # defensible falls out, and this is the record for it: container root,
+        # which the default map already moves onto the service identity, so no
+        # line is rendered and the service runs exactly as it did before
+        # ADR-0019 (the keep-id map for uid=0 was measured to carry only the
+        # pinned pair, which would stop an entrypoint that drops privileges
+        # rather than fix its owner).
+        handoff = _entrypoint_user(name, record, reference, [*entrypoint, *command])
+        if handoff is None:
+            return (0, 0)
+        declared = handoff
+    uid_text, separator, gid_text = declared.partition(":")
+    if uid_text.isdigit():
+        uid = int(uid_text)
+        if separator and gid_text.isdigit():
+            return (uid, int(gid_text))
+        passwd = _image_file(name, record, reference, "/etc/passwd")
+        if separator:
+            # a numeric uid with a name for its group
+            group = _image_file(name, record, reference, "/etc/group")
+            if group is None:
+                raise _cannot_run(name, record, reference, gid_text)
+            found = _named(group, gid_text)
+            if found is None:
+                raise _no_such_group(name, reference, gid_text)
+            return (uid, int(found[2]))
+        if passwd is not None:
+            entry = _uid_entry(passwd, uid)
+            if entry is not None:
+                return (uid, int(entry[3]))
+        # A number the image's passwd does not carry is what podman runs the
+        # container with a gid of 0 for, and the line has to map the gid the
+        # container will actually have.
+        return (uid, 0)
+    # A name: the image's own databases decide both numbers.
+    passwd = _image_file(name, record, reference, "/etc/passwd")
+    if passwd is None:
+        raise _cannot_run(name, record, reference, declared)
+    entry = _named(passwd, uid_text)
+    if entry is None:
+        raise errors.GuardenError(
+            f"{name}: the image {reference} declares the user {declared!r}, which its "
+            "/etc/passwd does not name",
+            errors.REJECTED_INPUT,
+        )
+    uid = int(entry[2])
+    if not separator:
+        return (uid, int(entry[3]))
+    if gid_text.isdigit():
+        return (uid, int(gid_text))
+    group = _image_file(name, record, reference, "/etc/group")
+    if group is None:
+        raise _cannot_run(name, record, reference, gid_text)
+    found = _named(group, gid_text)
+    if found is None:
+        raise _no_such_group(name, reference, gid_text)
+    return (uid, int(found[2]))
+
+
+def _cannot_run(name: str, record, reference: str, declared: str) -> errors.GuardenError:
+    """The image could not be run to resolve the name it declares: the host
+    cannot execute what it is being asked about (spec 1.2, exit 1)."""
+    return errors.GuardenError(
+        f"{name}: the image {reference} declares {declared!r} and could not be run to "
+        f"resolve it",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
+def _no_such_group(name: str, reference: str, group: str) -> errors.GuardenError:
+    return errors.GuardenError(
+        f"{name}: the image {reference} declares the group {group!r}, which its "
+        "/etc/group does not name",
+        errors.REJECTED_INPUT,
+    )
+
+
+def _named(document: str, name: str) -> list[str] | None:
+    """A passwd or group record by its name, or `None` when the databases do
+    not carry one."""
+    for line in document.splitlines():
+        fields = line.split(":")
+        if len(fields) >= 3 and fields[0] == name:
+            return fields
+    return None
+
+
+def _uid_entry(passwd: str, uid: int) -> list[str] | None:
+    for line in passwd.splitlines():
+        fields = line.split(":")
+        if len(fields) >= 4 and fields[2] == str(uid):
+            return fields
+    return None
+
+
+def _image_config(name: str, record, reference: str) -> tuple[str, list[str], list[str]]:
+    """`Config.User`, `Config.Entrypoint` and `Config.Cmd` from the service
+    user's own store, pulling once if the image is not there yet.
+
+    The whole `inspect` document rather than a `--format` template: the three
+    fields are three shapes (a string and two lists) and JSON is the one
+    spelling that carries all three without the template's own escaping
+    standing between the value and the reader. All three from one call because
+    the empty-user case needs the other two."""
+    result = _podman(name, record, "image", "inspect", reference)
+    if not result.ok:
+        pull = _podman(name, record, "pull", reference)
+        if not pull.ok:
+            raise errors.GuardenError(
+                f"{name}: the image {reference} is not in {name}'s podman store and podman "
+                f"pull failed: {_detail(pull)}",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        result = _podman(name, record, "image", "inspect", reference)
+        if not result.ok:
+            raise errors.GuardenError(
+                f"{name}: podman could not read {reference} after pulling it: {_detail(result)}",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+    try:
+        document = json.loads(result.stdout)
+    except ValueError as exc:
+        raise errors.GuardenError(
+            f"{name}: podman image inspect {reference} answered a document that is not JSON: "
+            f"{errors.oneline(str(exc))}",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    items = document if isinstance(document, list) else [document]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        config = item.get("Config") or {}
+        if not isinstance(config, dict):
+            continue
+        user = config.get("User")
+        return (
+            user.strip() if isinstance(user, str) else "",
+            _strlist(config.get("Entrypoint")),
+            _strlist(config.get("Cmd")),
+        )
+    raise errors.GuardenError(
+        f"{name}: podman image inspect {reference} carries no Config to read a user from",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
+def _strlist(value) -> list[str]:
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return value
+    return []
+
+
+# The handoff a root-then-drop entrypoint makes: `gosu postgres …` or
+# `su-exec app …`, the two spellings that mean "and then run as this user".
+# The token after the command is the whole answer, and it is looked up in the
+# image's own passwd rather than trusted as a number.
+HANDOFF = re.compile(r"(?:^|[\s;|&])(?:gosu|su-exec)\s+([A-Za-z_][A-Za-z0-9_.\-]*|\d+)")
+
+
+def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str | None:
+    """The user the entrypoint hands execution to, and only that (ADR-0019).
+
+    Asked of the words of `Entrypoint`/`Cmd` first — `sh -c 'exec gosu app …'`
+    carries the name without opening anything — and then of the script the
+    entrypoint names when that name ends in `.sh`, read by running the image as
+    container root with its entrypoint overridden. A passwd row alone is never
+    the answer: an entrypoint that is the application itself declares nothing
+    to hand off to, and choosing a row would pin init onto a uid nobody asked
+    for. None means "no defensible user", which the caller records as root.
+    """
+    for word in argv:
+        found = HANDOFF.search(word)
+        if found:
+            return found.group(1)
+    if argv and argv[0].endswith(".sh"):
+        script = _image_file(name, record, reference, argv[0])
+        if script:
+            found = HANDOFF.search(script)
+            if found:
+                return found.group(1)
+    return None
+
+
+def _image_file(name: str, record, reference: str, path: str) -> str | None:
+    """The image's own file, read by running the image as container root —
+    `--user 0` and not the declared user, for the reason probe_owner gives."""
+    result = _podman(
+        name, record, "run", "--rm", "--user", "0", "--entrypoint", "cat", reference, path
+    )
+    if not result.ok:
+        return None
+    return result.stdout
+
+
+def _detail(result) -> str:
+    text = result.stderr.strip() or result.stdout.strip()
+    return errors.oneline(text) or f"{result.argv[0]} exited {result.returncode}"
+
+
+def _podman(name: str, record, *argv: str):
+    """podman as the service user, from the service's own home.
+
+    The probe runs unprivileged as the service identity; the mutator's own hand
+    stays on the unit write (ADR-0001).
+
+    **`USER` and `LOGNAME` are named for the service, and that is measured
+    rather than decoration.** `runuser -u` swaps the uid but keeps the caller's
+    environment, and the caller is root — so podman saw `USER=root`, and its
+    keep-id mapping reads the subid files keyed by that name: every keep-id
+    container came out with a map of one pair (no gid 0, no gid 5), which crun
+    then refused to init (`ping_group_range`, `devpts`). With `USER` named for
+    the service the map is complete — measured on the golden: init uid/gid
+    10001/10001 under `keep-id:uid=10001,gid=10001`, three-row maps. A systemd
+    user manager sets both for the service already; this is the same shape for
+    the calls this program makes itself."""
+    home = paths.service_home(name)
+    runtime = Path(f"/run/user/{record.uid}")
+    env = ["env", f"USER={name}", f"LOGNAME={name}"]
+    if runtime.is_dir():
+        env.append(f"XDG_RUNTIME_DIR={runtime}")
+    return tool.call(["runuser", "-u", name, "--", *env, "podman", *argv], cwd=home)
+
+
+def _installed_reference(name: str, escaped_ref: str | None) -> str:
+    """The image the installed units name — read from the units that are about
+    to run, so a module's shipped service and a repository's own tree are read
+    the same way, and a source declaring no image is answered with the one its
+    build tags (images.reference_for)."""
+    for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
+        declared = unitsource.parse(path).one("Container", "Image")
+        if declared and declared.strip():
+            return declared.strip()
+    return images.reference_for(name)
+
+
+def _carries_owner_line(name: str, escaped_ref: str | None, record) -> bool:
+    """Whether every installed unit already holds exactly the line this record
+    renders — or holds none at all when the record renders none. Anything else
+    is a render that has not happened yet."""
+    want = render.owner_line(record)
+    files = sorted(units_dir(name, escaped_ref).glob("*.container"))
+    if not files:
+        return False
+    for path in files:
+        found = [
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("UserNS=")
+        ]
+        if want is None:
+            if found:
+                return False
+        elif found != [f"UserNS={want}"]:
+            return False
+    return True
+
+
+def _unit_source(name: str, record, escaped_ref: str | None = None) -> Path:
+    """Where `units.install` gets its source for this service: the home, or the
+    module's shipped tree for a service a module created — the same two sources
+    the installs that created these units read from."""
+    home = paths.service_home(name)
+    if _manifest_in(home).is_file():
+        return _render_source(home)
+    if record.installed_by:
+        shipped = modules_mod.source_of(record.installed_by, name)
+        if _manifest_in(shipped).is_file():
+            return shipped
+    raise errors.GuardenError(
+        f"{name}: no manifest in {home} and no module source, so its units cannot be "
+        "re-rendered with the probed line",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
 
 
 def stop_units(name: str, escaped_ref: str | None = None) -> None:

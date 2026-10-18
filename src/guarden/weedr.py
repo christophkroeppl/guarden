@@ -696,6 +696,11 @@ def _start(args) -> int:
             "nothing was installed for it and there is nothing that could be running",
             errors.HOST_NOT_AS_ASSUMED,
         )
+    # ADR-0019: the probe, the record and guarden's own `UserNS=keep-id` line
+    # come before the units are handed to systemctl — the line has to be in the
+    # unit the generator reads, and `start_units` reloads the manager after it
+    # is written.
+    service.ensure_owner_line(resolved.name, resolved.escaped_ref)
     service.start_units(resolved.name, resolved.escaped_ref)
     sys.stdout.write(f"started {resolved.name}\n")
     return 0
