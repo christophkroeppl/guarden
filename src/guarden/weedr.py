@@ -72,6 +72,7 @@ BUILD_TAG = "latest"
 SERVICE = (
     ("ingest", "create or reconcile a service from a poke's staged tree"),
     ("add", "create or reconcile a service from another service's tree"),
+    ("create", "manually create a new service from a template"),
     ("remove", "remove a service, or one instance of one; alias: rm"),
     ("purge", "delete a service's volumes; the only path in guarden that destroys data"),
     ("gate", "evaluate the credential gate; change nothing else, and take no /<ref>"),
@@ -150,7 +151,8 @@ weedr project rm. Nothing else in guarden has one, and nothing else will.
 Not on the guarden sudoers rule, and not reachable from a deploy:
 `weedr port open`, `weedr port close`, `weedr firewall open`,
 `weedr firewall close`, `weedr service purge`,
-`weedr service rollback`, `weedr module add`, `weedr project add`,
+`weedr service rollback`, `weedr service add`, `weedr service create`,
+`weedr module add`, `weedr project add`,
 `weedr project grant`, `weedr project revoke`, and every `weedr share`
 verb. A customer-facing grant is safe to have precisely because a poke
 can deploy to a preview and cannot mint, extend or revoke access to one.
@@ -176,14 +178,36 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         creator = top["service"]["verbs"][verb]
         cli.add_name(creator, help_text)
+        from_help = (
+            "`poke <project>@<sha>`"
+            if verb == "ingest"
+            else "the service to copy from"
+        )
         creator.add_argument(
             "--from",
             dest="source",
             metavar="SOURCE",
             nargs="+",
             required=True,
-            help="`<service>`, `poke <project>@<sha>`, or a local directory path",
+            help=from_help,
         )
+
+    create = top["service"]["verbs"]["create"]
+    cli.add_name(create, "the service to create; a name with no environment resolves a default")
+    create.add_argument(
+        "--env",
+        dest="environments",
+        metavar="ENVIRONMENTS",
+        default="production",
+        help="comma-separated environments to create the service in (default: production)",
+    )
+    create.add_argument(
+        "--template",
+        dest="template",
+        metavar="TEMPLATE",
+        default=None,
+        help="the template to create from; asked for at a terminal when omitted",
+    )
 
     for verb, help_text in (
         ("remove", "a whole service, or one instance with /<ref>"),
@@ -340,9 +364,9 @@ def _emit(outcome: service.Outcome, verb: str) -> int:
     return 0
 
 
-def _create(args, allow_default: bool) -> int:
+def _create(args, allow_default: bool, verb: str) -> int:
     config = config_mod.load()
-    source = service.parse_from(args.source)
+    source = service.parse_from(args.source, verb)
     resolved = names.resolve(args.name, list(config.tracks), allow_default)
     now = _now()
     outcome = service.create(resolved, source, config, now)
@@ -400,11 +424,136 @@ def _filter_set(name: str) -> None:
 def _ingest(args) -> int:
     # spec 5.1: the default-environment exception belongs to `add` alone, so a
     # poke can never choose the track its service lands in.
-    return _create(args, allow_default=False)
+    return _create(args, allow_default=False, verb="ingest")
 
 
 def _add(args) -> int:
-    return _create(args, allow_default=True)
+    # `add` is not on the sudoers rule — it needs a real root shell. What is
+    # gathered first is the configuration and the entry (spec 5.1): both read
+    # and validated while nothing has changed, so the credential is asked for
+    # only once the request is known to be well-formed.
+    config = config_mod.load()
+    service.parse_from(args.source, "add")
+    names.resolve(args.name, list(config.tracks), allow_default=True)
+    if os.geteuid() != 0:
+        _become_root("add", ["service", "add", args.name, "--from", *args.source])
+    return _create(args, allow_default=True, verb="add")
+
+
+def _become_root(verb: str, words: list[str]) -> None:
+    """Ask for root here, then re-exec as root to apply what has been gathered.
+
+    Configuration and the operator's own answers come before this is called, so
+    what sudo grants is a request already known to be well-formed, and it grants
+    it just before the change and nothing before that. `sudo -v` refreshes a
+    cached credential or asks for one — at a terminal, and only when stdin is
+    one, so nothing ever waits on a pipe that cannot answer; `sudo -n` afterwards
+    cannot prompt at all, which is why a non-root caller used to get sudo's own
+    words printed over a process guarden no longer controlled. `sudo -n -l` then
+    proves that **this** command is one the caller may run: `add` and `create`
+    are on no sudoers rule, and without that proof `os.execvp` would replace this
+    process and the diagnostic would be sudo's (spec 1.2: one line, prefixed,
+    naming what it is about).
+    """
+    command = [str(paths.BIN / "weedr"), *words]
+    refresh = ["sudo", "-v"] if sys.stdin.isatty() else ["sudo", "-n", "-v"]
+    for argv in (refresh, ["sudo", "-n", "-l", "--", *command]):
+        try:
+            result = tool.call(argv)
+        except OSError as exc:
+            raise errors.GuardenError(
+                f"{verb} requires root: {argv[0]} could not be run: {exc.strerror}",
+                errors.HOST_NOT_AS_ASSUMED,
+            ) from exc
+        if not result.ok:
+            detail = errors.oneline((result.stderr or result.stdout).strip()) or (
+                f"{argv[0]} exited {result.returncode}"
+            )
+            raise errors.GuardenError(
+                f"{verb} requires root: {detail}", errors.HOST_NOT_AS_ASSUMED
+            )
+    os.execvp("sudo", ["sudo", "-n", "--", *command])
+
+
+def _create_service(args) -> int:
+    """`weedr service create` — manually create a new service from a template.
+
+    Everything is gathered and validated before root is asked for: the
+    configuration, the environments, the names they resolve to, and the
+    template the operator chooses here. Root is obtained after all of that, so
+    sudo grants a request that is already well-formed and the answer given at
+    this terminal is the one applied — the chosen template travels with the
+    re-exec rather than being asked a second time.
+
+    What it creates is the identity, the service tree, a copy of the template's
+    quadlet files and the registry record. It creates **no manifest and no
+    volume**: a template ships neither, and the volumes a manifest declares are
+    created by `create` when a poke or an `add` brings a manifest in. The
+    template itself is installed root-owned in
+    `/usr/lib/guarden/templates/services/`.
+    """
+    config = config_mod.load()
+    envs = [env.strip() for env in args.environments.split(",") if env.strip()] or ["production"]
+    resolved = [
+        names.resolve(
+            f"{args.name}-{env}" if not args.name.endswith(f"-{env}") else args.name,
+            list(config.tracks),
+            allow_default=False,
+        )
+        for env in envs
+    ]
+    template = service.require_template(args.template or _choose_template()).name
+    if os.geteuid() != 0:
+        _become_root(
+            "create",
+            ["service", "create", args.name, "--env", args.environments, "--template", template],
+        )
+    now = _now()
+    for entry in resolved:
+        outcome = service.create_service(entry, config, now, template)
+        sys.stdout.write(f"created {entry.name} uid {outcome.uid} from {template}\n")
+    return 0
+
+
+def _choose_template() -> str | None:
+    """The template the operator picks from the installed set; `None` is an empty set.
+
+    `None` rather than a refusal: `service.require_template` is where the
+    missing-template line lives, so the verb validating its answer before it
+    asks for anything and the mutator about to copy it answer the same question
+    with one line and one code.
+    """
+    templates_dir = paths.TEMPLATES / "services"
+    available = (
+        sorted(entry.name for entry in templates_dir.iterdir() if entry.is_dir())
+        if templates_dir.is_dir()
+        else []
+    )
+    if not available:
+        return None
+    if len(available) == 1:
+        return available[0]
+    if not sys.stdin.isatty():
+        raise errors.GuardenError(
+            "create needs a terminal to answer its prompts; run it interactively",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    sys.stdout.write("available templates:\n")
+    for i, name in enumerate(available, 1):
+        sys.stdout.write(f"  {i}. {name}\n")
+    try:
+        choice = input("template (name or number): ").strip()
+    except EOFError:
+        # stdin ended where a terminal was promised: an `input()` that raised
+        # here would have left a traceback on stderr instead of the one line
+        # the contract promises.
+        raise errors.GuardenError(
+            "create needs a terminal to answer its prompts; stdin ended before one",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    if choice.isdigit() and 1 <= int(choice) <= len(available):
+        return available[int(choice) - 1]
+    return choice or None
 
 
 def _remove(args) -> int:
@@ -1322,6 +1471,7 @@ HANDLERS = {
     "weedr firewall list": _firewall_list,
     "weedr service ingest": _ingest,
     "weedr service add": _add,
+    "weedr service create": _create_service,
     "weedr service remove": _remove,
     "weedr service purge": _purge,
     "weedr service gate": _gate,
