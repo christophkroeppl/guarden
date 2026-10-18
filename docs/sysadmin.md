@@ -231,8 +231,8 @@ weedr service status <name[/ref]> [--json]
 `--from` is **required** on `ingest` and `add`, and each verb accepts exactly one form.
 `ingest` accepts only `poke <project>@<sha>`; `add` accepts only `<service>`. `create` takes no
 `--from` at all — it builds a service from a template installed root-owned in
-`/usr/lib/guarden/templates/services/`. A service is created from a manifest and guarden never
-infers where one is.
+`/usr/lib/guarden/templates/services/`. A service is created from a manifest — under `create`,
+from a template's quadlet files and no manifest at all — and guarden never infers where one is.
 
 ### Deploying a service by hand
 
@@ -241,13 +241,22 @@ build, and the ones no repository pokes. It takes no `--from` — it builds a se
 template installed root-owned in `/usr/lib/guarden/templates/services/`. The template provides
 the quadlet files; guarden provides the identity, the tree and the registry record.
 
+It makes a name that does not exist yet. A name the registry already holds is refused with
+exit `1` naming the entry, **before** anything is created and for every environment in an
+`--env` list at once, so a second `create` can never overwrite the record, the volumes, the
+`provides` or the instances that name carries. Replacing a service is `weedr service remove
+<name>` first, and bringing it a manifest is `weedr service add`.
+
 * **A declared volume is mounted by name, never by path.** `state:` and `bulk:` declare volumes
   by name, and the unit source has to mount that name:
   `Volume=data:/var/lib/postgresql/data`, not
   `Volume=/var/lib/guarden/services/<svc>/state/data:...`. A host path is a *path* mount and
-  satisfies nothing, so the create is refused with
-  `the manifest declares the volume 'data', and the unit source does not mount it`. guarden
-  resolves the name to the real path when it renders.
+  satisfies nothing, so the **render** refuses
+  `the manifest <path> declares the volume 'data', and the unit source <path> does not mount
+  it` — the renderer raises it, over a manifest, and guarden resolves the name to the real path
+  when it renders. `weedr service create` never meets that refusal: it reads no manifest, and a
+  template ships no `state:` and no `bulk:`. The volumes arrive with the first `ingest` or `add`
+  that brings a manifest in, and the unit source has to mount them by then.
 
 The credential keys a manifest needs are declared in `.guarden/.env.schema` with the varlock
 syntax (`@required`, `@sensitive`, `@type env`) — see §6.5. A key with `@type env` reaches the
