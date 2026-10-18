@@ -119,7 +119,7 @@ Decryption happens once, root-side, in the credential materialiser — a path un
 `/etc/guarden/creds/` and a boot-time oneshot, two units for the whole host and not one pair per
 service. That is why the unit exists, and it is why a generated service unit does not.
 
-The renderer emits `Secret=<KEY>,type=file` in the `[Container]` table **and nothing else**.
+The renderer emits `Secret=<KEY>,type=mount` in the `[Container]` table **and nothing else**.
 Podman resolves `<KEY>` from that service's own secret store and presents it inside the container
 at `/run/secrets/<KEY>`. A key whose application insists on a variable gets `type=env` instead.
 

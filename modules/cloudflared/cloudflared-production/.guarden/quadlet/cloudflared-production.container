@@ -9,4 +9,4 @@ Image=docker.io/cloudflare/cloudflared:2026.10.0
 # service's own tree.
 Volume=/var/lib/guarden/tunnel:/etc/cloudflared:ro
 Exec=tunnel --config /etc/cloudflared/config.yml run
-Secret=TUNNEL_CREDENTIAL,type=file
+Secret=TUNNEL_CREDENTIAL,type=mount

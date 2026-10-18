@@ -109,6 +109,13 @@ assert_file_has "$unit" "Secret=SESSION_KEY,type=env"
 # ... and for a `database` edge, the role's own password in the consumer's store,
 # named as the uppercased `as:` prefix plus _PASSWORD.
 assert_file_has "$unit" "Secret=DB_PASSWORD,type=mount"
+# **`type=file` is not a podman type (ticket 276), so its absence is asserted.**
+# podman 5.7 answers `type file is invalid: parsing secret` and the unit fails at
+# start — every service with a database or a secret edge — while three suites at
+# once pinned the wrong literal as expected output. `mount` is the directive
+# that presents the key at /run/secrets/<KEY>, which is what the renderer's own
+# docstring has always said it does.
+assert_file_lacks "$unit" ",type=file"
 
 # **There is no LoadCredentialEncrypted=, and the absence is asserted.** These
 # units run in the service user's user manager, which cannot read the 0600 root

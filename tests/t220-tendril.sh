@@ -128,6 +128,13 @@ assert_file_exists "$unit"
 assert_file_has "$unit" "[Container]"
 assert_file_has "$unit" "Image=docker.io/cloudflare/cloudflared"
 assert_file_lacks "$unit" "ExecStart="
+# The credential request in the shipped source is podman's `mount`, because
+# `type=file` is not a podman type: 5.7 answers "type file is invalid: parsing
+# secret" and the unit fails at start (ticket 276). The renderer regenerates
+# `Secret=` from the schema anyway, so this is the source's own spelling that
+# must not drift back.
+assert_file_has "$unit" "Secret=TUNNEL_CREDENTIAL,type=mount"
+assert_file_lacks "$unit" ",type=file"
 
 run weedr module add gate-traefik
 assert_exit 0
