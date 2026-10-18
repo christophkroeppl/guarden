@@ -244,8 +244,11 @@ assert_file_missing /var/lib/guarden/services/probeapp-production
 # --- create's own input: a plain name, and each environment once --------------
 #
 # Both are the **input** rejected, not the host's state, so both are exit 2
-# with one line (spec 1.2) and both are asked before the template question,
-# before root and before anything is written.
+# with one line (spec 1.2), and both are asked before anything is written and
+# before root is asked for -- the last of those **observed** rather than
+# asserted in a comment: each refusal below is also run through `hose`, which
+# is on no sudoers rule, so a refusal that had reached the escalation would
+# answer `create requires root` with exit 1 instead of its own line with 2.
 #
 # `create <name>` takes no /<ref> (spec 5.1 and the verb table in 5.3: the ref
 # belongs to `ingest` and `add`). A ref here used to be accepted: the `-ENV`
@@ -277,7 +280,36 @@ assert_file_missing /var/lib/guarden/registry/refusedapp-production.toml
 assert_file_missing /var/lib/guarden/services/refusedapp-production
 assert_no_passwd refusedapp-production
 
+# The same refusal asked of an unprivileged caller, because "before root" is
+# a claim about order and a root caller proves nothing about it: `hose` is on
+# no sudoers rule, so a run that had reached the escalation answers
+# `create requires root` with exit 1 instead of this line with exit 2, and
+# would still answer it if anything had been written first.
+run runuser -u hose -- /usr/lib/guarden/bin/weedr service create refusedapp-production/feat --env production --template probe
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "takes no /<ref>"
+assert_stderr_lacks "usage:"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/refusedapp-production.toml
+assert_file_missing /var/lib/guarden/services/refusedapp-production
+assert_no_passwd refusedapp-production
+
 run weedr service create dupapp --env staging,staging --template probe
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "--env names"
+assert_stderr_has "staging"
+assert_stderr_lacks "usage:"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/dupapp-staging.toml
+assert_file_missing /var/lib/guarden/services/dupapp-staging
+assert_no_passwd dupapp-staging
+
+# The dedupe refusal asked of `hose` for the same reason: the guard runs
+# before root is asked for, so an unprivileged caller sees this line and not
+# `create requires root`, and nothing of the name it refused exists after it.
+run runuser -u hose -- /usr/lib/guarden/bin/weedr service create dupapp --env staging,staging --template probe
 assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "--env names"
@@ -296,6 +328,21 @@ assert_no_passwd dupapp-staging
 # reported by one line, because the assertions below stop at the first failure.
 run weedr service create svc-foo-staging --env foo-staging,staging --template probe
 [ "$GUARDEN_EXIT" = 2 ] || _fail "distinct --env values resolved to one name and the run went ahead: exit $GUARDEN_EXIT, stdout: $(tr '\n' ' ' <"$GUARDEN_STDOUT")"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "--env names"
+assert_stderr_has "svc-foo-staging"
+assert_stderr_lacks "usage:"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/svc-foo-staging.toml
+assert_file_missing /var/lib/guarden/services/svc-foo-staging
+assert_no_passwd svc-foo-staging
+
+# And through `hose` as well, so the ordering claim is a machine observation
+# for this refusal too: exit 2 with the guard's own line, no escalation, no
+# record, no account -- where an unprivileged run of an unguarded request
+# answers `create requires root` with exit 1 instead.
+run runuser -u hose -- /usr/lib/guarden/bin/weedr service create svc-foo-staging --env foo-staging,staging --template probe
 assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "--env names"
