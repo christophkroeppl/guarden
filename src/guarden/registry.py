@@ -206,6 +206,13 @@ class Registry:
     environment: str
     uid: int
     created: str
+    # The uid and gid guarden probed out of the service's image at its first
+    # start, and the only source the renderer's `UserNS=keep-id:uid=...,gid=...`
+    # line is written from (ADR-0019). `None` is "not probed yet", which is the
+    # probe's own condition; `0` is the image declaring no user at all, whose
+    # container root the default map already moves onto the service identity.
+    owner_uid: int | None = None
+    owner_gid: int | None = None
     source: str = SOURCE_MANUAL
     installed_by: str | None = None
     deployed_sha: str | None = None
@@ -255,6 +262,10 @@ class Registry:
             document["deployed_sha"] = self.deployed_sha
         if self.source_hash:
             document["source_hash"] = self.source_hash
+        if self.owner_uid is not None:
+            document["owner_uid"] = self.owner_uid
+        if self.owner_gid is not None:
+            document["owner_gid"] = self.owner_gid
         if self.publication:
             document["publication"] = dict(self.publication)
         if self.edges:
@@ -323,6 +334,8 @@ class Registry:
             installed_by=document.get("installed_by"),
             deployed_sha=document.get("deployed_sha"),
             source_hash=document.get("source_hash"),
+            owner_uid=document.get("owner_uid"),
+            owner_gid=document.get("owner_gid"),
             publication=dict(document.get("publication") or {}),
             edges={name: dict(edge or {}) for name, edge in (document.get("edges") or {}).items()},
             provides=list(provides),
