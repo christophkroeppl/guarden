@@ -225,6 +225,63 @@ cmp -s /var/lib/guarden/registry/probeapp-staging.toml \
 assert_owner "$unit" "probeapp-staging:$(id -gn probeapp-staging)"
 assert_mode "$unit" 640
 
+# The whole `--env` list is asked **before** any of them is created (spec 5.1):
+# one name in the list that the registry already holds refuses the request and
+# creates none of the others, so a list cannot leave half of itself behind.
+# `probeapp-staging` exists -- `create` made it above -- and
+# `probeapp-production` does not, so the second name is the one that must not
+# appear: the record, the account and the home are each asked of the machine.
+
+run weedr service create probeapp --env staging,production --template probe
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "probeapp-staging already has a registry entry"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/probeapp-production.toml
+assert_no_passwd probeapp-production
+assert_file_missing /var/lib/guarden/services/probeapp-production
+
+# --- create's own input: a plain name, and each environment once --------------
+#
+# Both are the **input** rejected, not the host's state, so both are exit 2
+# with one line (spec 1.2) and both are asked before the template question,
+# before root and before anything is written.
+#
+# `create <name>` takes no /<ref> (spec 5.1 and the verb table in 5.3: the ref
+# belongs to `ingest` and `add`). A ref here used to be accepted: the `-ENV`
+# suffix was appended to the whole argument, so the suffix landed in the ref,
+# `--env` was silently ignored in favour of the track before the slash, the
+# ref was rewritten, the template's units were copied into `home/<ref>/` and
+# the **parent** service's record was saved -- a service created and reported
+# as created while the name and the environment disagreed, which spec 5.1
+# forbids.
+#
+# `--env` naming the same environment twice used to resolve one name twice:
+# the whole-list check saw no entry yet, the first create succeeded and
+# printed, and the second refused the record it had just written -- a run that
+# exits 1 for work it reports as done.
+
+run weedr service create refusedapp-production/feat --env production --template probe
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "takes no /<ref>"
+assert_stderr_lacks "usage:"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/refusedapp-production.toml
+assert_file_missing /var/lib/guarden/services/refusedapp-production
+assert_no_passwd refusedapp-production
+
+run weedr service create dupapp --env staging,staging --template probe
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "--env names"
+assert_stderr_has "staging"
+assert_stderr_lacks "usage:"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/dupapp-staging.toml
+assert_file_missing /var/lib/guarden/services/dupapp-staging
+assert_no_passwd dupapp-staging
+
 # The template goes the way `staged` did above: a test installs what its own
 # assertions need and takes it away again, so nothing here depends on the order
 # suites happen to run in.
