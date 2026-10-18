@@ -639,7 +639,9 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
             )
 
 
-def edge_publications(document: manifest_mod.Manifest, context: Context) -> list[tuple[str, str, int]]:
+def edge_publications(
+    document: manifest_mod.Manifest, context: Context
+) -> list[tuple[str, str, int]]:
     """`<AS>_PORT` for every edge, from the consumer's own registry.
 
     A publication is an allocation, so it is in the registry and not in either
@@ -1145,7 +1147,9 @@ def _secret_requests(
     return ordered
 
 
-def _environment_file(document: manifest_mod.Manifest, edge_ports: list[tuple[str, str, int]]) -> str:
+def _environment_file(
+    document: manifest_mod.Manifest, edge_ports: list[tuple[str, str, int]]
+) -> str:
     """`<AS>_HOST` and `<AS>_PORT` for every edge, or `<AS>_<DB>_HOST`,
     `<AS>_<DB>_PORT` and `<AS>_<DB>_USER` for each database of a
     multi-database edge.
