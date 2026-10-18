@@ -659,18 +659,22 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
     and port. The old key is still read so that an upgrade does not break existing
     edges — the `as:` prefix is unique per manifest, so the three-part key
     cannot collide with the old one.
+
+    **And a pin written after the install does not orphan the allocation.** The
+    record's key names the provider **the mutator resolved when it wrote it**
+    (`edges.install` keys it by `resolve_name`), while this lookup resolves
+    again — so `[edge_overrides]` moving the resolution leaves the only
+    allocation the box has under the old name, and reading only today's key
+    would answer "never installed" for an edge that was. `_recorded` reads the
+    resolved keys first and then any entry carrying this edge's `port` and
+    `as`, which is this `needs:` entry's record under whatever provider name it
+    was written and nothing else's. What it never does is invent a port: a
+    record with no allocation is still exit `1`.
     """
     out: list[tuple[str, str, int]] = []
     for edge in document.needs:
         concrete = context.provider(edge.service)
-
-        key = edges.edge_key(concrete, edge.port, edge.prefix)
-        stored = context.record.edges.get(key) or {}
-        if not stored.get("publications"):
-            # Fall back to the old two-part key for registries written by an
-            # earlier guarden that only had `provider:port`.
-            key = edges.edge_key(concrete, edge.port, "")
-            stored = context.record.edges.get(key) or {}
+        stored = _recorded(context.record, concrete, edge)
         numbers = [
             value for value in (stored.get("publications") or [])
             if isinstance(value, int) and not isinstance(value, bool)
@@ -685,6 +689,43 @@ def edge_publications(document: manifest_mod.Manifest, context: Context) -> list
             )
         out.append((edge.service, concrete, min(numbers)))
     return out
+
+
+def _recorded(record, concrete: str, edge) -> dict:
+    """The registry entry the mutator wrote for this `needs:` entry.
+
+    The resolved name's own keys come first — the three-part key, then the old
+    two-part one — so a record written under today's resolution is what answers,
+    and only an edge whose resolution has moved since the install falls through
+    to the entries keyed by another provider name.
+    """
+    keys = [
+        edges.edge_key(concrete, edge.port, edge.prefix),
+        edges.edge_key(concrete, edge.port, ""),
+    ]
+    keys += [
+        key
+        for key in sorted(record.edges)
+        if key not in keys and _is_this_edge(record.edges.get(key), edge)
+    ]
+    for key in keys:
+        stored = record.edges.get(key) or {}
+        if stored.get("publications"):
+            return stored
+    return record.edges.get(keys[0]) or {}
+
+
+def _is_this_edge(stored, edge) -> bool:
+    """Whether a registry entry is this `needs:` entry under some provider name.
+
+    `as:` is unique per manifest and the port is the one the entry declares, so
+    the pair names one `needs:` entry and no other.
+    """
+    return (
+        isinstance(stored, dict)
+        and stored.get("port") == edge.port
+        and stored.get("as") == edge.prefix
+    )
 
 
 def check_ingress(document: manifest_mod.Manifest, context: Context) -> str:
