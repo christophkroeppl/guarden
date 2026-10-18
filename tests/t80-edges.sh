@@ -489,8 +489,10 @@ assert_file_has "$prod_render/units/web.container" "AddHost=postgres-production:
 assert_file_has "$prod_render/system/guarden-order.target" "Wants=postgres-production.target"
 
 # An unmapped name passes through unchanged — a manifest naming a full
-# service name directly keeps working.
+# service name directly keeps working. The key is that full name exactly as
+# the manifest wrote it, and it names a provider that exists: a name resolving
+# to the declaring service itself is a self-edge, which spec 4 refuses.
 stage_poke unmapped 9f2c1ab
 run weedr service ingest unmapped-staging --from poke unmapped@9f2c1ab
 assert_exit 0
-assert_file_has "$registry/unmapped-staging.toml" '[edges."unmapped-staging:5432:db"]'
+assert_file_has "$registry/unmapped-staging.toml" '[edges."pgprov-staging:5432:db"]'

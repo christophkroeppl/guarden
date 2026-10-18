@@ -1,9 +1,13 @@
 # A consumer that declares a service name NOT in the providers table.
 # The name passes through unchanged — identity resolution.
+#
+# It names a service that exists and is not the one declaring it: a name that
+# resolves to the declaring service is a self-edge, and spec 4 refuses those
+# (t40-edges asserts the refusal), so this poke could never ingest.
 project: unmapped
 units: .guarden/quadlet/
 needs:
-  - service: unmapped-staging
+  - service: pgprov-staging
     as: db
     port: 5432
     auth: database
