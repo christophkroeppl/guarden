@@ -97,30 +97,14 @@ assert_stderr_has "template"
 assert_stderr_lacks "usage:"
 assert_stdout_empty
 
-# --- converged hash includes source files -------------------------------------
-
-# A second ingest of a converged service exits 0, says it converged
-run weedr service ingest myapp-production --from poke myapp@9f2c1ab
-assert_exit 0
-assert_stdout_has "converged"
-assert_stderr_empty
-
-# Editing the compose file makes the service NOT converged. It is edited rather
-# than replaced: the render has to still mount every volume the manifest
-# declares (`chainstate` among them), or the refusal would be about the manifest
-# and not about the hash.
-sed -i 's|nginx:1.27|nginx:1.28|' /var/lib/guarden/staging/myapp/9f2c1ab/compose.yaml
-run weedr service ingest myapp-production --from poke myapp@9f2c1ab
-assert_exit 0
-assert_stdout_lacks "converged"
-assert_stdout_has "myapp-production"
-
-# Editing the Containerfile makes the service NOT converged
-seed /var/lib/guarden/staging/myapp/9f2c1ab/Containerfile "FROM docker.io/library/nginx:1.28"
-run weedr service ingest myapp-production --from poke myapp@9f2c1ab
-assert_exit 0
-assert_stdout_lacks "converged"
-assert_stdout_has "myapp-production"
+# --- where the re-deploys went ------------------------------------------------
+#
+# This suite used to carry the source-hash section as well: a converged second
+# ingest, then one ingest per edited input. Those three ingests (two of them
+# full re-deploys) are t30-create.sh's subject rather than this suite's —
+# convergence is what that suite is about, and this one is the verb surface —
+# so they run there now. The gate still runs every one of them; this suite runs
+# fewer rebuild cycles for a claim it does not make.
 
 # --- add and create need root, and answer in guarden's own line ---------------
 #

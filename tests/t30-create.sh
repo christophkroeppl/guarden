@@ -130,3 +130,28 @@ assert_file_missing /var/lib/guarden/staging/myapp/9f2c1ab
 assert_subvolume /var/lib/guarden/services/myapp-production/state/data
 assert_subvolume /var/lib/guarden/services/myapp-production/bulk/chainstate
 assert_file_has "$registry" 'service = "myapp-production"'
+
+# The hash covers every render input, so an edited source re-deploys instead of
+# converging. These two re-deploys came from t250-verb-split.sh: they are about
+# creating and converging a service, which is this suite's subject, and they are
+# two rebuild cycles that suite did not need for its own (the verb surface).
+# The poke is staged again because the converged ingest above deliberately took
+# the staging tree away.
+#
+# The edit is an edit of the real compose file rather than a replacement:
+# a stub that mounts nothing would earn the render's own refusal about the
+# manifest, not a different hash.
+stage_poke myapp 9f2c1ab
+sed -i 's|nginx:1.27|nginx:1.28|' /var/lib/guarden/staging/myapp/9f2c1ab/compose.yaml
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 0
+assert_stdout_lacks "converged"
+assert_stdout_has "myapp-production"
+
+# The Containerfile is a build input too (spec 6.3): seeded, it hashes
+# differently and the second re-deploy is not converged either.
+seed /var/lib/guarden/staging/myapp/9f2c1ab/Containerfile "FROM docker.io/library/nginx:1.28"
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 0
+assert_stdout_lacks "converged"
+assert_stdout_has "myapp-production"
