@@ -407,15 +407,19 @@ def create_service(
     _make_tree(resolved.name, owner, resolved.escaped_ref)
 
     # Copy the template's quadlet files into the service's own quadlet
-    # directory. The template is root-owned and installed; the copy is the
-    # service user's own, and it is what `weedr service start` will find.
+    # directory, **as the service user and `0640`** — the way `units.install`
+    # lands every rendered unit. The template is root-owned and installed, and a
+    # copy that kept its `root:root 0644` was a file inside a `0700` home that
+    # the service could neither read, chown nor remove — including from the
+    # service's own podman generator, which is the process that has to read it
+    # (AGENTS.md: nothing root-owned inside a service's home). This copy is what
+    # `weedr service start` finds.
     quadlet_dir = units_dir(resolved.name, resolved.escaped_ref)
     quadlet_dir.mkdir(parents=True, exist_ok=True)
     for path in sorted(template_dir.rglob("*")):
         if path.is_file():
             target = quadlet_dir / path.relative_to(template_dir)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target)
+            conf.write_file(target, path.read_text(encoding="utf-8"), units.UNIT_MODE, owner)
 
     record = registry.Registry(
         service=resolved.name,
