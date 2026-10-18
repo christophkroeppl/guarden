@@ -491,6 +491,10 @@ def _create_service(args) -> int:
     created by `create` when a poke or an `add` brings a manifest in. The
     template itself is installed root-owned in
     `/usr/lib/guarden/templates/services/`.
+
+    It creates a name that does not exist yet, and refuses one that does
+    (`service.refuse_existing`, exit 1): `create` is the verb that makes a
+    service, never the verb that overwrites one.
     """
     config = config_mod.load()
     envs = [env.strip() for env in args.environments.split(",") if env.strip()] or ["production"]
@@ -509,6 +513,12 @@ def _create_service(args) -> int:
             ["service", "create", args.name, "--env", args.environments, "--template", template],
         )
     now = _now()
+    # Every name at once, and only now that root is held: a `--env` list that
+    # names one service the registry already holds refuses **before** any of
+    # them is created, rather than creating the rest and stopping halfway. The
+    # mutator asks the same question for its own name on the way in, so the
+    # refusal cannot be reached by a caller that skips this verb.
+    service.refuse_existing([entry.name for entry in resolved])
     for entry in resolved:
         outcome = service.create_service(entry, config, now, template)
         sys.stdout.write(f"created {entry.name} uid {outcome.uid} from {template}\n")

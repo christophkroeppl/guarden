@@ -342,6 +342,32 @@ def require_template(template_name: str | None) -> Path:
     )
 
 
+def refuse_existing(candidates: list[str]) -> None:
+    """`create`'s one line when a name it was asked to create already is one.
+
+    Asked for **every** name the request carries before any of them is created,
+    so a `--env` list naming one service that exists refuses whole instead of
+    creating the others and stopping; `create_service` asks again for its own
+    name, because it is the mutator and this is the line it must not cross.
+
+    Exit `1`, not `2` and not `0`. `2` is the input rejected and spec 1.2 writes
+    it for nothing else — the name here is well formed — and `0` would report
+    work that did not happen. What refuses it is the host's own state, the
+    registry entry that already exists, which is how `weedr service remove`
+    answers an instance list and `weedr service purge` an absent record: both
+    `1`, the host is not in the state the request assumed.
+    """
+    taken = [name for name in candidates if registry.load(name) is not None]
+    if not taken:
+        return
+    raise errors.GuardenError(
+        f"{', '.join(taken)} already has a registry entry, and creating over it "
+        f"would discard that service's volumes, provides and instances; remove it "
+        f"first if replacing it is what you meant",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
 def create_service(
     resolved: names.Resolved,
     config,
@@ -359,7 +385,13 @@ def create_service(
     for are created by `create` when a poke or an `add` brings a manifest in.
 
     Requires root. The caller is responsible for sudo.
+
+    **It refuses a name the registry already holds** (spec 5.1): a second
+    `create` over a service would discard the record that name carries — its
+    volumes, its `provides`, its instances — and copy the template's units into
+    a live home, which is a data loss rather than a no-op.
     """
+    refuse_existing([resolved.name])
     template_dir = require_template(template_name)
 
     # A service created from a template has no manifest yet — it gets one when
