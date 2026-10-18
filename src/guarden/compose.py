@@ -201,6 +201,126 @@ def refuse(body: dict[str, Any], container: str, path: Path) -> None:
             )
 
 
+def check_siblings(declared: dict[str, dict], path: Path) -> None:
+    """A sibling container named as a host, refused with `needs:` (spec 7.3).
+
+    **Decision, ticket 285: intra-compose connectivity is out of scope by
+    design, and this is the refusal that makes it visible.** The whole of name
+    resolution the renderer writes is `AddHost=<service>:<ingress.alias>` for a
+    declared edge — a *service* name, with no suffix and no alias — and there is
+    no name map to put a container in (spec 7.3). Two containers of one Compose
+    file are siblings rather than provider and consumer, so a value naming one as
+    a host renders units in which the name resolves to nothing: the file
+    converts, the units render, and nothing says so until something dials.
+
+    **A rendered entry would not connect either.** From inside a container the
+    alias is the host's loopback, where each container answers on its
+    *publication* — an allocation from `ingress.publication_range` — and never on
+    the container port the value dials (spec 7.4), so `http://api:3000` would
+    reach a port nothing binds. Making that work needs a port-translating name
+    map, which is the mechanism this design does not have.
+
+    The answer is the vocabulary the manifest already carries: the target becomes
+    a service of its own and `needs:` names it. Refused here, on the repository's
+    own declaration and in the vocabulary it was written in, before the converter
+    runs — one line naming the container, the sibling, where the value was
+    written and the value.
+    """
+    for container in sorted(declared):
+        values = _host_values(declared[container])
+        for sibling in sorted(declared):
+            if sibling == container:
+                continue
+            for where, text, bare in values:
+                if _dials(text, sibling, bare):
+                    raise errors.GuardenError(
+                        f"the unit source {path}: the service {container!r} names its "
+                        f"sibling container {sibling!r} as a host in {where} "
+                        f"({text!r}), and a name inside one unit source resolves to "
+                        f"nothing: the renderer writes AddHost= only for a declared "
+                        f"edge and it carries a service name (spec 7.3), so split "
+                        f"{sibling!r} into a service of its own and name it under "
+                        f"`needs:` in the manifest, or give this value an address "
+                        f"that exists"
+                    )
+
+
+def _host_values(body: dict[str, Any]) -> list[tuple[str, str, bool]]:
+    """Every value in which this service could name a host, as
+    `(where, text, bare)`.
+
+    `where` is what the diagnostic names — the key the value was written under —
+    and `bare` is whether a text that *is* a sibling's name, with no port and no
+    scheme, counts as a reference. It does for an environment value
+    (`BITCOIN_HOST=bitcoind` is the shape a stack writes) and for an
+    `extra_hosts` name, which is a hosts-file name by construction. It does not
+    for a command argument, where an argument equal to a sibling's name
+    (`command: [ "node", "worker.js" ]`) is this container's own program rather
+    than something to dial.
+    """
+    out: list[tuple[str, str, bool]] = []
+    environment = body.get("environment")
+    if isinstance(environment, dict):
+        for key, value in environment.items():
+            out.append((f"environment {key}", _text_of(value), True))
+    elif isinstance(environment, list):
+        for entry in environment:
+            if not isinstance(entry, str):
+                continue
+            key, separator, value = entry.partition("=")
+            if separator:
+                out.append((f"environment {key}", value, True))
+    for key in ("command", "entrypoint"):
+        for item in _arguments(body.get(key)):
+            out.append((key, item, False))
+    healthcheck = body.get("healthcheck")
+    if isinstance(healthcheck, dict):
+        for item in _arguments(healthcheck.get("test")):
+            out.append(("healthcheck", item, False))
+    extra = body.get("extra_hosts")
+    if isinstance(extra, dict):
+        for name in extra:
+            out.append(("extra_hosts", _text_of(name), True))
+    elif isinstance(extra, list):
+        for entry in extra:
+            out.append(("extra_hosts", _text_of(entry), True))
+    return out
+
+
+def _arguments(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [_text_of(item) for item in value]
+    return []
+
+
+def _text_of(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _dials(text: str, name: str, bare: bool) -> bool:
+    """Whether `text` asks for `name` as a host.
+
+    Three shapes and no substring search, because a check that fires on its own
+    shadow refuses a file that never named anything: `<name>:<port>` anywhere a
+    name may stand (the boundary excludes a longer name — `my-api:8080`,
+    `notapi:8080`, `api.example.com:443` are other hosts), `<scheme>://<name>`
+    up to the next delimiter of a hostname, and, where `bare` says so, the whole
+    value being the name.
+    """
+    escaped = re.escape(name)
+    if re.search(rf"(?<![\w.-]){escaped}:\d+", text):
+        return True
+    if re.search(rf"//{escaped}(?=[:/?#\s\"']|$)", text):
+        return True
+    return bare and text.strip() == name
+
+
 def mounts(body: dict[str, Any], container: str, path: Path) -> list[Mount]:
     """`volumes:` entries, in either spelling.
 

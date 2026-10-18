@@ -2154,6 +2154,19 @@ no alias — to the host's loopback alias. The edge's route target is
 generated environment variable per edge carries `DB_HOST` and `DB_PORT`, and for a database
 edge the credential arrives as `/run/secrets/DB_PASSWORD`.
 
+**A name inside a unit source is not a name.** Every container of one service runs in its own
+pasta namespace and there is no shared network (§7.1), so the containers of one `compose.yaml`
+cannot resolve each other, and `AddHost=` carries service names only: it is written for an edge
+and for the edge's routed services, never for a container. A value in a unit source that names
+one of the file's own other containers as a host therefore renders units in which the name
+resolves to nothing — and a rendered entry would not connect either, because the host binds each
+container's allocated **publication** (§7.4) and never the container port the value dials, so
+making that work would need a port-translating name map, which is the mechanism this design does
+not have. `loom` refuses such a unit source, naming the container, the sibling, the key and the
+value, and the answer the diagnostic carries is `needs:`: the target becomes a service of its
+own with an edge between them, which is the only connectivity there is. A multi-container stack
+is therefore split into provider and consumer services before it can be deployed.
+
 ### 7.4 Publications
 
 A **publication** is a loopback port allocated from `ingress.publication_range`. Publications

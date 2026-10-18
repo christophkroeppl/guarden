@@ -87,3 +87,27 @@ A decision, recorded:
 
 Either way the current state is the worst of the three: the compose file converts,
 the units render, and the service silently cannot reach the thing it names.
+
+## Decision — 2026-10-18, option (a)
+
+**Intra-compose connectivity is out of scope by design, and the refusal is what
+makes it visible.** The spec's whole of name resolution is
+`AddHost=<service>:<ingress.alias>` for a declared edge (§7.3), the names are
+service names with no suffix and no alias, and there is no name map to put a
+container in — so a compose service name that is not a declared edge has no
+rendered entry, and `loom` now refuses the file that names one instead of
+rendering units in which the name is dead.
+
+The sibling `AddHost` this ticket sketches as option (b) was rejected on the
+mechanism, not on taste: from inside a container the alias is the **host's**
+loopback, where each container answers on its allocated publication (§7.4) and
+never on the container port the compose value dials — `AddHost=api:10.0.2.2`
+resolves `api` and `http://api:3000` then reaches a port nothing binds.
+Delivering Compose's semantics needs a port-translating name map, which §7.3
+forbids, so (b) would have traded one silent failure for another.
+
+The refusal is one line, exit `2`, naming the container, the sibling, the key
+and the value, and it ends with the answer: split the target into a service of
+its own and name it under `needs:`. The rule is stated in spec §7.3; the
+implementation is `compose.check_siblings`, reached by `loom check` and
+`loom render` before the converter runs; the suite is `tests/t400-sibling.sh`.
