@@ -4,10 +4,11 @@ A service's tree comes from exactly one of three places (spec 5.3). `ingest`
 takes `poke <project>@<sha>` and the system resolves that pair to
 `/var/lib/guarden/staging/<project>/<sha>` itself; `add` takes a service name
 and copies that service's own manifest and unit source out of its home; and
-`add` also takes a local directory path, for a hand-written tree with no git
-ops behind it. A path is distinguished from a service name by not matching
-NAME_RE: a service name is `^[a-z0-9][a-z0-9._-]*$`, and any path containing
-`/`, `.`, `~`, or a leading character outside that set is not a service name.
+`create` takes a name and a template and no `--from` at all. None of the three
+takes a location: a service name is `^[a-z0-9][a-z0-9._-]*$`, a poke carries a
+`<project>@<sha>` pair, and the system resolves both to directories it already
+owns — so nothing here distinguishes a path from a name, because no caller can
+name a path.
 
 The rest is identity and roots — the registry record, the system user, the home,
 the quadlet directory, and the subvolumes and snapper configurations for the
@@ -89,15 +90,12 @@ class Source:
     sha: str | None = None
     service: str | None = None
     module: str | None = None
-    path: str | None = None
 
     def directory(self) -> Path:
         if self.kind == "poke":
             return paths.STAGING / str(self.project) / str(self.sha)
         if self.kind == "module":
             return modules_mod.source_of(str(self.module), str(self.service))
-        if self.kind == "path":
-            return Path(str(self.path))
         return paths.service_home(str(self.service))
 
 
@@ -541,8 +539,6 @@ def _project_from(source: Source) -> str:
     new layout the staging directory's basename is a sha."""
     if source.kind == "poke":
         return str(source.project)
-    if source.kind == "path":
-        return ""
     record = registry.load(str(source.service))
     if record is None or not record.project:
         raise errors.GuardenError(
