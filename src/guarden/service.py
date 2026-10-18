@@ -631,7 +631,11 @@ def _source_hash(directory: Path) -> str:
                     h.update(f.relative_to(directory).as_posix().encode())
                     h.update(f.read_bytes())
         elif path.is_file():
-            h.update(rel.encode())
+            # `rel` is a name and not only a string: the build inputs are
+            # `Path`s, and a Containerfile that is present would have reached
+            # here as one and ended the create with an AttributeError rather
+            # than a hash (measured: t250, after the Containerfile was seeded).
+            h.update(str(rel).encode())
             h.update(path.read_bytes())
     return h.hexdigest()
 
