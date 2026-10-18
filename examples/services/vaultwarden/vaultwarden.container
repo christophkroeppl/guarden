@@ -1,0 +1,22 @@
+# A self-hosted web service from a vendor you do not build for:
+# `weedr service create <name> --template vaultwarden` copies this file into the
+# service's own quadlet directory, `0640` under the service uid.
+#
+# Unlike `postgres`, this one starts with nothing planted: it has no credential
+# line, so the container comes up as it is written. What it has instead of a
+# credential is one data volume — named, so it is podman's and not a guarden
+# subvolume (see `examples/README.md`).
+
+[Unit]
+Description=vaultwarden from a guarden service template
+
+[Container]
+Image=docker.io/vaultwarden/server:latest
+# Loopback only, and the vendor's own web port inside. Nothing forwards it
+# until a manifest declares a route and an admin grants it.
+PublishPort=127.0.0.1:8082:80
+# The vendor's data directory: the sqlite database and the attachments.
+Volume=vaultwarden-data:/data
+# Signups are open on the vendor's default. Set this to false once the first
+# account exists, and keep the admin panel behind something else.
+Environment=SIGNUPS_ALLOWED=true
