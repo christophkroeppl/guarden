@@ -305,15 +305,16 @@ assert_exit 0
 # covered because it exists rather than because someone remembered it.
 #
 # Every helper the tree has is in the read set, and no suite but this one.
-# The runner selects exactly `tests/t[0-9]*.sh`, so the negation of that is
-# every helper — and the list below is the tree's own files with the runner's
-# own selection removed.
+# The list below is the tree's own files with **the runner's own selection**
+# removed — the runner selects `$REPO/tests/t[0-9]*.sh`, and the predicate in
+# `suitecache.py` is the same one, so the test and the tool cannot disagree
+# about what a suite is.
 python3 "$CACHE_TOOL" readset "$SUITE" >"$GUARDEN_FIXTURES/readset.list"
 while read -r helper; do
     name=${helper#"$GUARDEN_ROOT"/}
     grep -qxF "$name" "$GUARDEN_FIXTURES/readset.list" \
         || _fail "$name is a helper under tests/ and is not in the read set"
-done <<<"$(find "$GUARDEN_ROOT/tests" -type f ! -name '*.pyc' ! -name 't[0-9]*.sh' | sort)"
+done <<<"$(find "$GUARDEN_ROOT/tests" -type f ! -name '*.pyc' | sort | grep -vE '/t[0-9][^/]*\.sh$')"
 
 # The negation is exact: a suite is a suite because the runner says so, and
 # the runner's own selection is the predicate. The other suite is a suite, so
