@@ -207,12 +207,14 @@ def forget(resolved, record) -> list[str]:
         if snapper.configuration_exists(config):
             tool.run(["snapper", "--config", config, "delete-config"])
     _drop(paths.instance_tree(resolved.name, key))
-    _drop(paths.instance_home(resolved.name, key))
     # The search-path entries the instance's units were given in the service's
-    # own quadlet directory go with them: a declaration left behind would keep
-    # being generated into a unit for volumes, publications and a registry entry
-    # that are all gone.
+    # own quadlet directory go with them, derived from the instance's own unit
+    # directory (spec 5.2) — so this runs BEFORE that directory is dropped —
+    # and the instance's rendered slices go too: a routes.toml left behind
+    # would keep being rendered into the edge for a preview that is gone.
     units.drop_instance_entries(resolved.name, key)
+    _drop(paths.SHARED / resolved.name / "instances" / key)
+    _drop(paths.instance_home(resolved.name, key))
     del record.instances[key]
 
     released = ", ".join(

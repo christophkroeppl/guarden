@@ -158,10 +158,21 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
     shared = out / "shared"
     if shared.is_dir():
         gid = users.group_id(GUARDEN_GROUP)
-        target_dir = paths.SHARED / service
-        target_dir.mkdir(parents=True, exist_ok=True)
-        conf.set_owner(target_dir, (0, gid))
-        os.chmod(target_dir, SHARED_MODE)
+        # The slice target carries the instance: an instance's render installs
+        # under `shared/<service>/instances/<escaped-ref>/` and the service's
+        # own files stay the slot's (spec 2), so two instances of one service
+        # neither clobber each other's routes nor overwrite the slot's slice —
+        # which is ticket 295's folded-in wrong-path finding (264:87).
+        service_dir = paths.SHARED / service
+        directories = [service_dir]
+        if escaped_ref:
+            directories.append(service_dir / "instances")
+            directories.append(service_dir / "instances" / escaped_ref)
+        for directory in directories:
+            directory.mkdir(parents=True, exist_ok=True)
+            conf.set_owner(directory, (0, gid))
+            os.chmod(directory, SHARED_MODE)
+        target_dir = directories[-1]
         for path in sorted(_files(shared)):
             target = target_dir / path.relative_to(shared)
             conf.write_file(target, path.read_text(encoding="utf-8"), SHARED_FILE_MODE,

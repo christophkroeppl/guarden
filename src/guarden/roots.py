@@ -58,12 +58,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def slices() -> dict[str, list[dict]]:
-    """Every service's rendered routes, in service-name order."""
+    """Every service's rendered routes, in service-name order.
+
+    The service's own slice **and every instance's beneath it** (spec 2 and
+    §6.4): an instance's render installs at
+    `shared/<service>/instances/<escaped-ref>/routes.toml`, so two instances of
+    one service both reach the edge and neither — nor the slot's own file — is
+    overwritten by the other.
+    """
     out: dict[str, list[dict]] = {}
     if not paths.SHARED.is_dir():
         return out
     for directory in sorted(path for path in paths.SHARED.iterdir() if path.is_dir()):
-        routes = conf.read_toml(directory / "routes.toml").get("routes") or []
+        routes = list(conf.read_toml(directory / "routes.toml").get("routes") or [])
+        instances = directory / "instances"
+        if instances.is_dir():
+            for own in sorted(path for path in instances.iterdir() if path.is_dir()):
+                routes.extend(
+                    conf.read_toml(own / "routes.toml").get("routes") or []
+                )
         if routes:
             out[directory.name] = [dict(route) for route in routes]
     return out
