@@ -81,19 +81,32 @@ run weedr service create --help
 assert_exit 0
 assert_stdout_has "--env"
 
-# create requires a template (none installed on a fresh host)
+# create requires a template.
+#
+# **The refusal names the TEMPLATE, and it says why.** The set is not empty on
+# a fresh host any more — ticket 330 made the install phase copy the service
+# templates — so the chooser has a set to choose from, and with no terminal
+# under the harness it refuses with "create needs a terminal to answer its
+# prompts". That line does NOT contain the word "template", so an assertion
+# that looked for it was reading a refusal the verb no longer gives.
+#
+# The two refusals are DIFFERENT and the suite asserts each one:
+#   * an empty set names the template that was asked for and the path that
+#     holds none (the block below, with the set taken away);
+#   * a set with a choice in it and no terminal to answer in names the
+#     terminal.
 run weedr service create myapp-preview
 assert_exit 1
 assert_one_diagnostic "error:"
-assert_stderr_has "template"
+assert_stderr_has "create needs a terminal to answer its prompts"
 
 # `--env` is parsed and the verb reaches the template stage with it, rather than
-# only parsing as far as --help: the refusal names the template, and it is the
+# only parsing as far as --help: the refusal names the terminal, and it is the
 # host's, so exit 1 rather than the 2 a rejected argument would carry.
 run weedr service create myapp-staging --env staging
 assert_exit 1
 assert_one_diagnostic "error:"
-assert_stderr_has "template"
+assert_stderr_has "create needs a terminal to answer its prompts"
 assert_stderr_lacks "usage:"
 assert_stdout_empty
 
@@ -139,10 +152,25 @@ assert_no_passwd rejectedapp-staging
 # a service the host has never heard of, and the answer spec 1.2's `needs:` row
 # states for a provider that does not exist.
 
-run weedr service create rejectedapp-staging --template postgres
+# The other side of the same line, asked with the same flag: a name that breaks
+# no rule, and a set that does not hold it. The answer came from the host's
+# filesystem, so it stays `1` — the same answer `add --from <service>` gives for
+# a service the host has never heard of, and the answer spec 1.2's `needs:` row
+# states for a provider that does not exist.
+#
+# **The name is one the set does not hold.** It used to be `postgres`, which
+# the set did not hold because no template shipped — and ticket 330 made the
+# install phase copy the service templates, so `postgres` IS installed now and
+# the verb CREATED the service instead of refusing it. The test was asserting
+# a refusal against a name that had become a real template.
+#
+# `absenttemplate` breaks no rule (it is a legal template name) and the set
+# does not hold it, which is exactly the case this block is about.
+run weedr service create rejectedapp-staging --template absenttemplate
 assert_exit 1
 assert_one_diagnostic "error:"
 assert_stderr_has "does not exist"
+assert_stderr_has "absenttemplate"
 assert_stderr_lacks "not a template name"
 assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/rejectedapp-staging.toml
