@@ -260,6 +260,12 @@ def tunnel_publications(record) -> set[str]:
     is the registry's rather than a second reading of the track here. A route the
     registry says nothing about is an edge route: it was ingested before the
     field existed, and the edge's own accept already covers it.
+
+    **The answer is the SERVICE's container names, and an instance's publication
+    carries the same names.** An instance renders the same manifest, so the
+    container behind a route is the same name in both — and the accept set below
+    is keyed by that name, so one answer serves both publications. What
+    distinguishes them is the port, and the port is the instance's own.
     """
     path = paths.manifest_in_home(record.service)
     if not path.is_file():
@@ -292,6 +298,23 @@ def accept_lines(config) -> list[str]:
     number comes from the consumer's own registry edge — the same number
     `render.edge_publications` writes into `<AS>_PORT` — so the rule and the
     variable can never be built from two different answers.
+
+    **An INSTANCE's publication is granted like the service's own, and this is
+    the whole of what makes a preview reachable.** An instance gets its own
+    publication (`instance.publication`), its unit publishes it
+    (`PublishPort=127.0.0.1:<instance pub>:<port>`) and the route target is
+    `<service>:<instance pub>` — so the edge dials the instance's port, not the
+    service's. A set that named only the service's own publication left the
+    instance's port with no accept at all, and the default deny
+    (`daddr 127.0.0.0/8 jump DROP`, no owner match) dropped the edge's own
+    packet: the preview was running and unreachable (spec 7.4, spec 7.6).
+
+    The instance's uid IS the service's uid — an instance is a directory inside
+    one service and shares its one user — so the accept set is the same set,
+    applied to the instance's own port. The edge and the tunnel are granted on
+    it exactly when they are granted on the service's publication for the same
+    container, because the route is the same route: an instance renders the
+    service's manifest, so `routed`/`tunnel` is the container's name in both.
     """
     edge = edge_uids()
     tunnel = tunnel_uids()
@@ -310,6 +333,12 @@ def accept_lines(config) -> list[str]:
     for record in everything:
         allowed: dict[int, set[str]] = {}
         claimants = consumers.get(record.service, {})
+        edge_names = routed.get(record.service, set())
+        tunnel_names = tunnelled.get(record.service, set())
+        # The service's own publications and every instance's own publications,
+        # in one iteration: the two are granted by the same rule and the rule
+        # is keyed by the container's name, which an instance shares with the
+        # service (an instance renders the same manifest).
         for name, port in sorted(record.publication.items()):
             if name == publications.API:
                 if admin is None:
@@ -317,12 +346,25 @@ def accept_lines(config) -> list[str]:
                 uids = {admin}
             else:
                 uids = {record.uid} | claimants.get(port, set())
-                if record.uid in edge or name in routed.get(record.service, set()):
+                if record.uid in edge or name in edge_names:
                     uids |= edge
-                if name in tunnelled.get(record.service, set()):
+                if name in tunnel_names:
                     uids |= tunnel
             for uid in sorted(uids):
                 allowed.setdefault(port, set()).add(uid)
+        for instance in record.instances.values():
+            for name, port in sorted(instance.publication.items()):
+                if name == publications.API:
+                    # An instance never holds the API: the API belongs to the
+                    # edge's own service, and the edge is not a preview.
+                    continue
+                uids = {record.uid}
+                if record.uid in edge or name in edge_names:
+                    uids |= edge
+                if name in tunnel_names:
+                    uids |= tunnel
+                for uid in sorted(uids):
+                    allowed.setdefault(port, set()).add(uid)
         for port in sorted(allowed):
             for match in sorted(allowed[port]):
                 lines.append(
