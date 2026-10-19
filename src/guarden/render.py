@@ -25,6 +25,13 @@ installs it:
     <out>/system/    root-owned files, spec 6.10's `<name>.target`
     <out>/shared/    the slices `roots` and `twig` read (spec 2)
 
+**A fourth directory, `admin/`, holds the one file the mutator writes in
+podman's uid-scoped search path** (ADR-0019): the keep-id pin's
+`50-guarden-keepid.conf`. It is not in the service's home — nothing
+root-owned lives there — and the mutator installs it into
+`/etc/containers/systemd/users/<uid>/<unit>.container.d/`, where the
+generator reads it and where the admin's own `90-admin.conf` sits beside it.
+
 `--out` is the render directory the mutator copies from and removes (spec 2), and
 `loom` writes nothing outside it: the converter's scratch space is a temporary
 directory that is gone before this returns.
@@ -86,6 +93,12 @@ OWNED_KEYS = (
     "AddDevice",
     "HostUsers",
     "Rootfs",
+    # ADR-0019: the keep-id pin lives in a drop-in of its own, and the base
+    # unit carries no `UserNS=` line at all. A source's own line is refused
+    # by name (`REFUSED_DIRECTIVES` and the spelling check beside it), and
+    # the admin's drop-in is never merged into the base either — so the only
+    # way a `UserNS=` reaches a unit is the file guarden writes.
+    "UserNS",
 )
 
 # The refusal list (spec 6.3) in the vocabulary a hand-written quadlet file is
@@ -121,6 +134,14 @@ ABSENT = Path("/nonexistent/guarden/nothing")
 
 # The order the renderer's own keys are written in, after the repository's. Fixed
 # so a regenerated unit is byte-identical when nothing changed.
+#
+# **`UserNS` is not in this list, and its absence is the model** (ADR-0019):
+# the keep-id pin lives in a drop-in of guarden's own —
+# `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf`
+# — and the base unit carries no `UserNS=` line at all. The pin therefore
+# survives a regeneration of the unit, an admin's own `90-admin.conf` in the
+# same directory overrides it by name order alone, and no render can carry
+# the line twice.
 GUARDEN_OWNED_ORDER = (
     "ContainerName",
     "Network",
@@ -130,12 +151,6 @@ GUARDEN_OWNED_ORDER = (
     "Mount",
     "PublishPort",
     "Secret",
-    # ADR-0019: guarden's own `UserNS=` line — quadlet's spelling of the
-    # directive (podman-systemd.unit(5): `UserNS=keep-id:uid=200,gid=210`) —
-    # written from the registry's probed owner and from nothing a repository
-    # can reach. A source's own `UserNS=`/`Userns=` is refused, so the line
-    # this filter lets through is guarden's or it is not there at all.
-    "UserNS",
 )
 
 
@@ -1088,6 +1103,7 @@ def build(
         )
 
     for container in source.containers():
+        owner = _owner_of(context, source, container)
         plan.add(
             f"units/{container}.container",
             _container_unit(
@@ -1101,12 +1117,22 @@ def build(
                 routed=routed,
                 schema=schema,
                 domain=domain,
+                owner=owner,
             ),
         )
         plan.add(
             f"units/{container}.container.d/{ORDER_DROPIN}",
             render_template("quadlet-order-dropin.j2", service=context.service if context else ""),
         )
+        if owner is not None:
+            plan.add(
+                f"admin/{container}.container.d/{paths.KEEPID_DROPIN}",
+                render_template(
+                    "quadlet-keepid-dropin.j2",
+                    service=context.service if context else "",
+                    owner=owner,
+                ),
+            )
 
     if edge_ports:
         plan.add(f"units/{ENV_FILE}", _environment_file(document, edge_ports))
@@ -1128,6 +1154,20 @@ def _dropins(context: Context | None, source: Source) -> dict[str, Unit]:
     reads it and puts it back. A drop-in's `[Service]` keys land in the generated
     scope, because quadlet's own `[Container]` table has only `Memory=` and the
     systemd keys are the only way to express a soft and a hard limit together.
+
+    **Guarden's own file is NOT merged, and the base unit carries no
+    `UserNS=` line** (ADR-0019). Merging it would put the pin into the base
+    unit, and the base unit would then carry the line twice over — once from
+    the admin merge and once from the drop-in the generator reads — which is
+    the two-writers-one-key shape the whole drop-in model exists to avoid.
+    The pin's own file is written by the mutator, into the same directory, and
+    read by the generator; the renderer's business with it ends here, where it
+    is named and skipped.
+
+    The skip is by NAME and not by content: the file is identified by the name
+    the mutator writes it under, so a hand-written drop-in that happens to
+    carry a `UserNS=` line is refused by the base unit's own filter instead
+    (the `UserNS` entry in `OWNED_KEYS`).
     """
     out: dict[str, Unit] = {}
     if context is None or not context.record.uid:
@@ -1138,6 +1178,8 @@ def _dropins(context: Context | None, source: Source) -> dict[str, Unit]:
             continue
         merged = _merged(source.units[container])
         for path in sorted(directory.glob("*.conf")):
+            if path.name == paths.KEEPID_DROPIN:
+                continue
             dropin = unitsource.parse(path)
             for section in dropin.order:
                 for key, values in dropin.sections[section].items():
@@ -1192,6 +1234,35 @@ def _publications(
     return out
 
 
+def _owner_of(context: Context | None, source: Source, container: str) -> str | None:
+    """The keep-id line THIS unit's own image answers, or `None` (ADR-0019).
+
+    One reader for the answer, because the base unit's refusal and the
+    drop-in's content are the same question: the pair the registry holds for
+    this unit and for the image this unit names. The base unit carries no
+    line (the pin is a drop-in of its own), but the refusal of a source's own
+    `User=` still stands — a `User=` that is not the pinned pair runs where
+    the line maps nothing — so the answer is asked here, once, and the
+    refusal rides on it.
+
+    `None` is the whole of the other cases: no record to answer from, a
+    record that answers another image, and a pair probed to `0` (an image
+    that declares no user, whose container root the default map already
+    moves onto the service identity). No line in any of them.
+    """
+    if context is None:
+        return None
+    owner = owner_line(context.record, container, _unit_image(source, container, context))
+    if owner is None:
+        return None
+    refuse_pinned_user(
+        source.units[container],
+        owner,
+        f"the unit source {source.origin}: the container {container!r}",
+    )
+    return owner
+
+
 def _container_unit(
     document: manifest_mod.Manifest,
     source: Source,
@@ -1203,12 +1274,18 @@ def _container_unit(
     routed: list[str],
     schema: secretschema.Schema,
     domain: str,
+    owner: str | None = None,
 ) -> str:
     """One container unit: the source's own fields, then every field guarden owns.
 
     The order inside `[Container]` is the source's order, then guarden's own keys
     in a fixed order, so a regenerated unit differs from the last one only where
     something actually changed.
+
+    **The unit carries no `UserNS=` line** (ADR-0019): the keep-id pin is a
+    drop-in of guarden's own in the admin path, and `owner` — the answer for
+    this unit — is written there instead. A unit that carried the line as
+    well would have two writers for one key.
     """
     unit = merged if merged is not None else _merged(source.units[container])
     service = context.service if context else ""
@@ -1283,26 +1360,13 @@ def _container_unit(
     requests = _secret_requests(document, schema)
     if requests:
         unit.put("Container", "Secret", requests)
-    # ADR-0019: the keep-id line, and the registry's probed pair for THIS unit
-    # is its only source — the unit's own image's user, so a service whose
-    # units name two images renders two lines rather than the first image's
-    # pair in every unit. A unit with no answer (`None`) renders no line — and
-    # a pair probed to `0` is an image that declares no user, whose container
-    # root the default map already moves onto the service identity, so the
-    # line would name a mapping that is already in effect and change the rest
-    # of the map to get there.
-    owner = (
-        owner_line(context.record, container, _unit_image(source, container, context))
-        if context is not None
-        else None
-    )
-    if owner is not None:
-        refuse_pinned_user(
-            source.units[container],
-            owner,
-            f"the unit source {source.origin}: the container {container!r}",
-        )
-        unit.put("Container", "UserNS", [owner])
+    # ADR-0019: the keep-id line is NOT written here. The pin is a drop-in of
+    # guarden's own in the admin path (`50-guarden-keepid.conf`), written from
+    # the registry's probed owner and from nothing a repository can reach; the
+    # base unit carries no `UserNS=` line at all, so a regeneration of the
+    # unit cannot disturb the pin and an admin's own `90-admin.conf` can
+    # override it. `owner` was asked once, in `_owner_of`, and it is the
+    # drop-in's content there.
     container_keys.extend(_lines(unit, "Container", domain, only=GUARDEN_OWNED_ORDER))
 
     return render_template(

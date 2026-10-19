@@ -27,6 +27,24 @@ LOOM = paths.BIN / "loom"
 SHARED_MODE = 0o750
 SHARED_FILE_MODE = 0o640
 UNIT_MODE = 0o640
+# The keep-id drop-in, in podman's uid-scoped search path (ADR-0019).
+#
+# **The mode is `0644`, and the reason is who reads it.** The generator reads
+# this path as the SERVICE user, and so does the edge — the probe measured
+# that a `root:root 0600` base unit in the system dir yields NO generated
+# unit at all (`probe-quadlet-dropins.md` row 10). The service-owned `0640`
+# would refuse the edge and every other uid the generator runs as, and the
+# service-owned owner would refuse the generator too, because the generator
+# runs as the service and the file is root-owned.
+#
+# So the file is `root:root 0644`: readable by every uid the generator may
+# run as, writable by root alone, and nothing secret in it — a `UserNS=`
+# line names a uid and a gid and is not a credential.
+ADMIN_DROPIN_MODE = 0o644
+# The directories of the search path, and the mode each one needs: the
+# generator walks them as the service user, so every one of them is
+# traversable (`0755`) and none of them is writable by anybody but root.
+ADMIN_DIR_MODE = 0o755
 
 
 def render_dir(service: str, escaped_ref: str | None = None) -> Path:
@@ -155,6 +173,8 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
         conf.write_file(target, path.read_text(encoding="utf-8"), UNIT_MODE)
         written.append(str(target))
 
+    _install_admin_dropins(out, service, escaped_ref, written)
+
     shared = out / "shared"
     if shared.is_dir():
         gid = users.group_id(GUARDEN_GROUP)
@@ -184,6 +204,107 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
 
 
 QUADLET_KINDS = (".container.d", ".container")
+
+
+def _install_admin_dropins(
+    out: Path, service: str, escaped_ref: str | None, written: list[str]
+) -> None:
+    """Guarden's own drop-in, into podman's uid-scoped search path (ADR-0019).
+
+    **One file, one writer, one place.** The render's `admin/` directory
+    holds `50-guarden-keepid.conf` and nothing else, and this writes it into
+    `/etc/containers/systemd/users/<uid>/<unit>.container.d/` — the
+    directory the generator reads for a unit whose base file lives in the
+    service's home (measured, `probe-quadlet-dropins.md` row 8).
+
+    **The admin's own `90-admin.conf` in that directory is never written and
+    never deleted.** It is the human's file, and the alphabetical order is
+    what makes it win: `50-` merges before `90-`, and the last value of a
+    scalar key is the effective one. This function writes one named file and
+    touches nothing else in the directory — it does not clear the directory,
+    and it does not remove a file it did not write.
+
+    **The instance's own unit is a separate file.** An instance's units are
+    given an entry in the service's own quadlet directory named
+    `<unit>-<escaped-ref>` (`entry_stem`), and the generator reads THAT
+    name — so the instance's drop-in is named for the entry, not for the
+    unit's own stem. A drop-in written under the plain stem would sit in a
+    directory the generator never reads for an instance.
+
+    The mode is `0644` and the owner root, because the generator reads this
+    path as the service user and a root-owned `0600` file there yields no
+    generated unit at all (measured: `probe-quadlet-dropins.md` row 10).
+    """
+    admin = out / "admin"
+    record = registry.load(service)
+    if record is None or not record.uid:
+        return
+    rendered = {
+        path.name[: -len(".container")]
+        for path in sorted(_files(out / "units"))
+        if path.name.endswith(".container")
+    }
+    # The units this render gave a pin to — the ones with a drop-in of their
+    # own in the render's `admin/` directory. The difference from `rendered`
+    # is the set of units whose file must go: the ones the record does not
+    # answer any more.
+    pinned = {
+        path.relative_to(admin).parts[0][: -len(".container.d")]
+        for path in sorted(_files(admin))
+        if path.relative_to(admin).parts[0].endswith(".container.d")
+    }
+    for parent in paths.admin_parents():
+        parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(parent, ADMIN_DIR_MODE)
+    for path in sorted(_files(admin)):
+        relative = path.relative_to(admin)
+        # `relative` is `<unit>.container.d/<file>` — the unit's own name and
+        # the drop-in's file name, which is exactly the shape of the target.
+        stem = relative.parts[0]
+        if not stem.endswith(".container.d"):
+            continue
+        unit = stem[: -len(".container.d")]
+        if escaped_ref:
+            unit = entry_stem(unit, escaped_ref)
+        directory = paths.admin_dropin_dir(record.uid, unit)
+        directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(directory, ADMIN_DIR_MODE)
+        target = directory / path.name
+        conf.write_file(target, path.read_text(encoding="utf-8"), ADMIN_DROPIN_MODE)
+        written.append(str(target))
+    _drop_stale_admin_dropins(record.uid, rendered, escaped_ref, pinned)
+
+
+def _drop_stale_admin_dropins(
+    uid: int, rendered: set[str], escaped_ref: str | None, pinned: set[str]
+) -> None:
+    """Guarden's own file, gone for a unit the render gives no pin to.
+
+    **A stale pin is worse than a missing one.** The record answers a unit
+    with no pair — the image changed, or the record was edited to say the
+    image declares no user — and the render then produces no drop-in for it.
+    The file left behind would still carry a `UserNS=` line, the generator
+    would still merge it, and the mapping it names would still be in force:
+    the container would run under a pin the record no longer claims.
+
+    So the file guarden owns is removed for every unit THIS render produced
+    and gave **no** drop-in to. `pinned` is the set this render DID write, and
+    a unit in it is left alone — which is what keeps this from deleting the
+    file that was written a moment ago.
+
+    The removal is narrow on purpose: another unit's directory — the
+    service's own `<unit>.container.d` beside an instance's
+    `<unit>-<ref>.container.d` — is not this render's business, and neither
+    is the admin's own file, which is never touched at all.
+    """
+    root = paths.ADMIN_UNITS / str(uid)
+    if not root.is_dir():
+        return
+    for stem in sorted(rendered - pinned):
+        unit = entry_stem(stem, escaped_ref)
+        stale = paths.admin_dropin_dir(uid, unit) / paths.KEEPID_DROPIN
+        if stale.is_file():
+            stale.unlink()
 
 
 def entry_stem(unit: str, escaped_ref: str | None) -> str:
@@ -261,6 +382,43 @@ def drop_instance_entries(service: str, escaped_ref: str) -> None:
             elif target.exists():
                 target.unlink()
             break
+    _drop_instance_admin_dropins(service, escaped_ref)
+
+
+def _drop_instance_admin_dropins(service: str, escaped_ref: str) -> None:
+    """An instance's keep-id drop-in, gone with the instance (ADR-0019).
+
+    **An instance OWNS its drop-in directory, and the service's own is a
+    different one.** The instance's units are given an entry in the service's
+    own quadlet directory named `<unit>-<escaped-ref>`, and the generator
+    reads that name — so the instance's drop-in lives in
+    `<unit>-<escaped-ref>.container.d/` beside the service's own
+    `<unit>.container.d/`, and the two are separate directories with
+    separate pins. Two instances of one service therefore have two pins, and
+    neither lands in the other's.
+
+    So an instance that goes takes its own directory with it. **The admin's
+    own file in it is left alone**, by the same rule the service's removal
+    follows: guarden takes the file it wrote and nothing else. The instance's
+    directory is only removed when the admin left nothing in it.
+    """
+    record = registry.load(service)
+    if record is None or not record.uid:
+        return
+    root = paths.ADMIN_UNITS / str(record.uid)
+    if not root.is_dir():
+        return
+    for path in sorted(root.iterdir()):
+        if not path.is_dir() or not path.name.endswith(".container.d"):
+            continue
+        unit = path.name[: -len(".container.d")]
+        if entry_stem(unit, escaped_ref) != unit:
+            continue
+        for dropin in sorted(path.iterdir()):
+            if dropin.is_file() and dropin.name == paths.KEEPID_DROPIN:
+                dropin.unlink()
+        if not any(path.iterdir()):
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def _files(directory: Path) -> list[Path]:

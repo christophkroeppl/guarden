@@ -122,6 +122,9 @@ assert_exit 0
 
 home_b=/var/lib/guarden/services/kidname-staging/home
 unit_b=$home_b/.config/containers/systemd/app.container
+# ADR-0019's drop-in model: the pin is a drop-in of guarden's own, and the
+# base unit carries no `UserNS=` line at all.
+pin_b=/etc/containers/systemd/users/"$(id -u kidname-staging)"/app.container.d/50-guarden-keepid.conf
 record_b=$registry/kidname-staging.toml
 
 run weedr service start kidname-staging
@@ -146,7 +149,7 @@ daemon_line=$(grep "^daemon:" "$GUARDEN_STDOUT" || true)
 [ -n "$daemon_line" ] || _fail "the image's passwd names no daemon user to resolve against"
 daemon_uid=$(printf '%s\n' "$daemon_line" | cut -d: -f3)
 daemon_gid=$(printf '%s\n' "$daemon_line" | cut -d: -f4)
-assert_file_has "$unit_b" "UserNS=keep-id:uid=$daemon_uid,gid=$daemon_gid"
+assert_file_has "$pin_b" "UserNS=keep-id:uid=$daemon_uid,gid=$daemon_gid"
 assert_file_has "$record_b" "owner_uid = $daemon_uid"
 assert_file_has "$record_b" "owner_gid = $daemon_gid"
 
@@ -183,8 +186,9 @@ assert_exit 0
 run weedr service start kidgosu-staging
 assert_exit 0
 unit_g=/var/lib/guarden/services/kidgosu-staging/home/.config/containers/systemd/app.container
+pin_g=/etc/containers/systemd/users/"$(id -u kidgosu-staging)"/app.container.d/50-guarden-keepid.conf
 record_g=$registry/kidgosu-staging.toml
-assert_file_has "$unit_g" "UserNS=keep-id:uid=2000,gid=2000"
+assert_file_has "$pin_g" "UserNS=keep-id:uid=2000,gid=2000"
 assert_file_has "$record_g" "owner_uid = 2000"
 assert_file_has "$record_g" "owner_gid = 2000"
 
@@ -291,9 +295,10 @@ assert_exit 0
 run weedr service start kidrel-staging
 assert_exit 0
 unit_rel=/var/lib/guarden/services/kidrel-staging/home/.config/containers/systemd/app.container
+pin_rel=/etc/containers/systemd/users/"$(id -u kidrel-staging)"/app.container.d/50-guarden-keepid.conf
 record_rel=$registry/kidrel-staging.toml
-[ "$(unit_line "$unit_rel")" = "UserNS=keep-id:uid=3000,gid=3000" ] \
-    || _fail "a relative entrypoint whose script is on the image's PATH renders $(unit_line "$unit_rel"), and the handoff its script names is keep-id:uid=3000,gid=3000"
+[ "$(unit_line "$pin_rel")" = "UserNS=keep-id:uid=3000,gid=3000" ] \
+    || _fail "a relative entrypoint whose script is on the image's PATH renders $(unit_line "$pin_rel"), and the handoff its script names is keep-id:uid=3000,gid=3000"
 assert_file_has "$record_rel" "owner_uid = 3000"
 assert_file_lacks "$record_rel" "owner_uid = 0"
 
@@ -352,9 +357,10 @@ assert_exit 0
 run weedr service start kidexec-staging
 assert_exit 0
 unit_exec=/var/lib/guarden/services/kidexec-staging/home/.config/containers/systemd/app.container
+pin_exec=/etc/containers/systemd/users/"$(id -u kidexec-staging)"/app.container.d/50-guarden-keepid.conf
 record_exec=$registry/kidexec-staging.toml
-[ "$(unit_line "$unit_exec")" = "UserNS=keep-id:uid=2100,gid=2100" ] \
-    || _fail "an exec-form su-exec entrypoint renders $(unit_line "$unit_exec"), and the user it hands execution to is handoff with uid and gid 2100 in the image's own passwd — keep-id:uid=2100,gid=2100"
+[ "$(unit_line "$pin_exec")" = "UserNS=keep-id:uid=2100,gid=2100" ] \
+    || _fail "an exec-form su-exec entrypoint renders $(unit_line "$pin_exec"), and the user it hands execution to is handoff with uid and gid 2100 in the image's own passwd — keep-id:uid=2100,gid=2100"
 assert_file_has "$record_exec" "owner_uid = 2100"
 assert_file_has "$record_exec" "owner_gid = 2100"
 # The miss this fixture exists for was recorded as an ANSWER of root, which is
@@ -392,9 +398,10 @@ assert_exit 0
 run weedr service start kidtini-staging
 assert_exit 0
 unit_tini=/var/lib/guarden/services/kidtini-staging/home/.config/containers/systemd/app.container
+pin_tini=/etc/containers/systemd/users/"$(id -u kidtini-staging)"/app.container.d/50-guarden-keepid.conf
 record_tini=$registry/kidtini-staging.toml
-[ "$(unit_line "$unit_tini")" = "UserNS=keep-id:uid=2200,gid=2200" ] \
-    || _fail "an entrypoint whose script is not argv[0] renders $(unit_line "$unit_tini"), and the handoff that script names is handoff with uid and gid 2200 in the image's own passwd — keep-id:uid=2200,gid=2200"
+[ "$(unit_line "$pin_tini")" = "UserNS=keep-id:uid=2200,gid=2200" ] \
+    || _fail "an entrypoint whose script is not argv[0] renders $(unit_line "$pin_tini"), and the handoff that script names is handoff with uid and gid 2200 in the image's own passwd — keep-id:uid=2200,gid=2200"
 assert_file_has "$record_tini" "owner_uid = 2200"
 assert_file_has "$record_tini" "owner_gid = 2200"
 assert_file_lacks "$record_tini" "owner_uid = 0"

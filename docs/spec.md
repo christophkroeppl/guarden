@@ -160,7 +160,13 @@ to it.
   gated track
 /etc/containers/systemd/users/<uid>/  podman's uid-scoped rootless quadlet path: the admin
   injection point for a service's own units and drop-ins.
-  The mutator copies from `services/<name>/units.d/`.
+  <unit>.container.d/  one directory per unit, holding the drop-ins
+  that are merged into that unit's base file. **The mutator writes
+  exactly one file in it** — `50-guarden-keepid.conf`, the keep-id
+  pin (§6.3) — and **the admin's own `90-admin.conf` beside it is
+  never written and never deleted by guarden**. The directory is
+  searched AFTER the home's own directory, so a drop-in survives a
+  regeneration of the unit (§6.3).
 /etc/ssh/authorized_keys.d/hose  the poke keys, one forced command per project
 /etc/systemd/system/  soil's units and the units of the unprivileged programs
 /usr/lib/systemd/user/  not used; it is not uid-scoped and is not a search path
@@ -271,6 +277,11 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/etc/guarden/projects.toml`, the files under `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` | |
 | `/etc/guarden/creds/` | `0700` | `root` | |
 | `/etc/ssh/authorized_keys.d/hose` | `0644` | `root` | |
+| `/etc/containers/`, `/etc/containers/systemd/`, `/etc/containers/systemd/users/` | `0755` | `root:root` | `weedr service add`/`ingest`, creating the uid-scoped search path. **Traversable by every uid, because the generator walks it as the service user** — a `0750` would refuse the service its own units, and the umask's answer is not a mode (the same defect `/var/lib/guarden` had) |
+| `/etc/containers/systemd/users/<uid>/` | `0755` | `root:root` | `weedr service add`/`ingest`. The same traverse grant, one level down: the generator reads it as the service user |
+| `/etc/containers/systemd/users/<uid>/<unit>.container.d/` | `0755` | `root:root` | the mutator, installing the keep-id drop-in. One directory per unit, and the admin's own file in it is never touched |
+| `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | `0644` | `root:root` | the mutator, on the install that renders the pin. **World-readable, and that is the point**: the generator reads this path as the service user, and a root-owned `0600` file there yields NO generated unit at all (measured: `probe-quadlet-dropins.md` row 10). Nothing secret is in it — a `UserNS=` line names a uid and a gid — and root alone writes it |
+| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3) |
 
 `/run/guarden/locks/` is `2770 root:guarden` because `guarden` and root both take these locks
 — `queue` and `deploy-*` are taken by `furrow` as the `guarden` user, and the remaining names
@@ -1807,6 +1818,46 @@ source: a later start reads it instead of probing again, a record edited by hand
 through instead of being probed over, and no file's ownership is ever changed to agree with
 a container (ADR-0019).
 
+**The line is a DROP-IN, and the base unit carries no `UserNS=` line at all.** Three files,
+three writers, and no file with two of them:
+
+| file | who writes it | what it carries |
+|---|---|---|
+| the base unit, in the service's own quadlet directory | the renderer, on every install | **no `UserNS=` line at all** — the pin is not in it |
+| `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | the mutator, and nobody else | the `UserNS=keep-id:uid=…,gid=…` line |
+| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | **the admin, and nobody else** | whatever the admin wants; a `UserNS=` line in it **overrides** guarden's pin |
+
+The reasons are measured, and they are the whole of the design. **The base unit carries no
+line** because a base unit that carried it would carry it twice over once the generator
+merged the drop-in in — the render's own merge and the generator's merge are two different
+merges, and a key with two of them has two writers. **The pin is in a drop-in** because the
+drop-in directory is searched after the home's own, so a regeneration of the unit cannot
+disturb the pin — and because quadlet merges drop-ins **in alphabetical order by filename**,
+not by mtime and not by directory of origin, so the alphabetically LAST file's value of a
+scalar key is the one in force. **The admin's file is the admin's**: guarden writes exactly
+one file in that directory, never writes `90-admin.conf`, and never deletes it — not on a
+re-render, and not on a removal of the service, which takes guarden's own file and leaves the
+admin's where it is.
+
+**The admin's slot is power, and it is documented as power.** A `UserNS=` line in
+`90-admin.conf` **overrides the pin guarden probed and recorded**: the container then runs
+under the admin's mapping and not the one the image's own user asked for, and the registry
+still records guarden's pair — the admin's file is not the record and does not become one. It
+also **bypasses the refusal of a repository's own `Userns=`** — that refusal is about
+repository input, and this is the admin's own file, root-owned and outside any repository's
+reach. And **a change to it takes effect only after a daemon-reload**: a drop-in is read by
+the generator, and the generator runs at reload, so a file edited while the unit is running
+changes nothing until the user manager is reloaded and the unit is restarted.
+
+**The instance's drop-in is named for the entry, not for the unit.** An instance's units are
+given an entry in the service's own quadlet directory named `<unit>-<escaped-ref>` (§5.2), and
+the generator reads that name — so the instance's keep-id drop-in is
+`<unit>-<escaped-ref>.container.d/50-guarden-keepid.conf`, beside the service's own
+`<unit>.container.d/`. **An instance OWNS its drop-in directory; it does not share the
+service's.** Two instances of one service have two pins, neither lands in the other's, and
+an instance that is removed takes its own directory with it — the admin's own file in it is
+left alone, by the same rule the service's removal follows.
+
 **A `firewall:` entry is validated here and installed nowhere.** The renderer checks the closed
 shape of §4 and refuses the same malformed input it refuses everywhere else, and it writes the
 entry into the registry as a *request* for the mutator to read — it renders no firewall rule,
@@ -1950,7 +2001,7 @@ The steps, in this order, and the order is the point :
   teaches people to want the gate gone. The operator then plants the credentials and runs
   `weedr service start <name>`, which re-evaluates the gate, probes the image's declared
   user once when the registry holds no probed owner — rendering guarden's `UserNS=keep-id`
-  line into the units from it (§6.3) — and starts if the gate now passes. **No
+  line into the unit's own drop-in from it (§6.3) — and starts if the gate now passes. **No
   second push is needed**, and the gate's verdict — which until now existed only in the journal
   — is a field in the registry.
 

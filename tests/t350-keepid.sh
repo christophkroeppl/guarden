@@ -110,6 +110,12 @@ home=/var/lib/guarden/services/kid-staging/home
 unit=$home/.config/containers/systemd/app.container
 record=$registry/kid-staging.toml
 svc_uid=$(id -u kid-staging)
+# ADR-0019's drop-in model: the pin lives in a drop-in of guarden's own in the
+# uid-scoped search path, and the BASE unit carries no `UserNS=` line at all.
+# Every assertion below about "the line" is about the drop-in, and the base
+# unit's own absence of the line is asserted where the line is.
+dropin_dir=/etc/containers/systemd/users/"$svc_uid"/app.container.d
+pin=$dropin_dir/50-guarden-keepid.conf
 assert_passwd kid-staging
 assert_linger kid-staging
 run grep -c "^kid-staging:" /etc/subuid
@@ -232,10 +238,18 @@ owner=$(stat -c %u "$written")
 [ "$owner" = "$svc_uid" ] \
     || _fail "the file written inside the container is owned by host uid $owner, not the service uid $svc_uid"
 
-# --- the unit carries the line, and the record carries the numbers -----------
+# --- the drop-in carries the line, and the record carries the numbers ---------
+#
+# **The base unit carries NO `UserNS=` line** (ADR-0019's drop-in model): the
+# pin is the drop-in, and a base unit that carried the line as well would
+# have two writers for one key. The absence is asserted, not the presence of
+# something else.
 
 assert_file_exists "$unit"
-assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=$kid_gid"
+assert_file_exists "$pin"
+assert_file_lacks "$unit" "UserNS="
+assert_file_lacks "$unit" "Userns="
+assert_file_has "$pin" "UserNS=keep-id:uid=10001,gid=$kid_gid"
 assert_file_has "$record" "owner_uid = 10001"
 assert_file_has "$record" "owner_gid = $kid_gid"
 # ADR-0019's two record shapes: this service's units name ONE image, so its
@@ -247,11 +261,11 @@ assert_file_lacks "$record" "owner_units"
 
 # --- the pin, measured: uid 0, the init ids, and both maps -------------------
 #
-# The line is read out of the installed unit rather than retyped, so what is
-# measured is the line the render actually produced.
+# The line is read out of the drop-in guarden wrote rather than retyped, so
+# what is measured is the line the render actually produced.
 
-generated=$(grep -m1 "^UserNS=" "$unit" | cut -d= -f2- || true)
-[ -n "$generated" ] || _fail "the unit carries no UserNS= line to measure"
+generated=$(grep -m1 "^UserNS=" "$pin" | cut -d= -f2- || true)
+[ -n "$generated" ] || _fail "the drop-in carries no UserNS= line to measure"
 echo "MEASURE: the generated line: $generated"
 
 # (b) The task's own shape: a container STARTED with the generated line and
@@ -324,12 +338,17 @@ gid_rest=$((65536 - kid_gid))
     || _fail "gid_map row for $gid_next is [$(map_row "$GUARDEN_FIXTURES/gid-map" "$gid_next")], expected [$gid_next $gid_next $gid_rest]"
 
 # --- a second start is stable, and the record is what renders ----------------
+#
+# **Both files are stable**, and that is the churn claim: the re-render
+# trigger reads the drop-in guarden owns, not the base unit — a trigger that
+# read the base unit would reinstall the units on every start, because the
+# base unit holds no line and so the answer would always be "no line".
 
-before=$(sha256sum "$unit" | cut -d' ' -f1)
+before=$(sha256sum "$unit" "$pin" | sha256sum | cut -d' ' -f1)
 run weedr service start kid-staging
 assert_exit 0
-after=$(sha256sum "$unit" | cut -d' ' -f1)
-[ "$before" = "$after" ] || _fail "a second start rendered a different unit ($before -> $after)"
+after=$(sha256sum "$unit" "$pin" | sha256sum | cut -d' ' -f1)
+[ "$before" = "$after" ] || _fail "a second start rendered a different unit or drop-in ($before -> $after)"
 assert_file_has "$record" "owner_uid = 10001"
 
 # The record, not a probe, is what the renderer answers to: an owner_uid the
@@ -340,7 +359,7 @@ run weedr service start kid-staging
 assert_exit 0
 grep -q "^owner_uid = 4242$" "$record" \
     || _fail "a start with a probed uid already in the record probed again and overwrote it"
-assert_file_has "$unit" "UserNS=keep-id:uid=4242,gid=$kid_gid"
+assert_file_has "$pin" "UserNS=keep-id:uid=4242,gid=$kid_gid"
 
 # A record with no probed uid is the probe's condition, and it holds again:
 # the line comes back to the image's own ids.
@@ -349,7 +368,7 @@ sed -i '/^owner_gid = /d' "$record"
 run weedr service start kid-staging
 assert_exit 0
 assert_file_has "$record" "owner_uid = 10001"
-assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=$kid_gid"
+assert_file_has "$pin" "UserNS=keep-id:uid=10001,gid=$kid_gid"
 
 # The field an operator edits by hand holds a NUMBER, and a quoted "4242" in
 # the TOML document is a string: read back unconverted it reached the
@@ -363,7 +382,7 @@ sed -i 's/^owner_uid = 10001$/owner_uid = "4242"/' "$record"
 run weedr service start kid-staging
 echo "MEASURE: stderr of a quoted owner_uid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
 assert_exit 0
-assert_file_has "$unit" "UserNS=keep-id:uid=4242,gid=$kid_gid"
+assert_file_has "$pin" "UserNS=keep-id:uid=4242,gid=$kid_gid"
 # The value comes back as the NUMBER it was read as: the start writes its own
 # record (the gate verdict) from the loaded one, so the conversion is durable
 # and what must NOT be here is 10001 — that would be the probe answering again.
@@ -496,13 +515,13 @@ sed -i 's/^owner_gid = .*/owner_gid = 9998/' "$record"
 run weedr service start kid-staging
 assert_exit 0
 assert_file_has "$record" "owner_gid = 9998"
-assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=9998"
+assert_file_has "$pin" "UserNS=keep-id:uid=10001,gid=9998"
 
 sed -i 's/^owner_gid = .*/owner_gid = "9997"/' "$record"
 run weedr service start kid-staging
 assert_exit 0
 assert_file_has "$record" "owner_gid = 9997"
-assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=9997"
+assert_file_has "$pin" "UserNS=keep-id:uid=10001,gid=9997"
 assert_file_lacks "$record" "owner_gid = \"9997\""
 
 sed -i 's/^owner_gid = .*/owner_gid = "not-a-number"/' "$record"
@@ -530,7 +549,7 @@ run weedr service start kid-staging
 assert_exit 0
 assert_file_has "$record" "owner_uid = 10001"
 assert_file_has "$record" "owner_gid = $kid_gid"
-assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=$kid_gid"
+assert_file_has "$pin" "UserNS=keep-id:uid=10001,gid=$kid_gid"
 
 # --- create AND modify: a second process after a restart ---------------------
 #
@@ -649,9 +668,10 @@ worker_gid=$(image_gid kidpair-staging localhost/kidpair-worker:latest 20021)
 [ -n "$worker_gid" ] || _fail "the worker image resolves uid 20021 to no gid in its own passwd"
 [ "$web_gid" != "$worker_gid" ] || _fail "both images resolve to gid $web_gid, so this fixture cannot tell two pins apart"
 
-# unit_line <path>: the unit's own rendered line, or `none`. A red that prints
-# what the unit actually carries is evidence; a grep that only says the pattern
-# is missing is not.
+# unit_line <path>: the file's own rendered line, or `none`. A red that prints
+# what the file actually carries is evidence; a grep that only says the
+# pattern is missing is not. **The path is a drop-in**, not a base unit: ADR-0019
+# puts the pin in `50-guarden-keepid.conf` and the base unit carries no line.
 unit_line() {
     grep -m1 '^UserNS=' "$1" || printf 'none\n'
 }
@@ -675,11 +695,20 @@ done
 unit_web=$home_pair/.config/containers/systemd/web.container
 unit_worker=$home_pair/.config/containers/systemd/worker.container
 record_pair=$registry/kidpair-staging.toml
+# ADR-0019's drop-in model: the two pins are two drop-ins, one per unit, in
+# the uid-scoped search path — and the base units carry no `UserNS=` line at
+# all.
+pair_uid=$(id -u kidpair-staging)
+pin_web=/etc/containers/systemd/users/"$pair_uid"/web.container.d/50-guarden-keepid.conf
+pin_worker=/etc/containers/systemd/users/"$pair_uid"/worker.container.d/50-guarden-keepid.conf
 
-# Two images, two lines: the claim this fixture exists for. Each unit carries
-# the pair of the image IT names, and neither unit carries the other's.
-line_web=$(unit_line "$unit_web")
-line_worker=$(unit_line "$unit_worker")
+# Two images, two lines: the claim this fixture exists for. Each unit's OWN
+# drop-in carries the pair of the image IT names, and neither carries the
+# other's.
+assert_file_lacks "$unit_web" "UserNS="
+assert_file_lacks "$unit_worker" "UserNS="
+line_web=$(unit_line "$pin_web")
+line_worker=$(unit_line "$pin_worker")
 [ "$line_web" = "UserNS=keep-id:uid=10011,gid=$web_gid" ] \
     || _fail "the web unit of a two-image service carries $line_web, and its own image's user is keep-id:uid=10011,gid=$web_gid"
 [ "$line_worker" = "UserNS=keep-id:uid=20021,gid=$worker_gid" ] \
@@ -751,12 +780,12 @@ pair_init kidpair-staging-worker
 
 # A second start leaves both lines alone: the record, not a probe, is what the
 # renderer answers to once both pairs are in it.
-before_pair=$(sha256sum "$unit_web" "$unit_worker" | sha256sum | cut -d' ' -f1)
+before_pair=$(sha256sum "$unit_web" "$unit_worker" "$pin_web" "$pin_worker" | sha256sum | cut -d' ' -f1)
 run weedr service start kidpair-staging
 assert_exit 0
-after_pair=$(sha256sum "$unit_web" "$unit_worker" | sha256sum | cut -d' ' -f1)
+after_pair=$(sha256sum "$unit_web" "$unit_worker" "$pin_web" "$pin_worker" | sha256sum | cut -d' ' -f1)
 [ "$before_pair" = "$after_pair" ] \
-    || _fail "a second start rendered a different pair of units ($before_pair -> $after_pair)"
+    || _fail "a second start rendered a different pair of units or drop-ins ($before_pair -> $after_pair)"
 
 # --- a render the record does not answer: no line, not another image's pair ---
 #
@@ -775,10 +804,15 @@ cp -R "$home/.guarden/." "$changed/.guarden/"
 
 # Control: the same source naming its own image renders the recorded pair, so
 # the half below fails on the image and on nothing else about the render.
+# **The render's output carries the pin in its `admin/` directory**, which is
+# where the mutator installs it from — and the base unit in `units/` carries
+# no `UserNS=` line at all.
 run loom render "$changed" --service kid-staging --out "$changed/out-own"
 assert_exit 0
-[ "$(unit_line "$changed/out-own/units/app.container")" = "UserNS=keep-id:uid=10001,gid=$kid_gid" ] \
-    || _fail "the record's own image renders $(unit_line "$changed/out-own/units/app.container") and the pair it holds is keep-id:uid=10001,gid=$kid_gid"
+[ "$(unit_line "$changed/out-own/units/app.container")" = "none" ] \
+    || _fail "the base unit renders $(unit_line "$changed/out-own/units/app.container") and must render no line at all: the pin is a drop-in (ADR-0019)"
+[ "$(unit_line "$changed/out-own/admin/app.container.d/50-guarden-keepid.conf")" = "UserNS=keep-id:uid=10001,gid=$kid_gid" ] \
+    || _fail "the record's own image renders $(unit_line "$changed/out-own/admin/app.container.d/50-guarden-keepid.conf") and the pair it holds is keep-id:uid=10001,gid=$kid_gid"
 
 sed -i 's|^Image=localhost/kid-staging:latest$|Image=localhost/kid-other:latest|' \
     "$changed/.guarden/quadlet/app.container"
@@ -786,6 +820,7 @@ run loom render "$changed" --service kid-staging --out "$changed/out-other"
 assert_exit 0
 [ "$(unit_line "$changed/out-other/units/app.container")" = "none" ] \
     || _fail "a unit naming localhost/kid-other:latest renders $(unit_line "$changed/out-other/units/app.container") from a record whose owner_image is localhost/kid-staging:latest, and a unit the record does not answer renders no line (ADR-0019) — the render alone never probes, so a line here is another image's pin installed until the next start repairs it"
+assert_file_missing "$changed/out-other/admin/app.container.d/50-guarden-keepid.conf"
 
 # --- a rebuild under the same tag is a DIFFERENT image -----------------------
 #
@@ -812,5 +847,5 @@ assert_file_lacks "$record" "owner_image"
 run weedr service start kid-staging
 assert_exit 0
 assert_file_has "$record" "owner_uid = 10002"
-assert_file_has "$unit" "UserNS=keep-id:uid=10002,gid=10002"
+assert_file_has "$pin" "UserNS=keep-id:uid=10002,gid=10002"
 assert_file_lacks "$unit" "uid=10001"

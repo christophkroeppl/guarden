@@ -572,9 +572,33 @@ TasksMax=512
 ```
 
 That directory is podman's rootless quadlet search path and is scoped by uid, so only that
-service's units pick the drop-in up. It is root-owned and nothing in guarden reads or rewrites
-it, which is what makes a cap survive a regeneration. A manifest cannot state a weight or a
-cap; both come from the host.
+service's units pick the drop-in up. It is root-owned, and **guarden reads the drop-ins in it
+and puts them back into the rendered unit** — that is what makes a cap survive a regeneration
+— but it writes exactly one file there itself: `50-guarden-keepid.conf`, the keep-id pin
+ADR-0019 renders for a container whose image declares a non-root user. A manifest cannot
+state a weight or a cap; both come from the host.
+
+**Your own file beside it is yours, and it wins.** Drop-ins merge in alphabetical order by
+filename, and the last value of a scalar key is the one that runs, so a file named after
+`90-` overrides guarden's `50-`:
+
+```sh
+# /etc/containers/systemd/users/<uid>/web.container.d/90-admin.conf   root-owned, yours
+[Container]
+UserNS=keep-id:uid=2002,gid=2002
+```
+
+That line **overrides the pin guarden probed and recorded**: the container runs under your
+mapping and not the one the image's own user asked for. It also bypasses the refusal of a
+repository's own `Userns=` — that refusal is about repository input, and this file is
+root-owned and outside any repository's reach. It is not the record: the registry still holds
+guarden's pair, and the admin's file does not become one.
+
+**Guarden never writes that file and never deletes it.** Not on a re-render, and not when the
+service is removed — the removal takes guarden's own `50-guarden-keepid.conf` and leaves
+yours where it is. **A change takes effect only after a daemon-reload**, because a drop-in is
+read by the generator and the generator runs at reload: edit the file, reload the service
+user's manager, and restart the unit.
 
 ---
 

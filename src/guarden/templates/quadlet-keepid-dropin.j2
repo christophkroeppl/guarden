@@ -1,0 +1,20 @@
+{#
+  Guarden's own keep-id drop-in (ADR-0019).
+
+  The pin lives in a FILE of its own and not in the base unit: the base unit
+  carries no `UserNS=` line at all, and the only two files in this directory
+  are guarden's and the admin's. Quadlet merges drop-ins in alphabetical
+  order and the last one wins, so `50-guarden-keepid.conf` is the pin and
+  `90-admin.conf` — the human's own file, which guarden never writes and
+  never deletes — is what overrides it.
+
+  The `[Container]` header is not decoration: the merge is a concatenation
+  (quadlet(5)), so a file with no header at all would put its key in
+  whichever section the file before it ended in, and the rendered base unit
+  ends in `[Service]`.
+#}
+# Rendered by loom for {{ service }}. Do not edit: the next render overwrites
+# this file, and the mutator installs it into the admin path.
+
+[Container]
+UserNS={{ owner }}

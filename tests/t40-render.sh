@@ -175,6 +175,41 @@ assert_exit 0
 run diff -r "$GUARDEN_FIXTURES/render-once" "$render"
 assert_exit 0
 
+# --- an admin's `UserNS=` in a drop-in does NOT reach the base unit ---------
+#
+# **The base unit carries no `UserNS=` line in any spelling** (ADR-0019's
+# drop-in model): the pin is a file of its own, and the generator reads the
+# admin's own file directly. Merging the admin's line into the base unit
+# would put the same key in two files, and — worse — would leave a STALE copy
+# behind when the admin deletes their own file: the base unit is rewritten on
+# every install, but only from the drop-ins that are there at that moment, so
+# a deleted override would keep working until the next re-render happened to
+# notice.
+#
+# The base unit's own absence of the line is asserted, and so is the absence
+# of the merged copy.
+seed "$GUARDEN_PREFIX/etc/containers/systemd/users/1101/web.container.d/30-userns.conf" \
+    "[Container]" "UserNS=keep-id:uid=2002,gid=2002"
+run loom render "$project" --service app-production --out "$render"
+assert_exit 0
+assert_file_lacks "$unit" "UserNS="
+assert_file_lacks "$unit" "Userns="
+# The admin's OTHER keys in the same file are still merged — the refusal is
+# about the one key the model gives to a file of its own.
+assert_file_has "$unit" "TUNED=yes"
+rm -f "$GUARDEN_PREFIX/etc/containers/systemd/users/1101/web.container.d/30-userns.conf"
+
+# And the render's OWN drop-in is not merged back into the base unit: the
+# render writes it under `admin/`, and merging it would give the key two
+# writers — the renderer's merge and the generator's merge.
+seed "$GUARDEN_PREFIX/etc/containers/systemd/users/1101/web.container.d/50-guarden-keepid.conf" \
+    "[Container]" "UserNS=keep-id:uid=3003,gid=3003"
+run loom render "$project" --service app-production --out "$render"
+assert_exit 0
+assert_file_lacks "$unit" "UserNS="
+assert_file_lacks "$unit" "3003"
+rm -f "$GUARDEN_PREFIX/etc/containers/systemd/users/1101/web.container.d/50-guarden-keepid.conf"
+
 # `loom check` validates and writes nothing: no out directory, and the project's
 # own tree is untouched.
 cp -r "$project" "$GUARDEN_FIXTURES/project-before"
