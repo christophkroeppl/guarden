@@ -60,7 +60,7 @@ deployment worked, but the document that claims to describe it is fiction.
 `weedr service create` exists and takes a `--template`, but the templates
 carry a *file* and nothing else: "A template declares no `state:` and no
 `bulk:`, so guarden creates no subvolume and no snapper configuration for it"
-(examples/services/postgres/postgres.container). The operator picks a template
+(src/guarden/templates/services/postgres/postgres.container). The operator picks a template
 and gets a service with no manifest — so it cannot `provide:` anything, so
 **nothing can reach it** and the operator writes the manifest by hand anyway.
 
@@ -268,7 +268,7 @@ is written, and no value reaches a granted verb:
 
 ## Notes
 
-- The existing `examples/services/*` templates become the *starting points*
+- The existing `src/guarden/templates/services/*` templates become the *starting points*
   the creator fills in, rather than the finished artefacts they are now.
 - The `provides:` kind question matters more than it looks: a service with no
   `provides:` cannot be reached by any other service, so a creator that does

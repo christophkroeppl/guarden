@@ -285,18 +285,20 @@ and when stdin is not a terminal says so rather than reading an answer from it:
 error: create needs a terminal to answer its prompts; run it interactively
 ```
 
-`examples/services/` in this repository carries two copyable ones — `postgres`, a third-party
-database, and `vaultwarden`, a self-hosted web service. Install them with:
+The two service templates ship with the program and `soil install` installs them: `postgres`, a
+third-party database, and `vaultwarden`, a self-hosted web service. They land in
+`/usr/lib/guarden/templates/services/`, and `weedr service create --template postgres` finds
+them there.
 
-```sh
-install -d -m 0755 /usr/lib/guarden/templates/services
-cp -r examples/services/postgres examples/services/vaultwarden /usr/lib/guarden/templates/services/
+```
+$ ls /usr/lib/guarden/templates/services/
+postgres  vaultwarden
 ```
 
-`soil install` copies the checkout's own template tree over that directory without deleting
-what the checkout does not carry, and `soil install --check` compares the other way — the
-installed tree against the checkout — so a set installed by hand is neither overwritten nor
-reported as drift.
+**An operator's own template is not overwritten.** `soil install` copies the checkout's own
+template tree over that directory without deleting what the checkout does not carry, and
+`soil install --check` compares the other way — the installed tree against the checkout — so a
+template installed by hand is neither overwritten nor reported as drift.
 
 A template declares nothing guarden reads: no `state:` and no `bulk:`, no `ports:`, no
 `schema:`. The consequences are the bullets below — no volume, no publication, no firewall

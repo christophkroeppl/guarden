@@ -7,6 +7,9 @@ Blockers: none. Found 2026-10-19 by the from-scratch acceptance run
 - docs/sysadmin.md:281 / examples/README.md:19 give `cp -r examples/services/…` with
   no cwd; it only resolves from the repo root, which on a real host is
   /usr/local/src/guarden — a path the runbook never names.
+  **RESOLVED by ticket 330 (2026-10-19): the templates ship with the program and
+  `soil install` installs them, so the `cp -r` instruction is gone from both
+  documents and there is no cwd to get wrong.** The rest of this ticket stands.
 - The runbook ends at `weedr service start` (docs/sysadmin.md:237-371): grep for
   pg_isready across README/docs/examples = 0 hits, and to prove the postgres example
   answers the operator had to install postgresql-client by hand. No verification

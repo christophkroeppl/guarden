@@ -9,14 +9,12 @@ $GUARDEN_TEMPLATES/services  when that is set
 <prefix>/usr/lib/guarden/templates/services/      otherwise
 ```
 
-which `soil install` creates from `src/guarden/templates/` — and
-`src/guarden/templates/` ships no `services/` subdirectory, so **no template set
-ships with guarden**. On a fresh host `weedr service create` refuses with exit 1
-until one is installed:
+which `soil install` creates from `src/guarden/templates/` — and that tree
+**ships a `services/` subdirectory with two templates in it** (`postgres` and
+`vaultwarden`), so a template set ships with guarden and `weedr service
+create --template postgres` works on a fresh host:
 
 ```sh
-install -d -m 0755 /usr/lib/guarden/templates/services
-cp -r examples/services/postgres /usr/lib/guarden/templates/services/
 weedr service create postgres-staging --env staging --template postgres
 ```
 

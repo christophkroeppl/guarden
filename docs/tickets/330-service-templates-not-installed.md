@@ -21,7 +21,7 @@ On a live box (`app-vm`), that directory does not exist:
     ls: cannot access '...': No such file or directory
 
 **The templates exist — in the wrong place.** The repo carries them at
-`examples/services/postgres/` and `examples/services/vaultwarden/`, each a
+`src/guarden/templates/services/postgres/` and `src/guarden/templates/services/vaultwarden/`, each a
 directory holding one `.container` file.
 
 **And the install phase does not install them.** `_install_templates`
@@ -55,7 +55,7 @@ there are two honest answers:
   installed by the same phase that installs everything else. The cost: the
   templates become part of the program's own template tree, and `examples/`
   loses two entries (or keeps them as pointers).
-- **Add a second walk** in the install phase for `examples/services/` into
+- **Add a second walk** in the install phase for `src/guarden/templates/services/` into
   `templates/services/`. The cost: two walks to keep agreeing, and the
   examples tree becomes a source of installed state (the spec's §5.1 rule
   that a template is root-owned and installed, not read out of a checkout).
@@ -79,9 +79,9 @@ layout.
   guarden owns it; but that should be stated rather than implied, because a
   template an operator has edited and a template guarden overwrites are
   different expectations.
-- **The two existing templates are minimal.** `examples/services/postgres/`
+- **The two existing templates are minimal.** `src/guarden/templates/services/postgres/`
   is one `.container` with an `Image=` line and a `PublishPort=`, and
-  `examples/services/vaultwarden/` likewise. A template that produces a
+  `src/guarden/templates/services/vaultwarden/` likewise. A template that produces a
   service with no manifest cannot `provide:` anything, so nothing can reach
   it — the reason the manual path needed twelve steps. A template that
   carried a manifest would fix that, and the manifest is what ticket 328's
