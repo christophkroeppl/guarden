@@ -787,6 +787,7 @@ def _start(args) -> int:
         raise errors.GuardenError(
             f"{resolved.name} cannot start: {verdict.reason}", errors.HOST_NOT_AS_ASSUMED
         )
+    _refuse_slot_start(resolved, record)
     # `started <name>` is a claim about the host, so it needs a unit to be true of.
     # A quadlet directory with nothing in it is a service whose units were never
     # installed, and reporting success there is the false report spec 1.2 forbids.
@@ -805,6 +806,47 @@ def _start(args) -> int:
     service.start_units(resolved.name, resolved.escaped_ref)
     sys.stdout.write(f"started {resolved.name}\n")
     return 0
+
+
+def _refuse_slot_start(resolved, record) -> None:
+    """A bare `<name>` on an instance track names no instance, and is refused.
+
+    An instance track holds one service per workload and one INSTANCE per ref
+    (spec 5.2). A name with no `/<ref>` therefore names the SLOT — and the slot
+    of an instance track holds no unit of its own: every render on that track
+    is an instance's, and the slot's own quadlet directory holds only the
+    entries the search path needs (`<unit>-<escaped-ref>`, one per instance).
+
+    So a bare start on such a track had two ways to go wrong, and both were
+    live at once (review r2, finding F3):
+
+    - the "has no unit to start" guard read the SLOT's directory, which holds
+      those per-instance entries, so it passed and the start went on;
+    - `start_units(name, None)` then iterated that same directory and started
+      **every instance**, and keep-id's `ensure_owner_line` first re-rendered
+      the SLOT — a render that has no business existing on an instance track —
+      into it as `web.container`, which the start then started too.
+
+    A fan-out that starts every preview, plus a phantom unit nobody declared,
+    is not a start. The refusal names the instances, so the operator is told
+    which ones to name — the same shape as the refusal `weedr service remove
+    <name>` gives while instances exist (spec 5.3).
+
+    Exit `2`: the argument named something the track does not have, and it is
+    rejected input rather than a host that is not in the expected state
+    (spec 1.2).
+    """
+    if resolved.ref or resolved.track.kind != "instance":
+        return
+    live = ", ".join(
+        instance.ref for _, instance in sorted(record.instances.items())
+    )
+    raise errors.GuardenError(
+        f"the track {resolved.track.name!r} is kind = \"instance\", so every start names "
+        f"one instance: {resolved.name}/<ref>"
+        + (f" (the instances are: {live})" if live else ""),
+        errors.REJECTED_INPUT,
+    )
 
 
 def _stop(args) -> int:
