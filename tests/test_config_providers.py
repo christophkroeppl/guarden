@@ -53,7 +53,7 @@ def test_providers_not_a_table_refused():
     path = _write_config('providers = "nope"\n')
     try:
         config_mod.load(path)
-        assert False, "expected refusal"
+        raise AssertionError("expected refusal")
     except Exception as exc:
         assert "providers" in str(exc)
 
@@ -66,7 +66,7 @@ def test_providers_value_not_a_string_refused():
     )
     try:
         config_mod.load(path)
-        assert False, "expected refusal"
+        raise AssertionError("expected refusal")
     except Exception as exc:
         assert "postgres" in str(exc)
 

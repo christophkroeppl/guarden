@@ -58,7 +58,8 @@ a new ADR that supersedes it. The short version:
   the environment. The environment set is the root-owned `[[environments]]` table in
   `guarden.toml` and those three rows ship as defaults, not a list in the code, so `preprod` is a
   configuration change. A row is a **track**, and it carries its own host prefix, gate, weight,
-  retention defaults and `slot`/`instance` kind. There is no `--env` flag, and `weedr service
+  retention defaults and `slot`/`instance` kind. Neither `ingest` nor `add` carries an
+  `--env` flag — only the interactive `create` verb does — and `weedr service
   add` with no environment defaults to **staging**, never a gated track.
 - Previews are **instances**, not services: one service per workload, one directory per ref
   under its home, refs taken raw and escaped internally so they cannot collide, capped by the

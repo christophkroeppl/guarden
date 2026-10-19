@@ -1053,16 +1053,34 @@ contain dashes, dots and digits. The whole name must match `^[a-z0-9][a-z0-9._-]
 exceed 31 characters — the Linux user-name limit — and must not contain `..`.
 
 `other-app-production` parses as workload `other-app` in `production`. There is no `--env`
-flag: the name carries the environment, so a name and an environment cannot disagree. A name
-with no recognised environment segment is exit `2` — **except** that `weedr service add` with
-no environment in the name resolves a default and prints the resolved name. The default is
+flag on `ingest` or `add`: the name carries the environment, so a name and an environment
+cannot disagree. `weedr service create` is the one verb that carries an `--env` flag, and it is
+covered after this paragraph. A name with no recognised environment segment is exit `2` —
+**except** that `weedr service add` with no environment in the name resolves a default and
+prints the resolved name. The default is
 **the first track in table order with `gated = false` and `kind = "slot"`**, which is `staging`
 in the shipped table. It is resolved that way rather than hardcoded as the word `staging`
 because the shipped table is a default and not a list in the code, and an operator who has
 marked `staging` gated would otherwise have a documented default that creates a gated service —
 exactly what this rule exists to prevent. **If no such track exists, the name is exit `1` naming
-that fact**, not a silent choice of a gated track. An omitted environment segment can never
-create a gated service.
+that fact**, not a silent choice of a gated track. An omitted environment segment on `add` can
+never create a gated service.
+
+`weedr service create <name> [--env <environments>]` is that exception. Its `--env` is a
+comma-separated list, and with no flag it defaults to `production`. It may
+default where `add` may not because of what the verb is: an operator at a terminal, asking by
+hand for a service that does not exist, through a verb on no sudoers rule that needs a real
+root shell. The name it created is printed with the uid
+(`created myapp-production uid 123 from <template>`), so a default that resolved to a gated
+track is seen in the output rather than inferred.
+
+**"A service that does not exist" is enforced rather than assumed.** A name the registry
+already holds is exit `1` naming that entry, asked for **every** environment in the list
+*before* any of them is created, and `create` never overwrites a service: the record, the
+volumes, the `provides` and the instances that name carries are not this verb's to discard.
+`1` and not `2`, because the name is well-formed input and §1.2 writes `2` for nothing else,
+and what refuses it is the host's own state — the entry that already exists — which is how
+`weedr service remove` answers an instance list and `weedr service purge` an absent record.
 
 **No verb on the privileged surface carries a flag that widens authority, and this is structural
 rather than conventional.** A sudoers rule that names a command without an argument
@@ -1075,6 +1093,7 @@ flag therefore do not have one, and each capability is a separate verb instead:
 |---|---|---|
 | create a service from a poke | `weedr service ingest` | **yes** |
 | create a service from another service's tree | `weedr service add` | **no** |
+| create a new service from a template | `weedr service create` | **no** |
 | fork, with a chosen source | `weedr service fork` | **no** |
 | grant a public port | `weedr port open` | **no** |
 | install a requested firewall rule | `weedr firewall open` | **no** |
@@ -1119,7 +1138,7 @@ who can push to the repository, which is the case that actually matters.
 
 ### 5.3 What a service owns
 
-**A service's tree comes from exactly one of two places, and never from a path an argument names.**
+A service's tree comes from exactly one of three places, and never from a path an argument names.
 
 ```
   weedr service ingest <name[/ref]> --from poke <project>@<sha>  on the guarden rule
@@ -1127,23 +1146,31 @@ who can push to the repository, which is the case that actually matters.
 
   weedr service add <name[/ref]> --from <service>  root only
   └ copy that service's manifest and unit source
+
+  weedr service create <name> [--env <environments>] [--template <template>]  root only
+  └ manually create a new service from a template
 ```
 
 There is **no `--from <path>`**, and that is the whole security argument rather than a
-convention.  a directory, and the entire problem it created was that a
-caller could then *choose a location*: a path is the one argument in this interface that can
+convention. A path is the one argument in this interface that can
 mean something other than what it says, and every mitigation for it was a check — staging
 confinement, a `realpath` resolution, a symlink refusal, a uid-conditional allowance. A service
 name and a `<project>@<sha>` pair are not paths. The system resolves them to locations it already
 owns, and there is nothing left to confine.
+
+Each verb accepts exactly one `--from` form, and the error names the alternatives. `ingest`
+accepts only `poke <project>@<sha>`; `add` accepts only `<service>`; `create` takes no `--from`
+at all and builds a service from a template installed root-owned in
+`/usr/lib/guarden/templates/services/`.
 
 **The rule is about the verb surface, not about every read.** A root-owned program reading a
 root-owned path it shipped is not a caller naming a location, and one case depends on the
 distinction: `weedr module add` creates the module's declared services from the unit source in
 `/usr/lib/guarden/modules/<name>/`, which guarden shipped and root owns. It reads that path
 itself, takes no `--from` form for it, and offers no way for anyone to name a different one. So
-the two-place rule holds for every caller — operator, `furrow` and `hose` alike — without
-implying that `weedr` may not read its own installation.
+the rule above — a tree comes from exactly one of those three places, never from a path an
+argument names — holds for every caller, operator, `furrow` and `hose` alike, without implying
+that `weedr` may not read its own installation.
 
 Two consequences, and they are the reason this is the shape rather than a preference:
 

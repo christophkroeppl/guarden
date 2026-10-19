@@ -220,6 +220,7 @@ own programs call it, so `rm` is not something a script, a unit, or anything run
 ```sh
 weedr service ingest <name[/ref]> --from poke <project>@<sha>
 weedr service add <name[/ref]> --from <service>
+weedr service create <name> [--env <environments>]
 weedr service remove <name[/ref]>      # alias: rm
 weedr service purge <name>             # the only destructive verb
 weedr service start|stop|restart <name[/ref]>
@@ -227,30 +228,35 @@ weedr service list [--json]
 weedr service status <name[/ref]> [--json]
 ```
 
-`--from` is **required** and names a service, a poke, or a directory. A service is created from
-a manifest and guarden never infers where one is
-where one is.
+`--from` is **required** on `ingest` and `add`, and each verb accepts exactly one form.
+`ingest` accepts only `poke <project>@<sha>`; `add` accepts only `<service>`. `create` takes no
+`--from` at all — it builds a service from a template installed root-owned in
+`/usr/lib/guarden/templates/services/`. A service is created from a manifest — under `create`,
+from a template's quadlet files and no manifest at all — and guarden never infers where one is.
 
 ### Deploying a service by hand
 
-`--from <directory>` is the path a third-party image takes: the images you do not build, and
-the ones no repository pokes. A directory qualifies when it holds `.guarden/service.yml` at its
-root, and that is all guarden asks of the *content*. Two things it asks of the *location*, and
-both are easy to miss:
+`weedr service create <name>` is the path a third-party image takes: the images you do not
+build, and the ones no repository pokes. It takes no `--from` — it builds a service from a
+template installed root-owned in `/usr/lib/guarden/templates/services/`. The template provides
+the quadlet files; guarden provides the identity, the tree and the registry record.
 
-* **The directory must be readable by the service user.** `weedr service ingest` resolves the
-  source through `runuser`, so a manifest under `/root` is not merely inconvenient — it is
-  invisible, and the error reads as if the file did not exist:
-  `error: the manifest /root/x/.guarden/service.yml does not exist`. Put it under `/opt` or
-  another `a+rX` path and `chmod -R a+rX` it.
+It makes a name that does not exist yet. A name the registry already holds is refused with
+exit `1` naming the entry, **before** anything is created and for every environment in an
+`--env` list at once, so a second `create` can never overwrite the record, the volumes, the
+`provides` or the instances that name carries. Replacing a service is `weedr service remove
+<name>` first, and bringing it a manifest is `weedr service add`.
 
 * **A declared volume is mounted by name, never by path.** `state:` and `bulk:` declare volumes
   by name, and the unit source has to mount that name:
   `Volume=data:/var/lib/postgresql/data`, not
   `Volume=/var/lib/guarden/services/<svc>/state/data:...`. A host path is a *path* mount and
-  satisfies nothing, so the create is refused with
-  `the manifest declares the volume 'data', and the unit source does not mount it`. guarden
-  resolves the name to the real path when it renders.
+  satisfies nothing, so the **render** refuses
+  `the manifest <path> declares the volume 'data', and the unit source <path> does not mount
+  it` — the renderer raises it, over a manifest, and guarden resolves the name to the real path
+  when it renders. `weedr service create` never meets that refusal: it reads no manifest, and a
+  template ships no `state:` and no `bulk:`. The volumes arrive with the first `ingest` or `add`
+  that brings a manifest in, and the unit source has to mount them by then.
 
 The credential keys a manifest needs are declared in `.guarden/.env.schema` with the varlock
 syntax (`@required`, `@sensitive`, `@type env`) — see §6.5. A key with `@type env` reaches the
@@ -270,11 +276,13 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   step is `podman unshare chown -R <image uid>:<image uid> <volume>`, run as the service user
   (tickets 273 and 277). Point the image's data directory at a *subdirectory* of the mount, or
   it collides with snapper's root-owned `.snapshots`.
-* **A re-ingest after an edit is a no-op** (ticket 275). `source_hash` is computed only for a
-  poke, so an edited manifest re-ingests as `converged` and installs nothing. The registry entry
-  has to go first: `rm /var/lib/guarden/registry/<svc>.toml`, then ingest again. The note below
-  about `weedr service add` being the reconcile command holds for a poke and for the units a
-  render changes — it does **not** hold for this case.
+* **A re-ingest after an edit redeploys** (ticket 275). `source_hash` covers the full set of
+  render inputs — `.guarden/`, `compose.yaml`, `Containerfile` and `.dockerignore` — so an
+  edited manifest, compose file or Containerfile hashes differently and re-ingests as **not**
+  `converged`: the units are re-rendered and installed, and there is nothing to delete first —
+  no `rm /var/lib/guarden/registry/<svc>.toml`, and no second ingest after it. The note below
+  about `weedr service add` being the reconcile command holds for this case exactly as it
+  holds for a poke.
 
 Names carry the environment: `myapp-production`, `other-app-staging`, `postgres-production`,
 `traefik-production`. The name is the service name everywhere — no suffix, no alias. A consumer

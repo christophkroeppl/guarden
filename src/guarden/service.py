@@ -4,10 +4,11 @@ A service's tree comes from exactly one of three places (spec 5.3). `ingest`
 takes `poke <project>@<sha>` and the system resolves that pair to
 `/var/lib/guarden/staging/<project>/<sha>` itself; `add` takes a service name
 and copies that service's own manifest and unit source out of its home; and
-`add` also takes a local directory path, for a hand-written tree with no git
-ops behind it. A path is distinguished from a service name by not matching
-NAME_RE: a service name is `^[a-z0-9][a-z0-9._-]*$`, and any path containing
-`/`, `.`, `~`, or a leading character outside that set is not a service name.
+`create` takes a name and a template and no `--from` at all. None of the three
+takes a location: a service name is `^[a-z0-9][a-z0-9._-]*$`, a poke carries a
+`<project>@<sha>` pair, and the system resolves both to directories it already
+owns — so nothing here distinguishes a path from a name, because no caller can
+name a path.
 
 The rest is identity and roots — the registry record, the system user, the home,
 the quadlet directory, and the subvolumes and snapper configurations for the
@@ -89,15 +90,12 @@ class Source:
     sha: str | None = None
     service: str | None = None
     module: str | None = None
-    path: str | None = None
 
     def directory(self) -> Path:
         if self.kind == "poke":
             return paths.STAGING / str(self.project) / str(self.sha)
         if self.kind == "module":
             return modules_mod.source_of(str(self.module), str(self.service))
-        if self.kind == "path":
-            return Path(str(self.path))
         return paths.service_home(str(self.service))
 
 
@@ -111,29 +109,59 @@ class Outcome:
     notes: list[str] = field(default_factory=list)
 
 
-def parse_from(values: list[str]) -> Source:
-    """`--from` has exactly three accepted forms, and the error names all three."""
-    if len(values) == 2 and values[0] == "poke":
-        project, at, sha = values[1].partition("@")
-        if not project or not at or not sha or "/" in sha or ".." in sha:
+def parse_from(values: list[str], verb: str) -> Source:
+    """`--from` for a specific verb, with verb-specific validation.
+
+    `ingest` accepts only `poke <project>@<sha>` — a poke carries its own tree,
+    and a poke that could promote another service's tree would be a poke
+    choosing a track (spec 5.3).
+
+    `add` accepts only `<service>` — a service name, not a path and not a poke.
+    A path is the one argument in this interface that can mean something other
+    than what it says, and the whole security argument is that no caller can
+    name a location (spec 5.3).
+
+    `create` takes no `--from` at all; it builds a service from a template.
+    """
+    if verb == "ingest":
+        if len(values) == 2 and values[0] == "poke":
+            project, at, sha = values[1].partition("@")
+            if not project or not at or not sha or "/" in sha or ".." in sha:
+                raise errors.GuardenError(
+                    f"--from poke takes <project>@<sha>, and {values[1]!r} is not that"
+                )
+            return Source(kind="poke", project=project, sha=sha)
+        if len(values) == 1 and names.NAME_RE.match(values[0]):
             raise errors.GuardenError(
-                f"--from poke takes <project>@<sha>, and {values[1]!r} is not that"
+                "ingest takes a poke; to create a service from another service, "
+                "use weedr service add (root)"
             )
-        return Source(kind="poke", project=project, sha=sha)
-    if len(values) == 1:
-        if names.NAME_RE.match(values[0]):
-            return Source(kind="service", service=names.validate(values[0], "--from service"))
-        path = Path(values[0])
-        if path.is_dir():
-            return Source(kind="path", path=str(path))
         raise errors.GuardenError(
-            f"--from {values[0]!r} is not a service name or an existing directory"
+            "ingest takes a poke; to create a service from a directory, "
+            "use weedr service create (root)"
         )
-    raise errors.GuardenError(
-        "--from takes <service>, `poke <project>@<sha>`, or a local directory path, and "
-        + (" ".join(repr(value) for value in values) or "nothing")
-        + " is none of those"
-    )
+    if verb == "add":
+        if len(values) == 2 and values[0] == "poke":
+            raise errors.GuardenError(
+                "add takes a service; to deploy from a poke, use weedr service ingest"
+            )
+        if len(values) == 1 and values[0] == "poke":
+            raise errors.GuardenError(
+                "add takes a service; to deploy from a poke, use weedr service ingest"
+            )
+        if len(values) == 1 and names.NAME_RE.match(values[0]):
+            return Source(kind="service", service=names.validate(values[0], "--from service"))
+        if len(values) == 1:
+            raise errors.GuardenError(
+                "add takes a service; to create a service from a directory, "
+                "use weedr service create (root)"
+            )
+        raise errors.GuardenError(
+            "add takes a service name, and "
+            + (" ".join(repr(value) for value in values) or "nothing")
+            + " is not one"
+        )
+    raise errors.GuardenError(f"unknown verb {verb!r}")
 
 
 def _manifest_in(directory: Path) -> Path:
@@ -268,7 +296,143 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # uid it installs under, and rendering before the entry exists answered "there
     # is no registry entry for <service>".
     if source.kind != "module":
-        outcome.notes += units.install(directory, resolved.name)
+        # `_render_source`, not `directory`: `units.install` hands this to `loom`
+        # as `guarden` (ADR-0012), and a home is `0700` to its own service.
+        outcome.notes += units.install(_render_source(directory), resolved.name)
+    return outcome
+
+
+def require_template(template_name: str | None) -> Path:
+    """The installed template's directory, or the one refusal that names one.
+
+    Raised here and nowhere else, so the verb that validates its answer before
+    it asks for anything and the mutator that is about to copy the template
+    answer with the same line and the same code: `1`, because what is missing is
+    on the host and not in the argument (spec 1.2). A name that is not a template
+    name at all — anything with a `/` or a leading `.` in it — stops here too,
+    and stops before it can name a directory outside the template set.
+    """
+    templates = paths.TEMPLATES / "services"
+    directory = None
+    if template_name is not None and names.NAME_RE.match(template_name):
+        directory = templates / template_name
+    if directory is not None and directory.is_dir():
+        return directory
+    available = (
+        sorted(entry.name for entry in templates.iterdir() if entry.is_dir())
+        if templates.is_dir()
+        else []
+    )
+    if not template_name:
+        problem = "no template was chosen"
+    elif directory is None:
+        problem = f"the template {template_name!r} is not a template name"
+    else:
+        problem = f"the template {template_name!r} does not exist at {directory}"
+    raise errors.GuardenError(
+        problem
+        + (
+            f"; available templates: {', '.join(available)}"
+            if available
+            else f"; {templates} holds none"
+        ),
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
+def refuse_existing(candidates: list[str]) -> None:
+    """`create`'s one line when a name it was asked to create already is one.
+
+    Asked for **every** name the request carries before any of them is created,
+    so a `--env` list naming one service that exists refuses whole instead of
+    creating the others and stopping; `create_service` asks again for its own
+    name, because it is the mutator and this is the line it must not cross.
+
+    Exit `1`, not `2` and not `0`. `2` is the input rejected and spec 1.2 writes
+    it for nothing else — the name here is well formed — and `0` would report
+    work that did not happen. What refuses it is the host's own state, the
+    registry entry that already exists, which is how `weedr service remove`
+    answers an instance list and `weedr service purge` an absent record: both
+    `1`, the host is not in the state the request assumed.
+    """
+    taken = [name for name in candidates if registry.load(name) is not None]
+    if not taken:
+        return
+    raise errors.GuardenError(
+        f"{', '.join(taken)} already has a registry entry, and creating over it "
+        f"would discard that service's volumes, provides and instances; remove it "
+        f"first if replacing it is what you meant",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
+def create_service(
+    resolved: names.Resolved,
+    config,
+    now: str,
+    template_name: str,
+) -> Outcome:
+    """Create a new service from a template (spec 5.3, the `create` verb).
+
+    Unlike `create` (which is called by `ingest` and `add`), this builds a
+    service from scratch: no poke, no source service, just a name and a
+    template. What it creates is the identity, the tree, a copy of the
+    template's quadlet files in the service's own unit directory, the admin
+    unit directory and the registry record. It creates **no manifest and no
+    volume**: a template ships neither, so the declared volumes a manifest asks
+    for are created by `create` when a poke or an `add` brings a manifest in.
+
+    Requires root. The caller is responsible for sudo.
+
+    **It refuses a name the registry already holds** (spec 5.1): a second
+    `create` over a service would discard the record that name carries — its
+    volumes, its `provides`, its instances — and copy the template's units into
+    a live home, which is a data loss rather than a no-op.
+    """
+    refuse_existing([resolved.name])
+    template_dir = require_template(template_name)
+
+    # A service created from a template has no manifest yet — it gets one when
+    # a poke or `add` brings one in. Create the tree and the identity now, and
+    # leave the manifest, the volumes and the units for that later step.
+    outcome = Outcome(resolved=resolved)
+
+    identity = users.ensure(resolved.name, paths.service_home(resolved.name))
+    outcome.uid = identity.uid
+    owner = users.tree_owner(identity)
+    root_owner = (0, users.group_id(GUARDEN_GROUP))
+
+    _make_tree(resolved.name, owner, resolved.escaped_ref)
+
+    # Copy the template's quadlet files into the service's own quadlet
+    # directory, **as the service user and `0640`** — the way `units.install`
+    # lands every rendered unit. The template is root-owned and installed, and a
+    # copy that kept its `root:root 0644` was a file inside a `0700` home that
+    # the service could neither read, chown nor remove — including from the
+    # service's own podman generator, which is the process that has to read it
+    # (AGENTS.md: nothing root-owned inside a service's home). This copy is what
+    # `weedr service start` finds.
+    quadlet_dir = units_dir(resolved.name, resolved.escaped_ref)
+    quadlet_dir.mkdir(parents=True, exist_ok=True)
+    for path in sorted(template_dir.rglob("*")):
+        if path.is_file():
+            target = quadlet_dir / path.relative_to(template_dir)
+            conf.write_file(target, path.read_text(encoding="utf-8"), units.UNIT_MODE, owner)
+
+    record = registry.Registry(
+        service=resolved.name,
+        workload=names.workload_of(resolved.name, resolved.track.name),
+        project="",
+        environment=resolved.track.name,
+        uid=identity.uid,
+        created=now,
+        source=registry.SOURCE_MANUAL,
+    )
+    _ensure_admin_units(identity.uid)
+
+    with conf.lock("registry"):
+        registry.save(record, root_owner)
+
     return outcome
 
 
@@ -375,8 +539,6 @@ def _project_from(source: Source) -> str:
     new layout the staging directory's basename is a sha."""
     if source.kind == "poke":
         return str(source.project)
-    if source.kind == "path":
-        return ""
     record = registry.load(str(source.service))
     if record is None or not record.project:
         raise errors.GuardenError(
@@ -473,19 +635,27 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
 
 
 def _source_hash(directory: Path) -> str:
-    """The content hash of the unit source, for the convergence check.
+    """The content hash of everything that determines the render, for the
+    convergence check.
 
-    `_copy_source` copies exactly two things out of a staging tree: `.guarden/`
-    and `compose.yaml`. Those are also the only inputs the renderer reads, so a
-    hash over them is the exact predicate for "would the rendered units be the
-    same as last time". `deployed_sha` (the poke commit) is not: re-ingesting the
-    same commit after editing the compose file is a change the operator made and
-    the convergence check must see it.
+    `_copy_source` copies exactly these things out of a staging tree:
+    `.guarden/`, `compose.yaml`, and the build context (`Containerfile` and
+    `.dockerignore`). Those are the only inputs the renderer and the build
+    verb read, so a hash over them is the exact predicate for "would the
+    rendered units be the same as last time". Compare **source, not output**:
+    a Containerfile build produces an image — hash the Containerfile content,
+    not the built image. A compose render produces quadlets — hash the compose
+    content, not the rendered quadlets.
+
+    `deployed_sha` (the poke commit) is not: re-ingesting the same commit
+    after editing the compose file is a change the operator made and the
+    convergence check must see it.
     """
     import hashlib
 
     h = hashlib.sha256()
-    for rel in [".guarden", "compose.yaml"]:
+    # Every file _copy_source copies — the full set of render inputs.
+    for rel in [".guarden", "compose.yaml", *BUILD_INPUTS]:
         path = directory / rel
         if path.is_dir():
             for f in sorted(path.rglob("*")):
@@ -493,7 +663,11 @@ def _source_hash(directory: Path) -> str:
                     h.update(f.relative_to(directory).as_posix().encode())
                     h.update(f.read_bytes())
         elif path.is_file():
-            h.update(rel.encode())
+            # `rel` is a name and not only a string: the build inputs are
+            # `Path`s, and a Containerfile that is present would have reached
+            # here as one and ended the create with an AttributeError rather
+            # than a hash (measured: t250, after the Containerfile was seeded).
+            h.update(str(rel).encode())
             h.update(path.read_bytes())
     return h.hexdigest()
 
@@ -551,6 +725,52 @@ def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
             conf.set_owner(path, owner, follow=False)
             continue
         conf.set_owner(path, owner)
+
+
+def _render_source(directory: Path) -> Path:
+    """The render inputs where `loom` — running as `guarden` — can read them.
+
+    `units.install` hands its source to `loom` through `runuser -u guarden`
+    (ADR-0012), and a source inside a service's own tree is `0700` to that
+    service (`TREE_MODE`, spec 2.1): the renderer got `EACCES`, `Path.is_file()`
+    swallowed it as "not there", and `render` answered that a manifest which is
+    present "does not exist" (measured 2026-10-18, `weedr service add
+    myapp-staging --from myapp-production`, whose source is production's home —
+    and the same failure waits behind the home-fallback in `_manifest_directory`,
+    a second `ingest` whose staging tree has already been removed).
+
+    So a source a renderer cannot enter is staged first, exactly as a poke's
+    staging tree has always been: the four inputs `_copy_source` copies,
+    root-owned and `0755`, where the renderer is only a reader. Only a source
+    under `services/` is staged — a staging tree, a module's shipped source and
+    a template are root-owned and readable already — and the staging directory
+    is emptied and recreated on every run, so it can never carry a previous
+    run's inputs into a render.
+    """
+    if paths.SERVICES not in directory.parents:
+        return directory
+    relative = directory.relative_to(paths.SERVICES)
+    stage = paths.LIB / "render-source" / relative.parts[0]
+    stage.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(stage.parent, 0o755)
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir()
+    for relative_input in (".guarden", "compose.yaml", *BUILD_INPUTS):
+        source = directory / relative_input
+        target = stage / relative_input
+        if source.is_dir():
+            shutil.copytree(source, target)
+        elif source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    # The copies carry the home's modes — `0700` all the way down, because
+    # `_make_tree` modes every file and not only every directory — so the staged
+    # tree is re-moded as it is written: directories traversable, files readable,
+    # and nothing writable by the renderer.
+    for path in [stage, *sorted(stage.rglob("*"))]:
+        os.chmod(path, 0o755 if path.is_dir() else 0o644)
+    return stage
 
 
 def _ensure_admin_units(uid: int) -> None:

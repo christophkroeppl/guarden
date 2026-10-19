@@ -249,10 +249,19 @@ vm_exec_t() {
 # and a run that wedges reports nothing at all: the guest process is gone, the
 # harness is waiting on `lxc exec`, and no line is ever printed. That is the one
 # failure mode with no diagnostic, and this is the diagnostic.
-# `GUARDEN_LXC_SUITE_TIMEOUT` is in seconds. Three minutes is far longer than any
-# suite here takes — the whole 34-file run is about half an hour — and short
-# enough that a wedge costs a quarter of a minute rather than ten.
-SUITE_TIMEOUT=${GUARDEN_LXC_SUITE_TIMEOUT:-180}
+# `GUARDEN_LXC_SUITE_TIMEOUT` is in seconds. Eight minutes, and the number is
+# measured rather than preferred: the preamble every machine suite runs
+# (`stage_podlet_release`, `soil packages --apply`, `soil install --apply`) is
+# network-bound — the family's package index refresh and the pinned podlet
+# fetch — and two back-to-back `--no-cache` runs of t250-verb-split.sh on this
+# host measured that same preamble at 71 s and at 167 s. At the 180 s this used
+# to be, the second run left the suite 13 s for its own work and `timeout` killed
+# it with 124 before its first assertion — a false failure of a suite that had
+# done nothing wrong, which is the opposite of what this clock is for. 480 s is
+# the wall the reviewer's own measurement needed to pass the same suite, it still
+# costs a genuinely wedged suite eight minutes rather than ten, and
+# `GUARDEN_LXC_SUITE_TIMEOUT` still overrides it for a run that wants tighter.
+SUITE_TIMEOUT=${GUARDEN_LXC_SUITE_TIMEOUT:-480}
 
 # Ready means the agent answers, not that the state says RUNNING.
 _wait_ready() {
