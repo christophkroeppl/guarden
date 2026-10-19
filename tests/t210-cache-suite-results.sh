@@ -15,6 +15,8 @@
 #   * a change anywhere in `src/guarden/**` — the package the harness runs —
 #     invalidates every key, and a change under `docs/` invalidates none
 #     (ticket 309);
+#   * every helper under `tests/` is in every key because it exists, so a new
+#     helper moves the key and no suite is inherited against the old one;
 #   * a cached suite's line cannot be read as a pass;
 #   * `--no-cache` consults nothing;
 #   * the cache is outside the repository, and nothing expires.
@@ -286,6 +288,89 @@ assert_exit 0
 cache tree "$OTHER_SUITE"
 assert_exit 0
 [ "$TREE" != "$(cat "$GUARDEN_STDOUT")" ] || _fail "two suites produced one tree digest"
+
+# --- every helper under tests/ is in the key, because it exists ------------
+
+# **The read set names the four helpers it knows and stops there.** That is
+# the enumeration that lost ticket 309 one file class wide: a
+# `tests/newhelper.sh` satisfied no list, was in no read set, and failed
+# nothing — so a suite could be inherited against a helper nobody re-ran.
+#
+# The closure is a NEGATED glob, not a longer list: everything under `tests/`
+# that the runner does not select. The runner selects exactly
+# `tests/t[0-9]*.sh`, so the negation is every helper, and a helper is
+# covered because it exists rather than because someone remembered it.
+#
+# Every helper the tree has is in the read set, and no suite but this one.
+# The runner selects exactly `tests/t[0-9]*.sh`, so the negation of that is
+# every helper — and the list below is the tree's own files with the runner's
+# own selection removed.
+python3 "$CACHE_TOOL" readset "$SUITE" >"$GUARDEN_FIXTURES/readset.list"
+while read -r helper; do
+    name=${helper#"$GUARDEN_ROOT"/}
+    grep -qxF "$name" "$GUARDEN_FIXTURES/readset.list" \
+        || _fail "$name is a helper under tests/ and is not in the read set"
+done <<<"$(find "$GUARDEN_ROOT/tests" -type f ! -name '*.pyc' ! -name 't[0-9]*.sh' | sort)"
+
+# The negation is exact: a suite is a suite because the runner says so, and
+# the runner's own selection is the predicate. The other suite is a suite, so
+# it is not in this suite's read set — which is what keeps two suites two
+# read sets rather than one.
+if grep -qxF "tests/t30-list.sh" "$GUARDEN_FIXTURES/readset.list"; then
+    _fail "the other suite is in this suite's read set, so two suites are one read set"
+fi
+
+# A helper is in the read set of EVERY suite, which is the property that
+# closes the hole: a new helper joins every suite's read set, so a bug fixed
+# in it moves every key and no suite is inherited against the old helper.
+python3 "$CACHE_TOOL" readset "$OTHER_SUITE" >"$GUARDEN_FIXTURES/other-readset.list"
+grep -qxF "tests/lib.sh" "$GUARDEN_FIXTURES/other-readset.list" \
+    || _fail "a helper is not in the other suite's read set either"
+
+# --- a new helper moves the key, and two suites stay two digests ------------
+
+# The executable rule that keeps the hole closed: a helper that is a real file
+# under `tests/` is covered because it exists. The change is made on a copy,
+# so it cannot leak into the tree the suites run against.
+HELPER_COPY=$GUARDEN_FIXTURES/helper-copy
+mkdir -p "$HELPER_COPY/tests"
+cp "$GUARDEN_ROOT/tests/$SUITE_NAME" "$HELPER_COPY/tests/$SUITE_NAME"
+
+helper_tree_key() {
+    GUARDEN_LXC_ROOT="$HELPER_COPY" python3 "$CACHE_TOOL" key "$GOLDEN" \
+        "$HELPER_COPY/tests/$SUITE_NAME" "$1" "$2"
+}
+
+# The key of the copy without the helper, and the key of the same copy with
+# it. The helper is a file that exists and nothing else, so the difference
+# between the two keys is the helper.
+WITHOUT_HELPER=$(helper_tree_key declared runner-1)
+printf '#!/bin/sh\n# a helper that did not exist when the key was written\nexit 0\n' \
+    >"$HELPER_COPY/tests/anewhelper.sh"
+WITH_HELPER=$(helper_tree_key declared runner-1)
+[ "$WITHOUT_HELPER" != "$WITH_HELPER" ] \
+    || _fail "a new helper under tests/ did not move the key"
+
+# And the helper is in the read set of the copy, which is the reason the key
+# moved: the assertion is about the set, not only about a digest.
+GUARDEN_LXC_ROOT="$HELPER_COPY" python3 "$CACHE_TOOL" readset \
+    "$HELPER_COPY/tests/$SUITE_NAME" >"$GUARDEN_FIXTURES/helper-readset.list"
+grep -qxF "tests/anewhelper.sh" "$GUARDEN_FIXTURES/helper-readset.list" \
+    || _fail "the new helper is not in the read set of the copy"
+
+# **Two suites are still two digests.** This is the trap the negation has to
+# avoid: a plain glob of `tests/*.sh` would put every suite in every key and
+# make one digest for two suites, which is the bug the previous author hit.
+# The two read sets differ in exactly one file — each suite's own — and that
+# is what keeps them two.
+cp "$GUARDEN_ROOT/tests/t30-list.sh" "$HELPER_COPY/tests/t30-list.sh"
+GUARDEN_LXC_ROOT="$HELPER_COPY" python3 "$CACHE_TOOL" tree \
+    "$HELPER_COPY/tests/$SUITE_NAME" >"$GUARDEN_FIXTURES/helper-tree-one"
+GUARDEN_LXC_ROOT="$HELPER_COPY" python3 "$CACHE_TOOL" tree \
+    "$HELPER_COPY/tests/t30-list.sh" >"$GUARDEN_FIXTURES/helper-tree-two"
+if [ "$(cat "$GUARDEN_FIXTURES/helper-tree-one")" = "$(cat "$GUARDEN_FIXTURES/helper-tree-two")" ]; then
+    _fail "two suites produced one tree digest over a tree that has a new helper"
+fi
 
 # --- one changed file invalidates what read it ------------------------------
 
