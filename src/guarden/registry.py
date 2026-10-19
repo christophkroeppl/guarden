@@ -391,8 +391,8 @@ class Registry:
             installed_by=document.get("installed_by"),
             deployed_sha=document.get("deployed_sha"),
             source_hash=document.get("source_hash"),
-            owner_uid=document.get("owner_uid"),
-            owner_gid=document.get("owner_gid"),
+            owner_uid=_owner_id(document, "owner_uid"),
+            owner_gid=_owner_id(document, "owner_gid"),
             owner_image=document.get("owner_image"),
             owner_units={
                 name: OwnerUnit.from_document(entry)
@@ -414,6 +414,32 @@ class Registry:
             generated=dict(document.get("generated") or {}),
             immutable=dict(document.get("immutable") or {}),
         )
+
+
+def _owner_id(document: dict, key: str) -> int | None:
+    """One of the probe's two numbers as the document spells it: converted,
+    or refused.
+
+    `owner_uid` is the field an operator edits BY HAND, so a quoted value
+    reaches this reader as a string — and unconverted it walked into the
+    renderer's `uid and uid > 0` and out of `weedr service start` as a
+    TypeError (measured, t350), a traceback instead of the one line spec 1.2
+    promises. Converting is what `OwnerUnit.from_document` already does for
+    the per-unit table; a value that is not a number at all is refused the
+    same way it refuses one, with the field named: host state that does not
+    hold what guarden wrote (spec 1.2, exit 1).
+    """
+    value = document.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise errors.GuardenError(
+            f"the registry entry carries {value!r} as {key}, and a uid or gid the "
+            "probe recorded is a number",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
 
 
 def path_for(service: str) -> Path:
