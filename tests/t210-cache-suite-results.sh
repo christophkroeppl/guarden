@@ -582,15 +582,29 @@ RELOCATED_KEY=$(GUARDEN_LXC_ROOT="$RELOCATED" python3 "$CACHE_TOOL" key "$GOLDEN
 # beside `lib.sh`, and every other file under `tests/` is a helper too, so
 # they are carried by the negated glob rather than named one by one (a plain
 # glob of `tests/*.sh` would put every other suite in every key) — the
-# example services a suite installs as they are, and the tracked
-# `.env.schema`.
+# example service templates, and the tracked `.env.schema`.
+#
+# The example services moved: ticket 330 put them where the install phase
+# copies them, so they ship with the program and are covered as part of
+# `src/guarden/` rather than as the copyable set under `examples/`. The read
+# set follows the files, so the assertion names where they live now — and
+# `examples/` is still carried in its own right, because it is a universal
+# tree and the tree still has a file in it.
+#
+# The set, not the directory: a template set that exists but is empty is the
+# state ticket 330 found, so each template is named by its own path. A
+# directory that merely exists proves nothing about what is in it.
 cache readset "$SUITE"
 assert_exit 0
 assert_stdout_has "src/guarden/loom.py"
 assert_stdout_has "src/guarden/render.py"
 assert_stdout_has "src/guarden/weedr.py"
 assert_stdout_has "modules/gate-traefik"
-assert_stdout_has "examples/services"
+grep -qxF 'src/guarden/templates/services/postgres/postgres.container' "$GUARDEN_STDOUT" \
+    || _fail "the postgres example template is not in the read set"
+grep -qxF 'src/guarden/templates/services/vaultwarden/vaultwarden.container' "$GUARDEN_STDOUT" \
+    || _fail "the vaultwarden example template is not in the read set"
+assert_stdout_has "examples/README.md"
 assert_stdout_has "tests/aptlock.sh"
 grep -qFx '.env.schema' "$GUARDEN_STDOUT" \
     || _fail "the root .env.schema is not in the read set"

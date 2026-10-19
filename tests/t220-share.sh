@@ -26,9 +26,19 @@ export GUARDEN_PREFIX=/
 ensure_accounts
 
 # The staging track's `expose` is `tunnel` (so its routes are tunnel routes and a
-# grant may name them), production's is the default `edge` (so a grant against it
-# is the refusal this file exists to assert), and `[share] max` is two days so an
+# grant may name them), production's is `edge` (so a grant against it is the
+# refusal this file exists to assert), and `[share] max` is two days so an
 # over-maximum `--until` is refused without waiting a week for it.
+#
+# **Production states `expose = "edge"` and does not leave it to the default.**
+# The default is no posture at all: an unset `expose` resolves from the module
+# set (spec 3.1, 3.3), and this host has the `cloudflared` module installed, so
+# an unset production track resolves to `tunnel` — and the refusal this file
+# exists to assert would never happen, because a tunnel route is exactly the
+# route a grant may name. The comment above this table used to call production's
+# posture "the default `edge`", which was true while the default **was** `edge`
+# and stopped being true when ticket 293 made unset resolve from the module set
+# instead (69e8b2d). The posture is now stated where it is read.
 cat >"$GUARDEN_PREFIX/etc/guarden/guarden.toml" <<'TOML'
 [host]
 domain = "example.com"
@@ -64,6 +74,7 @@ free_limit = 0.10
 keep_last = 7
 kind = "slot"
 fork_from = ""
+expose = "edge"
 
 [[environments]]
 name = "staging"
