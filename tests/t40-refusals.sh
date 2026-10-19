@@ -51,6 +51,36 @@ refuse_compose "pid" "pid: host"
 refuse_compose "userns_mode" "userns_mode: keep-id"
 refuse_compose "podman_args" "podman_args: [ --privileged ]"
 
+# **A `ports:` entry carrying `${...}` is refused by guarden, naming the
+# construct (ticket 283).** The converter reads the host-IP field before any
+# substitution, so `127.0.0.1:${PORT:-19069}:8069` dies in podlet's parser with
+# `invalid IP address syntax` — a message about an IP address that is written
+# correctly — and the reader is sent to the wrong line entirely. The refusal is
+# guarden's and happens before the converter is driven: on a guarden host the
+# publication is not the repository's to state in the first place, because
+# `render._publications` writes `PublishPort=127.0.0.1:<allocated>:<port>` from
+# the ingress the manifest declares.
+seed "$project/compose.yaml" "services:" "  web:" \
+    "    image: docker.io/library/nginx:1.27" "    ports:" \
+    "      - \"127.0.0.1:\${PORT:-19069}:8069\""
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "ports"
+assert_stderr_has "\${PORT:-19069}"
+assert_stderr_has "templated"
+assert_stderr_has "publication"
+assert_stderr_lacks "podlet"
+
+# The refusal is about the substitution and not about ports: the same entry with
+# a literal host port is a Compose file guarden has no quarrel with.
+seed "$project/compose.yaml" "services:" "  web:" \
+    "    image: docker.io/library/nginx:1.27" "    ports:" \
+    "      - \"8080:80\""
+run loom check "$project"
+assert_exit 0
+assert_stderr_empty
+
 # The same list in the vocabulary a hand-written quadlet file is written in.
 quadlet=$GUARDEN_FIXTURES/quadlet
 seed "$quadlet/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/"

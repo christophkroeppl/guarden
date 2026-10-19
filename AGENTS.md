@@ -206,7 +206,7 @@ a new ADR that supersedes it. The short version:
   it finds one, so a box with a TPM would silently encrypt with a different key than the
   documents describe. Decryption happens once, root-side, in the credential materialiser unit.
   A key the manifest's schema marks `@required` or `@sensitive` gets a **credential request** from
-  the renderer — `Secret=<KEY>,type=file` in the `[Container]` table and nothing else — and podman
+  the renderer — `Secret=<KEY>,type=mount` in the `[Container]` table and nothing else — and podman
   resolves it from that service's own secret store and presents it at `/run/secrets/<KEY>`;
   `type=env` is generated only when the application needs a variable. **The generated unit
   carries no `LoadCredentialEncrypted=`,** because it runs in the *service user's* user manager,
