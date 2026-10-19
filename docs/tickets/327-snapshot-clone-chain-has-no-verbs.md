@@ -38,5 +38,33 @@ root-owned config, and it must be reviewable).
 G11 is a small, independent defect worth taking first: a pin that names a
 snapshot that does not exist breaks `weedr pin sync` for the whole host.
 
+**G11 IS FIXED** (`859321e`, 2026-10-19). Measured on a live host, before the
+fix:
+
+    $ stakes pin nosuch-service:nosuchvolume@999
+    pinned nosuch-service:nosuchvolume@999
+    $ ls -la /var/lib/guarden/stakes/
+    -rw-rw---- 1 root root 0 nosuch-service:nosuchvolume@999
+    $ weedr pin sync
+    error: snapper would not list the configuration
+    nosuch-service-nosuchvolume, so its marks cannot be recomputed; every
+    existing mark is left in place rather than cleared from a state that
+    could not be read
+
+`pins.write` now reads snapper's own list — the same read the reconciler
+uses — and refuses the pin where the operator is, with a line that names the
+snapshot and what to check, and writes **no file**:
+
+    $ stakes pin nosuch-service:nosuchvolume@999
+    error: the configuration nosuch-service-nosuchvolume could not be read,
+    so whether nosuch-service:nosuchvolume@999 exists is unknown;
+    `weedr service list` names the services this host holds
+    $ ls /var/lib/guarden/stakes/      # empty — nothing was written
+
+Two refusals, because they are two different answers: a configuration that
+cannot be READ means whether the snapshot exists is unknown, and a
+configuration that reads but does not hold the number means it does not
+exist. `t70-pins` asserts both.
+
 Red-first per verb, and the chain's own end-to-end test (a snapshot pinned, a
 tmp pg cut from it, a dump, a scrub, a load, a staging service answering).
