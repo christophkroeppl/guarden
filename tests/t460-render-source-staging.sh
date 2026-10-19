@@ -105,6 +105,23 @@ a_inode=$(stat -c %i "$a_tree")
 marker="$a_dir/.run-a-marker"
 printf 'run A staged this tree\n' >"$marker"
 
+# --- an entry whose name carries no answerable pid -----------------------------
+#
+# The reap names each tree after the pid that staged it and asks that pid
+# whether it still answers. A stray entry whose "pid" is wider than a pid_t —
+# the directory `2147483648-x`, one any root-side leftover can leave in the
+# staging parent — is garbage, not a run: `os.kill` raises `OverflowError` at
+# the C-int conversion, which is not an `OSError`, and an escape there would
+# end run B with a traceback instead of the one diagnostic line the contract
+# promises (spec 1.2) — and would keep ending every later staging run from
+# this source the same way, until an operator cleaned the entry out by hand.
+#
+# So the entry is planted before B stages: B must take it and add as always,
+# while A — alive, stopped or not — keeps its own tree.
+
+stage "planting an entry whose name carries no pid"
+mkdir -p "$stage_root/2147483648-x"
+
 # --- run B stages from the same source while A holds its tree -----------------
 
 stage "run B: add racetwo-staging --from myapp-production"
@@ -112,6 +129,9 @@ run weedr service add racetwo-staging --from myapp-production
 assert_exit 0
 assert_stderr_empty
 assert_stdout_has "racetwo-staging"
+
+stage "the stray entry was taken, A's tree was not"
+assert_file_missing "$stage_root/2147483648-x"
 
 stage "checking A's tree survived B"
 assert_file_exists "$marker"

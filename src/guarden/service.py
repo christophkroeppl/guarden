@@ -803,14 +803,24 @@ def _reap_staging(parent: Path) -> None:
     for entry in list(parent.iterdir()):
         creator, sep, _rest = entry.name.partition("-")
         if sep and creator.isdigit():
-            if int(creator) == os.getpid():
-                continue
             try:
-                os.kill(int(creator), 0)
+                pid = int(creator)
+                if pid == os.getpid():
+                    continue
+                os.kill(pid, 0)
                 continue
             except ProcessLookupError:
                 pass
             except PermissionError:
+                continue
+            except (OverflowError, ValueError):
+                # Not a pid this machine can hold: wider than a pid_t (the
+                # conversion raises before the syscall) or longer than int()
+                # takes. The name promised a run and names none — take it.
+                pass
+            except OSError:
+                # Anything else the kernel might answer, which for signal 0
+                # this cannot name: keep the tree rather than guess.
                 continue
         if entry.is_dir():
             shutil.rmtree(entry, ignore_errors=True)
