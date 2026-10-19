@@ -31,13 +31,20 @@ machine. Both come from `tests/lxc.sh` deciding the whole selection before it
 runs anything, so a key never depends on which of its neighbours hit or missed.
 
 The tree a suite reads is over-approximated, never narrowed below what is
-provable. `tests/lib.sh`, `tests/lxc.sh`, `tests/*.py`, `fixtures/`, `modules/`,
-`packages/`, `tools/`, `src/guarden/templates/` and `pyproject.toml` are in every
-key, because a suite reaches those through helpers whose arguments cannot be
-resolved from outside — `stage_config` reads `fixtures/$1` and `$1` is a bare
-name in the suite. `src/guarden/*.py` is the narrowable part: the closure of the
-modules the suite names, walked with `ast`. No resolvable name widens the key to
-the whole package.
+provable. `tests/lib.sh`, `tests/lxc.sh`, `tests/aptlock.sh`,
+`tests/failure_messages.sh`, `tests/*.py`, `fixtures/`, `modules/`, `packages/`,
+`tools/`, `examples/`, `src/guarden/**` and `pyproject.toml` (with
+`.env.schema`) are in every key, because a suite reaches those through helpers
+whose arguments cannot be resolved from outside — `stage_config` reads
+`fixtures/$1` and `$1` is a bare name in the suite, and `t370-apt-lock-wait.sh`
+runs `tests/aptlock.sh` beside `lxc.sh`. **The package is hashed whole rather
+than narrowed to an import closure** (ticket 309): the closure asked which
+modules the suite's text named, and a suite's result is not a function of that,
+so a src-only change could leave every inherited green standing over code
+nothing had re-run. A key that misses is worse than a key that hits too often,
+so what a suite executes is in and what it only quotes — `docs/` — is out. The
+suite's own file is added on top of all of that, so two suites are two read
+sets, and a suite that changed is run rather than inherited.
 
 Usage:
 
@@ -56,7 +63,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import json
 import os
@@ -65,11 +71,16 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-PROGRAMS = ("soil", "weedr", "loom", "roots", "twig", "furrow", "hose", "stakes")
-UNIVERSAL_FILES = ("pyproject.toml", "tests/lib.sh", "tests/lxc.sh")
+UNIVERSAL_FILES = (
+    "pyproject.toml",
+    ".env.schema",
+    "tests/lib.sh",
+    "tests/lxc.sh",
+    "tests/aptlock.sh",
+    "tests/failure_messages.sh",
+)
 UNIVERSAL_GLOBS = ("tests/*.py",)
-UNIVERSAL_TREES = ("fixtures", "modules", "packages", "tools", "src/guarden/templates")
-PROGRAM_WORD = re.compile(r"\b(?:{})\b".format("|".join(PROGRAMS)))
+UNIVERSAL_TREES = ("fixtures", "modules", "packages", "tools", "examples", "src/guarden")
 ABSOLUTE_TIME = re.compile(r"^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?")
 IDENTITY_FIELDS = ("instance", "pool", "snapshot", "created")
 LEDGER_SEP = "\t"
@@ -123,10 +134,16 @@ def record_path(golden: str, key: str) -> Path:
     return cache_root() / golden / f"{key}.json"
 
 
-def digests_of(root: Path, relative: str) -> list[tuple[str, str]]:
+def files_under(root: Path, relative: str) -> list[str]:
+    """The files a path covers, as names relative to the tree.
+
+    A file covers itself and a directory covers everything under it that is not
+    a bytecode cache. The bytes are read once, later, by `tree_digest` — this
+    walks names only, so a covered file is hashed once per key.
+    """
     target = root / relative
     if target.is_file():
-        return [(relative, digest(target.read_bytes()))]
+        return [relative]
     if not target.is_dir():
         return []
     found = []
@@ -134,83 +151,18 @@ def digests_of(root: Path, relative: str) -> list[tuple[str, str]]:
         relative_path = str(path.relative_to(root))
         if not path.is_file() or "__pycache__" in relative_path or path.suffix == ".pyc":
             continue
-        found.append((relative_path, digest(path.read_bytes())))
+        found.append(relative_path)
     return found
-
-
-def seeded_modules(root: Path, suite: Path) -> set[str]:
-    """The guarden modules the suite names, plus whatever `tools/` reaches.
-
-    Only the suite's own text and the tools are scanned. **`src/guarden` is not
-    scanned for program names**, because a module mentions its siblings in prose
-    and in data — `modules.py` carries `PROGRAMS = ("soil", "weedr", "loom", …)`,
-    so a word-boundary search over the package pulls `loom.py` into the read set
-    of every suite that imports `modules`, and `render.py` names `loom` in five
-    docstring lines. That is not a narrower cache, it is a wrong one: the key
-    would move when a comment moved.
-
-    `tools/` is scanned because the harness's own plan is built by running
-    `guarden.soil`, so a suite's outcome really is a function of `soil.py` even
-    when the suite never names it.
-    """
-    seeds = set(PROGRAM_WORD.findall(suite.read_text(errors="replace")))
-    tools = root / "tools"
-    if tools.is_dir():
-        for path in sorted(tools.iterdir()):
-            if path.is_file():
-                seeds |= set(PROGRAM_WORD.findall(path.read_text(errors="replace")))
-    return seeds
-
-
-def imported_names(path: Path) -> list[str]:
-    names = []
-    for node in ast.walk(ast.parse(path.read_text())):
-        if isinstance(node, ast.ImportFrom) and not node.level and node.module:
-            if node.module == "guarden":
-                names.extend(alias.name.split(".")[0] for alias in node.names)
-            elif node.module.startswith("guarden."):
-                names.append(node.module.split(".")[1])
-        elif isinstance(node, ast.Import):
-            names.extend(
-                alias.name.split(".")[1]
-                for alias in node.names
-                if alias.name.startswith("guarden.")
-            )
-    return names
-
-
-def module_closure(root: Path, seeds: set[str]) -> list[str] | None:
-    package = root / "src" / "guarden"
-    resolved: set[str] = set()
-    pending = sorted(seeds)
-    while pending:
-        name = pending.pop()
-        if name in resolved:
-            continue
-        module = package / f"{name}.py"
-        if not module.is_file():
-            return None
-        resolved.add(name)
-        pending.extend(imported_names(module))
-    return sorted(resolved)
 
 
 def read_set(root: Path, suite: Path) -> list[str]:
     paths: dict[str, None] = {str(suite.relative_to(root)): None}
     for relative in (*UNIVERSAL_FILES, *UNIVERSAL_TREES):
-        for relative_path, _ in digests_of(root, relative):
+        for relative_path in files_under(root, relative):
             paths[relative_path] = None
     for pattern in UNIVERSAL_GLOBS:
         for path in sorted(root.glob(pattern)):
             paths[str(path.relative_to(root))] = None
-    closure = module_closure(root, seeded_modules(root, suite))
-    if not closure:
-        candidates = digests_of(root, "src/guarden")
-    else:
-        candidates = [("src/guarden/__init__.py", "")]
-        candidates += [(f"src/guarden/{name}.py", "") for name in closure]
-    for relative_path, _ in candidates:
-        paths[relative_path] = None
     return sorted(paths)
 
 
@@ -438,7 +390,7 @@ def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     try:
         return HANDLERS[args.command](args)
-    except (ValueError, SyntaxError) as exc:
+    except ValueError as exc:
         return refuse(str(exc), 2)
 
 

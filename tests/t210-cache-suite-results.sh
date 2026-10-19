@@ -12,6 +12,9 @@
 #     the group it shared and the order the run went in are part of the key;
 #   * one changed file invalidates what read it, leaves the rest alone, and an
 #     edited suite is never inherited;
+#   * a change anywhere in `src/guarden/**` — the package the harness runs —
+#     invalidates every key, and a change under `docs/` invalidates none
+#     (ticket 309);
 #   * a cached suite's line cannot be read as a pass;
 #   * `--no-cache` consults nothing;
 #   * the cache is outside the repository, and nothing expires.
@@ -250,8 +253,18 @@ assert_exit 0
 # --- the key is a function of the tree the suite reads ----------------------
 
 # The read set is over-approximated, and its shape is the claim: a suite must
-# carry the shared helper and the fixture inputs, and it must not carry the whole
-# package when the modules it names are resolvable.
+# carry the shared helper, the fixture inputs and **the whole of the package the
+# harness runs out of** (ticket 309).
+#
+# The narrowing this section used to assert — `src/guarden` cut down to the
+# closure of the modules the suite names, walked with `ast` — is what ticket 309
+# is written against. It answers "which modules does this text name, resolved
+# through `import`", and a suite's result is not a function of that: the harness
+# runs programs out of the package, `tools/` names programs on a suite's behalf,
+# and a module the walk never reaches from a seed is a green nobody re-checked.
+# A src-only change that moved no key is a stale pass, which is the worst thing
+# this cache can produce. Which file moves the key and which does not is
+# asserted where the files are changed, below.
 cache readset "$SUITE"
 assert_exit 0
 assert_stdout_has "tests/lib.sh"
@@ -259,14 +272,6 @@ assert_stdout_has "tests/t30-create.sh"
 assert_stdout_has "pyproject.toml"
 assert_stdout_has "fixtures/guarden.toml"
 assert_stdout_has "src/guarden/templates/quadlet-container.j2"
-
-# `weedr` is named by this suite, so its module and everything it imports are in
-# the key. `loom.py` is reachable from no module this suite's closure imports, so
-# it must not be: a key carrying it would move when a docstring mentioning `loom`
-# moved, and a cache that misses on a comment is a cache nobody trusts.
-assert_stdout_has "src/guarden/weedr.py"
-assert_stdout_has "src/guarden/paths.py"
-assert_stdout_lacks "src/guarden/loom.py"
 
 # The same tree twice is one digest, and two suites with different read sets are
 # two. A digest that moved on its own would inherit nothing, and one that never
@@ -306,15 +311,25 @@ cp "$GUARDEN_ROOT/tests/$SUITE_NAME" "$TREE_COPY/tests/$SUITE_NAME"
 cp "$GUARDEN_ROOT/fixtures/guarden.toml" "$TREE_COPY/fixtures/guarden.toml"
 cp "$GUARDEN_ROOT/tools/golden-vm" "$TREE_COPY/tools/golden-vm"
 cp "$GUARDEN_ROOT/pyproject.toml" "$TREE_COPY/pyproject.toml"
-cp "$GUARDEN_ROOT/src/guarden/weedr.py" "$TREE_COPY/src/guarden/weedr.py"
-cp "$GUARDEN_ROOT/src/guarden/paths.py" "$TREE_COPY/src/guarden/paths.py"
-cp "$GUARDEN_ROOT/src/guarden/loom.py" "$TREE_COPY/src/guarden/loom.py"
+# The package is copied whole rather than file by file: a seed whose module is
+# missing from the copy makes `read_set` fall back to the whole copy of the
+# package, and a copy that fell back would answer the assertion below for the
+# wrong reason instead of showing what the read set resolved.
+cp -R "$GUARDEN_ROOT/src/guarden/." "$TREE_COPY/src/guarden/"
 
 tree_key() {
     GUARDEN_LXC_ROOT="$TREE_COPY" python3 "$CACHE_TOOL" key "$GOLDEN" "$TREE_COPY/tests/$SUITE_NAME" "$1" "$2"
 }
 
 BEFORE=$(tree_key declared runner-1)
+
+# The same unchanged tree answers the same key on a second invocation. The key
+# is a hash of names relative to the tree and the bytes under them — nothing
+# else — and a key that moved on its own would invalidate every suite on every
+# run, so nothing could ever be inherited and the cache would be worth nothing.
+[ "$BEFORE" = "$(tree_key declared runner-1)" ] \
+    || _fail "the same unchanged tree produced two different keys"
+
 cache put "$GOLDEN" "$BEFORE" "$SUITE_NAME" declared runner-1 0
 assert_exit 0
 
@@ -334,17 +349,44 @@ cp "$GUARDEN_ROOT/tests/lib.sh" "$TREE_COPY/tests/lib.sh"
 cache get "$GOLDEN" "$BEFORE" "$SUITE_NAME"
 assert_exit 0
 
+# A timestamp is not a change. The key is read from bytes, and one read from
+# mtimes would move on every checkout, every copy and every `tar` into a cut —
+# nothing could ever be inherited, and the cache would inherit nothing while
+# looking like it was working.
+touch "$TREE_COPY/tests/lib.sh"
+[ "$BEFORE" = "$(tree_key declared runner-1)" ] \
+    || _fail "touching a file without changing it moved the key"
+
+# **The package, which is the ticket (309).** `loom.py` is the file the old read
+# set could leave out: this suite's closure resolves `weedr` and the modules it
+# imports and never reaches `loom`, so a change to it left every recorded green
+# standing over code no suite had re-run. Every suite's result is a function of
+# the package the harness runs, so the whole of it is in the key — and the key
+# moves, the record recorded against the old key is a miss, and the suite runs.
+printf '\n# a change in the package\n' >>"$TREE_COPY/src/guarden/loom.py"
+[ "$BEFORE" != "$(tree_key declared runner-1)" ] \
+    || _fail "a change to src/guarden/loom.py did not move the key"
+SRC_AFTER=$(tree_key declared runner-1)
+cache get "$GOLDEN" "$SRC_AFTER" "$SUITE_NAME"
+assert_exit 1
+
+# Putting it back restores the key exactly, so the recorded result is a hit
+# again — the cache follows the bytes of the package and nothing else.
+cp "$GUARDEN_ROOT/src/guarden/loom.py" "$TREE_COPY/src/guarden/loom.py"
+[ "$BEFORE" = "$(tree_key declared runner-1)" ] \
+    || _fail "restoring src/guarden/loom.py did not restore the key"
+cache get "$GOLDEN" "$BEFORE" "$SUITE_NAME"
+assert_exit 0
+
 # And a file no read set carries leaves the key alone. Without this half the
 # mechanism would be sound but useless: a key that moved on any change anywhere
 # would invalidate every suite on every edit, and a run would inherit nothing.
 #
-# `src/guarden/loom.py` is NOT such a file, and asserting it was was asserting
-# something false: this suite runs the CACHE TOOL rather than a guarden program,
-# so it names no module and `read_set` cannot narrow a closure for it. The
-# fallback then takes all of `src/guarden`, which is the conservative and correct
-# answer for a suite whose dependency cannot be resolved — and the docstring on
-# `seeded_modules` says the alternative (scanning the package for program names)
-# would be a WRONG cache, not a narrower one.
+# `docs/` is where that line sits, and it is deliberate: the ticket asks for a
+# docs-only change to move nothing, so the key covers what a suite executes and
+# not what it quotes. `src/guarden/loom.py` was the file that used to sit in this
+# position as the example — asserting that it was outside every read set was
+# asserting the bug; it is in every key now, and the example is `docs/` again.
 mkdir -p "$TREE_COPY/docs"
 printf '# the specification\n' >"$TREE_COPY/docs/spec.md"
 printf '\n# a change outside every read set\n' >>"$TREE_COPY/docs/spec.md"
@@ -361,6 +403,48 @@ printf '\n# the suite changed\n' >>"$TREE_COPY/tests/$SUITE_NAME"
 # name and the bytes rather than of where the tree was found. That is what lets
 # the harness key against its own checkout and this suite against a scratch one
 # and get the same answer, which is the whole reason the override exists.
+
+# --- what the key covers, and what it costs ---------------------------------
+
+# The read set is the key's claim about the tree, so it is asserted as content
+# rather than inferred from a digest: the package as a whole (ticket 309), the
+# module definitions whose templates render the units, the runner's own shell
+# helpers — a suite runs `tests/aptlock.sh` and `tests/failure_messages.sh`
+# beside `lib.sh`, so both are named like `lib.sh` and `lxc.sh` rather than
+# globbed (a glob of `tests/*.sh` would put every other suite in every key) —
+# the example services a suite installs as they are, and the tracked
+# `.env.schema` a suite resolves.
+cache readset "$SUITE"
+assert_exit 0
+assert_stdout_has "src/guarden/loom.py"
+assert_stdout_has "src/guarden/render.py"
+assert_stdout_has "src/guarden/weedr.py"
+assert_stdout_has "modules/gate-traefik"
+assert_stdout_has "examples/services"
+assert_stdout_has "tests/aptlock.sh"
+grep -qFx '.env.schema' "$GUARDEN_STDOUT" \
+    || _fail "the root .env.schema is not in the read set"
+
+# And every name in it is relative to the tree, so the same bytes key the same
+# way wherever the checkout sits — no absolute path can enter the hash, which is
+# what lets the harness key against its own checkout and a scratch copy against
+# another root and get one answer.
+! grep -qE '^/' "$GUARDEN_STDOUT" || _fail "the read set carries an absolute path"
+
+# Covering the package means hashing it, so the cost is measured rather than
+# assumed: how many files the key covers, and how long a digest over them takes
+# on this machine — interpreter start included, which is most of it.
+python3 "$CACHE_TOOL" readset "$SUITE" >"$GUARDEN_FIXTURES/readset.list"
+READSET_FILES=$(grep -c . "$GUARDEN_FIXTURES/readset.list")
+START_NS=$(date +%s%N)
+cache tree "$SUITE"
+assert_exit 0
+is_digest
+END_NS=$(date +%s%N)
+TREE_MS=$(( (END_NS - START_NS) / 1000000 ))
+printf 'note: the key covers %s files; its digest was built in %s ms\n' \
+    "$READSET_FILES" "$TREE_MS"
+[ "$TREE_MS" -lt 5000 ] || _fail "a key digest took ${TREE_MS}ms, so the key is no longer cheap enough to build per suite"
 
 # --- a cached suite's line cannot be read as a pass -------------------------
 
