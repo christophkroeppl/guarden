@@ -198,6 +198,34 @@ def _rule_entries(value: Any) -> list[RuleEntry]:
     return [RuleEntry.from_document(entry) for entry in (value or [])]
 
 
+def _probe_number(value: Any) -> int | None:
+    """One of the probe's two numbers as the document spells it, or `None`
+    when the document does not carry one: a real `int`, or a decimal string.
+
+    Every other scalar TOML can put in that key is refused by the caller
+    instead of coerced, because each of them has its own silent damage:
+    `4242.9` truncates to a pin nobody recorded, `true` is `True` and
+    `int(True)` is 1, and `inf` raises **OverflowError** out of `int()` — a
+    traceback out of `weedr service start` rather than the one line spec 1.2
+    promises, which is the class the string case was fixed in (measured,
+    t350: `owner_uid = inf` came back as 21 traceback lines). The bool check
+    comes before the int check for the same reason, and `OverflowError` is
+    caught regardless: the one conversion left is a decimal string, which
+    `int()` cannot overflow on, but a reader that lets that class escape is
+    the defect this refuses to reintroduce.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdecimal():
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+
 @dataclass
 class OwnerUnit:
     """One unit's own probe answer, for a service whose units name more than one
@@ -229,13 +257,24 @@ class OwnerUnit:
                 errors.HOST_NOT_AS_ASSUMED,
             )
         try:
-            return cls(image=str(entry["image"]), uid=int(entry["uid"]), gid=int(entry["gid"]))
-        except (KeyError, TypeError, ValueError):
+            image = str(entry["image"])
+            raw_uid = entry["uid"]
+            raw_gid = entry["gid"]
+        except KeyError:
             raise errors.GuardenError(
                 "a per-unit image owner is a table of image, uid and gid, and this "
                 "one does not carry all three",
                 errors.HOST_NOT_AS_ASSUMED,
             ) from None
+        uid = _probe_number(raw_uid)
+        gid = _probe_number(raw_gid)
+        if uid is None or gid is None:
+            raise errors.GuardenError(
+                "a per-unit image owner is a table of image, uid and gid, and this "
+                "one's uid or gid is not a whole number",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        return cls(image=image, uid=uid, gid=gid)
 
 
 @dataclass
@@ -425,21 +464,24 @@ def _owner_id(document: dict, key: str) -> int | None:
     renderer's `uid and uid > 0` and out of `weedr service start` as a
     TypeError (measured, t350), a traceback instead of the one line spec 1.2
     promises. Converting is what `OwnerUnit.from_document` already does for
-    the per-unit table; a value that is not a number at all is refused the
-    same way it refuses one, naming the service and the field: host state
-    that does not hold what guarden wrote (spec 1.2, exit 1).
+    the per-unit table, and every OTHER scalar a hand edit can put there — a
+    float (which `int()` truncates into a pin nobody recorded), a bool (which
+    `int()` makes 1), `inf` (which `int()` raises **OverflowError** on, the
+    21-line traceback measured in t350 before this reader refused it) — is
+    refused through the same helper, naming the service and the field: host
+    state that does not hold what guarden wrote (spec 1.2, exit 1).
     """
     value = document.get(key)
     if value is None:
         return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
+    found = _probe_number(value)
+    if found is None:
         raise errors.GuardenError(
             f"{document.get('service', 'the service')}: the registry entry carries "
-            f"{value!r} as {key}, and a uid or gid the probe recorded is a number",
+            f"{value!r} as {key}, and a uid or gid the probe recorded is a whole number",
             errors.HOST_NOT_AS_ASSUMED,
         ) from None
+    return found
 
 
 def path_for(service: str) -> Path:
