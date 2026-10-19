@@ -426,8 +426,8 @@ def _owner_id(document: dict, key: str) -> int | None:
     TypeError (measured, t350), a traceback instead of the one line spec 1.2
     promises. Converting is what `OwnerUnit.from_document` already does for
     the per-unit table; a value that is not a number at all is refused the
-    same way it refuses one, with the field named: host state that does not
-    hold what guarden wrote (spec 1.2, exit 1).
+    same way it refuses one, naming the service and the field: host state
+    that does not hold what guarden wrote (spec 1.2, exit 1).
     """
     value = document.get(key)
     if value is None:
@@ -436,8 +436,8 @@ def _owner_id(document: dict, key: str) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         raise errors.GuardenError(
-            f"the registry entry carries {value!r} as {key}, and a uid or gid the "
-            "probe recorded is a number",
+            f"{document.get('service', 'the service')}: the registry entry carries "
+            f"{value!r} as {key}, and a uid or gid the probe recorded is a number",
             errors.HOST_NOT_AS_ASSUMED,
         ) from None
 
