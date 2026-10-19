@@ -48,20 +48,6 @@ assert_not_rejected
 # has nothing to withhold and the start reaches systemd.
 stage_poke routed 9f2c1ab
 
-# --- two instances, created the way the deploy path creates them --------------
-
-run weedr service ingest routed-preview/feature/x --from poke routed@9f2c1ab
-assert_exit 0
-assert_stderr_empty
-assert_file_exists /var/lib/guarden/registry/routed-preview.toml
-
-# The second instance is the whole point of the block below: one service, two
-# refs, two renders, and neither render may erase the other's.
-run weedr service ingest routed-preview/plain --from poke routed@9f2c1ab
-assert_exit 0
-assert_stderr_empty
-
-# --- neither instance's route slice clobbers the other's ----------------------
 escaped='feature\x2fx'
 second='plain'
 instance_quadlet="/var/lib/guarden/services/routed-preview/home/$escaped/.config/containers/systemd"
@@ -70,6 +56,26 @@ slot_quadlet="/var/lib/guarden/services/routed-preview/home/.config/containers/s
 slice_a="/var/lib/guarden/shared/routed-preview/instances/$escaped/routes.toml"
 slice_b="/var/lib/guarden/shared/routed-preview/instances/$second/routes.toml"
 
+# --- two instances, created the way the deploy path creates them ------------------
+
+run weedr service ingest routed-preview/feature/x --from poke routed@9f2c1ab
+assert_exit 0
+assert_stderr_empty
+assert_file_exists /var/lib/guarden/registry/routed-preview.toml
+# `units.install` writes an instance's quadlet files UNIT_MODE (0640) as the
+# service uid, and this is where that is true: the SECOND instance's create
+# walks the whole service tree (`_make_tree`, `0700` to the tree, spec §2.1)
+# and re-modes this file, so a mode asserted later would be asserting whichever
+# write ran last (ticket 320).
+assert_mode "$instance_quadlet/web.container" 640
+
+# The second instance is the whole point of the block below: one service, two
+# refs, two renders, and neither render may erase the other's.
+run weedr service ingest routed-preview/plain --from poke routed@9f2c1ab
+assert_exit 0
+assert_stderr_empty
+
+# --- neither instance's route slice clobbers the other's ----------------------
 # Before the fix `units.install` copied every instance's `out/shared/` into
 # `shared/routed-preview/` — ticket 295's "fold in 264:87's wrong SHARED slice
 # path, units.py writes every slice to SHARED/<service>" — so the second
@@ -99,8 +105,14 @@ assert_file_has "$instance_quadlet_b/web.container" "ContainerName=routed-previe
 
 # --- where the render had to land for a start to find it -----------------------
 assert_file_exists "$instance_quadlet/web.container"
-assert_mode "$instance_quadlet/web.container" 640
 assert_file_exists "$instance_quadlet_b/web.container"
+assert_mode "$instance_quadlet_b/web.container" 640
+# Instance A's unit was 0640 after ITS install (asserted above) and the second
+# instance's create re-moded it to 0700 with the rest of the tree (ticket 320).
+# What must hold either way is the property the entry exists for: the service
+# user — the uid podman's generator runs as — still reads the declaration.
+run_in /tmp runuser -u routed-preview -- test -r "$instance_quadlet/web.container"
+assert_exit 0
 # The shared slot is where the render used to land, and the service's own `web`
 # is not there: an instance track deploys a ref every time. What the slot does
 # hold is the one entry podman's generator reads — the unit plus the escaped
