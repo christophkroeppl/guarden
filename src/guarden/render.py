@@ -1261,9 +1261,12 @@ def _routes(
     # `soil firewall --check` reports a default that moved underneath a record.
     hosts = [route.host for route in document.routes]
     recorded = context.record.route_destinations if context else {}
+    # The context-less path is `loom check`, which writes nothing; its fallback
+    # is still the fail-closed one, because `edge` is the answer nothing may
+    # default to (tickets 293/294).
     fallback = (
         exposure.resolve(context.record, context.track, context.config.modules)
-        if context else exposure.EDGE
+        if context else exposure.LOOPBACK
     )
     dests = {host: recorded.get(host, fallback) for host in hosts}
 

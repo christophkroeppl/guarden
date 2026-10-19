@@ -523,6 +523,15 @@ def _allocate(resolved, record, manifest, config, source: Source) -> None:
         wanted, record.publication, taken, config.publication_range, record.service,
     )
     holders = publications.host_holders(records)
+    # A label the manifest dropped stops being claimed — and stops being
+    # carried. `route_hosts` is keyed to the manifest's routes, so this
+    # record, the expose verbs and the drift item (all of which key off it)
+    # compute over one host set rather than an accumulating one that is a
+    # second place to be wrong (tickets 293/294).
+    claimed = {route.host for route in manifest.routes}
+    record.route_hosts = {
+        label: full for label, full in record.route_hosts.items() if label in claimed
+    }
     for route in manifest.routes:
         record.route_hosts[route.host] = publications.claim_host(
             route.host, resolved.track.host_prefix, holders, record.service

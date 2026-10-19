@@ -75,15 +75,19 @@ def from_record(value: str, modules: Iterable[str] | None) -> str:
 def resolve(record, track, modules: Iterable[str] | None) -> str:
     """The service's default destination: record, then track, then derived.
 
-    `record` and `track` may be `None` only where there is no host context at
-    all (`loom check` of a source with no registry); the edge is what a route
-    has meant without a host to ask, so that is what falls out.
+    `track` is `None` in two shapes and both are fail-closed: `loom check`
+    renders with no host context at all, and `weedr expose list` walks a
+    record whose environment names no track in `guarden.toml` (the row was
+    deleted). Private loses nothing; `edge` is the one answer no operator
+    asked for, so a missing track resolves like a missing module rather than
+    like a grant — the same refusal-without-guessing rule `set`/`unset`
+    apply to that host state, one step earlier.
     """
     recorded = getattr(record, "exposure", None) if record is not None else None
     if recorded:
         return from_record(recorded, modules)
     if track is None:
-        return EDGE
+        return _tunnel_or_loopback(modules)
     track_value = getattr(track, "expose", "") or ""
     if track_value == EDGE:
         return EDGE
