@@ -1,4 +1,6 @@
-{# The route slice `roots` reads from /var/lib/guarden/shared/<service>/routes.toml.
+{# The route slice `roots` reads from /var/lib/guarden/shared/<service>/routes.toml —
+  the slot's file — or, when this render carries an instance, from
+  /var/lib/guarden/shared/<service>/instances/<escaped-ref>/routes.toml (spec 2 and 6.4).
 
   `target` is `<name>:<publication>` — the service's own name, with no suffix
   and no alias (spec 7.3) — and `host` is the name the mutator allocated from
