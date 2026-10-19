@@ -43,6 +43,14 @@ assert_not_rejected
 run soil firewall --apply
 assert_not_rejected
 
+# The edge is installed, because the edge is what dials a preview: the accept
+# set this suite asserts is the edge's own uid being granted the instance's
+# publication, and a host with no edge has no edge uid to grant. The module is
+# already in the fixture's `[modules] enabled`, so this is the act that
+# creates the edge's service and its account.
+run weedr module add gate-traefik
+assert_exit 0
+
 # One route and no `needs:`, so nothing here is about the edge: the preview
 # track is `kind = "instance"` in the shipped table and ungated, so the gate
 # has nothing to withhold and the start reaches systemd.
@@ -122,6 +130,61 @@ assert_exit 0
 assert_file_missing "$slot_quadlet/web.container"
 assert_file_exists "$slot_quadlet/web-$escaped.container"
 assert_file_exists "$slot_quadlet/web-$second.container"
+
+# --- the instance's publication is in the firewall accept set -----------------
+# The start above proves the container runs. It does not prove anything can
+# REACH it, and that is a different fact: an instance gets its own
+# publication (`instance.publication`), its unit publishes it
+# (`PublishPort=127.0.0.1:<instance pub>:<port>`) and the route target is
+# `<service>:<instance pub>` — so the edge dials the INSTANCE's port, not the
+# service's. The accept set is what lets it: `50-services.conf` carries one
+# owner-matched accept per `(publication, uid)`, and the loopback deny below
+# them carries no owner match, so a publication with no accept is a port
+# nothing outside the box can reach.
+#
+# Before this fix `accept_lines` iterated only `record.publication` — the
+# service's own map — so the instance's port had no accept at all: the preview
+# was running and unreachable, and "two previews run at once" was true in
+# podman and false in the product.
+#
+# The instance's publication is read from the registry, which is where it is
+# persisted (spec 7.4) and the only place it can be read from — the number is
+# allocated, never derived.
+#
+# The registry writes it as a sub-table of the instance's own table, and the
+# instance's key is the ESCAPED ref, TOML-quoted — so the header on disk holds
+# the escaped form with its backslash doubled by the TOML string quoting.
+registry=/var/lib/guarden/registry/routed-preview.toml
+pub_header=$(grep -nF '[instances."feature\\x2fx".publication]' "$registry" | cut -d: -f1)
+[ -n "$pub_header" ] \
+    || _fail "the instance feature\\x2fx holds no publication table in the registry"
+instance_pub=$(sed -n "$((pub_header + 1)),/^\[/p" "$registry" \
+    | sed -n 's/^web = \([0-9]*\)$/\1/p' | head -n 1)
+[ -n "$instance_pub" ] \
+    || _fail "the instance feature\\x2fx holds no publication in the registry"
+services=/etc/guarden/firewall/50-services.conf
+assert_file_exists "$services"
+# The service's own uid, and the edge's uid: the edge is what dials it, and it
+# dials it as the edge's own uid. Both accepts are owner-matched and both sit
+# above the single loopback deny.
+assert_file_has "$services" \
+    "mod owner uid-owner $(id -u routed-preview) daddr 127.0.0.1 proto tcp dport $instance_pub jump ACCEPT;"
+# The edge's uid is the one that makes the preview reachable at all, so it is
+# asserted by name rather than by count: the edge's own publication set is
+# granted on every route publication the edge serves (ticket 293), and an
+# instance's publication is a route publication like any other.
+edge_uid=$(getent passwd traefik-production | cut -d: -f3)
+[ -n "$edge_uid" ] \
+    || _fail "the edge service traefik-production has no uid, so its accept cannot be named"
+assert_file_has "$services" \
+    "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $instance_pub jump ACCEPT;"
+# Above the deny: an accept under the single drop matches no packet while
+# still appearing in the file, so the position is part of the claim.
+accept_line=$(grep -nFm1 "dport $instance_pub jump ACCEPT;" "$services" | cut -d: -f1)
+deny_line=$(grep -nF "daddr 127.0.0.0/8 jump DROP;" "$services" | tail -n 1 | cut -d: -f1)
+if [ -z "$accept_line" ] || [ -z "$deny_line" ] || [ "$accept_line" -ge "$deny_line" ]; then
+    _fail "the instance's accept for dport $instance_pub (line ${accept_line:-absent}) is not above the loopback deny (line ${deny_line:-absent})"
+fi
 
 # --- the step no suite ever ran -------------------------------------------------
 # Before the fix this answers 1: `routed-preview has no unit to start:
