@@ -264,10 +264,22 @@ weedr service create myapp --env staging
 error: no template was chosen; /usr/lib/guarden/templates/services holds none
 ```
 
-Both are exit `1`: what is missing is on the host and not in the argument. With templates
-installed and `--template` omitted, the verb takes the set's only entry without asking, asks
-at a terminal when there is more than one, and when stdin is not a terminal says so rather
-than reading an answer from it:
+Both are exit `1`: neither name breaks a rule, so the input is fine and what is missing is on
+the host — spec 1.2 draws one line, "The dividing line is input against host", and the
+filesystem is the host's half of it. The argument is what fails when the value breaks the name
+rule, and then it is exit `2` whatever the host holds:
+
+```
+weedr service create myapp --env staging --template ../x
+error: the template '../x' is not a template name; /usr/lib/guarden/templates/services holds none
+```
+
+The same line with templates installed: a name that breaks no rule and a set that does not hold
+it is still `1`, while an empty answer at a prompt that had a set to offer — or an explicitly
+empty `--template`, an answer that reaches the same refusal without asking — is `2`, because
+there the input itself named nothing. With templates installed and `--template` omitted, the
+verb takes the set's only entry without asking, asks at a terminal when there is more than one,
+and when stdin is not a terminal says so rather than reading an answer from it:
 
 ```
 error: create needs a terminal to answer its prompts; run it interactively

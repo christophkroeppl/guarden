@@ -26,6 +26,9 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -324,8 +327,12 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # is no registry entry for <service>".
     if source.kind != "module":
         # `_render_source`, not `directory`: `units.install` hands this to `loom`
-        # as `guarden` (ADR-0012), and a home is `0700` to its own service.
-        outcome.notes += units.install(_render_source(directory), resolved.name)
+        # as `guarden` (ADR-0012), and a home is `0700` to its own service. The
+        # tree is the invocation's own and is taken away with it, so a second
+        # run staging from the same source has nothing to delete out from under
+        # this render (ticket 301).
+        with _render_source(directory) as staged:
+            outcome.notes += units.install(staged, resolved.name)
     return outcome
 
 
@@ -334,10 +341,25 @@ def require_template(template_name: str | None) -> Path:
 
     Raised here and nowhere else, so the verb that validates its answer before
     it asks for anything and the mutator that is about to copy the template
-    answer with the same line and the same code: `1`, because what is missing is
-    on the host and not in the argument (spec 1.2). A name that is not a template
-    name at all — anything with a `/` or a leading `.` in it — stops here too,
-    and stops before it can name a directory outside the template set.
+    answer with the same line and the same code. Either way the refusal stops
+    before it can name a directory outside the template set.
+
+    **Two codes on spec 1.2's one line — "The dividing line is input against
+    host" — and which one is asked is which thing is at fault.**
+
+    `2`, the input rejected, when the argument itself breaks a rule: a value
+    that does not match `names.NAME_RE` — `^[a-z0-9][a-z0-9._-]*$`, the whole
+    of "a template name" — is not a template name at all and is §1.2's row
+    "a name that breaks a rule"; it is `2` whatever the host holds, the same
+    answer the same-shaped `add --from /tmp` gives (pinned by t250). An answer
+    that names nothing where the installed set offered a choice is input too,
+    so it is `2` as well.
+
+    `1`, the host not in the state the request assumed, when the name breaks no
+    rule and the host is what says no: a set that does not hold the name, and a
+    set that is empty at all. §1.2 puts "the filesystem, the installed services
+    and the remote" on the host's side, which is the same reason its `needs:`
+    row answers `1` for a provider that does not exist.
     """
     templates = paths.TEMPLATES / "services"
     directory = None
@@ -352,10 +374,13 @@ def require_template(template_name: str | None) -> Path:
     )
     if not template_name:
         problem = "no template was chosen"
+        code = errors.HOST_NOT_AS_ASSUMED if not available else errors.REJECTED_INPUT
     elif directory is None:
         problem = f"the template {template_name!r} is not a template name"
+        code = errors.REJECTED_INPUT
     else:
         problem = f"the template {template_name!r} does not exist at {directory}"
+        code = errors.HOST_NOT_AS_ASSUMED
     raise errors.GuardenError(
         problem
         + (
@@ -363,7 +388,7 @@ def require_template(template_name: str | None) -> Path:
             if available
             else f"; {templates} holds none"
         ),
-        errors.HOST_NOT_AS_ASSUMED,
+        code,
     )
 
 
@@ -761,7 +786,65 @@ def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
         conf.set_owner(path, owner)
 
 
-def _render_source(directory: Path) -> Path:
+def _reap_staging(parent: Path) -> None:
+    """Take the staging trees whose creator run no longer answers — best effort.
+
+    The `rmtree` this replaces deleted `render-source/<source>` whatever another
+    run was doing with it — the whole of the race — and this keeps only trees
+    whose named creator is gone: a run's tree is named after the pid that staged
+    it, so while that pid answers, its tree is never a candidate (`kill(pid, 0)`
+    answers across uids, so `EPERM` means alive too), and an entry that is not
+    `<pid>-<random>` at all is a leftover of the shared layout this replaces
+    (where `render-source/<source>` *was* the tree).
+
+    **The pid check is about the creator and proves nothing about who is reading
+    the tree.** The reader is not the run: `units.render_units` runs `loom` under
+    `runuser`, from `tool.call`'s bare `subprocess.run` — no `start_new_session`,
+    no timeout, nothing tying the child's life to the parent's — so a mutator
+    SIGKILLed mid-render (the OOM killer is the realistic one; it takes the
+    parent and leaves the child) leaves that `loom` orphaned and still reading a
+    tree whose creator pid no longer answers, and the next run to stage from
+    this source takes the tree from under it. The per-invocation tree closes the
+    race ticket 301 names — one live run `rmtree`ing the tree another live run
+    holds — and this is what remains after it: an unclean parent death first,
+    never a concurrent run.
+
+    The reap is deliberately one-sided when it cannot decide either way, which
+    makes it best effort in both: a creator pid the kernel has handed to some
+    long-lived process since keeps its dead run's tree here for good (nothing
+    else bounds this directory) — the better of the two failures, because the
+    other one is deleting a tree someone is reading.
+    """
+    for entry in list(parent.iterdir()):
+        creator, sep, _rest = entry.name.partition("-")
+        if sep and creator.isdigit():
+            try:
+                pid = int(creator)
+                if pid == os.getpid():
+                    continue
+                os.kill(pid, 0)
+                continue
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                continue
+            except (OverflowError, ValueError):
+                # Not a pid this machine can hold: wider than a pid_t (the
+                # conversion raises before the syscall) or longer than int()
+                # takes. The name promised a run and names none — take it.
+                pass
+            except OSError:
+                # Anything else the kernel might answer, which for signal 0
+                # this cannot name: keep the tree rather than guess.
+                continue
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            entry.unlink(missing_ok=True)
+
+
+@contextmanager
+def _render_source(directory: Path) -> Iterator[Path]:
     """The render inputs where `loom` — running as `guarden` — can read them.
 
     `units.install` hands its source to `loom` through `runuser -u guarden`
@@ -777,34 +860,58 @@ def _render_source(directory: Path) -> Path:
     staging tree has always been: the four inputs `_copy_source` copies,
     root-owned and `0755`, where the renderer is only a reader. Only a source
     under `services/` is staged — a staging tree, a module's shipped source and
-    a template are root-owned and readable already — and the staging directory
-    is emptied and recreated on every run, so it can never carry a previous
-    run's inputs into a render.
+    a template are root-owned and readable already.
+
+    **The tree belongs to the invocation that staged it and is gone when that
+    invocation ends**, because nothing that reads it needs the path to be
+    stable. There is one consumer: `units.install` → `render_units` → `loom
+    render <source>`, reading this tree for the length of one render, and
+    nothing after it. `_source_hash` hashes the **original** directory (a poke's
+    staging tree or the source's own home, by design — 00d0150), never this
+    copy; `_manifest_directory` resolves a manifest from the source directory or
+    the service's home, also never this copy; and no registry field, diagnostic
+    or printed line names where the inputs were staged from. So two runs from
+    one source have no reason to see the same path, and the way they stop
+    deleting each other's tree out from under a read is to not share one:
+    `render-source/<source>/<pid>-<random>`, created by `mkdtemp` (which cannot
+    hand the same name to two runs) and removed in this function's `finally`,
+    including when the copy it was staging failed.
+
+    A lock keyed on the source was the other shape and is the wrong one. spec
+    3.5 enumerates the lock names and their order, and `conf._rank` refuses a
+    name outside that table, so it would be a spec change to the contract; it
+    would serialise two independent adds behind one whole render to protect a
+    tree nothing keeps; and it would still leave a killed run's tree behind,
+    which is what `_reap_staging` takes over — best effort, and on the terms
+    its own docstring states.
     """
     if paths.SERVICES not in directory.parents:
-        return directory
+        yield directory
+        return
     relative = directory.relative_to(paths.SERVICES)
-    stage = paths.LIB / "render-source" / relative.parts[0]
-    stage.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(stage.parent, 0o755)
-    if stage.exists():
-        shutil.rmtree(stage)
-    stage.mkdir()
-    for relative_input in (".guarden", "compose.yaml", *BUILD_INPUTS):
-        source = directory / relative_input
-        target = stage / relative_input
-        if source.is_dir():
-            shutil.copytree(source, target)
-        elif source.is_file():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-    # The copies carry the home's modes — `0700` all the way down, because
-    # `_make_tree` modes every file and not only every directory — so the staged
-    # tree is re-moded as it is written: directories traversable, files readable,
-    # and nothing writable by the renderer.
-    for path in [stage, *sorted(stage.rglob("*"))]:
-        os.chmod(path, 0o755 if path.is_dir() else 0o644)
-    return stage
+    parent = paths.LIB / "render-source" / relative.parts[0]
+    parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(parent, 0o755)
+    _reap_staging(parent)
+    stage = Path(tempfile.mkdtemp(prefix=f"{os.getpid()}-", dir=parent))
+    try:
+        for relative_input in (".guarden", "compose.yaml", *BUILD_INPUTS):
+            source = directory / relative_input
+            target = stage / relative_input
+            if source.is_dir():
+                shutil.copytree(source, target)
+            elif source.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+        # The copies carry the home's modes — `0700` all the way down, because
+        # `_make_tree` modes every file and not only every directory — so the
+        # staged tree is re-moded as it is written: directories traversable,
+        # files readable, and nothing writable by the renderer.
+        for path in [stage, *sorted(stage.rglob("*"))]:
+            os.chmod(path, 0o755 if path.is_dir() else 0o644)
+        yield stage
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 def _ensure_admin_units(uid: int) -> None:
