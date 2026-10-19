@@ -803,21 +803,27 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
 
 
 def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
-    """Probe once, record, and put guarden's `Userns=` line into the units
-    before they are started (ADR-0019).
+    """Probe what the record does not answer yet, record it, and put guarden's
+    `UserNS=` line into the units before they are started (ADR-0019).
 
     `weedr service start` calls this in front of `start_units`. A first start
-    probes the image's declared user as the service user, writes the answer
-    into the registry as `owner_uid`/`owner_gid`, and re-renders so the unit
-    carries `UserNS=keep-id:uid=...,gid=...` before the container it is about
-    to start — the line is rendered, never hand-written, so the refusal of a
-    repository's own `Userns=` is untouched (spec 6.3).
+    probes each DISTINCT image the installed units name, as the service user,
+    writes the answers into the registry — `owner_uid`/`owner_gid` for a
+    service whose units name one image, those plus a per-unit `owner_units` map
+    when they name several — and re-renders so every unit carries the
+    `UserNS=keep-id:uid=...,gid=...` of ITS OWN image before the container it
+    is about to start. The line is rendered, never hand-written, so the refusal
+    of a repository's own `Userns=` is untouched (spec 6.3), and a unit whose
+    image cannot be read or resolved raises the probe's one line rather than
+    being skipped.
 
-    A later start finds the record and does not probe again, and re-renders
-    only when an installed unit does not hold exactly the line the record
-    renders — so the line is stable across starts, re-renders and re-ingests,
-    an edited record is rendered through rather than overwritten by a second
-    probe, and a record with the probe removed is the probe's condition again.
+    A later start finds every unit answered and does not probe again, and
+    re-renders only when an installed unit does not hold exactly the line the
+    record renders for it — so the line is stable across starts, re-renders and
+    re-ingests, an edited record is rendered through rather than overwritten by
+    a second probe, a unit a re-ingest added (or an image that changed) is the
+    probe's condition again, and a record with the probe removed is probed
+    again.
     """
     record = registry.load(name)
     if record is None:
@@ -825,8 +831,9 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
             f"{name} has no registry entry, so there is nothing to start",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    if record.owner_uid is None or record.owner_gid is None:
-        uid, gid = probe_owner(name, record, escaped_ref)
+    plan = _owner_plan(name, record, escaped_ref)
+    if plan:
+        probed = {reference: probe_image(name, record, reference) for reference in plan}
         with conf.lock("registry"):
             current = registry.load(name)
             if current is None:
@@ -834,21 +841,21 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
                     f"{name} lost its registry entry while its image user was being probed",
                     errors.HOST_NOT_AS_ASSUMED,
                 )
-            current.owner_uid = uid
-            current.owner_gid = gid
+            _record_owners(current, name, escaped_ref, probed)
             registry.save(current, (0, users.group_id(GUARDEN_GROUP)))
         record = current
-    pinned = render.owner_line(record)
-    if pinned is not None:
+    for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
+        unit = unitsource.parse(path)
         # A pin and a source's own `User=` cannot both decide the container's
         # user — an explicit `--user` beats keep-id's init-forcing — so the
         # refusal happens here as well as in the render: this is the path that
         # answers the start, and it answers with the input code rather than
-        # through the renderer's exit plumbing.
-        for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
-            render.refuse_pinned_user(
-                unitsource.parse(path), pinned, f"{name}: the unit {path.name}"
-            )
+        # through the renderer's exit plumbing. It is asked per unit, because
+        # the line is per unit: a service whose other unit is pinned does not
+        # take this unit's `User=` away.
+        pinned = render.owner_line(record, unit.stem())
+        if pinned is not None:
+            render.refuse_pinned_user(unit, pinned, f"{name}: the unit {path.name}")
     if not _carries_owner_line(name, escaped_ref, record):
         units.install(_unit_source(name, record), name, escaped_ref)
 
@@ -868,8 +875,110 @@ def _is_root_declaration(declared: str) -> bool:
     return declared.partition(":")[0] in ROOT_DECLARATIONS
 
 
-def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int, int]:
-    """The uid and gid the service's image declares, read at first start.
+def _installed_images(name: str, escaped_ref: str | None) -> dict[str, str]:
+    """Every installed unit and the image it names, keyed by unit.
+
+    The probe's question is per unit (ADR-0019): two units of one service may
+    name two images, and each image's user is its own answer, so this is the
+    lookup the plan and the record are both built from — not the first file the
+    directory hands back. A unit that names no image is answered the reference
+    its own build tags (images.reference_for), which is the fallback the
+    single-image probe gave the whole directory.
+    """
+    found: dict[str, str] = {}
+    for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
+        unit = unitsource.parse(path)
+        declared = unit.one("Container", "Image")
+        found[unit.stem()] = (
+            declared.strip() if declared and declared.strip() else images.reference_for(name)
+        )
+    return found
+
+
+def _recorded(record, stem: str, image: str) -> tuple[int, int] | None:
+    """The pair the record already holds for THIS unit and the image it names,
+    or `None` when what the record holds was read from another image or from no
+    image at all — either of which makes the unit the probe's condition."""
+    if record.owner_units:
+        entry = record.owner_units.get(stem)
+        if entry is None or entry.image != image:
+            return None
+        return (entry.uid, entry.gid)
+    if record.owner_image and record.owner_image != image:
+        return None
+    return (record.owner_uid, record.owner_gid)
+
+
+def _owner_plan(name: str, record, escaped_ref: str | None) -> list[str]:
+    """The images a probe still owes this record, and `[]` when it owes none.
+
+    Not probed at all (`owner_uid is None`) is every distinct image in the
+    directory; after that, only the units the record does not answer: one it
+    holds no entry for, or one whose `Image=` has changed since its pair was
+    read from that image.
+    """
+    unit_images = _installed_images(name, escaped_ref)
+    if record.owner_uid is None or record.owner_gid is None:
+        return sorted(set(unit_images.values())) or [images.reference_for(name)]
+    return sorted(
+        {image for stem, image in unit_images.items() if _recorded(record, stem, image) is None}
+    )
+
+
+def _record_owners(current, name: str, escaped_ref: str | None,
+                   probed: dict[str, tuple[int, int]]) -> None:
+    """Write the probe's answers into the record: the service-level anchor and,
+    when the units name more than one image, the per-unit map the renderer
+    answers each unit from (ADR-0019).
+
+    Two shapes on purpose. A service whose units name one image keeps exactly
+    the record it has always had — `owner_uid`/`owner_gid`, the drift anchor
+    (ticket 277) and the field an operator edits by hand — plus `owner_image`,
+    so a unit that later names another image is the probe's condition again
+    rather than a unit that pair answers. Only a service whose units DISAGREE
+    grows `owner_units`, and its anchor stays the first unit's pair, so the
+    single-number fields never disappear and never change meaning.
+    """
+    unit_images = _installed_images(name, escaped_ref)
+    pairs: dict[str, tuple[str, int, int]] = {}
+    for stem, image in sorted(unit_images.items()):
+        if image in probed:
+            uid, gid = probed[image]
+        else:
+            held = _recorded(current, stem, image)
+            if held is None:
+                raise errors.GuardenError(
+                    f"{name}: the registry entry holds no probed image user for the unit "
+                    f"{stem} after the probe, so that unit's line has no source",
+                    errors.HOST_NOT_AS_ASSUMED,
+                )
+            uid, gid = held
+        pairs[stem] = (image, uid, gid)
+    if pairs and len({image for image, _, _ in pairs.values()}) > 1:
+        image, uid, gid = pairs[sorted(pairs)[0]]
+        current.owner_uid, current.owner_gid = uid, gid
+        current.owner_image = image
+        current.owner_units = {
+            stem: registry.OwnerUnit(image=owned, uid=owned_uid, gid=owned_gid)
+            for stem, (owned, owned_uid, owned_gid) in sorted(pairs.items())
+        }
+        return
+    if pairs:
+        image, uid, gid = next(iter(pairs.values()))
+    else:
+        # No unit installed at all: the reference this service's build tags,
+        # which is the answer the single-image probe gave a directory with no
+        # `Image=` in it.
+        image = images.reference_for(name)
+        uid, gid = probed[image]
+    current.owner_uid, current.owner_gid = uid, gid
+    current.owner_image = image
+    current.owner_units = {}
+
+
+def probe_image(name: str, record, reference: str) -> tuple[int, int]:
+    """The uid and gid THIS image declares, read at first start — one image at
+    a time, because a service's units may name several (ADR-0019).
 
     `podman image inspect` gives `Config.User` — a number, a `uid:gid`, a name,
     or nothing — and every shape is resolved by ONE table (ADR-0019):
@@ -885,7 +994,7 @@ def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int,
     running the image as container root: a probe that started the container as
     the declared user could not answer the one case that matters, an image
     whose declared user does not exist in it. A missing image is pulled first,
-    once, because the start below needs it either way.
+    once, because the start that asked for it needs the image either way.
 
     Exit `1` when the image is not on the host and cannot be pulled — the
     filesystem — and `2` when the image names a user or group it does not
@@ -893,7 +1002,6 @@ def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int,
     be: the declaration is the input, and it is rejected where it is
     visible. Every one of these is one line naming the service (spec 1.2).
     """
-    reference = _installed_reference(name, escaped_ref)
     user, entrypoint, command = _image_config(name, record, reference)
     declared = user
     if _is_root_declaration(declared):
@@ -1111,7 +1219,7 @@ def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str 
 
 def _image_file(name: str, record, reference: str, path: str) -> str | None:
     """The image's own file, read by running the image as container root —
-    `--user 0` and not the declared user, for the reason probe_owner gives."""
+    `--user 0` and not the declared user, for the reason probe_image gives."""
     result = _podman(
         name, record, "run", "--rm", "--user", "0", "--entrypoint", "cat", reference, path
     )
@@ -1156,36 +1264,27 @@ def _podman(name: str, record, *argv: str):
         raise errors.GuardenError(f"{name}: {exc.message}", exc.code) from None
 
 
-def _installed_reference(name: str, escaped_ref: str | None) -> str:
-    """The image the installed units name — read from the units that are about
-    to run, so a module's shipped service and a repository's own tree are read
-    the same way, and a source declaring no image is answered with the one its
-    build tags (images.reference_for)."""
-    for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
-        declared = unitsource.parse(path).one("Container", "Image")
-        if declared and declared.strip():
-            return declared.strip()
-    return images.reference_for(name)
-
-
 def _carries_owner_line(name: str, escaped_ref: str | None, record) -> bool:
-    """Whether every installed unit already holds exactly the line this record
-    renders — or holds none at all when the record renders none. Anything else
-    is a render that has not happened yet."""
-    want = render.owner_line(record)
+    """Whether every installed unit already holds exactly the line the record
+    renders FOR THAT UNIT — or holds none at all when the record renders it
+    none. Anything else is a render that has not happened yet.
+
+    Read through `unitsource.parse` rather than by scanning lines: the answer
+    is per unit now, the unit's own stem is what the renderer keys its pair by,
+    and a file that cannot be read is the one-line refusal unitsource already
+    makes rather than a decode error out of this walk.
+    """
     files = sorted(units_dir(name, escaped_ref).glob("*.container"))
     if not files:
         return False
     for path in files:
-        found = [
-            line
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.startswith("UserNS=")
-        ]
+        unit = unitsource.parse(path)
+        want = render.owner_line(record, unit.stem())
+        found = unit.get("Container", "UserNS")
         if want is None:
             if found:
                 return False
-        elif found != [f"UserNS={want}"]:
+        elif found != [want]:
             return False
     return True
 

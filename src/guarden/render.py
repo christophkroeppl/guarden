@@ -137,20 +137,32 @@ GUARDEN_OWNED_ORDER = (
 )
 
 
-def owner_line(record: Registry) -> str | None:
-    """The `UserNS=` value the renderer writes for this record, and `None` when
-    it writes none — the one spelling of the line (ADR-0019).
+def owner_line(record: Registry, unit: str) -> str | None:
+    """The `UserNS=` value the renderer writes for THIS unit, and `None` when it
+    writes none — the one spelling of the line, answered per unit (ADR-0019).
 
     The start path reads this to decide whether the installed units already
-    hold what this record renders, so the check and the render cannot drift
-    apart. `owner_uid` is the probe's answer: `None` is "not probed yet" and
-    renders nothing (nothing has been measured), and `0` is an image that
-    declares no user, whose container root the default map already moves onto
-    the service identity — the line would name a mapping already in effect and
-    move the rest of the map to get there.
+    hold what the record renders for each of them, so the check and the render
+    cannot drift apart. A record that answers per unit — `owner_units`, the
+    map a service whose units name more than one image grows — answers this
+    unit from its own entry and from nothing else: a unit it does not answer
+    gets no line rather than another image's pin, which is the failure the map
+    exists to prevent. What is left is the single-image record, and
+    `owner_uid` is the probe's answer: `None` is "not probed yet" and renders
+    nothing (nothing has been measured), and `0` is an image that declares no
+    user, whose container root the default map already moves onto the service
+    identity — the line would name a mapping already in effect and move the
+    rest of the map to get there.
     """
-    if record.owner_uid and record.owner_uid > 0 and record.owner_gid is not None:
-        return f"keep-id:uid={record.owner_uid},gid={record.owner_gid}"
+    if record.owner_units:
+        entry = record.owner_units.get(unit)
+        if entry is None:
+            return None
+        uid, gid = entry.uid, entry.gid
+    else:
+        uid, gid = record.owner_uid, record.owner_gid
+    if uid and uid > 0 and gid is not None:
+        return f"keep-id:uid={uid},gid={gid}"
     return None
 
 
@@ -1075,13 +1087,15 @@ def _container_unit(
     requests = _secret_requests(document, schema)
     if requests:
         unit.put("Container", "Secret", requests)
-    # ADR-0019: the keep-id line, and the registry's probed uid/gid is its only
-    # source. A record with no probe (`None`) renders no line — and a record
-    # probed to `0` is an image that declares no user, whose container root the
-    # default map already moves onto the service identity, so the line would
-    # name a mapping that is already in effect and change the rest of the map
-    # to get there.
-    owner = owner_line(context.record) if context is not None else None
+    # ADR-0019: the keep-id line, and the registry's probed pair for THIS unit
+    # is its only source — the unit's own image's user, so a service whose
+    # units name two images renders two lines rather than the first image's
+    # pair in every unit. A unit with no answer (`None`) renders no line — and
+    # a pair probed to `0` is an image that declares no user, whose container
+    # root the default map already moves onto the service identity, so the
+    # line would name a mapping that is already in effect and change the rest
+    # of the map to get there.
+    owner = owner_line(context.record, container) if context is not None else None
     if owner is not None:
         refuse_pinned_user(
             source.units[container],

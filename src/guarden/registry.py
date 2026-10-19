@@ -199,6 +199,46 @@ def _rule_entries(value: Any) -> list[RuleEntry]:
 
 
 @dataclass
+class OwnerUnit:
+    """One unit's own probe answer, for a service whose units name more than one
+    image (ADR-0019): the image the pair was read from, and the pair.
+
+    The image is in the record because the pair is only true of the image it
+    was read from — a unit whose `Image=` changes is the probe's condition
+    again, and a record that could not say which image answered which unit
+    could only answer every unit with ONE image's user, which is the failure
+    this field exists to prevent.
+    """
+
+    image: str
+    uid: int
+    gid: int
+
+    def to_document(self) -> dict[str, Any]:
+        return {"image": self.image, "uid": self.uid, "gid": self.gid}
+
+    @classmethod
+    def from_document(cls, entry: Any) -> OwnerUnit:
+        """Three fields or a refusal, for the reason `RuleEntry.from_document`
+        gives: an entry that does not name an image and two numbers is not an
+        answer, and rendering it would pin a unit nobody probed."""
+        if not isinstance(entry, dict):
+            raise errors.GuardenError(
+                "a per-unit image owner is a table of image, uid and gid, and this "
+                "one is not",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        try:
+            return cls(image=str(entry["image"]), uid=int(entry["uid"]), gid=int(entry["gid"]))
+        except (KeyError, TypeError, ValueError):
+            raise errors.GuardenError(
+                "a per-unit image owner is a table of image, uid and gid, and this "
+                "one does not carry all three",
+                errors.HOST_NOT_AS_ASSUMED,
+            ) from None
+
+
+@dataclass
 class Registry:
     service: str
     workload: str
@@ -213,6 +253,17 @@ class Registry:
     # container root the default map already moves onto the service identity.
     owner_uid: int | None = None
     owner_gid: int | None = None
+    # The image those two were read from. The pair is only true of that image,
+    # so a unit naming another one is the probe's condition again rather than a
+    # unit this pair answers (ADR-0019).
+    owner_image: str | None = None
+    # Per-unit answers, written only when the service's units name MORE THAN
+    # ONE image: `owner_uid`/`owner_gid` stay the single-image record they have
+    # always been — the drift anchor and the field an operator edits by hand —
+    # and this map is what the renderer answers each unit from when the units
+    # disagree about their user. An empty map writes no table at all, so a
+    # single-image document gains only `owner_image` and never a table.
+    owner_units: dict[str, OwnerUnit] = field(default_factory=dict)
     source: str = SOURCE_MANUAL
     installed_by: str | None = None
     deployed_sha: str | None = None
@@ -266,6 +317,12 @@ class Registry:
             document["owner_uid"] = self.owner_uid
         if self.owner_gid is not None:
             document["owner_gid"] = self.owner_gid
+        if self.owner_image:
+            document["owner_image"] = self.owner_image
+        if self.owner_units:
+            document["owner_units"] = {
+                name: unit.to_document() for name, unit in sorted(self.owner_units.items())
+            }
         if self.publication:
             document["publication"] = dict(self.publication)
         if self.edges:
@@ -336,6 +393,11 @@ class Registry:
             source_hash=document.get("source_hash"),
             owner_uid=document.get("owner_uid"),
             owner_gid=document.get("owner_gid"),
+            owner_image=document.get("owner_image"),
+            owner_units={
+                name: OwnerUnit.from_document(entry)
+                for name, entry in (document.get("owner_units") or {}).items()
+            },
             publication=dict(document.get("publication") or {}),
             edges={name: dict(edge or {}) for name, edge in (document.get("edges") or {}).items()},
             provides=list(provides),

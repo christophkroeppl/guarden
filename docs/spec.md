@@ -1700,13 +1700,16 @@ to write.** The refusal covers it in both vocabularies and in both of quadlet's 
 `userns_mode` above, `Userns=` and `UserNS=` for a hand-written quadlet file — and no
 manifest, unit source or converter output ever reaches a generated unit carrying one. What
 may carry one is the render itself: `UserNS=keep-id:uid=…,gid=…`,
-emitted at the service's first start from the user `podman image inspect` reports for the
-image the installed units name — a name, and a bare number's group, resolved against the
-image's own `/etc/passwd` and `/etc/group` — and recorded in the registry as `owner_uid` and
-`owner_gid`. An image whose user is root — no `USER` at all, `USER 0` or `USER root`, which
-are one declaration and take one path — is answered from the handoff its entrypoint names,
-the `gosu` or `su-exec` user the entrypoint would switch to, never a passwd row chosen by
-itself — and records root, and renders no line, when neither yields a user: the default map
+emitted at the service's first start for **each unit, from the image that unit names** — every
+distinct image the installed units carry is probed once, the user `podman image inspect`
+reports for it resolved (a name, and a bare number's group) against that image's own
+`/etc/passwd` and `/etc/group` — and recorded in the registry as `owner_uid` and `owner_gid`,
+with a per-unit table beside them when the units name more than one image, so a service whose
+units name two images renders two lines and no image's uid is ever forced onto another
+container's init. An image whose user is root — no `USER` at all, `USER 0` or `USER root`,
+which are one declaration and take one path — is answered from the handoff its entrypoint
+names, the `gosu` or `su-exec` user the entrypoint would switch to, never a passwd row chosen
+by itself — and records root, and renders no line, when neither yields a user: the default map
 already moves container root onto the service identity, and a line
 carrying only the pinned pair would stop an entrypoint that drops privileges rather than
 fix its owner. A unit source that sets `User=` on a service whose line is rendered is
