@@ -104,6 +104,41 @@ run stakes pin "myapp-production:data@$two" "the restore point for the 2.3 upgra
 assert_exit 0
 assert_stdout_has "already pinned"
 
+# A pin for a snapshot that does not exist is REFUSED, because it breaks the
+# whole host (ticket 327's G11).
+#
+# **`weedr pin sync` recomputes every mark from the pin files, and a
+# configuration it cannot read is a reason to STOP rather than to clear marks**
+# (spec 8.5). So one pin naming a service that was never created stops the
+# retention ladder for every service on the box, and the operator's answer is a
+# message from snapper about a configuration they have never heard of.
+#
+# Measured before the refusal existed:
+#
+#     $ stakes pin nosuch-service:nosuchvolume@999
+#     pinned nosuch-service:nosuchvolume@999
+#     $ weedr pin sync
+#     error: snapper would not list the configuration
+#     nosuch-service-nosuchvolume, so its marks cannot be recomputed; every
+#     existing mark is left in place rather than cleared from a state that
+#     could not be read
+#
+# The refusal names the snapshot and what to check, and it writes NO file — a
+# pin file for a snapshot that does not exist is the thing that breaks the host.
+run stakes pin "myapp-production:data@9999" "a snapshot that was never taken"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "myapp-production:data@9999"
+assert_file_missing "$stakes/myapp-production:data@9999"
+
+# A service that does not exist at all is the same refusal, and the
+# configuration it names is the one that cannot be read.
+run stakes pin "nosuchservice-production:data@1"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "nosuchservice-production"
+assert_file_missing "$stakes/nosuchservice-production:data@1"
+
 # `stakes list` reports the pin files it owns, with the closed field set of
 # spec 1.2 and nothing else. `marked` is a statement about what the reconciler
 # **will** write, not about the filesystem, because a pin is a priority with a

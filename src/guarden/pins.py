@@ -24,7 +24,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from guarden import errors, paths, registry
+from guarden import errors, paths, registry, snapper
 from guarden import snapshotid as ids
 
 PIN_MODE = 0o660
@@ -83,7 +83,46 @@ def path_for(snapshot: ids.SnapshotId) -> Path:
 
 
 def write(snapshot: ids.SnapshotId, note: str = "") -> bool:
-    """Create the file. Idempotent: the same pin twice is one file, not two."""
+    """Create the file. Idempotent: the same pin twice is one file, not two.
+
+    **The snapshot is checked before the file is written, because a pin for a
+    snapshot that does not exist breaks the whole host.** `weedr pin sync`
+    recomputes every mark from the pin files; a configuration it cannot read is
+    a reason to STOP rather than to clear marks (spec 8.5) — so one pin naming
+    a service that was never created stops the retention ladder for every
+    service on the box, and the operator's answer is a message from snapper
+    about a configuration they have never heard of.
+
+    Measured, before this check existed:
+
+        $ stakes pin nosuch-service:nosuchvolume@999
+        pinned nosuch-service:nosuchvolume@999
+        $ weedr pin sync
+        error: snapper would not list the configuration
+        nosuch-service-nosuchvolume, so its marks cannot be recomputed; every
+        existing mark is left in place rather than cleared from a state that
+        could not be read
+
+    So the pin is refused here, where the operator is, with a line that names
+    the snapshot and what to check. The two refusals are different: a
+    configuration that does not exist is the INPUT naming something the host
+    does not have, and a configuration that exists but does not hold the
+    snapshot is the same kind of answer.
+    """
+    config = paths.snapper_config(snapshot.service, snapshot.volume)
+    entries = snapper.entries_of(config)
+    if entries is None:
+        raise errors.GuardenError(
+            f"the configuration {config} could not be read, so whether {snapshot} exists is "
+            f"unknown; `weedr service list` names the services this host holds",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if not any(entry.get("number") == snapshot.number for entry in entries):
+        raise errors.GuardenError(
+            f"there is no snapshot {snapshot} in the configuration {config}; "
+            f"`stakes list` names the snapshots this host holds",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
     target = path_for(snapshot)
     existed = target.exists()
     paths.STAKES.mkdir(parents=True, exist_ok=True)
