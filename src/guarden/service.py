@@ -609,14 +609,21 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
             # `OSError: [Errno 30] Read-only file system`) and their ownership
             # is snapper's, not the service user's.
             continue
-        if _in_podman_store(path, tree):
+        if _in_podman_store(path, paths.service_home(name)):
             # Podman's store is podman's to own. Its overlay carries the
             # image's own modes and owners, and re-moding it to 0700 under the
             # service uid left the container unable to stat its own entrypoint
-            # -- the container's root is subuid-mapped, not the service uid --
-            # so `postgres:17-alpine` died with `permission denied` on
+            # -- the container's root is subuid-mapped, not the service uid -- so
+            # `postgres:17-alpine` died with `permission denied` on
             # `/usr/local/bin/docker-entrypoint.sh` (measured 2026-10-18,
             # app-vm). See `_in_podman_store`.
+            #
+            # The root is the **home**, because podman resolves the store from
+            # `HOME`, which every unit pins to the home (render.py). Rooted at
+            # the tree instead, the guard asked for `.local/share/containers`
+            # beside the home and matched nothing, so this walk went on
+            # re-moding the store -- the line `tests/t380-store-walk.sh` fails
+            # on without it.
             continue
         if path.is_symlink():
             # A link's target is not the tree's to own, and may not exist at
