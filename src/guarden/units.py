@@ -186,32 +186,49 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
 QUADLET_KINDS = (".container.d", ".container")
 
 
-def search_entry(relative: Path, escaped_ref: str | None) -> Path | None:
-    """The same unit where podman's generator reads it, for an instance.
+def entry_stem(unit: str, escaped_ref: str | None) -> str:
+    """The unit name podman's generator makes from an instance's unit — the
+    ONE statement of that rule.
 
     An instance's units live in the instance's own quadlet directory (spec 2),
     which is a subdirectory of the service's home — and the generator reads
     `$XDG_CONFIG_HOME/containers/systemd` and the uid-scoped system paths and
     nothing below them (podman-systemd.unit(5)), so a declaration only there is
     a declaration systemd never makes: `systemctl start` answers
-    "Unit <name> not found" (measured, ticket 295).
+    "Unit <name> not found" (measured, ticket 295). So the instance's units are
+    ALSO given an entry in the service's own quadlet directory, named after the
+    unit and the instance's escaped ref — the same escaped form that names the
+    instance's directory, its registry key and its deploy lock (spec 5.2) — and
+    every reader and writer of that name goes through THIS function: install
+    writes it, `weedr service start`/`stop` translate to it, and
+    `drop_instance_entries` derives what to delete from it. Three expressions
+    of one rule would be three things to keep agreeing, and the disagreement
+    would surface as a start that fails silently in one direction.
 
-    So an instance's units also get one entry in the service's own quadlet
-    directory, named after the unit and the instance's escaped ref — the same
-    escaped form that names the instance's directory, its registry key and its
-    deploy lock (spec 5.2), so two instances of one service never answer to one
-    unit name. `None` for anything that is not a quadlet source: `guarden.env`
-    is read by the path the unit carries, not found by search, and a ref is
-    always present here or there is no instance at all.
+    The unit itself when there is no instance: nothing is suffixed, and
+    `search_entry` (which decides whether there is a second file to write at
+    all) is the one caller that asks that separately.
+    """
+    if not escaped_ref:
+        return unit
+    return f"{unit}-{escaped_ref}"
+
+
+def search_entry(relative: Path, escaped_ref: str | None) -> Path | None:
+    """The same unit where podman's generator reads it, for an instance —
+    built on `entry_stem`, the rule's one home.
+
+    `None` for anything that is not a quadlet source: `guarden.env` is read by
+    the path the unit carries, not found by search, and a ref is always present
+    here or there is no instance at all.
     """
     if not escaped_ref:
         return None
     head = relative.parts[0]
     for kind in QUADLET_KINDS:
         if head.endswith(kind):
-            return Path(
-                f"{head[: -len(kind)]}-{escaped_ref}{kind}", *relative.parts[1:]
-            )
+            stem = entry_stem(head[: -len(kind)], escaped_ref)
+            return Path(f"{stem}{kind}", *relative.parts[1:])
     return None
 
 
@@ -222,18 +239,28 @@ def drop_instance_entries(service: str, escaped_ref: str) -> None:
     preview does not leave a declaration behind for a container whose volumes,
     publications and registry entry are all gone — the generator would keep
     making a unit out of it.
+
+    The entries are **derived from the instance's own quadlet directory**
+    through `entry_stem` rather than matched by suffix in the shared directory:
+    a suffix match is a second expression of the naming rule, and two
+    expressions are two things that can drift (review finding 5). The caller
+    therefore runs this while the instance's directory still exists.
     """
+    own = unit_dir(service, escaped_ref)
     directory = unit_dir(service)
-    if not directory.is_dir():
+    if not own.is_dir() or not directory.is_dir():
         return
-    for path in sorted(directory.iterdir()):
-        if not path.name.endswith((f"-{escaped_ref}.container",
-                                   f"-{escaped_ref}.container.d")):
-            continue
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
+    for path in sorted(own.iterdir()):
+        for kind in QUADLET_KINDS:
+            if not path.name.endswith(kind):
+                continue
+            stem = entry_stem(path.name[: -len(kind)], escaped_ref)
+            target = directory / f"{stem}{kind}"
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+            break
 
 
 def _files(directory: Path) -> list[Path]:
