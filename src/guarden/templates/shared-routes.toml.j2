@@ -11,6 +11,7 @@
 service = "{{ service }}"
 project = "{{ project }}"
 track = "{{ track }}"
+basicauth = {{ "true" if basicauth else "false" }}
 {% for route in rows %}
 [[routes]]
 container = "{{ route.container }}"

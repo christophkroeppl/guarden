@@ -1274,6 +1274,12 @@ def _routes(
         service=context.service if context else "",
         project=context.record.project if context else "",
         track=context.track.name if context else "",
+        # Ticket 292: the basic-auth policy the mutator recorded at creation
+        # (registry `basicauth`), carried to `roots` in the slice so the
+        # renderer — never the renderer re-reading a manifest — is what places
+        # the middleware. Absent/false is a grandfathered service, and it
+        # renders byte for byte what it rendered before.
+        basicauth=bool(context.record.basicauth) if context else False,
         rows=rows,
     )
 

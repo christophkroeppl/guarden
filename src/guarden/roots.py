@@ -20,7 +20,7 @@ import argparse
 import re
 import sys
 
-from guarden import cli, conf, edgeconf, errors, names, paths, registry, render
+from guarden import basicauth, cli, conf, edgeconf, errors, names, paths, registry, render
 from guarden import config as config_mod
 from guarden import modules as modules_mod
 
@@ -28,6 +28,9 @@ GROUPS = (("sync", "render every service's routes into the edge's directory", No
 
 TEMPLATE = "edge-routes.yml.j2"
 EXTENSION = ".yml"
+# The per-service basic-auth middleware's name suffix, shared with the template
+# that emits it so the name is written once (ticket 292).
+BASICAUTH_SUFFIX = "-basicauth"
 FORWARD_AUTH = f"_{edgeconf.MIDDLEWARE}{EXTENSION}"
 
 TUNNEL_TEMPLATE = "tunnel-ingress.yml.j2"
@@ -69,6 +72,24 @@ def slices() -> dict[str, list[dict]]:
     return out
 
 
+def basicauth_flags() -> dict[str, bool]:
+    """The per-service basic-auth policy the renderer recorded (ticket 292).
+
+    Read from the same slice file `slices()` reads, so the middleware and the
+    routes it attaches to can never come from two sources. A service whose
+    slice predates the flag (or carries `false`) is grandfathered: no flag, no
+    middleware, byte-identical output.
+    """
+    out: dict[str, bool] = {}
+    if not paths.SHARED.is_dir():
+        return out
+    for directory in sorted(path for path in paths.SHARED.iterdir() if path.is_dir()):
+        out[directory.name] = bool(
+            conf.read_toml(directory / "routes.toml").get("basicauth")
+        )
+    return out
+
+
 def file_name(service: str) -> str:
     return f"{service}{EXTENSION}"
 
@@ -78,13 +99,20 @@ def _router(service: str, route: dict) -> str:
 
 
 def render_service(service: str, routes: list[dict], entrypoints: list[str],
-                   provider: str | None) -> str:
+                   provider: str | None, basicauthed: bool = False) -> str:
     """One service's routes, as the file provider reads them.
 
-    A route carries the middleware only when it asked for it, there is a
-    provider to ask for it from, and it is not the provider's own route. The
-    provider's own route is the lockout this excludes: a sign-in page behind
-    itself cannot be reached, whatever its manifest declares.
+    A route carries the forward-auth middleware only when it asked for it,
+    there is a provider to ask for it from, and it is not the provider's own
+    route. The provider's own route is the lockout this excludes: a sign-in
+    page behind itself cannot be reached, whatever its manifest declares.
+
+    The **basic-auth** middleware (ticket 292) is the other half of the story
+    and is deliberately not a route's to choose: when the mutator recorded the
+    policy for this service, every route the edge serves here carries it, in
+    front of forward-auth when both apply. No manifest reaches this flag — it
+    arrives in the slice from the registry — so there is no key that removes
+    it (spec 4's closed key sets, spec 10).
     """
     rows = [
         {
@@ -94,13 +122,23 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
             "target": f"http://{route.get('target', '')}",
             "middleware": bool(route.get("auth")) and provider is not None
             and service != provider,
+            "basicauth": bool(basicauthed),
         }
         for route in routes
         if route.get("destination") != "tunnel"
     ]
     if not rows:
         return ""
-    return render.render_template(TEMPLATE, service=service, rows=rows)
+    # One file, one definition: a service with no policy renders byte for byte
+    # what it rendered before, and the file provider merges this directory, so
+    # the definition exists only in the files that use it.
+    return render.render_template(
+        TEMPLATE,
+        service=service,
+        rows=rows,
+        basicauth_name=f"{service}{BASICAUTH_SUFFIX}",
+        users_file=basicauth.users_file(service) if basicauthed else "",
+    )
 
 
 def write(service: str, body: str) -> None:
@@ -306,12 +344,14 @@ def sync() -> int:
         )
     provider = provider_for(config)
     routes = slices()
+    policies = basicauth_flags()
     # **The whole plan is rendered before the first byte is written**, after
     # `provider_for` has refused a marker that does not hold. A validator that
     # writes the routes and then complains has already broken the routes that
     # were working, which is the one outcome this exists to prevent.
     plan = [
-        (service, render_service(service, entries, entrypoints, provider))
+        (service, render_service(service, entries, entrypoints, provider,
+                                 policies.get(service, False)))
         for service, entries in routes.items()
     ]
     auth_body = forward_auth(provider) if provider else None

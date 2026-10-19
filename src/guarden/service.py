@@ -29,6 +29,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from guarden import basicauth as basicauth_mod
 from guarden import (
     conf,
     edges,
@@ -275,6 +276,14 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     ]
     if source.kind == "module":
         record.installed_by = str(source.module)
+    # Ticket 292: the basic-auth login is minted once, for a brand-new service,
+    # while the gate module's policy marker exists. `existing is None` is the
+    # grandfathering: a re-ingest or a redeploy of a running fleet mints
+    # nothing, so no surprise auth arrives on a service created before the
+    # policy — and a service without routes has nothing the edge would serve,
+    # so it holds no login at all.
+    if existing is None and manifest.routes and basicauth_mod.in_force():
+        basicauth_mod.mint(record, now)
     _ensure_admin_units(identity.uid)
 
     if resolved.escaped_ref and resolved.escaped_ref not in record.instances:
@@ -958,6 +967,7 @@ def _remove_service(resolved, record, now: str) -> list[str]:
     _drop(paths.service_tree(resolved.name))
     _drop(paths.ETC_SERVICES / resolved.name)
     _drop(paths.SHARED / resolved.name)
+    basicauth_mod.drop(resolved.name)
     with conf.lock("registry"):
         registry.delete(resolved.name)
     printed.append("its snapper configurations are left for `soil storage` to remove")

@@ -17,6 +17,7 @@ import sys
 import time
 
 from guarden import (
+    basicauth,
     cli,
     conf,
     credentials,
@@ -55,6 +56,10 @@ from guarden import (
 
 EDGE_GROUP = "edge"
 EDGE_MODE = 0o2750
+# The module whose installation generates the basic-auth policy marker (ticket
+# 292). Named here beside the other module-name constants rather than inline in
+# two functions that must agree about which module it is.
+GATE_MODULE = "gate-traefik"
 
 DASHBOARD_MODE = 0o755
 DASHBOARD_MODULE = "homepage"
@@ -1120,6 +1125,17 @@ def _requirements(module: modules.Module, config) -> None:
 
 
 def _install_module(module: modules.Module, config) -> int:
+    # Ticket 292: installing the gate generates the basic-auth policy, before
+    # any of the module's services is created — the marker is the reason a
+    # service created afterwards carries the credential, so it must exist first.
+    # The edge's own service declares no `routes:`, so this act mints nothing
+    # for it; the directory the edge unit mounts is created here as well, for
+    # the host whose `soil install` predates the unit that mounts it.
+    if module.name == GATE_MODULE:
+        basicauth.ensure_directory()
+        if not basicauth.in_force():
+            sys.stdout.write(f"basic auth policy in {basicauth.POLICY}\n")
+            basicauth.write_policy()
     found: dict[str, dict] = {}
     for entry in module.services:
         source = modules.source_of(module.name, entry.name)
@@ -1433,6 +1449,13 @@ def _module_remove(args) -> int:
                 sys.stdout.write(line + "\n")
 
     _remove_module(config, module)
+    if module.name == GATE_MODULE:
+        # Ticket 292: the policy goes with the module that generated it, and
+        # the entries with it — a host with no edge has no login in front of
+        # nothing, and a re-install starts from a policy, not from logins for
+        # services that may no longer exist.
+        basicauth.drop_policy()
+        sys.stdout.write(f"removed the basic auth policy from {basicauth.POLICY}\n")
     remaining = config_mod.load()
     firewall.print_diff(firewall.install(remaining))
     firewall.load_set()

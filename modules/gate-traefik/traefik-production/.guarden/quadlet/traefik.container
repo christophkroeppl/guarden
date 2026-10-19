@@ -25,3 +25,10 @@ GroupAdd=keep-groups
 Image=docker.io/library/traefik:v3.2
 Exec=--providers.file.directory=/etc/guarden/edge --providers.file.watch=true --entrypoints.web.address=:80 --entrypoints.web.http.redirections.entrypoint.to=websecure --entrypoints.websecure.address=:443 --entrypoints.websecure.http3 --entrypoints.traefik.address=:8080 --api=true --api.dashboard=true --api.insecure=true --accesslog=true --log.level=INFO
 Volume=/var/lib/guarden/edge/dynamic:/etc/guarden/edge:ro
+# Ticket 292: the per-service htpasswd entries the mutator mints, mounted
+# read-only at the path each service's `usersFile` names. The host directory is
+# converged by `soil install` before any unit mounts it: an unprivileged edge
+# user cannot mkdir under a root-owned parent, so a bind source that did not
+# exist would fail the unit rather than degrade it. `keep-groups` (above) is
+# what lets the container read the `0640 root:edge` files inside.
+Volume=/etc/guarden/edge/basicauth:/etc/guarden/basicauth:ro

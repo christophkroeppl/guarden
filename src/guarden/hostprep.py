@@ -38,7 +38,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
-from guarden import conf, config, errors, packagelist, paths, users, volumes, zram
+from guarden import basicauth, conf, config, errors, packagelist, paths, users, volumes, zram
 from guarden import hosttool as h
 from guarden.config import PASTA_OPTIONS, TRACK_DEFAULTS, float_value, int_value
 from guarden.hosttool import Item, hostpath, lock
@@ -2393,6 +2393,16 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             _link_programs,
         ),
         Item("guarden's templates are installed", _templates_installed, _install_templates),
+        # Ticket 292: the directory the edge unit mounts for the per-service
+        # htpasswd entries. Converged here rather than created on demand,
+        # because the unit's bind source has to exist before an unprivileged
+        # edge user is asked to mount it — podman's auto-mkdir runs as that
+        # user and cannot write under a root-owned parent.
+        Item(
+            "the edge's basic-auth directory exists at the path the edge unit mounts",
+            lambda: basicauth.HTPASSWD_DIR.is_dir(),
+            basicauth.ensure_directory,
+        ),
         # The one package list, where the installed programs read it: a host whose
         # `/usr/bin/soil` answers "the package list is missing" has a broken
         # interface, and the checkout's `packages/` is not on an installed
