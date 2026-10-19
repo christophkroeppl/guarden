@@ -50,12 +50,22 @@
 #     answer and not a reading of a file.
 #
 # **What this file does NOT claim, and says so in its own words.** The
-# `guarden` sudoers rule the spec writes out (spec 6.6) is **not implemented in
-# this tree**: nothing in `src/` writes a sudoers file, and `/etc/sudoers.d/`
-# on a converged host carries no rule for any service user. So "a service user
-# cannot do root things" rests here on the things that ARE implemented — the
-# per-service uid, the `0700` tree, the subuid band, the capabilities, the
-# firewall — and NOT on an absence of sudoers grants. The suite asserts that
+# `guarden` sudoers rule the spec writes out (spec 6.6) **IS implemented in
+# this tree**: `src/guarden/sudoers.py` writes `/etc/sudoers.d/guarden`, and
+# `soil install --apply` installs it (`0440 root:root`). So the rule is
+# asserted by its CONTENT — its mode and owner, the five verbs it grants, the
+# verbs it does not — and the service user's reach is measured against it.
+#
+# **This paragraph used to say the opposite** — that "nothing in `src/` writes
+# a sudoers file" — and that was true when it was written and stopped being
+# true when ticket 329's rule landed. A comment that says a protection is
+# absent is the kind that makes a later reader "fix" the test to rely on the
+# absence, which would be a vacuous test.
+#
+# So "a service user cannot do root things" rests here on the things that ARE
+# implemented — the per-service uid, the `0700` tree, the subuid band, the
+# capabilities, the firewall, AND the rule's own content — and not on an
+# absence of sudoers grants. The suite asserts that
 # absence directly, so a future rule that grants a service user something would
 # go red here rather than pass unnoticed.
 #
