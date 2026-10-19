@@ -31,6 +31,11 @@
 # prefix at the end of the test, so it must not occur in any file guarden writes.
 VALUE=top-secret-value-77
 
+# The value a second materialisation carries. It has to differ from VALUE: the
+# assertion below that the store holds this one and not the other is the only
+# way to see that the secret was REPLACED rather than left alone (ticket 287).
+ROTATED=top-secret-value-88
+
 # The fixture names `operator` as admin_user and nothing creates it; the API
 # accept set is keyed on that uid.
 id -u operator >/dev/null 2>&1 || {
@@ -350,6 +355,47 @@ run_installed env -C "$GUARDEN_PREFIX/var/lib/guarden/services/qapp-production/h
 assert_exit 0
 assert_stdout_has "DB_PASSWORD"
 
+# Ticket 287: the removal the materialiser issues has to be a command podman
+# actually has, and a second materialisation is the only step that issues it at
+# all. A FIRST materialise removes nothing — the secret is absent — so this
+# suite was green over a removal podman rejects outright: `podman secret rm -f
+# <key>` answers `unknown shorthand flag: 'f'` and exits 125, `tool.call` does
+# not raise on that, and the `create` that follows is what failed, with `secret
+# name in use` — a message naming the secret rather than the flag that failed to
+# remove it. The loop is the host's whole credential path, so the first
+# already-existing secret aborted every service's credentials (the ticket's
+# `guarden-creds-boot.service: failed`).
+#
+# Both halves are asked of the machine below, and of the real podman as the
+# service user (ADR-0014: no stand-in for a system tool).
+home=$GUARDEN_PREFIX/var/lib/guarden/services/qapp-production/home
+
+# The premise, measured here rather than quoted from the ticket. The secret the
+# probe names does not exist, so the flag is the only thing the command can fail
+# on: a non-zero exit is this podman refusing `-f`.
+run_installed env -C "$home" runuser -u qapp-production -- \
+    podman secret rm -f GUARDEN_287_FLAG_PROBE
+[ "$GUARDEN_EXIT" -ne 0 ] \
+    || _fail "podman secret rm -f was accepted, so the flag the materialiser was fixed to drop exists on this machine"
+assert_stderr_has "unknown shorthand flag: 'f'"
+
+# And the step the removal exists for: a rotated value over a secret that is
+# already in the store. Under `rm -f` this is the run that dies — the removal
+# no-ops, `create` answers `secret name in use`, and `tool.run` raises — so
+# exit 0 here is the removal having happened, and the store holding only the
+# rotated value is what it bought.
+run weedr secret set qapp-production DB_PASSWORD <<<"$ROTATED"
+assert_exit 0
+run weedr secret materialise qapp-production
+assert_exit 0
+assert_stdout_has "qapp-production DB_PASSWORD"
+rotated=$(printf '%s' "$ROTATED" | base64 -w0)
+assert_file_has "$driver/secretsdata.json" "$rotated"
+# The value that was there before is gone rather than joined by a second record
+# under the same name, which is the whole of what rm-before-create provides.
+assert_file_lacks "$driver/secretsdata.json" "$encoded"
+assert_file_has "$containers/storage/secrets/secrets.json" "DB_PASSWORD"
+
 # And nowhere else in guarden's own tree. Every file guarden owns is searched for
 # the value in the clear, so this is a fact about the tree rather than about the
 # handful of paths this test thought of: it is in no blob, no registry, no rendered
@@ -368,5 +414,15 @@ assert_stdout_has "DB_PASSWORD"
 matches=$(grep -rl -- "$VALUE" /etc/guarden /var/lib/guarden /usr/lib/guarden 2>/dev/null || true)
 [ -z "$matches" ] || {
     printf 'the value is in:\n%s\n' "$matches" >&2
+    exit 1
+}
+
+# The rotated value is searched for the same way and for the same reason: it was
+# typed at this suite's own terminal after the block above, so it is the value
+# most recent in the machine's hands, and "no fixture reaches a file in the
+# clear" has to hold for the second plant as well as the first.
+matches=$(grep -rl -- "$ROTATED" /etc/guarden /var/lib/guarden /usr/lib/guarden 2>/dev/null || true)
+[ -z "$matches" ] || {
+    printf 'the rotated value is in:\n%s\n' "$matches" >&2
     exit 1
 }
