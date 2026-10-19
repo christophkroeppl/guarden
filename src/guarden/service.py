@@ -866,7 +866,8 @@ def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int,
 
     Exit `1` when the image is not on the host and cannot be pulled — the
     filesystem — and `2` when the image names a user or group it does not
-    carry: the declaration is the input, and it is rejected where it is
+    carry, or a uid or gid field of those files is not the number it has to
+    be: the declaration is the input, and it is rejected where it is
     visible. Every one of these is one line naming the service (spec 1.2).
     """
     reference = _installed_reference(name, escaped_ref)
@@ -906,7 +907,8 @@ def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int,
         if passwd is not None:
             entry = _uid_entry(passwd, uid)
             if entry is not None:
-                return (uid, int(entry[3]))
+                where = f"the gid of uid {uid} in /etc/passwd"
+                return (uid, _number(name, reference, entry[3], where))
         # A number the image's passwd does not carry is what podman runs the
         # container with a gid of 0 for, and the line has to map the gid the
         # container will actually have.
@@ -922,9 +924,10 @@ def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int,
             "/etc/passwd does not name",
             errors.REJECTED_INPUT,
         )
-    uid = int(entry[2])
+    uid = _number(name, reference, entry[2], f"the uid of the user {uid_text!r} in /etc/passwd")
     if not separator:
-        return (uid, int(entry[3]))
+        where = f"the gid of the user {uid_text!r} in /etc/passwd"
+        return (uid, _number(name, reference, entry[3], where))
     if gid_text.isdigit():
         return (uid, int(gid_text))
     group = _image_file(name, record, reference, "/etc/group")
@@ -952,6 +955,25 @@ def _no_such_group(name: str, reference: str, group: str) -> errors.GuardenError
         "/etc/group does not name",
         errors.REJECTED_INPUT,
     )
+
+
+def _number(name: str, reference: str, value: str, where: str) -> int:
+    """One uid or gid field read out of the image's OWN passwd or group.
+
+    Every one of them is a field of a file the image wrote, so a field that is
+    not a number is the image's declaration rejected where it is visible: an
+    `int()` allowed to raise instead walks out of the probe as a traceback, and
+    the probe promises one line naming the service (spec 1.2). The check is
+    `isdigit` and not a `try`, because the same predicate decides which fields
+    the resolver treats as numbers at all.
+    """
+    if not value.isdigit():
+        raise errors.GuardenError(
+            f"{name}: the image {reference} carries {value!r} as {where}, and a uid "
+            "or a gid is a number",
+            errors.REJECTED_INPUT,
+        )
+    return int(value)
 
 
 def _named(document: str, name: str) -> list[str] | None:
