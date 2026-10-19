@@ -256,14 +256,21 @@ class OwnerUnit:
         return {"image": self.image, "uid": self.uid, "gid": self.gid}
 
     @classmethod
-    def from_document(cls, entry: Any) -> OwnerUnit:
+    def from_document(cls, entry: Any, service: str = "", unit: str = "") -> OwnerUnit:
         """Three fields or a refusal, for the reason `RuleEntry.from_document`
         gives: an entry that does not name an image and two numbers is not an
-        answer, and rendering it would pin a unit nobody probed."""
+        answer, and rendering it would pin a unit nobody probed.
+
+        **The refusal names the service and the unit it is about.** The twin
+        reader for the scalar keys (`_owner_id`) names both, and AGENTS.md asks
+        a diagnostic to name the thing it is about: with several services on a
+        host, a refusal that names neither leaves the operator with a broken
+        record and no way to say which one.
+        """
         if not isinstance(entry, dict):
             raise errors.GuardenError(
-                "a per-unit image owner is a table of image, uid and gid, and this "
-                "one is not",
+                f"{_whose(service, unit)}a per-unit image owner is a table of image, uid and "
+                "gid, and this one is not",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         try:
@@ -272,19 +279,59 @@ class OwnerUnit:
             raw_gid = entry["gid"]
         except KeyError:
             raise errors.GuardenError(
-                "a per-unit image owner is a table of image, uid and gid, and this "
-                "one does not carry all three",
+                f"{_whose(service, unit)}a per-unit image owner is a table of image, uid and "
+                "gid, and this one does not carry all three",
                 errors.HOST_NOT_AS_ASSUMED,
             ) from None
         uid = _probe_number(raw_uid)
         gid = _probe_number(raw_gid)
         if uid is None or gid is None:
             raise errors.GuardenError(
-                "a per-unit image owner is a table of image, uid and gid, and this "
-                "one's uid or gid is not a whole number",
+                f"{_whose(service, unit)}a per-unit image owner is a table of image, uid and "
+                "gid, and this one's uid or gid is not a whole number",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         return cls(image=image, uid=uid, gid=gid)
+
+
+def _whose(service: str, unit: str) -> str:
+    """The subject of a per-unit diagnostic: the service, and the unit when
+    the reader knows which one it is reading."""
+    if service and unit:
+        return f"{service}: the unit {unit}: "
+    if service:
+        return f"{service}: "
+    if unit:
+        return f"the unit {unit}: "
+    return ""
+
+
+def _owner_units(document: dict) -> dict[str, OwnerUnit]:
+    """The per-unit table, and a refusal when the document's `owner_units` is
+    not a table at all.
+
+    The container's shape was the one thing the reader did not guard: a
+    hand-edited `owner_units = 5` (or a list) raised `AttributeError` out of
+    `weedr service start` — a traceback where spec 1.2 promises one line.
+    The ENTRIES are guarded by `OwnerUnit.from_document` and the two scalars
+    by `_probe_number`; the container itself was not, and a hand edit is
+    exactly the input those guards exist for (measured, t350: the same class
+    was paid for twice on the scalar keys).
+    """
+    raw = document.get("owner_units")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise errors.GuardenError(
+            f"{document.get('service', 'the service')}: the registry entry's owner_units is "
+            "a table of per-unit image owners, and this one is not",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return {
+        name: OwnerUnit.from_document(entry, str(document.get("service", "")), str(name))
+        for name, entry in raw.items()
+    }
+
 def _exposure(value: Any) -> str | None:
     """Ticket 294's record: a `[exposure] value` table, or `None` for default.
 
@@ -500,10 +547,7 @@ class Registry:
             owner_uid=_owner_id(document, "owner_uid"),
             owner_gid=_owner_id(document, "owner_gid"),
             owner_image=document.get("owner_image"),
-            owner_units={
-                name: OwnerUnit.from_document(entry)
-                for name, entry in (document.get("owner_units") or {}).items()
-            },
+            owner_units=_owner_units(document),
             publication=dict(document.get("publication") or {}),
             edges={name: dict(edge or {}) for name, edge in (document.get("edges") or {}).items()},
             provides=list(provides),

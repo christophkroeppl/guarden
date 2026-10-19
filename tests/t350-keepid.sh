@@ -739,6 +739,83 @@ assert_file_has "$record_pair" "owner_gid = $web_gid"
 [ "$(owner_field "$record_pair" worker gid)" = "$worker_gid" ] \
     || _fail "the record's worker entry holds gid $(owner_field "$record_pair" worker gid)"
 
+# --- the per-unit table's own reader: a shape and a refusal ----------------
+#
+# The scalar keys got five refusal tests in this file (the string, the float,
+# the bool, the `inf`, and the unnumbered one), and the per-unit table got
+# NONE — even though it is the second reader of the same kind of value, and
+# the round-3 fix (`efa08ee`) closed BOTH readers in one commit and tested
+# only one. Three shapes are refused here, and each of them was a traceback
+# or a silent wrong answer:
+#
+#   * the TABLE itself is not a table (`owner_units = 5`) — the container's
+#     shape was unguarded, so this raised an `AttributeError` out of
+#     `weedr service start`;
+#   * an ENTRY's uid is not a whole number (`inf`) — refused, and the refusal
+#     must NAME the service and the unit it is about, because with several
+#     services on a host a refusal that names neither leaves the operator
+#     with a broken record and no way to say which one;
+#   * an ENTRY is missing a field — the same class again.
+#
+# The record is read back through the same reader on every start, so a
+# hand-edited table is read by the very next `weedr service start`.
+
+# The container's own shape: not a table at all.
+cp "$record_pair" "$GUARDEN_FIXTURES/record-pair-backup"
+python3 - "$record_pair" <<'PY'
+import sys
+
+path = sys.argv[1]
+lines = open(path).read().splitlines()
+out = []
+for line in lines:
+    if line.startswith("[owner_units."):
+        continue
+    out.append(line)
+out.append("owner_units = 5")
+open(path, "w").write("\n".join(out) + "\n")
+PY
+run weedr service start kidpair-staging
+echo "MEASURE: stderr of an owner_units that is not a table: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "kidpair-staging"
+assert_stderr_has "owner_units"
+assert_stdout_lacks "started kidpair-staging"
+cp "$GUARDEN_FIXTURES/record-pair-backup" "$record_pair"
+
+# An entry whose uid is not a whole number: the per-unit twin of the scalar
+# `inf` case, and the refusal must name the service AND the unit.
+cp "$record_pair" "$GUARDEN_FIXTURES/record-pair-backup"
+sed -i 's/^uid = 10011$/uid = inf/' "$record_pair"
+run weedr service start kidpair-staging
+echo "MEASURE: stderr of a per-unit owner with an inf uid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "kidpair-staging"
+assert_stderr_has "web"
+assert_stderr_has "uid"
+assert_stdout_lacks "started kidpair-staging"
+cp "$GUARDEN_FIXTURES/record-pair-backup" "$record_pair"
+
+# An entry that is missing a field: the same class once more, and the last
+# of the per-unit table's own refusals.
+cp "$record_pair" "$GUARDEN_FIXTURES/record-pair-backup"
+sed -i '/^gid = /d' "$record_pair"
+run weedr service start kidpair-staging
+echo "MEASURE: stderr of a per-unit owner without a gid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "kidpair-staging"
+assert_stdout_lacks "started kidpair-staging"
+cp "$GUARDEN_FIXTURES/record-pair-backup" "$record_pair"
+
+# The restored record is read through the same reader and still answers, so
+# the three refusals above were refusals and not a broken file.
+run weedr service start kidpair-staging
+assert_exit 0
+assert_file_has "$record_pair" "owner_uid = 10011"
+
 # Each container inits at ITS OWN image's uid — the same mechanism t350
 # measures the single-image pin with: `id -u` of the running container, and the
 # uid_map row that says the pinned pair sits on the service identity.
