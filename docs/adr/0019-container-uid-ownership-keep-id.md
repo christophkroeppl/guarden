@@ -13,9 +13,13 @@ guarden-generated lines (repository-supplied `Userns` stays refused).
 
 accepted (2026-10-18, operator) — implemented on branch `feat/keep-id-uid` (this file's
 commit ba6c114 plus six commits: 3c52158, 00decc3, ee40e14, 20ebc73, 7bc9715 and the
-206ff58 scaffold), tests t350-keepid / t351-keepid-diagnostics / t352-keepid-boundaries —
-the pid-1 readings that settle what a pin decides are asserted in the last two and in t350 —
-pending review and merge.
+206ff58 scaffold), amended by 3abc671 and 1fb02de, and amended again by the round-3 series
+7156644…HEAD — every finding of the third adversarial review closed: the 4242 pid-1 row
+re-measured on a container started under that pin, the two refuted prose claims out of the
+tree, the owner keys refusing every other TOML scalar whole, the renderer answering per
+image, a rebuild invalidating the pair it re-tags, and both handoff seams — tests t350-keepid
+/ t351-keepid-diagnostics / t352-keepid-boundaries — the pid-1 readings that settle what a
+pin decides are asserted in the last two and in t350 — pending review and merge.
 
 ## Considered Options
 
@@ -77,8 +81,11 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   accepts both spellings, and this prose keeps `Userns=` — one directive. The probe is
   entrypoint-aware by **one table**, and every `Config.User` shape takes exactly one row of
   it: empty, `0` and `root` are one declaration (container root) and are answered by the
-  image's gosu/su-exec handoff target when the entrypoint names one, and by nothing — **no
-  line**, the default mapping — when it does not; a non-root number or name is resolved
+  image's gosu/su-exec handoff target when the entrypoint names one (asked of every word of
+  `Entrypoint`/`Cmd` — a bare `gosu`/`su-exec` element takes the word after it, exec form
+  included — and of the script any of those words names, at whatever position it sits), and
+  by nothing — **no line**, the default mapping — when it does not; a non-root number or
+  name is resolved
   against the image's own `/etc/passwd` and `/etc/group`, where a field that is not a number
   is refused the way a user the image does not carry is (spec 1.2: one line, exit `2`). The
   table decides the RECORD; what each of the three root spellings then RUNS as under the line
@@ -95,7 +102,22 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   names no user, its own pin — and either way the pin decides where that uid
   lands — measured, t350/t351/t352). A unit the
   record does not answer renders no line and is the probe's condition again at the next start,
-  never another unit's pin. Re-ingest can no longer break ownership because nothing chowns.
+  never another unit's pin — and the renderer asks that per unit AND per image, the
+  reference the unit names resolved the way the probe resolves it, so a deploy that renders
+  a unit whose `Image=` changed writes no line rather than the pair read from another image
+  (round 3, measured t350). Re-ingest can no longer break ownership because nothing chowns.
+- **A rebuild invalidates the pair.** `owner_image` records the REFERENCE and `weedr service
+  build` re-tags it, so the reference is not an anchor: after a successful build the
+  record's answer for that reference is cleared — the scalar anchor whole (uid, gid and
+  `owner_image` are one answer), a per-unit entry only for the image it names — under the
+  registry lock, and the next start probes what the units name (measured, t350: the rebuilt
+  fixture declares `USER 10002` and the record and the unit come back as 10002). Before
+  this, a rebuilt Containerfile that changed `USER` kept the old pin: the container ran the
+  new image user, the line mapped the old pair, and those writes landed in the subuid band
+  with the record and this ADR's "an image that changed is the probe's condition again" both
+  claiming otherwise. What this does NOT cover is an image replaced outside that verb — a
+  hand `podman pull` under the same tag — which a reference anchor cannot see and an
+  image-ID anchor would: the deliberate trade, recorded here rather than in a comment.
 - While a pin renders, a repository-supplied `User=` is refused (it would run the container
   outside the mapping the line exists to create: the line puts exactly the pinned pair on the
   service identity, and a `User=` that names anything else runs where it maps nothing — spec
@@ -110,7 +132,10 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   line on podman 5.7.0, and every row of this list asserted:
   an image that names a `USER` runs it — `USER root` → pid 1 = 0 under
   `keep-id:uid=3000,gid=3000` (t352), `USER 0` → pid 1 = 0 under the same pin (t352), and
-  `USER 10001` → pid 1 = 10001 while the record pins 4242 (t350) — and an image with **no**
+  `USER 10001` → pid 1 = 10001 while the record pins 4242 (t350: read after a stop and a
+  start under that pin, with the container's own uid_map row `4242 0 1` asserted live
+  first — a start on an already-active unit does not restart, which is how this row was
+  measuring the FIRST pin until round 3 found it) — and an image with **no**
   `USER` line runs the **pinned pair**: pid 1 = 2000 under `keep-id:uid=2000` (t351), the
   discriminating measurement the round-2 review asked for, because every other fixture's image
   user and pinned pair are the same number by construction and cannot tell the two readings
