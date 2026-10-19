@@ -1645,13 +1645,45 @@ def _widget_slice(
 def _widget_file(directory: Path, relative: str) -> str:
     """Widget files are copied through **unparsed** (spec 6.5): dashboard UI
     configuration, and a renderer that parsed it would be a second thing to keep
-    in step with the dashboard."""
+    in step with the dashboard.
+
+    **The read is contained, and the containment is asserted here rather than
+    assumed.** `Path(directory) / relative` escapes the tree two ways — an
+    absolute right operand discards the left one (`Path("/a") / "/etc/x"` is
+    `/etc/x`), and a `..` component climbs out — and the file is read as the
+    `guarden` account, which is in the `guarden` group and can read the host's
+    configuration. So the resolved path is checked against the tree BEFORE the
+    read.
+
+    The manifest check (`manifest._check_widget_file`) refuses the same two
+    shapes at parse time, and this is the belt: the renderer is the thing that
+    opens the file, so the renderer is the thing that checks where the file is.
+    A manifest that reaches the renderer by another road is still contained.
+    """
     path = directory / relative
+    try:
+        resolved = path.resolve()
+    except OSError as exc:  # pragma: no cover - a resolve that cannot answer
+        raise errors.GuardenError(
+            f"the manifest declares the widget file {relative}, and its path could not be read: {exc}"
+        ) from exc
+    root = directory.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise errors.GuardenError(
+            f"the manifest declares the widget file {relative}, which is outside "
+            f"the tree it belongs to"
+        )
     try:
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raise errors.GuardenError(
             f"the manifest declares the widget file {relative}, and it does not exist"
+        ) from None
+    except PermissionError:
+        # One line, not a traceback (spec 1.2): the file is inside the tree and
+        # the `guarden` account cannot read it, and the answer names the file.
+        raise errors.GuardenError(
+            f"the manifest declares the widget file {relative}, and it cannot be read"
         ) from None
 
 

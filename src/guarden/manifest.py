@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from guarden import errors, names, rules
@@ -176,6 +176,47 @@ class Widget:
 
     container: str
     file: str
+
+
+def _check_widget_file(value: str, path: Path, container: str) -> None:
+    """A widget's file is a name INSIDE the tree, and not a path.
+
+    **The renderer reads this file as the `guarden` account, which is in the
+    `guarden` group and can therefore read the host's configuration.** So a
+    `file:` that names a path outside the tree turns a repository — the
+    untrusted actor — into a reader of `/etc/guarden/guarden.toml`, of every
+    service's registry record, and of every overrides file, and the content
+    lands where a service's container can read it.
+
+    The escape is a Python fact, not a guess: **`Path("/a/b") / "/etc/x"` is
+    `/etc/x`**, because an absolute right operand discards the left one. And a
+    traversal does the same without being absolute:
+
+        >>> Path("/tree") / "/etc/passwd"
+        PosixPath('/etc/passwd')
+        >>> (Path("/tree") / "../../etc/passwd").resolve()
+        PosixPath('/etc/passwd')
+
+    So both shapes are refused here, and the rule is the same one `hose`
+    applies to a member path (`hose._member_path`): a RELATIVE path, with no
+    leading `/` and no `..` component.
+
+    The check is on the NAME, before anything is read, so a refused widget
+    costs a manifest parse and not a read.
+    """
+    if value.startswith("/"):
+        raise errors.GuardenError(
+            f"the manifest {path}: the widgets entry for {container!r} names "
+            f"{value!r}, which is an absolute path; a widget's file is a name "
+            f"inside the tree, not a path on this host"
+        )
+    parts = PurePosixPath(value).parts
+    if ".." in parts:
+        raise errors.GuardenError(
+            f"the manifest {path}: the widgets entry for {container!r} names "
+            f"{value!r}, which climbs out of the tree; a widget's file is a "
+            f"name inside the tree, not a path on this host"
+        )
 
 
 @dataclass(frozen=True)
@@ -547,6 +588,7 @@ def _widgets(value: Any, path: Path) -> list[Widget]:
             raise errors.GuardenError(
                 f"the manifest {path}: the widgets entry for {container!r} has no file"
             )
+        _check_widget_file(file, path, container)
         out.append(Widget(container=container, file=file))
     return out
 
