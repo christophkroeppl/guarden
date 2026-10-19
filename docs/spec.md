@@ -276,6 +276,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/etc/guarden/**` (files) | `0640` | `root:guarden` | the write protocol |
 | `/etc/guarden/projects.toml`, the files under `/etc/guarden/projects.d/`, `/etc/guarden/allow-gated-drop` | `0444` | `root:root` | |
 | `/etc/guarden/creds/` | `0700` | `root` | |
+| `/etc/sudoers.d/guarden` | `0440` | `root:root` | `soil install`. **The capability split, as a file** — it grants the `hose` account the deploy verbs and nothing else (§5.1). The mode is part of the row: a grant the grantee can read is a grant the grantee can edit, and sudo refuses a world-writable sudoers file outright |
 | `/etc/ssh/authorized_keys.d/hose` | `0644` | `root` | |
 | `/etc/containers/`, `/etc/containers/systemd/`, `/etc/containers/systemd/users/` | `0755` | `root:root` | `weedr service add`/`ingest`, creating the uid-scoped search path. **Traversable by every uid, because the generator walks it as the service user** — a `0750` would refuse the service its own units, and the umask's answer is not a mode (the same defect `/var/lib/guarden` had) |
 | `/etc/containers/systemd/users/<uid>/` | `0755` | `root:root` | `weedr service add`/`ingest`. The same traverse grant, one level down: the generator reads it as the service user |

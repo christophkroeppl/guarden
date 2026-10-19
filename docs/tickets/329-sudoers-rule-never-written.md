@@ -80,6 +80,52 @@ Not on the sudoers rule. On:
 future grant goes red — the suite is written to notice the change in either
 direction.
 
+## The decision: Option C, the middle (operator, 2026-10-19)
+
+**The operator chose the middle: the rule is for the POKE, and every other
+mutating verb stays root-only.** It is implemented in `491b5a7` — the rule is
+`/etc/sudoers.d/guarden`, `0440 root:root`, written by the install phase, and
+it grants the `hose` account the mutator's deploy verbs running as `guarden`:
+
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow preview drop
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow queue list
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow status
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/weedr project list
+
+**MEASURED on a live host (app-vm), with the rule written and sudo asked:**
+
+    visudo -c                                        -> parsed OK
+    sudo -u hose sudo -u guarden furrow status        -> "lanes 1 / in flight 0"   GRANTED
+    sudo -u hose sudo -u guarden furrow deploy        -> "sorry hose. I can't"     REFUSED
+    sudo -u hose sudo -u guarden weedr service purge  -> REFUSED
+    sudo -u hose sudo -u guarden weedr service list   -> REFUSED
+
+**and the argument rule, measured the same way:**
+
+    a rule naming `furrow status` admits `furrow status` and refuses
+    `furrow deploy`; a rule naming the bare `furrow` admits
+    `furrow deploy --from poke <anything>`.
+
+**Why the middle, and not a rule with more verbs:** the request/grant split
+survives only because the grant verbs are not reachable from a push. `weedr
+port open` and `weedr firewall open` are on no sudoers rule, so nothing that
+answers a push can reach them — a rule that added them would collapse the
+split, and a rule that added `purge` or `rollback` would hand a push the
+destructive verbs.
+
+**Why the middle, and not no rule at all:** the poke genuinely needs an
+unprivileged path, and `hose.py:5`'s own list of what the rule names is
+exactly the list the rule now has — the evidence that the poke-only rule was
+the intent all along and the spec's table had drifted.
+
+**The spec's table named the wrong verb.** It said `weedr service ingest` was
+granted; what a poke actually reaches is `furrow deploy`, and the deploy
+reaches `weedr service ingest` as `guarden` — which is how a service comes to
+exist. The table now names the verbs the rule grants.
+
+**The three options, kept for the record:**
+
 ## What to decide
 
 This is a design decision, not a mechanical fix, and the ticket exists to

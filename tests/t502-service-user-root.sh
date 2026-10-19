@@ -546,14 +546,21 @@ echo "MEASURE: the accept is restored and the counter is back to $before -> $aft
 [ "$after" = "$before" ] \
     || _fail "the accept was not restored: the service's own publication is still refused"
 
-# --- the absence the spec does NOT implement, asserted so it cannot drift ---
+# --- the sudoers surface, asserted so it cannot drift ---
 #
-# **The spec writes out a `guarden` sudoers rule (spec 6.6) and nothing in
-# this tree writes one.** So the real reason a service user cannot do root
-# things is the per-service uid, the `0700` tree, the subuid band, the empty
-# capability set and the firewall — and NOT an absence of sudoers grants. This
-# block asserts that absence, so a rule that granted a service user something
-# would go red here rather than pass unnoticed.
+# **The `guarden` sudoers rule EXISTS (ticket 329) and it is for the POKE.**
+# The rule grants the `hose` account — the one a poke arrives as — the
+# mutator's deploy verbs, and nothing else. It names no service user, so the
+# real reason a service user cannot do root things is still the per-service
+# uid, the `0700` tree, the subuid band, the empty capability set and the
+# firewall.
+#
+# So this block asserts THREE things, and each is a way the rule could grow
+# into something it must not be:
+#   1. no rule names a SERVICE user (the grant is the poke's alone);
+#   2. the rule file is not readable by the service user (a grant the grantee
+#      can read is a grant the grantee can edit);
+#   3. the service user's own sudo attempt is refused.
 echo "=== the sudoers surface"
 if [ -d /etc/sudoers.d ]; then
     # **`|| true`, and the reason is the shape of the answer.** `grep -rl` exits
@@ -567,6 +574,20 @@ if [ -d /etc/sudoers.d ]; then
     echo "MEASURE: /etc/sudoers.d files naming $SVC: $sudoers_service_rules"
     [ "$sudoers_service_rules" = 0 ] \
         || _fail "$SVC is named in a sudoers rule; the design gives a service user no sudoers grant"
+    # The rule file itself must be out of the service user's reach. It is
+    # `0440 root:root`, so a read is refused — and a grant the grantee can
+    # read is a grant the grantee can edit, so the mode is part of the
+    # boundary and not a detail of it.
+    if [ -f /etc/sudoers.d/guarden ]; then
+        out=$(as_service sh -c "cat /etc/sudoers.d/guarden" 2>&1 || true)
+        echo "MEASURE: the service user reading the guarden rule: $out"
+        case "$out" in
+            *"Permission denied"*) echo "MEASURE: the rule is out of the service user's reach" ;;
+            *) _fail "the service user read the guarden sudoers rule: $out" ;;
+        esac
+    else
+        echo "MEASURE: /etc/sudoers.d/guarden is absent — the install phase has not written it"
+    fi
 fi
 out=$(as_service sh -c "sudo -n true" 2>&1 || true)
 echo "MEASURE: the service user's own sudo attempt: $out"
