@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from guarden import conf, credentials, errors, paths, registry, secretschema, users
+from guarden import conf, credentials, errors, paths, registry, secretschema, unitsource, users
 from guarden import manifest as manifest_mod
 
 READY = "ready"
@@ -48,21 +48,89 @@ class Verdict:
     state: str
     reason: str | None
     warnings: tuple[str, ...] = ()
+    # Every credential the service's units ask for and nothing has planted.
+    # This is the list the verdict's state is computed FROM, and it is kept
+    # because the two tracks answer it differently: a gated track blocks on it
+    # (spec 6.6 step 3), and an ungated track records `not-required` and warns
+    # — but a start on EITHER track cannot proceed past it, because the
+    # podman secret the unit asks for does not exist and podman would refuse
+    # the container with a raw `125 no such secret` (tickets 305 and 313).
+    unsatisfied: tuple[str, ...] = ()
+
+
+def unit_requests(service: str) -> list[str]:
+    """Every credential the service's own units ask podman for.
+
+    **The unit is the request, and the schema is not the only thing that can
+    make one.** The renderer emits `Secret=<KEY>` for a `@sensitive` or
+    `@required` key (spec 6.3), and a **template-created service has no schema
+    at all** — a template ships quadlet files and nothing else — so its unit can
+    name a key the manifest never declared. Nothing plants that key, podman
+    refuses the start with a raw `125 no such secret`, and the operator gets a
+    runtime error where spec 6.6 promises a gate state.
+
+    So the gate's subject is the **set of requests the service's units make**,
+    not the set of keys its schema declares. A key the units ask for and the
+    schema does not declare is a request nobody can satisfy, and it is reported
+    as one — the same "missing required key" the schema's own required key
+    produces, so there is one answer and not two.
+
+    The units are read from the service's own quadlet directory, which is
+    where the install put them and where the start reads them from, so the
+    gate and the start are asking the same question of the same files.
+    """
+    wanted: list[str] = []
+    directory = paths.unit_dir(service)
+    if not directory.is_dir():
+        return wanted
+    for path in sorted(directory.glob("*.container")):
+        try:
+            unit = unitsource.parse(path)
+        except errors.GuardenError:
+            continue
+        for value in unit.get("Container", "Secret"):
+            # `Secret=<KEY>,type=mount` — the key is the first comma-separated
+            # field, and the type is podman's own spelling (spec 6.3).
+            key = value.split(",", 1)[0].strip()
+            if key and key not in wanted:
+                wanted.append(key)
+    return wanted
 
 
 def evaluate(service: str, schema: secretschema.Schema, gated: bool, now: str) -> Verdict:
     """The verdict for one service, and the lines a caller should print for it."""
     blocked: list[str] = []
+    declared = {key.name: key for key in schema.keys}
+    # Every key the service's units ask for, whether or not the schema declares
+    # it: the request is what podman will refuse, so the request is what the
+    # gate has to answer for. A key the schema declares and the units do not
+    # ask for is still a required key — the schema alone makes it one.
+    asked: list[str] = []
+    for key in unit_requests(service):
+        if key not in asked:
+            asked.append(key)
     for key in schema.keys:
-        if not key.required:
+        if key.name not in asked:
+            asked.append(key.name)
+    unsatisfied: list[str] = []
+    for name in asked:
+        key = declared.get(name)
+        # A key the units ask for and the schema does not declare is required
+        # by the request alone: podman cannot resolve it from nothing, so
+        # nothing but a planted value satisfies it.
+        if key is not None and not key.required:
             continue
-        stored = credentials.value(service, key.name)
+        stored = credentials.value(service, name)
         if stored is None:
-            blocked.append(f"missing required key: {key.name}")
+            blocked.append(f"missing required key: {name}")
+            unsatisfied.append(name)
+            continue
+        if key is None:
             continue
         why = credentials.placeholder(key, stored)
         if why:
-            blocked.append(f"required key {key.name} {why}")
+            blocked.append(f"required key {name} {why}")
+            unsatisfied.append(name)
     if not gated:
         # The whole difference between the two tracks: a warning naming the key,
         # and a start that proceeds. `reason` is absent rather than empty, so a
@@ -74,9 +142,12 @@ def evaluate(service: str, schema: secretschema.Schema, gated: bool, now: str) -
                 errors.warn(f"{service}: {reason}, and the track is not gated")
                 for reason in blocked
             ),
+            unsatisfied=tuple(unsatisfied),
         )
     if blocked:
-        return Verdict(state=BLOCKED, reason="; ".join(blocked))
+        return Verdict(
+            state=BLOCKED, reason="; ".join(blocked), unsatisfied=tuple(unsatisfied)
+        )
     return Verdict(state=READY, reason=None)
 
 

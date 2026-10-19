@@ -1,5 +1,17 @@
 # 314 — guarden-creds.path is enabled but never started: the first credential plant triggers nothing
 
+**Status:** implemented on `fix/secret-gate` and green in the VM
+(`ok t491-creds-trigger.sh`). **The side implemented is "install/start the
+.path unit", not the refusal**: the unit is the trigger, it is installed by
+`soil install`, and a `.path` unit that is enabled but not running watches
+nothing — so the automation the unit exists for engaged on the NEXT BOOT and
+not before, and a first `weedr secret set` on a converged box left no podman
+secret at all. `soil install` now starts the unit as well as enabling it, and
+the install item's predicate asks systemd whether the unit is ACTIVE, so
+`--check` reports a dormant watch as drift and `--apply` starts it. The
+runbook's manual `systemctl start guarden-creds-boot.service` is no longer
+what a first plant needs.
+
 Blockers: none. Found 2026-10-19 measured in a VM during the 295/302 fix
 (instance-start-path report: "no podman secret exists at all because
 guarden-creds.path is enabled but never started").

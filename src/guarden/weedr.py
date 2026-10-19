@@ -787,7 +787,36 @@ def _start(args) -> int:
         raise errors.GuardenError(
             f"{resolved.name} cannot start: {verdict.reason}", errors.HOST_NOT_AS_ASSUMED
         )
+    # The SLOT first: a name that names no instance on an instance track has
+    # no unit to start at all, and a unit that does not exist cannot ask for a
+    # credential either. (review r2, finding F3)
     _refuse_slot_start(resolved, record)
+
+    # **A credential the units ask for and nothing planted stops the start on
+    # an ungated track too.** The gate's state on that track is `not-required`
+    # and the start proceeds — that is the whole difference between the two
+    # tracks (spec 6.6 step 3) and it is not what changes here. What changes is
+    # that the container would ask podman for a secret that is not in the
+    # service's store, and podman answers `125 no such secret`: a raw runtime
+    # error, naming a podman message, where the operator needs the key (tickets
+    # 305 and 313).
+    #
+    # **The refusal is one line and it names the keys**, so the operator knows
+    # what to plant. It is the host not being in the state the request assumed
+    # — the podman secret does not exist — so it is exit `1` and not `2` (spec
+    # 1.2), the same code a blocked gate's start answers with.
+    if verdict.unsatisfied:
+        keys = ", ".join(verdict.unsatisfied)
+        # One command per key, because `weedr secret set` takes ONE key and a
+        # comma-joined list would be a command that does not parse.
+        plants = " then ".join(
+            f"`weedr secret set {resolved.name} {key}`" for key in verdict.unsatisfied
+        )
+        raise errors.GuardenError(
+            f"{resolved.name} cannot start: the unit asks for {keys} and no value is "
+            f"planted for it; {plants} plants it, and the start re-checks",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
     # `started <name>` is a claim about the host, so it needs a unit to be true of.
     # A quadlet directory with nothing in it is a service whose units were never
     # installed, and reporting success there is the false report spec 1.2 forbids.

@@ -2542,6 +2542,24 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             lambda: h.run("systemctl", "is-enabled", "guarden-creds.path").line == "enabled",
             lambda: h.run("systemctl", "enable", "guarden-creds.path"),
         ),
+        # **The path unit is started, and it was not.** `enable` writes a
+        # symlink; it does not start anything. A `.path` unit that is enabled
+        # but not running watches nothing, so the automation the unit exists
+        # for — materialise a blob as soon as it changes — engaged on the NEXT
+        # BOOT and not before, and a first `weedr secret set` on a freshly
+        # converged box left no podman secret at all (ticket 314, measured).
+        #
+        # `start` rather than `restart`: the unit is a watcher, not a job, and
+        # restarting one that is already running is a way to make it stop
+        # watching for a moment. The predicate asks systemd whether the unit is
+        # ACTIVE, which is the state the trigger depends on, and the answer is
+        # the machine's.
+        Item(
+            "the credential materialiser's path unit is running, or a blob written "
+            "outside the mutator is materialised at the next boot and not before",
+            lambda: h.run("systemctl", "is-active", "guarden-creds.path").line == "active",
+            lambda: h.run("systemctl", "start", "guarden-creds.path"),
+        ),
         # **The boot oneshot is enabled, and it was not.** It carries
         # `WantedBy=multi-user.target`, so `enable` is the only thing that makes
         # boot materialisation happen: the path unit answers a *change* under
