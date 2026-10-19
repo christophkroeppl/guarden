@@ -307,10 +307,24 @@ seed "$preview_staged/.guarden/quadlet/app.container" \
     "Description=the instance's drop-in subject" \
     "" \
     "[Container]" \
-    "Image=localhost/dropin-staging:latest"
+    "Image=localhost/dropin-preview:latest"
+# **The instance builds its OWN image, in its OWN store.** `weedr service
+# build` runs podman as the service user and tags into that service's
+# rootless store, so a service that names another service's image finds
+# nothing there — the image is in the OTHER user's store, and the probe's
+# pull fails against a registry that does not exist. The image is therefore
+# built from this tree's own Containerfile, under this service's own name.
+seed "$preview_staged/Containerfile" \
+    "FROM docker.io/library/alpine:3.20" \
+    "RUN adduser -D -u 10001 dropuser" \
+    "USER 10001" \
+    "CMD [\"sleep\", \"3600\"]"
 
 run weedr service ingest dropin-preview/feature/x --from poke dropinprev@0000001
 assert_exit 0
+run weedr service build dropin-preview
+assert_exit 0
+assert_stdout_has "localhost/dropin-preview:latest"
 
 # The escaped ref is what the registry and the directory are keyed by.
 escaped='feature\x2fx'
