@@ -107,21 +107,30 @@ assert_file_has "$slice_a" 'ref = "feature/x"'
 # ref IS a path (`feature/x` is two segments and `/feature/x` is the path that
 # reaches it) — and a slot's rule is byte-for-byte what it was before, so a
 # service with no instance renders exactly as it did.
-edge_file="/usr/lib/guarden/lib/edge/dynamic/routed-preview.yml"
-if [ -f "$edge_file" ]; then
-    echo "MEASURE: the edge router file: $edge_file"
-    # Both instances' rules are present, each with its own ref.
-    assert_file_has "$edge_file" 'PathPrefix(`/feature/x`)'
-    assert_file_has "$edge_file" 'PathPrefix(`/plain`)'
-    # And the HOST rule is there for each: the rule is the conjunction.
-    assert_file_has "$edge_file" 'Host(`web`)' || \
-        assert_file_has "$edge_file" 'Host('
-    echo "MEASURE: the instance routers: $(grep -c 'PathPrefix' "$edge_file")"
-    [ "$(grep -c 'PathPrefix' "$edge_file")" -ge 2 ] \
-        || _fail "the edge file carries fewer than two instance routers, so one instance is not routable"
-else
-    echo "MEASURE: the edge file is absent — the edge module did not render a router"
-fi
+edge_file="/var/lib/guarden/edge/dynamic/routed-preview.yml"
+# **The routers are written by `roots sync`, not by the deploy.** The edge
+# reads its routes from a file provider over `/var/lib/guarden/edge/dynamic`,
+# and the file is written when the routes are SYNced — a route change the edge
+# reads without a restart. So the suite syncs the roots before it reads the
+# file, or the file is absent and the assertion below is about nothing.
+#
+# **The file must be there.** A conditional assertion is a vacuous one: the
+# first run of this suite found the file absent at the path it guessed, the
+# `if [ -f ]` branch took the "absent" arm and the suite went green having
+# asserted nothing. So the file's existence is asserted, not assumed, and the
+# rules are read out of it.
+run roots sync
+assert_not_rejected
+assert_file_exists "$edge_file"
+echo "MEASURE: the edge router file: $edge_file"
+# Both instances' rules are present, each with its own ref.
+assert_file_has "$edge_file" 'PathPrefix(`/feature/x`)'
+assert_file_has "$edge_file" 'PathPrefix(`/plain`)'
+# And the HOST rule is there for each: the rule is the conjunction.
+assert_file_has "$edge_file" 'Host('
+echo "MEASURE: the instance routers: $(grep -c 'PathPrefix' "$edge_file")"
+[ "$(grep -c 'PathPrefix' "$edge_file")" -ge 2 ] \
+    || _fail "the edge file carries fewer than two instance routers, so one instance is not routable"
 assert_file_exists "$slice_b"
 assert_file_has "$slice_b" 'ref = "plain"'
 # The service's own routes.toml is the slot's file: on an instance track no

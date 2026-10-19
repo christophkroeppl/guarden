@@ -879,6 +879,51 @@ def _refuse_slot_start(resolved, record, verb: str = "start") -> None:
     )
 
 
+def _restart(args) -> int:
+    """Stop a service's units and start them again.
+
+    **A restart is a stop and a start, and it is BOTH of them.** The two
+    refusals the halves make are the restart's refusals: a bare `<name>` on an
+    instance track names the SLOT, and the slot holds no unit of its own — so
+    the refusal that stops the start from fanning out to every instance also
+    stops the restart from stopping every instance, and the stop half runs
+    first so a restart never leaves a service down when it was refused.
+
+    The gate is re-evaluated on the way in, exactly as `start` does, because a
+    restart after planting a credential is the operator's way of saying "now it
+    can start" — and a restart that re-evaluated nothing would refuse a
+    service whose credential has since been planted.
+
+    The verb was advertised in the table, in `--help` and in the spec, and had
+    no handler at all: every invocation fell to `cli.pending` and answered
+    "not implemented". An advertised verb that does not exist is worse than an
+    absent one, because the operator is told it exists.
+    """
+    config = config_mod.load()
+    resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
+    record = _record_for(resolved.name)
+    # The SLOT first, and before the stop: a refusal that arrives after the
+    # units are down leaves a service stopped when the operator asked for a
+    # restart and got a refusal.
+    _refuse_slot_start(resolved, record, "restart")
+    service.stop_units(resolved.name, resolved.escaped_ref)
+    now = _now()
+    verdict = gate.evaluate(
+        resolved.name, gate.schema_for(resolved.name), resolved.track.gated, now
+    )
+    gate.write(record, verdict, now)
+    for warning in verdict.warnings:
+        sys.stderr.write(f"{warning}\n")
+    if verdict.state == gate.BLOCKED:
+        raise errors.GuardenError(
+            f"{resolved.name} cannot start: {verdict.reason}", errors.HOST_NOT_AS_ASSUMED
+        )
+    service.ensure_owner_line(resolved.name, resolved.escaped_ref)
+    service.start_units(resolved.name, resolved.escaped_ref)
+    sys.stdout.write(f"restarted {resolved.name}\n")
+    return 0
+
+
 def _stop(args) -> int:
     """Stop a service's units, and say what it was asked to stop.
 
@@ -1856,6 +1901,7 @@ HANDLERS = {
     "weedr service gate": _gate,
     "weedr service start": _start,
     "weedr service stop": _stop,
+    "weedr service restart": _restart,
     "weedr service build": _build,
     "weedr service list": _list,
     "weedr service snapshot": _snapshot,
