@@ -105,7 +105,12 @@ run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
 assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
-assert_file_has "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml" 'hostname: "web"'
+# The hostname is asserted in FULL: 'hostname: "web"' is a prefix of the
+# allocated FQDN, so the substring assertion could not tell an allocated
+# hostname from the bare label — or from a hostname in the wrong zone, which
+# is the open question ticket 293 reports rather than answers.
+assert_file_has "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml" \
+    'hostname: "web.example.com"' 
 assert_file_has "$services" \
     "mod owner uid-owner $tunnel_uid daddr 127.0.0.1 proto tcp dport $prodpub jump ACCEPT;"
 
