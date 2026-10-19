@@ -351,3 +351,193 @@ second=$(sed -n '2p' "$written")
 owner=$(stat -c %u "$written")
 [ "$owner" = "$svc_uid" ] \
     || _fail "after the restart the file is owned by host uid $owner, not the service uid $svc_uid"
+
+# --- two units, two images, two pins (ADR-0019's line is per unit) -----------
+#
+# The claim above is one image for one service. This is the shape it has to
+# survive: a service whose units name TWO images, each declaring its own
+# non-root user. ADR-0019 is explicit that "each unit maps its own user onto
+# the same service identity" — so the probe asks each distinct unit image, the
+# registry records a pair per unit, and the renderer writes each unit's own
+# line. One pair for the whole service would put the first image's uid onto
+# every other container's init, and keep-id with an explicit `uid=` FORCES
+# init (asserted above and asserted again for both containers below), so that
+# would break a container whose image user is somebody else's — silently,
+# because nothing about the run would say the pin named the wrong image.
+#
+# The two images are built as the service user from two Containerfiles in the
+# service's own tree: `weedr service build` tags every container from the one
+# `Containerfile` the tree carries (spec 6.6), so a second image with a second
+# uid is built the same way the first one is — `podman build` as the service,
+# into the service's own store, which is the store the probe reads.
+
+pair=/var/lib/guarden/staging/kidpair/0000001
+mkdir -p "$pair/.guarden/quadlet" "$pair/.guarden/images"
+seed "$pair/.guarden/service.yml" \
+    "project: kidpair" \
+    "units: .guarden/quadlet/"
+seed "$pair/.guarden/quadlet/web.container" \
+    "[Unit]" \
+    "Description=the web half of the two-image service" \
+    "" \
+    "[Container]" \
+    "Image=localhost/kidpair-staging:latest"
+seed "$pair/.guarden/quadlet/worker.container" \
+    "[Unit]" \
+    "Description=the worker half of the two-image service" \
+    "" \
+    "[Container]" \
+    "Image=localhost/kidpair-worker:latest"
+seed "$pair/.guarden/images/web.Containerfile" \
+    "FROM docker.io/library/alpine:3.20" \
+    "RUN adduser -D -u 10011 kidweb" \
+    "USER kidweb" \
+    "CMD [\"sleep\", \"3600\"]"
+seed "$pair/.guarden/images/worker.Containerfile" \
+    "FROM docker.io/library/alpine:3.20" \
+    "RUN adduser -D -u 20021 kidworker" \
+    "USER kidworker" \
+    "CMD [\"sleep\", \"3600\"]"
+
+run weedr service ingest kidpair-staging --from poke kidpair@0000001
+assert_exit 0
+
+home_pair=/var/lib/guarden/services/kidpair-staging/home
+runtime_pair=/run/user/"$(id -u kidpair-staging)"
+for _ in $(seq 1 30); do
+    [ -d "$runtime_pair" ] && break
+    sleep 1
+done
+assert_file_exists "$runtime_pair"
+
+podman_as kidpair-staging build --tag localhost/kidpair-staging:latest \
+    -f "$home_pair/.guarden/images/web.Containerfile" "$home_pair/.guarden/images"
+assert_exit 0
+podman_as kidpair-staging build --tag localhost/kidpair-worker:latest \
+    -f "$home_pair/.guarden/images/worker.Containerfile" "$home_pair/.guarden/images"
+assert_exit 0
+
+# image_gid <service> <image> <uid>: the gid the image's OWN passwd resolves
+# that uid to, read by running the image as container root — pinned to the
+# image's declaration rather than to a number this file assumes it made, which
+# is how the assertions below survive a base image renumbering its groups.
+image_gid() {
+    podman_as "$1" run --rm --user 0 --entrypoint cat "$2" /etc/passwd
+    assert_exit 0
+    grep ":x:$3:" "$GUARDEN_STDOUT" | cut -d: -f4
+}
+
+web_gid=$(image_gid kidpair-staging localhost/kidpair-staging:latest 10011)
+worker_gid=$(image_gid kidpair-staging localhost/kidpair-worker:latest 20021)
+[ -n "$web_gid" ] || _fail "the web image resolves uid 10011 to no gid in its own passwd"
+[ -n "$worker_gid" ] || _fail "the worker image resolves uid 20021 to no gid in its own passwd"
+[ "$web_gid" != "$worker_gid" ] || _fail "both images resolve to gid $web_gid, so this fixture cannot tell two pins apart"
+
+# unit_line <path>: the unit's own rendered line, or `none`. A red that prints
+# what the unit actually carries is evidence; a grep that only says the pattern
+# is missing is not.
+unit_line() {
+    grep -m1 '^UserNS=' "$1" || printf 'none\n'
+}
+
+run weedr service start kidpair-staging
+assert_exit 0
+
+pair_ready=0
+for _ in $(seq 1 60); do
+    podman_as kidpair-staging exec kidpair-staging-web true
+    web_up=$GUARDEN_EXIT
+    podman_as kidpair-staging exec kidpair-staging-worker true
+    if [ "$web_up" = 0 ] && [ "$GUARDEN_EXIT" = 0 ]; then
+        pair_ready=1
+        break
+    fi
+    sleep 2
+done
+[ "$pair_ready" = 1 ] || _fail "the kidpair containers never became exec-able together"
+
+unit_web=$home_pair/.config/containers/systemd/web.container
+unit_worker=$home_pair/.config/containers/systemd/worker.container
+record_pair=$registry/kidpair-staging.toml
+
+# Two images, two lines: the claim this fixture exists for. Each unit carries
+# the pair of the image IT names, and neither unit carries the other's.
+line_web=$(unit_line "$unit_web")
+line_worker=$(unit_line "$unit_worker")
+[ "$line_web" = "UserNS=keep-id:uid=10011,gid=$web_gid" ] \
+    || _fail "the web unit of a two-image service carries $line_web, and its own image's user is keep-id:uid=10011,gid=$web_gid"
+[ "$line_worker" = "UserNS=keep-id:uid=20021,gid=$worker_gid" ] \
+    || _fail "the worker unit of a two-image service carries $line_worker, and its own image's user is keep-id:uid=20021,gid=$worker_gid — one image's uid must not be forced onto another container's init"
+[ "$line_web" != "$line_worker" ] \
+    || _fail "both units render $line_web, which cannot be two images' users"
+
+# The record carries both answers, per unit, and the service-level anchor is
+# the first unit's pair (the single-image fields this file asserted above).
+owner_field() {
+    python3 -c '
+import sys
+import tomllib
+
+record = tomllib.load(open(sys.argv[1], "rb"))
+entry = record.get("owner_units", {}).get(sys.argv[2], {})
+print(entry.get(sys.argv[3], ""))
+' "$1" "$2" "$3"
+}
+assert_file_has "$record_pair" "owner_uid = 10011"
+assert_file_has "$record_pair" "owner_gid = $web_gid"
+[ "$(owner_field "$record_pair" web image)" = "localhost/kidpair-staging:latest" ] \
+    || _fail "the record's web entry names the image $(owner_field "$record_pair" web image)"
+[ "$(owner_field "$record_pair" web uid)" = "10011" ] \
+    || _fail "the record's web entry holds uid $(owner_field "$record_pair" web uid)"
+[ "$(owner_field "$record_pair" worker uid)" = "20021" ] \
+    || _fail "the record's worker entry holds uid $(owner_field "$record_pair" worker uid), and its image declares 20021"
+[ "$(owner_field "$record_pair" worker gid)" = "$worker_gid" ] \
+    || _fail "the record's worker entry holds gid $(owner_field "$record_pair" worker gid)"
+
+# Each container inits at ITS OWN image's uid — the same mechanism t350
+# measures the single-image pin with: `id -u` of the running container, and the
+# uid_map row that says the pinned pair sits on the service identity.
+pair_init() {
+    local container=$1
+    run_in "$home_pair" setpriv --reuid=kidpair-staging --regid=kidpair-staging \
+        --clear-groups env -u OLDPWD HOME="$home_pair" PWD="$home_pair" \
+        USER=kidpair-staging LOGNAME=kidpair-staging \
+        XDG_RUNTIME_DIR="$runtime_pair" \
+        podman exec "$container" sh -c 'id -u; id -g'
+    assert_exit 0
+    init_uid=$(sed -n '1p' "$GUARDEN_STDOUT")
+    init_gid=$(sed -n '2p' "$GUARDEN_STDOUT")
+    run_in "$home_pair" setpriv --reuid=kidpair-staging --regid=kidpair-staging \
+        --clear-groups env -u OLDPWD HOME="$home_pair" PWD="$home_pair" \
+        USER=kidpair-staging LOGNAME=kidpair-staging \
+        XDG_RUNTIME_DIR="$runtime_pair" \
+        podman exec "$container" cat /proc/self/uid_map
+    assert_exit 0
+    cp "$GUARDEN_STDOUT" "$GUARDEN_FIXTURES/uid-map-$container"
+    echo "MEASURE: $container init uid/gid $init_uid/$init_gid; uid_map $(tr '\n' '|' <"$GUARDEN_FIXTURES/uid-map-$container")"
+}
+
+pair_init kidpair-staging-web
+[ "$init_uid" = "10011" ] \
+    || _fail "the web container inits as uid $init_uid under $line_web, and its own image's user is 10011 — keep-id with an explicit uid= must force init"
+[ "$init_gid" = "$web_gid" ] \
+    || _fail "the web container inits as gid $init_gid under $line_web, and its own image resolves gid $web_gid"
+[ "$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-web" 10011)" = "10011 0 1" ] \
+    || _fail "the web uid_map row for 10011 is [$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-web" 10011)], expected [10011 0 1]"
+
+pair_init kidpair-staging-worker
+[ "$init_uid" = "20021" ] \
+    || _fail "the worker container inits as uid $init_uid under $line_worker, and its own image's user is 20021 — two images must init at two uids"
+[ "$init_gid" = "$worker_gid" ] \
+    || _fail "the worker container inits as gid $init_gid under $line_worker, and its own image resolves gid $worker_gid"
+[ "$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-worker" 20021)" = "20021 0 1" ] \
+    || _fail "the worker uid_map row for 20021 is [$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-worker" 20021)], expected [20021 0 1]"
+
+# A second start leaves both lines alone: the record, not a probe, is what the
+# renderer answers to once both pairs are in it.
+before_pair=$(sha256sum "$unit_web" "$unit_worker" | sha256sum | cut -d' ' -f1)
+run weedr service start kidpair-staging
+assert_exit 0
+after_pair=$(sha256sum "$unit_web" "$unit_worker" | sha256sum | cut -d' ' -f1)
+[ "$before_pair" = "$after_pair" ] \
+    || _fail "a second start rendered a different pair of units ($before_pair -> $after_pair)"
