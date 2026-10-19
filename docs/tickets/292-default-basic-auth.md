@@ -97,6 +97,10 @@ which inverts who holds the decision.
 
 ## Known gaps (reported, not invented)
 
+Each of these is carried as an open ticket so that deleting this ticket on
+merge does not delete the gap: 303 (opt-out), 304 (rotation), 305 (tunnel
+middleware).
+
 - **No opt-out yet.** The backlog's acceptance seed wants a root-owned
   per-service "no auth" setting. Neither spec surface admits one: spec 3.3
   closes overrides.toml ("nothing else is overridable") and spec 3.1's

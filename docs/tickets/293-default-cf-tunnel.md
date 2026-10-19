@@ -87,7 +87,8 @@ hold for exposure at all.
   track-field list and 3.3's overrides sentence were rewritten to state the
   derived default, in the same change that made the code behave that way
   (review-exposure.out finding 1).
-- Tunnel hostnames are still allocated by nobody (the backlog's open question):
+- Tunnel hostnames are still allocated by nobody (the backlog's open question;
+  carried as ticket 306):
   `roots` publishes a route to whatever host the mutator allocated in
   `host.domain`; the tunnel zone (`[ingress] tunnel_domain`) is only used for
   previews. Per-service hostnames inside the CF zone are not part of this
