@@ -216,6 +216,12 @@ assert_file_exists "$unit"
 assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=$kid_gid"
 assert_file_has "$record" "owner_uid = 10001"
 assert_file_has "$record" "owner_gid = $kid_gid"
+# ADR-0019's two record shapes: this service's units name ONE image, so its
+# document keeps the scalar pair and never grows the per-unit table — the map
+# is written only when the units disagree about their user, and the other half
+# of that claim (a two-image service whose record DOES carry the table) is
+# asserted at the bottom of this file.
+assert_file_lacks "$record" "owner_units"
 
 # --- the pin, measured: uid 0, the init ids, and both maps -------------------
 #
@@ -318,6 +324,33 @@ run weedr service start kid-staging
 assert_exit 0
 assert_file_has "$record" "owner_uid = 10001"
 assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=$kid_gid"
+
+# The field an operator edits by hand holds a NUMBER, and a quoted "4242" in
+# the TOML document is a string: read back unconverted it reached the
+# renderer's `uid and uid > 0` and raised TypeError — a traceback out of
+# `weedr service start` rather than either answer below. Two answers, the pair
+# `OwnerUnit.from_document` already gives the per-unit table: a string that IS
+# a number is converted and rendered through — the same as the hand edit
+# above — and a value that is not a number at all is refused as host state
+# that does not hold what guarden wrote (one line, exit 1).
+sed -i 's/^owner_uid = 10001$/owner_uid = "4242"/' "$record"
+run weedr service start kid-staging
+echo "MEASURE: stderr of a quoted owner_uid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 0
+assert_file_has "$unit" "UserNS=keep-id:uid=4242,gid=$kid_gid"
+assert_file_has "$record" 'owner_uid = "4242"'
+
+sed -i 's/^owner_uid = "4242"$/owner_uid = "not-a-number"/' "$record"
+run weedr service start kid-staging
+echo "MEASURE: stderr of an unnumbered owner_uid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "kid-staging"
+assert_stderr_has "owner_uid"
+assert_stdout_lacks "started kid-staging"
+# The record is rendered through, so what the rest of this file reads is the
+# probe's own pair again.
+sed -i 's/^owner_uid = "not-a-number"$/owner_uid = 10001/' "$record"
 
 # --- create AND modify: a second process after a restart ---------------------
 #

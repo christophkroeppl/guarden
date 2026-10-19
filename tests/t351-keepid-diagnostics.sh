@@ -191,3 +191,48 @@ assert_stderr_has "kiduser-staging"
 assert_stderr_has "User="
 assert_stderr_has "4242"
 assert_stdout_lacks "started kiduser-staging"
+
+# --- a RELATIVE entrypoint: the name the runtime resolves, not the cwd --------
+#
+# The stock postgres and mysql shape — `ENTRYPOINT ["docker-entrypoint.sh"]`,
+# a bare name on the image's PATH with a WORKDIR somewhere else entirely, which
+# is the shape the probe's own comment names. The probe handed that name to
+# `cat`, and `cat` resolves it against the container's WORKDIR rather than
+# PATH, so the read failed — and a failed read was read as "no handoff": the
+# record settled on `owner_uid = 0`, no line rendered, nothing printed, while
+# the record claimed the question had been answered. The keep-id line this ADR
+# exists for then never appears for exactly the images it exists for.
+#
+# The resolution now answers the way the OCI runtime resolves the same name —
+# PATH first (`command -v`), then the literal name against the WORKDIR — and
+# this fixture's script is deliberately NOT in its WORKDIR, so only the PATH
+# half can find it. The handoff is in the script's own words, resolved against
+# the image's passwd, exactly as the root row resolves it.
+unit_line() {
+    grep -m1 '^UserNS=' "$1" || printf 'none\n'
+}
+
+stage_kid kidrel localhost/kidrel-staging:latest \
+    "FROM docker.io/library/alpine:3.20" \
+    "RUN echo 'app:x:3000:3000::/home/app:/bin/sh' >> /etc/passwd" \
+    "ADD .guarden/entry.sh /usr/local/bin/entry.sh" \
+    "RUN chmod +x /usr/local/bin/entry.sh" \
+    "WORKDIR /srv" \
+    "ENTRYPOINT [\"entry.sh\"]"
+seed /var/lib/guarden/staging/kidrel/0000001/.guarden/entry.sh \
+    '#!/bin/sh' \
+    'if [ -x /usr/sbin/gosu ] ; then exec gosu app /usr/local/bin/entry.sh ; fi' \
+    'exec sleep 3600'
+run weedr service ingest kidrel-staging --from poke kidrel@0000001
+assert_exit 0
+run weedr service build kidrel-staging
+assert_exit 0
+
+run weedr service start kidrel-staging
+assert_exit 0
+unit_rel=/var/lib/guarden/services/kidrel-staging/home/.config/containers/systemd/app.container
+record_rel=$registry/kidrel-staging.toml
+[ "$(unit_line "$unit_rel")" = "UserNS=keep-id:uid=3000,gid=3000" ] \
+    || _fail "a relative entrypoint whose script is on the image's PATH renders $(unit_line "$unit_rel"), and the handoff its script names is keep-id:uid=3000,gid=3000"
+assert_file_has "$record_rel" "owner_uid = 3000"
+assert_file_lacks "$record_rel" "owner_uid = 0"
