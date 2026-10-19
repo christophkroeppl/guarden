@@ -1853,8 +1853,10 @@ changes nothing until the user manager is reloaded and the unit is restarted.
 given an entry in the service's own quadlet directory named `<unit>-<escaped-ref>` (§5.2), and
 the generator reads that name — so the instance's keep-id drop-in is
 `<unit>-<escaped-ref>.container.d/50-guarden-keepid.conf`, beside the service's own
-`<unit>.container.d/`. The two are separate files with separate pins, and an instance's pin
-never lands in the service's own unit.
+`<unit>.container.d/`. **An instance OWNS its drop-in directory; it does not share the
+service's.** Two instances of one service have two pins, neither lands in the other's, and
+an instance that is removed takes its own directory with it — the admin's own file in it is
+left alone, by the same rule the service's removal follows.
 
 **A `firewall:` entry is validated here and installed nowhere.** The renderer checks the closed
 shape of §4 and refuses the same malformed input it refuses everywhere else, and it writes the

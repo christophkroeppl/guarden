@@ -382,6 +382,43 @@ def drop_instance_entries(service: str, escaped_ref: str) -> None:
             elif target.exists():
                 target.unlink()
             break
+    _drop_instance_admin_dropins(service, escaped_ref)
+
+
+def _drop_instance_admin_dropins(service: str, escaped_ref: str) -> None:
+    """An instance's keep-id drop-in, gone with the instance (ADR-0019).
+
+    **An instance OWNS its drop-in directory, and the service's own is a
+    different one.** The instance's units are given an entry in the service's
+    own quadlet directory named `<unit>-<escaped-ref>`, and the generator
+    reads that name — so the instance's drop-in lives in
+    `<unit>-<escaped-ref>.container.d/` beside the service's own
+    `<unit>.container.d/`, and the two are separate directories with
+    separate pins. Two instances of one service therefore have two pins, and
+    neither lands in the other's.
+
+    So an instance that goes takes its own directory with it. **The admin's
+    own file in it is left alone**, by the same rule the service's removal
+    follows: guarden takes the file it wrote and nothing else. The instance's
+    directory is only removed when the admin left nothing in it.
+    """
+    record = registry.load(service)
+    if record is None or not record.uid:
+        return
+    root = paths.ADMIN_UNITS / str(record.uid)
+    if not root.is_dir():
+        return
+    for path in sorted(root.iterdir()):
+        if not path.is_dir() or not path.name.endswith(".container.d"):
+            continue
+        unit = path.name[: -len(".container.d")]
+        if entry_stem(unit, escaped_ref) != unit:
+            continue
+        for dropin in sorted(path.iterdir()):
+            if dropin.is_file() and dropin.name == paths.KEEPID_DROPIN:
+                dropin.unlink()
+        if not any(path.iterdir()):
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def _files(directory: Path) -> list[Path]:
