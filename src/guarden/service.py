@@ -101,12 +101,43 @@ class Source:
     sha: str | None = None
     service: str | None = None
     module: str | None = None
+    # A tree the operator built by hand, or with the guided creator: an
+    # absolute path to a directory that holds `.guarden/service.yml` and
+    # `.guarden/quadlet/`. It is the third shape of `--from` and it is the one
+    # `weedr service add --from <tree>` has always taken by path — the
+    # difference is that the guided creator WRITES the tree and then hands it
+    # over, so the mutator still reads it from a path it was given rather than
+    # from a location the caller can influence.
+    tree: Path | None = None
 
     def directory(self) -> Path:
         if self.kind == "poke":
-            return paths.STAGING / str(self.project) / str(self.sha)
+            path = paths.STAGING / str(self.project) / str(self.sha)
+            # **The path is contained, and the containment is asserted here.**
+            # The project and the sha are both validated as NAMES by the
+            # callers, so this cannot be reached with a path today — and the
+            # point of the belt is that the next caller need not know that.
+            # The staging area is the system's own directory, and a source
+            # that points outside it is not a poke.
+            root = paths.STAGING.resolve()
+            try:
+                resolved = path.resolve()
+            except OSError:  # pragma: no cover - a resolve that cannot answer
+                raise errors.GuardenError(
+                    f"the poke's staging path {path} could not be read",
+                    errors.HOST_NOT_AS_ASSUMED,
+                ) from None
+            if root not in resolved.parents and resolved != root:
+                raise errors.GuardenError(
+                    f"the poke's staging path {path} is outside the staging area "
+                    f"{root}; a poke names a project and a commit and not a place",
+                    errors.REJECTED_INPUT,
+                )
+            return path
         if self.kind == "module":
             return modules_mod.source_of(str(self.module), str(self.service))
+        if self.kind == "tree":
+            return Path(str(self.tree))
         return paths.service_home(str(self.service))
 
 
@@ -140,6 +171,26 @@ def parse_from(values: list[str], verb: str) -> Source:
             if not project or not at or not sha or "/" in sha or ".." in sha:
                 raise errors.GuardenError(
                     f"--from poke takes <project>@<sha>, and {values[1]!r} is not that"
+                )
+            # **The project is a NAME and not a path, and it is checked as one.**
+            # The sha is refused a `/` and a `..`; the project was not, and the
+            # project is the half that becomes a directory:
+            #
+            #     paths.STAGING / project / sha
+            #
+            # so `--from poke ../../tmp/evil@9f2c1ab` resolved to a tree
+            # OUTSIDE the staging area, and root — reached through the mutator
+            # rule — then read and rendered from a tree the caller chose. The
+            # module's own docstring claims "nothing here distinguishes a path
+            # from a name, because no caller can name a path", and a caller
+            # could.
+            #
+            # The rule is the one a service name gets (`names.NAME_RE`), which
+            # is closed and takes no `/` and no `..`.
+            if not names.NAME_RE.match(project):
+                raise errors.GuardenError(
+                    f"--from poke takes <project>@<sha>, and the project {project!r} "
+                    f"is not a name; a project is a name and not a path"
                 )
             return Source(kind="poke", project=project, sha=sha)
         if len(values) == 1 and names.NAME_RE.match(values[0]):
@@ -241,7 +292,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # under its ref — the registry is one file per service, and one shared
     # field was a value an instance's ingest wrote over the service's own
     # (review finding 1).
-    source_hash = _source_hash(directory) if source.kind in ("poke", "service") else ""
+    source_hash = _source_hash(directory) if source.kind in ("poke", "service", "tree") else ""
     if existing is not None and _converged(existing, resolved, manifest, project, source_hash):
         outcome.converged = True
         outcome.uid = existing.uid
@@ -663,10 +714,19 @@ def check_hosts(name: str, manifest: manifest_mod.Manifest, track) -> None:
 
 
 def _project_from(source: Source) -> str:
-    """The project the `--from` source belongs to, never a path basename: under the
-    new layout the staging directory's basename is a sha."""
+    """The project the `--from` source belongs to, never a path basename: under
+    the new layout the staging directory's basename is a sha.
+
+    **A tree names no project.** A tree the operator built — by hand or with
+    the guided creator — is not a poke and belongs to no registered project,
+    so the project's name is empty and the manifest's own `project:` is what
+    the record carries. A tree that named a project would claim one the host
+    has never registered.
+    """
     if source.kind == "poke":
         return str(source.project)
+    if source.kind == "tree":
+        return ""
     record = registry.load(str(source.service))
     if record is None or not record.project:
         raise errors.GuardenError(

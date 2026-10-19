@@ -359,6 +359,18 @@ def _poke(values: list[str] | None, sha_argument: str | None, known: bool, name:
             f"from two validated components",
             errors.REJECTED_INPUT,
         )
+    # **The project is a NAME, and it is checked as one.** The sha is checked
+    # against a closed pattern; the project was only checked for being
+    # non-empty, and the project is the half that becomes a directory — so
+    # `--from poke ../../tmp/evil@9f2c1ab` assembled a staging path OUTSIDE the
+    # staging area. The same rule a service name gets.
+    if not names.NAME_RE.match(project):
+        raise errors.GuardenError(
+            f"`--from poke` takes a project that is a name, and {project!r} is not "
+            f"one; the staging directory is assembled by the system from two "
+            f"validated components",
+            errors.REJECTED_INPUT,
+        )
     if sha_argument and sha_argument != sha:
         raise errors.GuardenError(
             f"--sha {sha_argument} and --from poke {values[1]} name two different commits"
