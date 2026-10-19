@@ -206,11 +206,23 @@ assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/otherapp-staging.toml
 
 # The same refusal for `create`, and only after its configuration, its name and
-# its template choice have been gathered: one template has to be installed for
-# the verb to get as far as asking for root, and it must still refuse before it
+# its template choice have been gathered: it must still refuse before it
 # copies anything. `otherapp-staging` never appears in the registry.
+#
+# **The template is NAMED on the command line, and that is a change.** The
+# suite used to install an empty `staged` directory and rely on the chooser
+# picking the only template — but two real templates now ship (ticket 330
+# fixed the install path, so `postgres` and `vaultwarden` are installed), so
+# the chooser has a set to choose from and demands a terminal. The refusal
+# then became "create needs a terminal to answer its prompts" instead of
+# "create requires root", and the assertion below was reading the wrong
+# refusal — the test was still passing for the wrong reason on the suites
+# where the terminal happened to be there.
+#
+# Naming the template is what the verb is for: the chooser is for an operator
+# at a terminal, and this is a suite with no operator.
 install -d -m 0755 /usr/lib/guarden/templates/services/staged
-run runuser -u hose -- /usr/lib/guarden/bin/weedr service create otherapp-staging --env staging
+run runuser -u hose -- /usr/lib/guarden/bin/weedr service create otherapp-staging --env staging --template staged
 assert_exit 1
 assert_one_diagnostic "error:"
 assert_stderr_has "create requires root"
