@@ -1,7 +1,9 @@
 # 263: the edge is listening, the routes load, and the packet still does not arrive
 
 **Blocked by:** nothing. **Blocks:** `t50-slice.sh`, and therefore any release gate that runs
-the whole suite.
+the whole suite. **Stale as of 2026-10-19: `t50-slice.sh` is green on `develop` with no
+branch applied — observed rc=0 in `guarden-run-t263`, and the acceptance is counted against
+the tree at the end of this ticket.**
 
 **What to build:** A measurement that says why a `curl` from the host to the edge's own
 loopback publication times out, when the edge is demonstrably listening on that publication.
@@ -1344,3 +1346,126 @@ assertion checks the wrong thing.
 grep ^Groups /proc/$(pgrep -u traefik-production -f 'systemd --user' | head -1)/status
 # -> "Groups: 982" means NO, "Groups: 981 982" means YES
 ```
+
+## Measured on `develop` (2026-10-19): the layer is `guarden-svc`'s default deny, and the deciding variable is the curler's uid
+
+What this ticket asked to build, produced by running it: a real edges fixture (this
+suite's own green run as the fixture builder, rc=0, fresh cut of `guarden-run-t263` from
+`develop` `8d3e6ba`), then every probe below with the deny's own packet counter read
+immediately before and after. `nft list ruleset` holds 0 lines on the host — the rules
+live in `iptables-legacy`, the variant fact `docs/notes/iptables-variant-must-be-stated.md`
+warns about — and `net.ipv4.conf.{all,lo}.rp_filter` is `2`.
+
+**Ordering first, because the lead said ordering:**
+
+```
+$ iptables-legacy -S guarden-svc | grep -n -E 'conntrack|uid-owner 0|-j DROP'
+2:-A guarden-svc -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+3:-A guarden-svc -d 127.0.0.1/32 -p tcp -m owner --uid-owner 0 -j ACCEPT
+15:-A guarden-svc -d 127.0.0.0/8 -j DROP
+total: 14 rules
+```
+
+Conntrack is rule 1, the deny is rule 15 of 15, and `30-admin.conf` loads between
+`20-ingress-nat.conf` and `50-services.conf`, so admin drop-ins land above the deny too —
+`guarden-deploy`'s live chain reads exactly that way: 50 rules, the hand rule
+`uid-owner 976 dport 20006` first, conntrack second, uid-0 third, `-A guarden-svc -d
+127.0.0.0/8 -j DROP` last. **Ordering is not the defect.** rp_filter is not the defect
+either: a packet rp_filter refuses never reaches this chain's counters, and these move.
+Not pasta, same reason: the counting rule is guarden's own `OUTPUT` set, so the packet
+reached it before it died.
+
+**The matrix — one run, verbatim:**
+
+```
+root->20001            rc=0 301  DENY=37->37 conntrack=16000->16009 uid0=6->7
+operator->20001         rc=28 000  DENY=37->41 accepts_1001_20001=0
+operator->20000/api     rc=0 200  DENY=41->41
+routed-staging->20001   rc=28 000  DENY=41->45
+edge->routed:20003      rc=0 200  DENY=45->45
+LISTEN 0      128        127.0.0.1:20001      0.0.0.0:*
+root getent   rc=2 DENY=45->53
+svc getent    rc=0 DENY=53->53
+```
+
+**This answers "what to build."** The packet dies at the last rule of guarden's own
+ferm-rendered `OUTPUT` chain — `daddr 127.0.0.0/8 jump DROP` — proven by that rule's own
+packet counter: **+4 for one `operator` curl** (the SYN and three retransmits under
+`curl -m 4`), while `ss` shows the edge LISTENing on the same address the curl went to.
+A timeout rather than a 404 is exactly what a dropped SYN looks like. The deciding
+variable is the curling uid against the `--uid-owner` set above the deny:
+
+- **root passes**: `uid-owner 0 daddr 127.0.0.1 proto tcp` takes the SYN (`uid0=6->7`, one
+  packet), conntrack takes every reply of the connection (`16000->16009`), the deny does
+  not move (`37->37`).
+- **the edge's own uid passes**: its own publication, and uid 994 on `20003` is the
+  route-publication accept — `edge->routed:20003` answers 200 with the deny flat.
+- **`operator` passes only where spec §7.6 puts `host.admin_user`** — the API
+  (`--dport 20000` answers 200) — and is refused on the web publication:
+  `accepts_1001_20001=0`, deny +4.
+- **every other uid is refused by design**: the accept set is service uid + declared
+  consumers + edge (§7.6), the deny names no uid at all, and no counter moves for anything
+  that was allowed.
+
+The original exit-28 of this suite was this same deny eating the *reply*: root's SYN passed
+`uid-owner 0`, the SYN-ACK came back from pasta as uid 994, matched nothing, and fell to
+the deny — fixed at that layer by `519903c` (`firewall.py:414`, now rule 1), which the
+counters above re-confirm: a full root↔edge connection completes with the deny flat. The
+suite's own counters on the same run:
+
+```
+MEASURE: STUB_ACCEPT=14->15 DENY_DROP=0->0
+MEASURE: OTHER_DENY=0->1
+T50_RC=0
+```
+
+**Same class, two more corners (measured):** root's and `operator`'s own DNS through the
+stub is dropped by that same rule (`getent rc=2`, deny `45->53`) while a service uid
+resolves with the deny flat — `resolv.conf` is `nameserver 127.0.0.53` on this cut and on
+`guarden-deploy` (where a root `getent` also fails, deny `595->603`), the resolver accepts
+name the service uids alone (spec §7.6: "the service uids and no other"), and the uid-0
+blanket is `daddr 127.0.0.1 proto tcp` — the stub is neither. And on `guarden-deploy`, the
+live lead's exact case, read-only:
+
+```
+# Deploy manual step (see redeployment report): nbxplorer (uid 976) reaches
+# bitcoind P2P through the ad-hoc publication 127.0.0.1:20006 -> 8333, which
+# no guarden edge allocates (the bitcoind manifest publishes 8332 only).
+mod owner uid-owner 976 daddr 127.0.0.1 proto tcp dport 20006 jump ACCEPT;
+```
+
+— in `/etc/guarden/firewall/30-admin.conf`, first rule of the chain, above the deny by
+file order, which is why it worked. **No render was missing an accept there: no render ever
+knew that port.** It is ad-hoc, not a publication, so the drop was the deny working as
+designed, and the hand rule is §7.7's mechanism doing exactly the job it exists for.
+
+**This ticket's acceptance, counted against the tree (existence is not completion):**
+
+1. *"A measurement names the layer that drops the packet ... with the command that
+   produced it."* — **now met, by this section.** The `THE CAUSE` block above names the
+   firewall layer but carries no counter command of its own (its own words: the number
+   "came out of its transcript"); the commands and their output are the two blocks above.
+2. *"The fix is at that layer and no wider. **No `GroupAdd`** ..."* — **the tree
+   contradicts the criterion as written:** `GroupAdd=keep-groups` is in
+   `modules/gate-traefik/traefik-production/.guarden/quadlet/traefik.container:24` and
+   asserted by `t50-slice.sh` itself; this ticket's `RESOLVED` section says "the ADR is
+   written" and **no `docs/adr/` exists anywhere in the tree** — the decision survives only
+   as prose in `AGENTS.md`. The conntrack half *is* at that layer: `firewall.py:414`,
+   ancestor of `develop` (`519903c`).
+3. *"`t50-slice.sh` green on `develop` with no branch applied, and its failure path names
+   itself rather than exiting with empty stderr (262, criterion 3)"* — **met:** observed
+   rc=0 on a fresh cut of unmodified `develop` (2026-10-19; this section's fixture run),
+   every recorded `t50-slice.sh` result in the suite cache is `green` (the cache records
+   observed passes only), and `tests/lib.sh:36` prints
+   `error: failed at line %s: %s (exit %s)` on a failed assertion.
+
+So the `**Blocks:**` line at the top of this ticket — that it blocks `t50-slice.sh`, and
+therefore any release gate — is **stale**: criterion 3 is green on `develop` with no branch
+applied, observed today.
+
+**Recommendation (one line):** no render patch follows from this measurement — declare the
+ad-hoc `20006` wiring as a real publication (or leave it the §7.7 drop-in it already is)
+rather than growing `30-admin.conf` by hand, and take root's dropped stub-resolver queries
+(`getent` as root after `soil firewall --apply`, measured on the deploy box) to spec §7.6
+as the ADR question they are, because "package updates are outbound and untouched" does not
+survive one root DNS query.
