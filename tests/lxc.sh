@@ -510,9 +510,19 @@ _reboot() {
 # _push <instance> <local-path> <guest-path>: tar over stdin rather than a disk
 # device. A mounted host tree would let the harness's state land back on the
 # developer's checkout, which is the one leak this design must not have.
+#
+# **The developer's `.venv` does not travel.** It is the checkout's own
+# interpreter and the two libraries the renderer needs, so it can change what
+# a suite runs against — but a suite in the machine must run against the
+# machine's `python3-yaml` and `python3-jinja2`, which the golden carries, and
+# not against whatever the developer last installed. Shipping the venv would
+# put a host's `pip install` in the middle of a machine's result: a suite
+# could pass on one checkout and fail on another for a reason the tree does
+# not hold. The guest's packages are the substrate; the venv is the
+# developer's.
 _push() {
     local instance=$1 src=$2 dst=$3
-    tar -C "$src" -cf - . | vm_exec_t "$instance" \
+    tar -C "$src" --exclude=./.venv -cf - . | vm_exec_t "$instance" \
         "sudo mkdir -p '$dst' && sudo tar -C '$dst' -xf - && sudo chown -R root:root '$dst'"
 }
 # The package list is the harness's, not guarden's: `soil packages` converges

@@ -15,6 +15,11 @@
 #   * a change anywhere in `src/guarden/**` — the package the harness runs —
 #     invalidates every key, and a change under `docs/` invalidates none
 #     (ticket 309);
+#   * every helper under `tests/` is in every key because it exists, so a new
+#     helper moves the key and no suite is inherited against the old one;
+#   * a file's execute bit is in the key, because a tool is run and not read;
+#   * the developer's `.venv` is not a suite input, so it is neither in the key
+#     nor on the machine;
 #   * a cached suite's line cannot be read as a pass;
 #   * `--no-cache` consults nothing;
 #   * the cache is outside the repository, and nothing expires.
@@ -287,6 +292,152 @@ cache tree "$OTHER_SUITE"
 assert_exit 0
 [ "$TREE" != "$(cat "$GUARDEN_STDOUT")" ] || _fail "two suites produced one tree digest"
 
+# --- every helper under tests/ is in the key, because it exists ------------
+
+# **The read set names the four helpers it knows and stops there.** That is
+# the enumeration that lost ticket 309 one file class wide: a
+# `tests/newhelper.sh` satisfied no list, was in no read set, and failed
+# nothing — so a suite could be inherited against a helper nobody re-ran.
+#
+# The closure is a NEGATED glob, not a longer list: everything under `tests/`
+# that the runner does not select. The runner selects exactly
+# `tests/t[0-9]*.sh`, so the negation is every helper, and a helper is
+# covered because it exists rather than because someone remembered it.
+#
+# Every helper the tree has is in the read set, and no suite but this one.
+# The runner selects exactly `tests/t[0-9]*.sh`, so the negation of that is
+# every helper — and the list below is the tree's own files with the runner's
+# own selection removed.
+python3 "$CACHE_TOOL" readset "$SUITE" >"$GUARDEN_FIXTURES/readset.list"
+while read -r helper; do
+    name=${helper#"$GUARDEN_ROOT"/}
+    grep -qxF "$name" "$GUARDEN_FIXTURES/readset.list" \
+        || _fail "$name is a helper under tests/ and is not in the read set"
+done <<<"$(find "$GUARDEN_ROOT/tests" -type f ! -name '*.pyc' ! -name 't[0-9]*.sh' | sort)"
+
+# The negation is exact: a suite is a suite because the runner says so, and
+# the runner's own selection is the predicate. The other suite is a suite, so
+# it is not in this suite's read set — which is what keeps two suites two
+# read sets rather than one.
+if grep -qxF "tests/t30-list.sh" "$GUARDEN_FIXTURES/readset.list"; then
+    _fail "the other suite is in this suite's read set, so two suites are one read set"
+fi
+
+# A helper is in the read set of EVERY suite, which is the property that
+# closes the hole: a new helper joins every suite's read set, so a bug fixed
+# in it moves every key and no suite is inherited against the old helper.
+python3 "$CACHE_TOOL" readset "$OTHER_SUITE" >"$GUARDEN_FIXTURES/other-readset.list"
+grep -qxF "tests/lib.sh" "$GUARDEN_FIXTURES/other-readset.list" \
+    || _fail "a helper is not in the other suite's read set either"
+
+# --- a new helper moves the key, and two suites stay two digests ------------
+
+# The executable rule that keeps the hole closed: a helper that is a real file
+# under `tests/` is covered because it exists. The change is made on a copy,
+# so it cannot leak into the tree the suites run against.
+HELPER_COPY=$GUARDEN_FIXTURES/helper-copy
+mkdir -p "$HELPER_COPY/tests"
+cp "$GUARDEN_ROOT/tests/$SUITE_NAME" "$HELPER_COPY/tests/$SUITE_NAME"
+
+helper_tree_key() {
+    GUARDEN_LXC_ROOT="$HELPER_COPY" python3 "$CACHE_TOOL" key "$GOLDEN" \
+        "$HELPER_COPY/tests/$SUITE_NAME" "$1" "$2"
+}
+
+# The key of the copy without the helper, and the key of the same copy with
+# it. The helper is a file that exists and nothing else, so the difference
+# between the two keys is the helper.
+WITHOUT_HELPER=$(helper_tree_key declared runner-1)
+printf '#!/bin/sh\n# a helper that did not exist when the key was written\nexit 0\n' \
+    >"$HELPER_COPY/tests/anewhelper.sh"
+WITH_HELPER=$(helper_tree_key declared runner-1)
+[ "$WITHOUT_HELPER" != "$WITH_HELPER" ] \
+    || _fail "a new helper under tests/ did not move the key"
+
+# And the helper is in the read set of the copy, which is the reason the key
+# moved: the assertion is about the set, not only about a digest.
+GUARDEN_LXC_ROOT="$HELPER_COPY" python3 "$CACHE_TOOL" readset \
+    "$HELPER_COPY/tests/$SUITE_NAME" >"$GUARDEN_FIXTURES/helper-readset.list"
+grep -qxF "tests/anewhelper.sh" "$GUARDEN_FIXTURES/helper-readset.list" \
+    || _fail "the new helper is not in the read set of the copy"
+
+# **Two suites are still two digests.** This is the trap the negation has to
+# avoid: a plain glob of `tests/*.sh` would put every suite in every key and
+# make one digest for two suites, which is the bug the previous author hit.
+# The two read sets differ in exactly one file — each suite's own — and that
+# is what keeps them two.
+cp "$GUARDEN_ROOT/tests/t30-list.sh" "$HELPER_COPY/tests/t30-list.sh"
+GUARDEN_LXC_ROOT="$HELPER_COPY" python3 "$CACHE_TOOL" tree \
+    "$HELPER_COPY/tests/$SUITE_NAME" >"$GUARDEN_FIXTURES/helper-tree-one"
+GUARDEN_LXC_ROOT="$HELPER_COPY" python3 "$CACHE_TOOL" tree \
+    "$HELPER_COPY/tests/t30-list.sh" >"$GUARDEN_FIXTURES/helper-tree-two"
+if [ "$(cat "$GUARDEN_FIXTURES/helper-tree-one")" = "$(cat "$GUARDEN_FIXTURES/helper-tree-two")" ]; then
+    _fail "two suites produced one tree digest over a tree that has a new helper"
+fi
+
+# --- the execute bit is in the key ------------------------------------------
+
+# The tools under `tools/` are exec'd rather than read — `tool` runs them by
+# path — so the same bytes without the execute bit is a different result:
+# "Permission denied" where the suite expected an answer. A committed
+# `100755` to `100644` would move no key at all, and every suite that calls
+# the tool would inherit a green observed against a working tool.
+TOOLS_COPY=$GUARDEN_FIXTURES/tools-copy
+mkdir -p "$TOOLS_COPY/tools" "$TOOLS_COPY/tests"
+cp "$GUARDEN_ROOT/tools/golden-vm" "$TOOLS_COPY/tools/golden-vm"
+cp "$GUARDEN_ROOT/tests/$SUITE_NAME" "$TOOLS_COPY/tests/$SUITE_NAME"
+chmod +x "$TOOLS_COPY/tools/golden-vm"
+
+tools_tree_key() {
+    GUARDEN_LXC_ROOT="$TOOLS_COPY" python3 "$CACHE_TOOL" key "$GOLDEN" \
+        "$TOOLS_COPY/tests/$SUITE_NAME" "$1" "$2"
+}
+
+EXECUTABLE=$(tools_tree_key declared runner-1)
+chmod -x "$TOOLS_COPY/tools/golden-vm"
+NOT_EXECUTABLE=$(tools_tree_key declared runner-1)
+[ "$EXECUTABLE" != "$NOT_EXECUTABLE" ] \
+    || _fail "the execute bit of a tool is not in the key"
+
+# The bytes are the same in both, so the difference is the mode and nothing
+# else: restoring the bit restores the key exactly.
+chmod +x "$TOOLS_COPY/tools/golden-vm"
+[ "$EXECUTABLE" = "$(tools_tree_key declared runner-1)" ] \
+    || _fail "restoring the execute bit did not restore the key"
+
+# --- the developer's .venv is not a suite input ----------------------------
+
+# A developer's `.venv` supplies the interpreter and the two libraries, and
+# the runner's push tars the whole checkout, so it travels into the guest and
+# `lib.sh` puts it on PATH. A `pip install` inside it changes what a suite
+# runs against without moving any key.
+#
+# It is not in the key, and the reason is that it is not a suite input: the
+# push leaves it behind, so the machine ran against the guest's own
+# `python3-yaml` and `python3-jinja2`, not against the developer's.
+VENV_COPY=$GUARDEN_FIXTURES/venv-copy
+mkdir -p "$VENV_COPY/.venv/bin" "$VENV_COPY/tests"
+cp "$GUARDEN_ROOT/tests/$SUITE_NAME" "$VENV_COPY/tests/$SUITE_NAME"
+printf '#!/bin/sh\nexit 0\n' >"$VENV_COPY/.venv/bin/python3"
+
+venv_tree_key() {
+    GUARDEN_LXC_ROOT="$VENV_COPY" python3 "$CACHE_TOOL" key "$GOLDEN" \
+        "$VENV_COPY/tests/$SUITE_NAME" "$1" "$2"
+}
+
+NO_VENV=$(venv_tree_key declared runner-1)
+printf '# a different library in the venv\n' >>"$VENV_COPY/.venv/bin/python3"
+WITH_VENV=$(venv_tree_key declared runner-1)
+[ "$NO_VENV" = "$WITH_VENV" ] \
+    || _fail "a change in the developer's .venv moved the key, so a pip install invalidates every cached green"
+
+# And the venv is not in the read set either, which is the same claim.
+GUARDEN_LXC_ROOT="$VENV_COPY" python3 "$CACHE_TOOL" readset \
+    "$VENV_COPY/tests/$SUITE_NAME" >"$GUARDEN_FIXTURES/venv-readset.list"
+if grep -qF '.venv' "$GUARDEN_FIXTURES/venv-readset.list"; then
+    _fail "the developer's .venv is in the read set, so a pip install invalidates every cached green"
+fi
+
 # --- one changed file invalidates what read it ------------------------------
 
 # The digest is a function of the bytes, so a change to a file in the read set
@@ -399,10 +550,28 @@ printf '\n# the suite changed\n' >>"$TREE_COPY/tests/$SUITE_NAME"
 [ "$BEFORE" != "$(tree_key declared runner-1)" ] \
     || _fail "a change to the suite itself did not move the key"
 
+# **Relocation does not change the key, and that is asserted here rather than
+# claimed in a comment.** The copy above holds only part of the read set, so
+# its key is a DIFFERENT key from the harness's — the copy is a subset, and a
+# subset hashes differently. What must not depend on the root is the answer
+# for the same bytes, so the whole read set is copied into a second root and
+# the two keys are compared.
+#
 # The copy names the same suite file, so the key is a function of the suite's
-# name and the bytes rather than of where the tree was found. That is what lets
-# the harness key against its own checkout and this suite against a scratch one
-# and get the same answer, which is the whole reason the override exists.
+# name and the bytes rather than of where the tree was found. That is what
+# lets the harness key against its own checkout and this suite against a
+# scratch one and get the same answer, which is the whole reason the override
+# exists.
+RELOCATED=$GUARDEN_FIXTURES/relocated
+mkdir -p "$RELOCATED"
+while read -r name; do
+    mkdir -p "$RELOCATED/$(dirname "$name")"
+    cp --preserve=mode "$GUARDEN_ROOT/$name" "$RELOCATED/$name"
+done <"$GUARDEN_FIXTURES/readset.list"
+RELOCATED_KEY=$(GUARDEN_LXC_ROOT="$RELOCATED" python3 "$CACHE_TOOL" key "$GOLDEN" \
+    "$RELOCATED/tests/$SUITE_NAME" declared runner-1)
+[ "$RELOCATED_KEY" = "$(key "$GOLDEN" "$SUITE" declared runner-1)" ] \
+    || _fail "the same bytes in a second root answered a different key, so the key depends on where the tree was found"
 
 # --- what the key covers, and what it costs ---------------------------------
 
@@ -410,10 +579,11 @@ printf '\n# the suite changed\n' >>"$TREE_COPY/tests/$SUITE_NAME"
 # rather than inferred from a digest: the package as a whole (ticket 309), the
 # module definitions whose templates render the units, the runner's own shell
 # helpers — a suite runs `tests/aptlock.sh` and `tests/failure_messages.sh`
-# beside `lib.sh`, so both are named like `lib.sh` and `lxc.sh` rather than
-# globbed (a glob of `tests/*.sh` would put every other suite in every key) —
-# the example services a suite installs as they are, and the tracked
-# `.env.schema` a suite resolves.
+# beside `lib.sh`, and every other file under `tests/` is a helper too, so
+# they are carried by the negated glob rather than named one by one (a plain
+# glob of `tests/*.sh` would put every other suite in every key) — the
+# example services a suite installs as they are, and the tracked
+# `.env.schema`.
 cache readset "$SUITE"
 assert_exit 0
 assert_stdout_has "src/guarden/loom.py"

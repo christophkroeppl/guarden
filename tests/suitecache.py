@@ -31,20 +31,45 @@ machine. Both come from `tests/lxc.sh` deciding the whole selection before it
 runs anything, so a key never depends on which of its neighbours hit or missed.
 
 The tree a suite reads is over-approximated, never narrowed below what is
-provable. `tests/lib.sh`, `tests/lxc.sh`, `tests/aptlock.sh`,
-`tests/failure_messages.sh`, `tests/*.py`, `fixtures/`, `modules/`, `packages/`,
-`tools/`, `examples/`, `src/guarden/**` and `pyproject.toml` (with
-`.env.schema`) are in every key, because a suite reaches those through helpers
-whose arguments cannot be resolved from outside — `stage_config` reads
-`fixtures/$1` and `$1` is a bare name in the suite, and `t370-apt-lock-wait.sh`
-runs `tests/aptlock.sh` beside `lxc.sh`. **The package is hashed whole rather
-than narrowed to an import closure** (ticket 309): the closure asked which
-modules the suite's text named, and a suite's result is not a function of that,
-so a src-only change could leave every inherited green standing over code
-nothing had re-run. A key that misses is worse than a key that hits too often,
-so what a suite executes is in and what it only quotes — `docs/` — is out. The
-suite's own file is added on top of all of that, so two suites are two read
-sets, and a suite that changed is run rather than inherited.
+provable. `fixtures/`, `modules/`, `packages/`, `tools/`, `examples/`,
+`src/guarden/**` and `pyproject.toml` are in every key, because a suite
+reaches those through helpers whose arguments cannot be resolved from
+outside — `stage_config` reads `fixtures/$1` and `$1` is a bare name in the
+suite. The root `.env.schema` is in every key as an over-approximation: the
+only reader is `t35-env-schema.sh`, which the runner does not select, so
+nothing in a machine run reads it, and carrying it costs one hash.
+
+**Everything under `tests/` that is not a suite is in every key**, and the
+predicate is the runner's own: `tests/lxc.sh` selects exactly
+`tests/t[0-9]*.sh`, so a file under `tests/` is a suite iff its name matches
+that, and the negation of that is every helper. `lib.sh`, `lxc.sh`,
+`aptlock.sh`, `failure_messages.sh` and the `*.py` helpers are covered
+because they exist, not because a list remembered them: naming four helpers
+was the same enumeration that lost ticket 309, one file class wide — a
+`tests/newhelper.sh` satisfied none of them and failed nothing. A suite's own
+file is excluded from that set and added by path, so two suites are two read
+sets and two digests, and a change to one suite moves that suite's key and no
+other.
+
+**The package is hashed whole rather than narrowed to an import closure**
+(ticket 309): the closure asked which modules the suite's text named, and a
+suite's result is not a function of that, so a src-only change could leave
+every inherited green standing over code nothing had re-run. A key that misses
+is worse than a key that hits too often, so what a suite executes is in and
+what it only quotes — `docs/` — is out.
+
+**A file's execute bit is in its row.** The tools under `tools/` are exec'd
+rather than read, so the same bytes without the execute bit is a different
+result — `Permission denied` where the suite expected an answer — and a
+committed `100755` to `100644` would move no key at all.
+
+**The developer's `.venv` is not a suite input and is not in the key.** It
+supplies the interpreter and the two libraries the renderer needs, so it can
+change what a suite runs against — but the runner's push leaves it behind,
+so the machine ran against the guest's own `python3-yaml` and
+`python3-jinja2` and never saw the developer's copy. A venv in the key would
+make every `pip install` invalidate every cached green, and it would
+describe a tree no suite ever reads.
 
 Usage:
 
@@ -71,16 +96,13 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-UNIVERSAL_FILES = (
-    "pyproject.toml",
-    ".env.schema",
-    "tests/lib.sh",
-    "tests/lxc.sh",
-    "tests/aptlock.sh",
-    "tests/failure_messages.sh",
-)
-UNIVERSAL_GLOBS = ("tests/*.py",)
+UNIVERSAL_FILES = ("pyproject.toml", ".env.schema")
 UNIVERSAL_TREES = ("fixtures", "modules", "packages", "tools", "examples", "src/guarden")
+# The runner's own notion of a suite: `tests/lxc.sh` selects exactly
+# `tests/t[0-9]*.sh`. Everything under `tests/` that is NOT one of those is a
+# helper the suites share, and it is in every key because it exists rather than
+# because a list remembered it.
+SUITE_FILE = re.compile(r"t[0-9].*\.sh")
 ABSOLUTE_TIME = re.compile(r"^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?")
 IDENTITY_FIELDS = ("instance", "pool", "snapshot", "created")
 LEDGER_SEP = "\t"
@@ -155,19 +177,59 @@ def files_under(root: Path, relative: str) -> list[str]:
     return found
 
 
+def helper_files(root: Path) -> list[str]:
+    """Every file under `tests/` that the runner does not select, as names relative to the tree.
+
+    The predicate is the runner's: `tests/lxc.sh` selects exactly
+    `tests/t[0-9]*.sh` — a direct child of `tests/` whose name starts with a
+    `t` and a digit — so the negation of that is every helper the suites
+    share. Naming them was the enumeration that lost ticket 309 one file class
+    wide: a `tests/newhelper.sh` satisfied no list and failed nothing.
+
+    A suite is excluded here and added by path in `read_set`, so the only
+    difference between two suites' read sets is their own file, and two suites
+    are two digests. A glob of `tests/*.sh` would have put every suite in
+    every key and made them one digest, which is the trap this replaces.
+    """
+    tests = root / "tests"
+    if not tests.is_dir():
+        return []
+    found = []
+    for path in sorted(tests.rglob("*")):
+        if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+            continue
+        if path.parent == tests and SUITE_FILE.fullmatch(path.name):
+            continue
+        found.append(str(path.relative_to(root)))
+    return found
+
+
 def read_set(root: Path, suite: Path) -> list[str]:
     paths: dict[str, None] = {str(suite.relative_to(root)): None}
     for relative in (*UNIVERSAL_FILES, *UNIVERSAL_TREES):
         for relative_path in files_under(root, relative):
             paths[relative_path] = None
-    for pattern in UNIVERSAL_GLOBS:
-        for path in sorted(root.glob(pattern)):
-            paths[str(path.relative_to(root))] = None
+    for relative_path in helper_files(root):
+        paths[relative_path] = None
     return sorted(paths)
 
 
 def tree_digest(root: Path, suite: Path) -> str:
-    rows = [f"{name}\0{digest((root / name).read_bytes())}" for name in read_set(root, suite)]
+    """The digest of the read set: each name with its bytes and its execute bit.
+
+    The mode is in the row because a file's bytes do not decide whether it can
+    be run: the tools under `tools/` are exec'd rather than read, so the same
+    bytes without the execute bit is a different result, and a committed
+    `100755` to `100644` would otherwise move no key at all. The bit is read
+    from the mode rather than from an access check, because a key must not
+    depend on who asks: the same tree has to answer the same key for the
+    runner and for the suite.
+    """
+    rows = []
+    for name in read_set(root, suite):
+        target = root / name
+        executable = "x" if target.stat().st_mode & 0o111 else "-"
+        rows.append(f"{name}\0{executable}\0{digest(target.read_bytes())}")
     return digest("\0".join(rows).encode())
 
 
