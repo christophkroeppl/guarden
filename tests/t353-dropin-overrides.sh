@@ -323,14 +323,11 @@ seed "$preview_staged/Containerfile" \
 run weedr service ingest dropin-preview/feature/x --from poke dropinprev@0000001
 assert_exit 0
 
-# **The service user's systemd manager has to be up before the build.**
+# **The service user's systemd manager has to be UP before the build.**
 #
-# A rootless podman build runs its `RUN` steps in a container, and it puts
-# that container in the **systemd sandbox cgroup** of the user running it —
-# which means it asks the service user's own manager for a cgroup. The
-# manager comes up on its own because linger is enabled, but it comes up
-# *asynchronously*: right after an ingest the uid exists and `/run/user/<uid>`
-# may not be there yet, and a build that runs in that window dies with
+# A rootless podman build puts its `RUN` steps in the systemd sandbox cgroup of
+# the user running it, so it asks that user's manager for a cgroup. A manager
+# that is down answers
 #
 #   error running container: from /usr/bin/crun creating container for
 #   [/bin/sh -c ...]: sd-bus call: Access denied as the requested operation
@@ -338,16 +335,27 @@ assert_exit 0
 #   Failed to add pause process to systemd sandbox cgroup: dial unix
 #   /run/user/<uid>/bus: connect: connection refused
 #
-# The first line is the sd-bus denial and the second is the reason: the
-# manager's bus was not there to be asked. So the wait is for the manager, and
-# it is the same premise t350 waits for before its probe.
+# **This service's uid was RECYCLED**: the removal above took `dropin-staging`
+# away, `users.destroy` stopped `user@<uid>.service` and freed the uid, and
+# the host allocated the same uid to this service — whose manager was never
+# started. That is a real guarden defect (ticket 322), and the suite works
+# around it here rather than papering over it: the manager is started, and
+# the wait is on the manager's OWN STATE, because `/run/user/<uid>` and its
+# bus socket outlive a dead manager and a directory check would pass on one.
 preview_uid=$(id -u dropin-preview)
-preview_runtime=/run/user/"$preview_uid"
+run systemctl start "user@$preview_uid.service"
+assert_exit 0
+preview_ready=0
 for _ in $(seq 1 30); do
-    [ -d "$preview_runtime" ] && break
+    state=$(systemctl is-active "user@$preview_uid.service" 2>/dev/null || true)
+    if [ "$state" = active ]; then
+        preview_ready=1
+        break
+    fi
     sleep 1
 done
-assert_file_exists "$preview_runtime"
+[ "$preview_ready" = 1 ] \
+    || _fail "the service user's manager user@$preview_uid.service is not active, and a rootless build asks it for a cgroup"
 
 run weedr service build dropin-preview
 assert_exit 0
