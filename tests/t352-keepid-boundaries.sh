@@ -345,9 +345,10 @@ assert_exit 0
 run weedr service start kidrootplain-staging
 assert_exit 0
 unit_rootplain=/var/lib/guarden/services/kidrootplain-staging/home/.config/containers/systemd/app.container
+pin_rootplain=/etc/containers/systemd/users/"$(id -u kidrootplain-staging)"/app.container.d/50-guarden-keepid.conf
 record_rootplain=$registry/kidrootplain-staging.toml
-[ "$(unit_line "$unit_rootplain")" = "none" ] \
-    || _fail "a USER root image that names no handoff renders $(unit_line "$unit_rootplain"), and it must render no line at all — the same answer the empty spelling gives"
+[ "$(unit_line "$pin_rootplain")" = "none" ] \
+    || _fail "a USER root image that names no handoff renders $(unit_line "$pin_rootplain"), and it must render no line at all — the same answer the empty spelling gives"
 assert_file_has "$record_rootplain" "owner_uid = 0"
 
 # --- fields that `isdigit` calls digits and `int()` refuses ------------------

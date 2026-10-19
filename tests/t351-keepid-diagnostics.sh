@@ -449,10 +449,10 @@ assert_exit 0
 
 run weedr service start kidexecpg-staging
 assert_exit 0
-unit_execpg=/var/lib/guarden/services/kidexecpg-staging/home/.config/containers/systemd/app.container
+pin_execpg=/etc/containers/systemd/users/"$(id -u kidexecpg-staging)"/app.container.d/50-guarden-keepid.conf
 record_execpg=$registry/kidexecpg-staging.toml
-[ "$(unit_line "$unit_execpg")" = "UserNS=keep-id:uid=2300,gid=2300" ] \
-    || _fail "an exec-form su-exec entrypoint naming user:group renders $(unit_line "$unit_execpg"), and the user it hands execution to is pguser with uid and gid 2300 in the image's own passwd — keep-id:uid=2300,gid=2300"
+[ "$(unit_line "$pin_execpg")" = "UserNS=keep-id:uid=2300,gid=2300" ] \
+    || _fail "an exec-form su-exec entrypoint naming user:group renders $(unit_line "$pin_execpg"), and the user it hands execution to is pguser with uid and gid 2300 in the image's own passwd — keep-id:uid=2300,gid=2300"
 assert_file_has "$record_execpg" "owner_uid = 2300"
 assert_file_has "$record_execpg" "owner_gid = 2300"
 # The silent root this fixture exists for: the exec form with a colon was
