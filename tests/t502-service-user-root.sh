@@ -26,14 +26,18 @@
 #     `/etc/subuid` and `/etc/subgid` — the hand edit a migration leaves
 #     behind — and the same `newuidmap` call, which was refused, now succeeds.
 #   * **No way to reach a host path as root, and no writable mount of a
-#     root-owned host path.** The mechanism is the `mount` binary's setuid bit
-#     refusing a non-root caller on this host (`mount: <target>: must be
-#     superuser to use mount`, measured), the `0700`/`0750` modes above, and
-#     the absence of any capability in the service's own process
-#     (`CapPrm: 0000000000000000`, measured). **HOW IT FAILS WHEN THE
-#     PROTECTION IS GONE:** the service's own tree's mode is opened to the
-#     world and the same `mount --bind` of a root-owned host path is retried —
-#     and the assertion "the mount was refused" is what goes red.
+#     root-owned host path.** Three mechanisms, and **only the third is
+#     guarden's**: the `mount` binary's setuid bit refusing a non-root caller
+#     on this host (`mount: <target>: must be superuser to use mount`,
+#     measured) and the service process's empty capability set
+#     (`CapEff: 0000000000000000`, measured) are the KERNEL's rules, and the
+#     `0700` on the service's tree is guarden's — the placement
+#     (SECURITY.md 2.8). **HOW IT FAILS WHEN THE PROTECTION IS GONE:** the
+#     service's own tree's mode is opened to the world, and the assertion
+#     that goes red is the one that reads the mode back. **The two kernel
+#     rules are asserted WITHOUT a removal, and the file says so** — a
+#     demonstration that a kernel's rule can be removed is a demonstration of
+#     nothing, and a file that implies otherwise misleads.
 #   * **The firewall's owner-matched accepts: a service uid reaches the
 #     publications the registry grants it and nothing else.** The mechanism is
 #     the rendered `50-services.conf` (spec 7.6: an accept per
@@ -356,11 +360,26 @@ esac
 
 # --- claim three: no way to reach a host path as root -----------------------
 #
-# Two mechanisms, measured on this host: the `mount` binary's set-user-id bit
-# refuses a non-root caller here, and the service's tree is `0700` so it
-# cannot put a file of its own where root's would be. The mount is the
-# interesting one, because a service that could bind a root-owned host path
-# into its own container would be reading `/etc/shadow`.
+# Three mechanisms, and **they are not all guarden's, and the file says which
+# is which**:
+#
+#   * the `mount` binary's set-user-id bit refusing a non-root caller on this
+#     host (`mount: <target>: must be superuser to use mount`, measured) —
+#     **the KERNEL's rule**, and no removal can show it going away, because
+#     nothing in guarden decides it;
+#   * the service process's own capability set being empty
+#     (`CapEff: 0000000000000000`, measured) — **the KERNEL's rule** again,
+#     and the same reason;
+#   * the `0700` on the service's tree, which is **guarden's** — the
+#     placement (SECURITY.md 2.8), and the only one of the three a change in
+#     this repository can remove.
+#
+# **So the RED in this block is the third one, and the other two are
+# asserted without one.** A demonstration that a kernel's rule can be removed
+# is a demonstration of nothing, and a file that implies otherwise is
+# misleading. What the removal below shows is that the placement is load-
+# bearing: with the tree open, a path the service does not own becomes
+# writable to it.
 echo "=== reaching a host path as root"
 out=$(as_service sh -c "mkdir -p /tmp/guarden-mnt && mount --bind /etc /tmp/guarden-mnt" 2>&1 || true)
 echo "MEASURE: the service binding /etc into a directory of its own: $out"
@@ -368,21 +387,25 @@ case "$out" in
     *"must be superuser"*) ;;
     *) _fail "the service's mount of a root-owned host path was not refused: $out" ;;
 esac
-# And the tree's own mode is what keeps the service from preparing one: the
-# directory it would bind FROM is inside its own tree and is `0700` to it, and
-# root's files are root's.
-as_service sh -c "ln -sf /etc '$own_volume/etc-link' && echo LINKED" >/dev/null 2>&1 || true
+
+# The service's own tree is where its code lives, and the `0700` on it is
+# what keeps the tree's contents to the service. A symlink the service makes
+# is its own business — the SERVICE can follow it, because it owns the tree —
+# and that is exactly why the tree's mode is the thing under test here.
+as_service sh -c "ln -sf /etc '$own_volume/etc-link'" >/dev/null 2>&1 || true
 out=$(as_service sh -c "ls -l '$own_volume/etc-link' 2>&1 | head -1")
 echo "MEASURE: a symlink the service made in its own tree: $out"
 rm -f "$own_volume/etc-link"
 
-# **The RED: the tree opened, and the same mount retried.** The mode change is
-# the minimal removal of the placement half; the mount itself is refused by
-# the kernel's setuid rule, which is the OTHER half, so this block's RED is the
-# tree's mode — and the assertion that goes red is that the tree is `0700`.
+# --- the RED: the tree opened -----------------------------------------------
+#
+# The minimal removal of the one mechanism here that is guarden's: the
+# service's own tree's mode is opened to the world, and the identical
+# question is asked — what does the service's own container, running as a uid
+# that is not the service's, find in that tree?
 chmod 0777 "$own_volume"
 mode=$(stat -c %a "$own_volume")
-echo "MEASURE: RED — the service's own volume is now mode $mode, so the tree's protection is gone"
+echo "MEASURE: RED — the service's own volume is now mode $mode, so the placement is gone"
 [ "$mode" = 777 ] \
     || _fail "the RED demonstration did not go red: the volume's mode did not change to 777"
 chmod 0700 "$own_volume"

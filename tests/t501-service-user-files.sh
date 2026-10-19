@@ -12,7 +12,7 @@
 #     and `/etc/guarden/creds/` is `0700 root` (spec 2.1) with its blobs `0600`.
 #     A service uid is in NEITHER group — `id shelf-staging` names only its own
 #     group — and is not the owner, so it can neither write nor unlink any of
-#     them. **Placemement is the whole mechanism** (SECURITY.md 2.8): none of
+#     them. **Placement is the whole mechanism** (SECURITY.md 2.8): none of
 #     these files is inside a service's own tree, so there is no directory the
 #     service user owns from which to unlink them.
 #     **HOW IT FAILS WHEN THE PROTECTION IS GONE:** the file's own mode is
@@ -20,9 +20,10 @@
 #     write is retried, and it now succeeds — so the assertion goes red.
 #   * **the soil state.** `/var/lib/guarden/soil/` is `0750 root:guarden`
 #     (spec 2.1) and holds the btrfs conversion state and the reboot marker
-#     (`src/guarden/hostprep.py:79-87` is the row; `_conversion_marker` at
-#     `hostprep.py:1144` is the reader). A service uid cannot write it, so a
-#     service cannot fake a converged host or arm a reboot it did not ask for.
+#     (`src/guarden/hostprep.py:86` is the row — the STORAGE phase's own
+#     table — and `_conversion_marker` at `hostprep.py:1143` is the reader).
+#     A service uid cannot write it, so a service cannot fake a converged host
+#     or arm a reboot it did not ask for.
 #     **HOW IT FAILS WHEN THE PROTECTION IS GONE:** the directory's mode is
 #     `chmod 0777`ed, the identical write is retried, and it now succeeds.
 #   * **another service's files.** `/var/lib/guarden/services/<name>` and
