@@ -30,6 +30,11 @@ run soil packages --apply
 assert_not_rejected
 run soil install --apply
 assert_not_rejected
+# The firewall phase is the one that installs `guarden-firewall.service`,
+# and it is what loads what the mutator renders: without it the render
+# below writes `50-services.conf` and warns that nothing loaded it.
+run soil firewall --apply
+assert_not_rejected
 
 # One route and no `needs:`, so nothing here is about the edge: the preview
 # track is `kind = "instance"` in the shipped table and ungated, so the gate

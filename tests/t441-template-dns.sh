@@ -29,6 +29,11 @@ run soil packages --apply
 assert_not_rejected
 run soil install --apply
 assert_not_rejected
+# The firewall phase is the one that installs `guarden-firewall.service`,
+# and it is what loads what the mutator renders: without it the render
+# below writes `50-services.conf` and warns that nothing loaded it.
+run soil firewall --apply
+assert_not_rejected
 
 services=/etc/guarden/firewall/50-services.conf
 
