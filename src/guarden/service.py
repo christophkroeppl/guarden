@@ -1212,21 +1212,38 @@ def _strlist(value) -> list[str]:
 # image's own passwd rather than trusted as a number.
 HANDOFF = re.compile(r"(?:^|[\s;|&])(?:gosu|su-exec)\s+([A-Za-z_][A-Za-z0-9_.\-]*|\d+)")
 
+# The same command and the same user as TWO argv elements, which is how an OCI
+# image spells them: `ENTRYPOINT ["su-exec", "app"]` puts them in separate
+# elements, so a scan that looks for `gosu <user>` inside one word never sees
+# them together — the probe answered "no handoff" without having looked and
+# recorded root as an answer (t351's kidexec). The next element is taken only
+# when it is the token `HANDOFF` would have captured, so a handoff command
+# followed by something that is not a user (`gosu --help`, a stray `--`) is
+# skipped rather than answered with a name the image's passwd will refuse.
+HANDOFF_COMMANDS = frozenset({"gosu", "su-exec"})
+HANDOFF_USER = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_.\-]*|\d+)")
+
 
 def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str | None:
     """The user the entrypoint hands execution to, and only that (ADR-0019).
 
     Asked of the words of `Entrypoint`/`Cmd` first — `sh -c 'exec gosu app …'`
-    carries the name without opening anything — and then of the script the
-    entrypoint names when that name ends in `.sh`, read by running the image as
-    container root with its entrypoint overridden. A passwd row alone is never
-    the answer: an entrypoint that is the application itself declares nothing
-    to hand off to, and choosing a row would pin the line onto a uid nobody
-    asked for. None means "no defensible user", which the caller records as
-    root — a script that could not be READ raises instead, because that is the
-    host failing to answer and not an answer of "nobody".
+    carries the name inside one element, and the exec form
+    `["su-exec", "app", …]` carries it as the word after a bare handoff
+    command — and then of the script the entrypoint names when that name ends
+    in `.sh`, read by running the image as container root with its entrypoint
+    overridden. A passwd row alone is never the answer: an entrypoint that is
+    the application itself declares nothing to hand off to, and choosing a row
+    would pin the line onto a uid nobody asked for. None means "no defensible
+    user", which the caller records as root — a script that could not be READ
+    raises instead, because that is the host failing to answer and not an
+    answer of "nobody".
     """
-    for word in argv:
+    for index, word in enumerate(argv):
+        if word in HANDOFF_COMMANDS:
+            if index + 1 < len(argv) and HANDOFF_USER.fullmatch(argv[index + 1]):
+                return argv[index + 1]
+            continue
         found = HANDOFF.search(word)
         if found:
             return found.group(1)
