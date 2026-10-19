@@ -1,5 +1,18 @@
 # 330 — the service templates are in the repo but never installed: `weedr service create` has nothing to choose from
 
+**RESOLVED (`851920a`, `4d67a2a`, 2026-10-19): the templates now ship with the
+program, `soil install` installs them, and `weedr service create --template`
+works.** The templates moved from `examples/services/` to
+`src/guarden/templates/services/`, so the install phase's existing walk picks
+them up and the existing check already compares them recursively — no new item
+was needed. `t131-service-templates.sh` asserts both the installed set and the
+verb, on a fresh VM:
+
+    MEASURE: the installed template set: postgres vaultwarden
+    MEASURE: create --env staging --template postgres: created
+    MEASURE: the units it installed: 1
+    MEASURE: the template's image reached the service
+
 Blockers: none. Found 2026-10-19 while correcting the manual-fleet deployment
 record (`deploy-fresh-manual-fleet.md`), whose commands named verbs that do
 not exist — which sent me looking for the real manual path.
