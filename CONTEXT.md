@@ -184,6 +184,31 @@ measured: `soil install` derives it from the `-g` in `[network] pasta_options` a
 `guarden.toml`, so it is a constant no host's route can drift (ADR-0018).
 _Avoid_: host-gateway, host.containers.internal, publication
 
+**probe**:
+The one reading of an image's own user, done at a start that has no answer yet: `podman image
+inspect` for `Config.User`, the image's own `/etc/passwd` and `/etc/group` for the numbers that
+declaration names, and the entrypoint's own words for the user it hands execution to. The
+answer is a pair — a uid and a gid — and it is recorded, not applied: nothing is chowned, and
+the pair becomes a line in the unit.
+_Avoid_: detection, scan, inspector
+
+**owner**:
+The uid and gid an image's user was read as, and the record fields that hold them:
+`owner_uid` and `owner_gid` for a service whose units name one image, plus `owner_image` (the
+image the pair was read from) and — for a service whose units name more than one image — an
+`owner_units` table of per-unit image/uid/gid. The pair is true of the image it was read from:
+an image that changed is the probe's condition again, and a build that re-tags a reference
+takes the answer away.
+_Avoid_: pin, uid, mapping
+
+**keep-id**:
+The user-namespace line guarden writes into a unit, `UserNS=keep-id:uid=…,gid=…`: it moves
+the probed pair onto the service identity, so the container's writes land on the service's
+tree instead of in its subuid band. It is guarden's own line and the only one that may carry
+the directive — a repository's `Userns=`/`UserNS=` is refused — and it is rendered from the
+record, never hand-written.
+_Avoid_: userns, idmap, chown
+
 ## Programs
 
 Garden names are for guarden's own programs and nothing else.
