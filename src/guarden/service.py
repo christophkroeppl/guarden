@@ -788,17 +788,33 @@ def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
 
 
 def _reap_staging(parent: Path) -> None:
-    """Take the staging trees no run is holding any more.
+    """Take the staging trees whose creator run no longer answers — best effort.
 
     The `rmtree` this replaces deleted `render-source/<source>` whatever another
-    run was doing with it — the whole of the race — and this keeps only the half
-    of that behaviour nothing can be reading. A run's tree is named after the
-    pid that staged it, so a tree whose creator no longer answers is a run that
-    was killed before its own `finally` could clean up after it, and an entry
-    that is not `<pid>-<random>` at all is not a run's tree but a leftover of
-    the shared layout this replaces (where `render-source/<source>` *was* the
-    tree). A live run answers for its pid, so a concurrent run's tree is never a
-    candidate: `kill(pid, 0)` answers across uids, so `EPERM` means alive too.
+    run was doing with it — the whole of the race — and this keeps only trees
+    whose named creator is gone: a run's tree is named after the pid that staged
+    it, so while that pid answers, its tree is never a candidate (`kill(pid, 0)`
+    answers across uids, so `EPERM` means alive too), and an entry that is not
+    `<pid>-<random>` at all is a leftover of the shared layout this replaces
+    (where `render-source/<source>` *was* the tree).
+
+    **The pid check is about the creator and proves nothing about who is reading
+    the tree.** The reader is not the run: `units.render_units` runs `loom` under
+    `runuser`, from `tool.call`'s bare `subprocess.run` — no `start_new_session`,
+    no timeout, nothing tying the child's life to the parent's — so a mutator
+    SIGKILLed mid-render (the OOM killer is the realistic one; it takes the
+    parent and leaves the child) leaves that `loom` orphaned and still reading a
+    tree whose creator pid no longer answers, and the next run to stage from
+    this source takes the tree from under it. The per-invocation tree closes the
+    race ticket 301 names — one live run `rmtree`ing the tree another live run
+    holds — and this is what remains after it: an unclean parent death first,
+    never a concurrent run.
+
+    The reap is deliberately one-sided when it cannot decide either way, which
+    makes it best effort in both: a creator pid the kernel has handed to some
+    long-lived process since keeps its dead run's tree here for good (nothing
+    else bounds this directory) — the better of the two failures, because the
+    other one is deleting a tree someone is reading.
     """
     for entry in list(parent.iterdir()):
         creator, sep, _rest = entry.name.partition("-")
@@ -867,7 +883,8 @@ def _render_source(directory: Path) -> Iterator[Path]:
     name outside that table, so it would be a spec change to the contract; it
     would serialise two independent adds behind one whole render to protect a
     tree nothing keeps; and it would still leave a killed run's tree behind,
-    which is what `_reap_staging` answers for.
+    which is what `_reap_staging` takes over — best effort, and on the terms
+    its own docstring states.
     """
     if paths.SERVICES not in directory.parents:
         yield directory
