@@ -770,6 +770,11 @@ def _start(args) -> int:
             "nothing was installed for it and there is nothing that could be running",
             errors.HOST_NOT_AS_ASSUMED,
         )
+    # ADR-0019: the probe, the record and guarden's own `UserNS=keep-id` line
+    # come before the units are handed to systemctl — the line has to be in the
+    # unit the generator reads, and `start_units` reloads the manager after it
+    # is written.
+    service.ensure_owner_line(resolved.name, resolved.escaped_ref)
     service.start_units(resolved.name, resolved.escaped_ref)
     sys.stdout.write(f"started {resolved.name}\n")
     return 0
@@ -873,9 +878,55 @@ def _build(args) -> int:
             errors.HOST_NOT_AS_ASSUMED,
         )
 
+    # A rebuilt reference is a different image under the same tag, and the
+    # pair the record holds is only true of the image it was read from: left
+    # answered, the next render writes the OLD user's pair into a unit whose
+    # container now runs the NEW user, and that uid's writes land in the
+    # service's subuid band (ticket 277) while the record and ADR-0019's
+    # "an image that changed is the probe's condition again" both claim the
+    # opposite. The image changes here, so the answer goes here.
+    _invalidate_owner(resolved.name, built)
+
     for ref in built:
         sys.stdout.write(f"{ref}\n")
     return 0
+
+
+def _invalidate_owner(name: str, references: list[str]) -> None:
+    """Take the probe's answer away from a rebuilt image, so the next start is
+    the probe's condition again for the units that name it.
+
+    `owner_image` records the REFERENCE and the build re-tags it, which is
+    why the reference is not an anchor: whatever the record holds for one of
+    `references` was read from the image that tag used to point at. Under the
+    registry lock and re-read inside it, the way every other registry writer
+    does it (spec 3.5) — a start probing this record must not have its answer
+    overwritten by a copy read before the build finished.
+
+    Two shapes, matching what the record holds. The scalar anchor goes whole:
+    `owner_uid`, `owner_gid` and `owner_image` are ONE answer, and a record
+    missing the uid is the probe's condition for every image. A per-unit entry
+    goes only for the image it names, so a service whose other unit names an
+    untouched image keeps that pair — and the probe's plan then asks for the
+    rebuilt one alone.
+    """
+    with conf.lock("registry"):
+        record = registry.load(name)
+        if record is None:
+            return
+        stale = set(references)
+        touched = False
+        if record.owner_image in stale:
+            record.owner_uid = None
+            record.owner_gid = None
+            record.owner_image = None
+            touched = True
+        for stem, entry in list(record.owner_units.items()):
+            if entry.image in stale:
+                del record.owner_units[stem]
+                touched = True
+        if touched:
+            registry.save(record, (0, users.group_id(service.GUARDEN_GROUP)))
 
 
 def _secret_set(args) -> int:

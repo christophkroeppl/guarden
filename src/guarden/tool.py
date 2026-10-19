@@ -38,14 +38,28 @@ class Result:
 def call(argv: list[str] | tuple[str, ...], stdin: str | None = None,
          cwd: str | Path | None = None) -> Result:
     log.debug("ran: %s", " ".join(argv))
-    finished = subprocess.run(
-        list(argv),
-        input=stdin,
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=cwd,
-    )
+    try:
+        finished = subprocess.run(
+            list(argv),
+            input=stdin,
+            capture_output=True,
+            text=True,
+            # The encoding is named rather than left to the environment: every
+            # file guarden reads is read as UTF-8, and a tool's answer that
+            # depends on the caller's locale is an answer that changes with it —
+            # under `LANG=C` the same valid output would be refused as ASCII.
+            encoding="utf-8",
+            check=False,
+            cwd=cwd,
+        )
+    except UnicodeDecodeError as exc:
+        # A tool's answer is read as text, so bytes no codec accepts are an
+        # answer this program cannot have: one line naming the tool, the same
+        # refusal `unitsource.parse` makes for a unit file it cannot read, and
+        # never a UnicodeDecodeError out of subprocess (spec 1.2).
+        raise errors.GuardenError(
+            f"{argv[0]} printed output that is not UTF-8: {errors.oneline(str(exc))}"
+        ) from None
     return Result(tuple(argv), finished.returncode, finished.stdout, finished.stderr)
 
 

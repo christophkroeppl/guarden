@@ -101,6 +101,13 @@ refuse_quadlet "BindReadOnlyPaths" "BindReadOnlyPaths=/etc/shadow"
 refuse_quadlet "Mount" "Mount=type=bind,source=/,destination=/host"
 refuse_quadlet "Device" "Device=/dev/dri"
 refuse_quadlet "Userns" "Userns=keep-id"
+# The same directive in quadlet's OWN spelling (podman-systemd.unit(5) writes
+# `UserNS=`), which is the spelling a repository copies out of the manual and
+# the one guarden's own line is written in — so refusing it here is what keeps
+# every `UserNS=` a generated unit carries the renderer's (ADR-0019). The two
+# spellings are two lookups (unitsource's table is case-exact), and only the
+# `Userns=` one was asserted before this line.
+refuse_quadlet "UserNS" "UserNS=keep-id:uid=200,gid=210"
 
 # A unit source naming a backend other than pasta is refused with the key named.
 # On the Compose path `network_mode` is *replaced* rather than refused, which is

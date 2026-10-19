@@ -24,7 +24,9 @@ renamed is a data problem and not a cosmetic one.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -37,14 +39,17 @@ from guarden import (
     edges,
     errors,
     gate,
+    images,
     names,
     paths,
     previews,
     projects,
     publications,
     registry,
+    render,
     tool,
     units,
+    unitsource,
     users,
     volumes,
 )
@@ -942,6 +947,613 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
     if not directory.is_dir():
         return []
     return sorted(path.stem for path in directory.glob("*.container"))
+
+
+def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
+    """Probe what the record does not answer yet, record it, and put guarden's
+    `UserNS=` line into the units before they are started (ADR-0019).
+
+    `weedr service start` calls this in front of `start_units`. A first start
+    probes each DISTINCT image the installed units name, as the service user,
+    writes the answers into the registry — `owner_uid`/`owner_gid` for a
+    service whose units name one image, those plus a per-unit `owner_units` map
+    when they name several — and re-renders so every unit carries the
+    `UserNS=keep-id:uid=...,gid=...` of ITS OWN image before the container it
+    is about to start. The line is rendered, never hand-written, so the refusal
+    of a repository's own `Userns=` is untouched (spec 6.3), and a unit whose
+    image cannot be read or resolved raises the probe's one line rather than
+    being skipped.
+
+    A later start finds every unit answered and does not probe again, and
+    re-renders only when an installed unit does not hold exactly the line the
+    record renders for it — so the line is stable across starts, re-renders and
+    re-ingests, an edited record is rendered through rather than overwritten by
+    a second probe, a unit a re-ingest added (or an image that changed) is the
+    probe's condition again, and a record with the probe removed is probed
+    again.
+    """
+    record = registry.load(name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{name} has no registry entry, so there is nothing to start",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    plan = _owner_plan(name, record, escaped_ref)
+    if plan:
+        probed = {reference: probe_image(name, record, reference) for reference in plan}
+        with conf.lock("registry"):
+            current = registry.load(name)
+            if current is None:
+                raise errors.GuardenError(
+                    f"{name} lost its registry entry while its image user was being probed",
+                    errors.HOST_NOT_AS_ASSUMED,
+                )
+            _record_owners(current, name, escaped_ref, probed)
+            registry.save(current, (0, users.group_id(GUARDEN_GROUP)))
+        record = current
+    unit_images = _installed_images(name, escaped_ref)
+    for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
+        unit = unitsource.parse(path)
+        # A pin and a source's own `User=` cannot both decide the container's
+        # user — the line maps the probed pair onto the service identity while
+        # `User=` names the uid the container runs as, and a uid that is not
+        # the pair is one the pin maps nowhere — so the refusal happens here
+        # as well as in the render: this is the path that answers the start,
+        # and it answers with the input code rather than through the
+        # renderer's exit plumbing. It is asked per unit, because
+        # the line is per unit: a service whose other unit is pinned does not
+        # take this unit's `User=` away.
+        pinned = render.owner_line(record, unit.stem(), unit_images[unit.stem()])
+        if pinned is not None:
+            render.refuse_pinned_user(unit, pinned, f"{name}: the unit {path.name}")
+    if not _carries_owner_line(name, escaped_ref, record):
+        units.install(_unit_source(name, record, escaped_ref), name, escaped_ref)
+
+
+# The spellings of one declaration: no `USER` at all, the number, and the name.
+# All three say "this container runs its entrypoint as container root", so all
+# three take the probe's root row and no other — a group part cannot make a
+# root declaration non-root. Reading `root` through the passwd row while `0`
+# took the entrypoint's handoff was two paths for one declaration, and the
+# second path recorded root without ever asking the entrypoint who it hands
+# off to (ADR-0019's Consequences).
+ROOT_DECLARATIONS = frozenset({"", "0", "root"})
+
+
+def _is_root_declaration(declared: str) -> bool:
+    """Whether `Config.User` declares container root, in any of its spellings."""
+    return declared.partition(":")[0] in ROOT_DECLARATIONS
+
+
+def _installed_images(name: str, escaped_ref: str | None) -> dict[str, str]:
+    """Every installed unit and the image it names, keyed by unit.
+
+    The probe's question is per unit (ADR-0019): two units of one service may
+    name two images, and each image's user is its own answer, so this is the
+    lookup the plan and the record are both built from — not the first file the
+    directory hands back. A unit that names no image is answered the reference
+    its own build tags (images.reference_for), which is the fallback the
+    single-image probe gave the whole directory.
+    """
+    found: dict[str, str] = {}
+    for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
+        unit = unitsource.parse(path)
+        declared = unit.one("Container", "Image")
+        found[unit.stem()] = (
+            declared.strip() if declared and declared.strip() else images.reference_for(name)
+        )
+    return found
+
+
+def _owner_plan(name: str, record, escaped_ref: str | None) -> list[str]:
+    """The images a probe still owes this record, and `[]` when it owes none.
+
+    Not probed at all (`owner_uid is None`) is every distinct image in the
+    directory; after that, only the units the record does not answer: one it
+    holds no entry for, or one whose `Image=` has changed since its pair was
+    read from that image.
+    """
+    unit_images = _installed_images(name, escaped_ref)
+    if record.owner_uid is None or record.owner_gid is None:
+        return sorted(set(unit_images.values())) or [images.reference_for(name)]
+    return sorted(
+        {image for stem, image in unit_images.items() if record.answer_for(stem, image) is None}
+    )
+
+
+def _record_owners(current, name: str, escaped_ref: str | None,
+                   probed: dict[str, tuple[int, int]]) -> None:
+    """Write the probe's answers into the record: the service-level anchor and,
+    when the units name more than one image, the per-unit map the renderer
+    answers each unit from (ADR-0019).
+
+    Two shapes on purpose. A service whose units name one image keeps exactly
+    the record it has always had — `owner_uid`/`owner_gid`, the drift anchor
+    (ticket 277) and the field an operator edits by hand — plus `owner_image`,
+    so a unit that later names another image is the probe's condition again
+    rather than a unit that pair answers. Only a service whose units DISAGREE
+    grows `owner_units`, and its anchor stays the first unit's pair, so the
+    single-number fields never disappear and never change meaning.
+    """
+    unit_images = _installed_images(name, escaped_ref)
+    pairs: dict[str, tuple[str, int, int]] = {}
+    for stem, image in sorted(unit_images.items()):
+        if image in probed:
+            uid, gid = probed[image]
+        else:
+            held = current.answer_for(stem, image)
+            if held is None:
+                raise errors.GuardenError(
+                    f"{name}: the registry entry holds no probed image user for the unit "
+                    f"{stem} after the probe, so that unit's line has no source",
+                    errors.HOST_NOT_AS_ASSUMED,
+                )
+            uid, gid = held
+        pairs[stem] = (image, uid, gid)
+    if pairs and len({image for image, _, _ in pairs.values()}) > 1:
+        image, uid, gid = pairs[sorted(pairs)[0]]
+        current.owner_uid, current.owner_gid = uid, gid
+        current.owner_image = image
+        current.owner_units = {
+            stem: registry.OwnerUnit(image=owned, uid=owned_uid, gid=owned_gid)
+            for stem, (owned, owned_uid, owned_gid) in sorted(pairs.items())
+        }
+        return
+    if pairs:
+        image, uid, gid = next(iter(pairs.values()))
+    else:
+        # No unit installed at all: the reference this service's build tags,
+        # which is the answer the single-image probe gave a directory with no
+        # `Image=` in it.
+        image = images.reference_for(name)
+        uid, gid = probed[image]
+    current.owner_uid, current.owner_gid = uid, gid
+    current.owner_image = image
+    current.owner_units = {}
+
+
+def probe_image(name: str, record, reference: str) -> tuple[int, int]:
+    """The uid and gid THIS image declares, read at first start — one image at
+    a time, because a service's units may name several (ADR-0019).
+
+    `podman image inspect` gives `Config.User` — a number, a `uid:gid`, a name,
+    or nothing — and every shape is resolved by ONE table (ADR-0019):
+
+        `Config.User`     the answer
+        ----------------  --------------------------------------------------
+        empty             the entrypoint's handoff, else (0, 0)
+        `0`, `root`       the same row: one declaration, one path
+        a number          that uid; its gid from `:gid`, its passwd row, or 0
+        a name            that passwd row, then `:group` or the row's own gid
+
+    The last two rows read the image's OWN `/etc/passwd` and `/etc/group`, by
+    running the image as container root: a probe that started the container as
+    the declared user could not answer the one case that matters, an image
+    whose declared user does not exist in it. A missing image is pulled first,
+    once, because the start that asked for it needs the image either way.
+
+    Exit `1` when the image is not on the host and cannot be pulled — the
+    filesystem — and `2` when the image names a user or group it does not
+    carry, or a uid or gid field of those files is not the number it has to
+    be: the declaration is the input, and it is rejected where it is
+    visible. Every one of these is one line naming the service (spec 1.2).
+    """
+    user, entrypoint, command = _image_config(name, record, reference)
+    declared = user
+    if _is_root_declaration(declared):
+        # The stock postgres and alpine shape, and the two spellings of it: no
+        # `USER` at all, `USER 0`, and `USER root` are one declaration — this
+        # container runs its entrypoint as container root — so all three take
+        # this row. The answer is the handoff the entrypoint names (the app
+        # user a gosu or su-exec would switch to) and never a passwd row picked
+        # by itself: every row of a base image is a system account, and a pin
+        # on one would put init on a uid the application never asked for — on
+        # an image with no `USER` line the pin IS what pid 1 runs as (measured,
+        # t351: 2000 under `keep-id:uid=2000`), and on `USER root` the line
+        # would map a number the entrypoint drops away from while init stays
+        # root (measured, t352: pid 1 = 0 under `keep-id:uid=3000`). Either
+        # way the application never asked for that account. Nothing defensible
+        # falls out, and this is the record for it:
+        # container root, which the default map already moves onto the service
+        # identity, so no line is rendered and the service runs exactly as it
+        # did before ADR-0019 (the keep-id map for uid=0 was measured to carry
+        # only the pinned pair, which would stop an entrypoint that drops
+        # privileges rather than fix its owner).
+        handoff = _entrypoint_user(name, record, reference, [*entrypoint, *command])
+        if handoff is None:
+            return (0, 0)
+        declared = handoff
+    uid_text, separator, gid_text = declared.partition(":")
+    if _is_number(uid_text):
+        uid = int(uid_text)
+        if separator:
+            if _is_number(gid_text):
+                return (uid, int(gid_text))
+            # A numeric uid with a name for its group. The group database is
+            # the only one this row reads: /etc/passwd is not opened for a
+            # `uid:groupname` declaration, which is one `podman run` per probe
+            # saved on the shape that declares its group by name.
+            group = _image_file(name, record, reference, "/etc/group")
+            if group is None:
+                raise _cannot_run(name, record, reference, gid_text)
+            found = _named(group, gid_text)
+            if found is None:
+                raise _no_such_group(name, reference, gid_text)
+            where = f"the gid of the group {gid_text!r} in /etc/group"
+            return (uid, _number(name, reference, found[2], where))
+        passwd = _image_file(name, record, reference, "/etc/passwd")
+        if passwd is None:
+            # The read FAILED, which is not "this uid has no passwd row": the
+            # row is what says whether the image carries one, and a file the
+            # host could not read leaves the question unanswered (spec 1.2).
+            raise _cannot_run(name, record, reference, declared)
+        entry = _uid_entry(passwd, uid)
+        if entry is not None:
+            where = f"the gid of uid {uid} in /etc/passwd"
+            return (uid, _number(name, reference, entry[3], where))
+        # A number the image's passwd does not carry is what podman runs the
+        # container with a gid of 0 for, and the line has to map the gid the
+        # container will actually have.
+        return (uid, 0)
+    # A name: the image's own databases decide both numbers.
+    passwd = _image_file(name, record, reference, "/etc/passwd")
+    if passwd is None:
+        raise _cannot_run(name, record, reference, declared)
+    entry = _named(passwd, uid_text)
+    if entry is None:
+        raise errors.GuardenError(
+            f"{name}: the image {reference} declares the user {declared!r}, which its "
+            "/etc/passwd does not name",
+            errors.REJECTED_INPUT,
+        )
+    uid = _number(name, reference, entry[2], f"the uid of the user {uid_text!r} in /etc/passwd")
+    if not separator:
+        where = f"the gid of the user {uid_text!r} in /etc/passwd"
+        return (uid, _number(name, reference, entry[3], where))
+    if _is_number(gid_text):
+        return (uid, int(gid_text))
+    group = _image_file(name, record, reference, "/etc/group")
+    if group is None:
+        raise _cannot_run(name, record, reference, gid_text)
+    found = _named(group, gid_text)
+    if found is None:
+        raise _no_such_group(name, reference, gid_text)
+    where = f"the gid of the group {gid_text!r} in /etc/group"
+    return (uid, _number(name, reference, found[2], where))
+
+
+def _cannot_run(name: str, record, reference: str, declared: str) -> errors.GuardenError:
+    """The image could not be run to resolve the name it declares: the host
+    cannot execute what it is being asked about (spec 1.2, exit 1)."""
+    return errors.GuardenError(
+        f"{name}: the image {reference} declares {declared!r} and could not be run to "
+        f"resolve it",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
+def _no_such_group(name: str, reference: str, group: str) -> errors.GuardenError:
+    return errors.GuardenError(
+        f"{name}: the image {reference} declares the group {group!r}, which its "
+        "/etc/group does not name",
+        errors.REJECTED_INPUT,
+    )
+
+
+def _is_number(value: str) -> bool:
+    """Whether a uid or gid field is a number — THE predicate, the one every
+    field the resolver reads goes through: both halves of `Config.User` and
+    every uid/gid field of the image's own `/etc/passwd` and `/etc/group`.
+
+    `isdecimal`, not `isdigit`: every decimal digit is one `int()` accepts
+    (`int('٣')` is 3), while `isdigit` also counts the superscripts and
+    fractions `int()` refuses — `'²'.isdigit()` is True and `int('²')`
+    raises ValueError. A guard that is a strict superset of the `int()` behind
+    it lets a field through the guard and kills it in the conversion, which is
+    what an image-controlled field did: a passwd uid of `²` walked out of
+    `weedr service start` as a traceback instead of the refusal it is
+    (measured, t352).
+    """
+    return value.isdecimal()
+
+
+def _number(name: str, reference: str, value: str, where: str) -> int:
+    """One uid or gid field read out of the image's OWN passwd or group.
+
+    Every one of them is a field of a file the image wrote, so a field that is
+    not a number is the image's declaration rejected where it is visible: an
+    `int()` allowed to raise instead walks out of the probe as a traceback, and
+    the probe promises one line naming the service (spec 1.2). The check is
+    `_is_number` and not a `try`, because the same predicate decides which
+    fields the resolver treats as numbers at all — and while that predicate
+    was `isdigit` the equivalence was false, `isdigit` being a superset of
+    what `int()` takes (see `_is_number`).
+    """
+    if not _is_number(value):
+        raise errors.GuardenError(
+            f"{name}: the image {reference} carries {value!r} as {where}, and a uid "
+            "or a gid is a number",
+            errors.REJECTED_INPUT,
+        )
+    return int(value)
+
+
+def _named(document: str, name: str) -> list[str] | None:
+    """A passwd or group record by its name, or `None` when the databases do
+    not carry one."""
+    for line in document.splitlines():
+        fields = line.split(":")
+        if len(fields) >= 3 and fields[0] == name:
+            return fields
+    return None
+
+
+def _uid_entry(passwd: str, uid: int) -> list[str] | None:
+    for line in passwd.splitlines():
+        fields = line.split(":")
+        if len(fields) >= 4 and fields[2] == str(uid):
+            return fields
+    return None
+
+
+def _image_config(name: str, record, reference: str) -> tuple[str, list[str], list[str]]:
+    """`Config.User`, `Config.Entrypoint` and `Config.Cmd` from the service
+    user's own store, pulling once if the image is not there yet.
+
+    The whole `inspect` document rather than a `--format` template: the three
+    fields are three shapes (a string and two lists) and JSON is the one
+    spelling that carries all three without the template's own escaping
+    standing between the value and the reader. All three from one call because
+    the empty-user case needs the other two."""
+    result = _podman(name, record, "image", "inspect", reference)
+    if not result.ok:
+        pull = _podman(name, record, "pull", reference)
+        if not pull.ok:
+            raise errors.GuardenError(
+                f"{name}: the image {reference} is not in {name}'s podman store and podman "
+                f"pull failed: {_detail(pull)}",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        result = _podman(name, record, "image", "inspect", reference)
+        if not result.ok:
+            raise errors.GuardenError(
+                f"{name}: podman could not read {reference} after pulling it: {_detail(result)}",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+    try:
+        document = json.loads(result.stdout)
+    except ValueError as exc:
+        raise errors.GuardenError(
+            f"{name}: podman image inspect {reference} answered a document that is not JSON: "
+            f"{errors.oneline(str(exc))}",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    items = document if isinstance(document, list) else [document]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        config = item.get("Config") or {}
+        if not isinstance(config, dict):
+            continue
+        user = config.get("User")
+        return (
+            user.strip() if isinstance(user, str) else "",
+            _strlist(config.get("Entrypoint")),
+            _strlist(config.get("Cmd")),
+        )
+    raise errors.GuardenError(
+        f"{name}: podman image inspect {reference} carries no Config to read a user from",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
+def _strlist(value) -> list[str]:
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return value
+    return []
+
+
+# The handoff a root-then-drop entrypoint makes: `gosu postgres …` or
+# `su-exec app …`, the two spellings that mean "and then run as this user".
+# The token after the command is the whole answer, and it is looked up in the
+# image's own passwd rather than trusted as a number.
+HANDOFF = re.compile(r"(?:^|[\s;|&])(?:gosu|su-exec)\s+([A-Za-z_][A-Za-z0-9_.\-]*|\d+)")
+
+# The same command and the same user as TWO argv elements, which is how an OCI
+# image spells them: `ENTRYPOINT ["su-exec", "app"]` puts them in separate
+# elements, so a scan that looks for `gosu <user>` inside one word never sees
+# them together — the probe answered "no handoff" without having looked and
+# recorded root as an answer (t351's kidexec). The next element is taken only
+# when it is the token `HANDOFF` would have captured, so a handoff command
+# followed by something that is not a user (`gosu --help`, a stray `--`) is
+# skipped rather than answered with a name the image's passwd will refuse.
+HANDOFF_COMMANDS = frozenset({"gosu", "su-exec"})
+HANDOFF_USER = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_.\-]*|\d+)")
+
+
+def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str | None:
+    """The user the entrypoint hands execution to, and only that (ADR-0019).
+
+    Asked of the words of `Entrypoint`/`Cmd` first — `sh -c 'exec gosu app …'`
+    carries the name inside one element, and the exec form
+    `["su-exec", "app", …]` carries it as the word after a bare handoff
+    command — and then of the script ANY of those words names, at whatever
+    position it sits: the stock supervisor shape
+    `["/sbin/tini", "--", "/docker-entrypoint.sh"]` names its script second,
+    and a read gated on `argv[0].endswith(".sh")` never opened it, so the
+    probe answered "no handoff" from having looked at nothing. A passwd row
+    alone is never the answer: an entrypoint that is the application itself
+    declares nothing to hand off to, and choosing a row would pin the line
+    onto a uid nobody asked for. None means "no defensible user", which the
+    caller records as root — a script that could not be READ raises instead,
+    because that is the host failing to answer and not an answer of "nobody".
+    """
+    for index, word in enumerate(argv):
+        if word in HANDOFF_COMMANDS:
+            if index + 1 < len(argv) and HANDOFF_USER.fullmatch(argv[index + 1]):
+                return argv[index + 1]
+            continue
+        found = HANDOFF.search(word)
+        if found:
+            return found.group(1)
+    for word in argv:
+        if not word.endswith(".sh"):
+            continue
+        script = _image_file(name, record, reference, word)
+        if script is None:
+            raise _cannot_run(name, record, reference, word)
+        found = HANDOFF.search(script)
+        if found:
+            return found.group(1)
+    return None
+
+
+# The entrypoint name resolved before `cat` is handed it: PATH first, then the
+# name itself. A bare entrypoint — `docker-entrypoint.sh`, the stock postgres
+# and mysql shape — is a name the image carries on its PATH while its WORKDIR
+# is somewhere else entirely, and `cat` alone resolves that name against the
+# WORKDIR instead, so the read failed for exactly the images ADR-0019 exists
+# for: the failure was read as "no handoff", and the record settled on root
+# with nothing printed. The literal-name fallback is the other half of what a
+# name means — `bin/entry.sh` is read against the WORKDIR, where a shell would
+# read it too.
+RESOLVE_THEN_CAT = """found=$(command -v "$1")
+if [ -n "$found" ]; then
+    target=$found
+else
+    target=$1
+fi
+cat -- "$target"
+"""
+
+
+def _image_file(name: str, record, reference: str, path: str) -> str | None:
+    """The image's own file, read by running the image as container root —
+    `--user 0` and not the declared user, for the reason probe_image gives.
+
+    `None` is a read that FAILED and never an answer: podman could not run,
+    the file is not there, the name resolves to nothing. Every caller turns it
+    into `_cannot_run`'s one line (spec 1.2), because reading it as "no such
+    row / no handoff" is what settled the record on root while the host had
+    simply not been able to look.
+
+    A name with no slash goes through the shell above; a path — `/etc/passwd`,
+    `/etc/group`, an entrypoint the image names absolutely — goes to `cat`
+    verbatim, exactly as it always did.
+    """
+    if "/" in path:
+        result = _podman(
+            name, record, "run", "--rm", "--user", "0", "--entrypoint", "cat", reference, path
+        )
+    else:
+        result = _podman(
+            name,
+            record,
+            "run",
+            "--rm",
+            "--user",
+            "0",
+            "--entrypoint",
+            "sh",
+            reference,
+            "-c",
+            RESOLVE_THEN_CAT,
+            "sh",
+            path,
+        )
+    if not result.ok:
+        return None
+    return result.stdout
+
+
+def _detail(result) -> str:
+    text = result.stderr.strip() or result.stdout.strip()
+    return errors.oneline(text) or f"{result.argv[0]} exited {result.returncode}"
+
+
+def _podman(name: str, record, *argv: str):
+    """podman as the service user, from the service's own home.
+
+    The probe runs unprivileged as the service identity; the mutator's own hand
+    stays on the unit write (ADR-0001).
+
+    **`USER` and `LOGNAME` are named for the service, and that is measured
+    rather than decoration.** `runuser -u` swaps the uid but keeps the caller's
+    environment, and the caller is root — so podman saw `USER=root`, and its
+    keep-id mapping reads the subid files keyed by that name: every keep-id
+    container came out with a map of one pair (no gid 0, no gid 5), which crun
+    then refused to init (`ping_group_range`, `devpts`). With `USER` named for
+    the service the map is complete — measured on the golden: init uid/gid
+    10001/10001 under `keep-id:uid=10001,gid=10001`, three-row maps. A systemd
+    user manager sets both for the service already; this is the same shape for
+    the calls this program makes itself."""
+    home = paths.service_home(name)
+    runtime = Path(f"/run/user/{record.uid}")
+    env = ["env", f"USER={name}", f"LOGNAME={name}"]
+    if runtime.is_dir():
+        env.append(f"XDG_RUNTIME_DIR={runtime}")
+    try:
+        return tool.call(["runuser", "-u", name, "--", *env, "podman", *argv], cwd=home)
+    except errors.GuardenError as exc:
+        # Every failure `tool.call` reports here is bytes it could not read —
+        # an image's own file or podman's own answer, which is what this run
+        # was asked about — and the probe's contract is one line NAMING THE
+        # SERVICE (spec 1.2), so the name is put on before it leaves.
+        raise errors.GuardenError(f"{name}: {exc.message}", exc.code) from None
+
+
+def _carries_owner_line(name: str, escaped_ref: str | None, record) -> bool:
+    """Whether every installed unit already holds exactly the line the record
+    renders FOR THAT UNIT — or holds none at all when the record renders it
+    none. Anything else is a render that has not happened yet.
+
+    Read through `unitsource.parse` rather than by scanning lines: the answer
+    is per unit now, the unit's own stem is what the renderer keys its pair by,
+    and a file that cannot be read is the one-line refusal unitsource already
+    makes rather than a decode error out of this walk. The image each unit
+    names goes to the renderer with it, because the record renders FOR THAT
+    UNIT only what that unit's own image answered (ADR-0019): a unit whose
+    `Image=` changed holds no line the record renders any more, which is the
+    same question `_owner_plan` answered before this runs.
+    """
+    files = sorted(units_dir(name, escaped_ref).glob("*.container"))
+    if not files:
+        return False
+    unit_images = _installed_images(name, escaped_ref)
+    for path in files:
+        unit = unitsource.parse(path)
+        want = render.owner_line(record, unit.stem(), unit_images[unit.stem()])
+        found = unit.get("Container", "UserNS")
+        if want is None:
+            if found:
+                return False
+        elif found != [want]:
+            return False
+    return True
+
+
+def _unit_source(name: str, record, escaped_ref: str | None = None) -> Path:
+    """Where `units.install` gets its source for this service: the tree the units
+    being re-rendered were installed from — an instance's own home first when
+    this start is an instance's, then the service's home, and the module's
+    shipped tree for a service a module created. The same sources the installs
+    that created these units read from, looked up in the same order the
+    directory they are being installed into resolves."""
+    homes = [paths.service_home(name)]
+    if escaped_ref:
+        homes.insert(0, paths.instance_home(name, escaped_ref))
+    for home in homes:
+        if _manifest_in(home).is_file():
+            return _render_source(home)
+    if record.installed_by:
+        shipped = modules_mod.source_of(record.installed_by, name)
+        if _manifest_in(shipped).is_file():
+            return shipped
+    raise errors.GuardenError(
+        f"{name}: no manifest in {homes[-1]} and no module source, so its units cannot be "
+        "re-rendered with the probed line",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
 
 
 def stop_units(name: str, escaped_ref: str | None = None) -> None:

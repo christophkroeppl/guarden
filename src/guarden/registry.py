@@ -198,6 +198,85 @@ def _rule_entries(value: Any) -> list[RuleEntry]:
     return [RuleEntry.from_document(entry) for entry in (value or [])]
 
 
+def _probe_number(value: Any) -> int | None:
+    """One of the probe's two numbers as the document spells it, or `None`
+    when the document does not carry one: a real `int`, or a decimal string.
+
+    Every other scalar TOML can put in that key is refused by the caller
+    instead of coerced, because each of them has its own silent damage:
+    `4242.9` truncates to a pin nobody recorded, `true` is `True` and
+    `int(True)` is 1, and `inf` raises **OverflowError** out of `int()` — a
+    traceback out of `weedr service start` rather than the one line spec 1.2
+    promises, which is the class the string case was fixed in (measured,
+    t350: `owner_uid = inf` came back as 21 traceback lines). The bool check
+    comes before the int check for the same reason, and `OverflowError` is
+    caught regardless: the one conversion left is a decimal string, which
+    `int()` cannot overflow on, but a reader that lets that class escape is
+    the defect this refuses to reintroduce.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdecimal():
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+
+@dataclass
+class OwnerUnit:
+    """One unit's own probe answer, for a service whose units name more than one
+    image (ADR-0019): the image the pair was read from, and the pair.
+
+    The image is in the record because the pair is only true of the image it
+    was read from — a unit whose `Image=` changes is the probe's condition
+    again, and a record that could not say which image answered which unit
+    could only answer every unit with ONE image's user, which is the failure
+    this field exists to prevent.
+    """
+
+    image: str
+    uid: int
+    gid: int
+
+    def to_document(self) -> dict[str, Any]:
+        return {"image": self.image, "uid": self.uid, "gid": self.gid}
+
+    @classmethod
+    def from_document(cls, entry: Any) -> OwnerUnit:
+        """Three fields or a refusal, for the reason `RuleEntry.from_document`
+        gives: an entry that does not name an image and two numbers is not an
+        answer, and rendering it would pin a unit nobody probed."""
+        if not isinstance(entry, dict):
+            raise errors.GuardenError(
+                "a per-unit image owner is a table of image, uid and gid, and this "
+                "one is not",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        try:
+            image = str(entry["image"])
+            raw_uid = entry["uid"]
+            raw_gid = entry["gid"]
+        except KeyError:
+            raise errors.GuardenError(
+                "a per-unit image owner is a table of image, uid and gid, and this "
+                "one does not carry all three",
+                errors.HOST_NOT_AS_ASSUMED,
+            ) from None
+        uid = _probe_number(raw_uid)
+        gid = _probe_number(raw_gid)
+        if uid is None or gid is None:
+            raise errors.GuardenError(
+                "a per-unit image owner is a table of image, uid and gid, and this "
+                "one's uid or gid is not a whole number",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        return cls(image=image, uid=uid, gid=gid)
+
+
 @dataclass
 class Registry:
     service: str
@@ -206,6 +285,24 @@ class Registry:
     environment: str
     uid: int
     created: str
+    # The uid and gid guarden probed out of the service's image at its first
+    # start, and the only source the renderer's `UserNS=keep-id:uid=...,gid=...`
+    # line is written from (ADR-0019). `None` is "not probed yet", which is the
+    # probe's own condition; `0` is the image declaring no user at all, whose
+    # container root the default map already moves onto the service identity.
+    owner_uid: int | None = None
+    owner_gid: int | None = None
+    # The image those two were read from. The pair is only true of that image,
+    # so a unit naming another one is the probe's condition again rather than a
+    # unit this pair answers (ADR-0019).
+    owner_image: str | None = None
+    # Per-unit answers, written only when the service's units name MORE THAN
+    # ONE image: `owner_uid`/`owner_gid` stay the single-image record they have
+    # always been — the drift anchor and the field an operator edits by hand —
+    # and this map is what the renderer answers each unit from when the units
+    # disagree about their user. An empty map writes no table at all, so a
+    # single-image document gains only `owner_image` and never a table.
+    owner_units: dict[str, OwnerUnit] = field(default_factory=dict)
     source: str = SOURCE_MANUAL
     installed_by: str | None = None
     deployed_sha: str | None = None
@@ -239,6 +336,35 @@ class Registry:
         registry and a rendered list agree byte for byte."""
         return sorted(self.volumes.values(), key=lambda v: (v.kind != "state", v.name))
 
+    def answer_for(self, unit: str, image: str) -> tuple[int, int] | None:
+        """The pair this record holds for THIS unit when it names THIS image,
+        and `None` when what the record holds was read from another image or
+        from no image at all — either of which makes the unit the probe's
+        condition again (ADR-0019).
+
+        One predicate for the two halves that read it: the start path, which
+        asks whether the record still answers a unit before deciding to probe,
+        and the renderer, which asks whether it may write a line at all. They
+        were two answers — the renderer took only the unit, so a record whose
+        `owner_image` named one thing wrote that pair into a unit naming
+        another (round-3 finding 4: the deploy path installs a line the start
+        path would have probed first). A record with no `owner_image` — the
+        shape written before that field existed — still answers every unit
+        with its pair, which is the only case where the image is not part of
+        the answer, and a record holding only one of the two numbers has no
+        pair to give: unanswered like one never probed.
+        """
+        if self.owner_units:
+            entry = self.owner_units.get(unit)
+            if entry is None or entry.image != image:
+                return None
+            return (entry.uid, entry.gid)
+        if self.owner_image and self.owner_image != image:
+            return None
+        if self.owner_uid is None or self.owner_gid is None:
+            return None
+        return (self.owner_uid, self.owner_gid)
+
     def to_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {
             "service": self.service,
@@ -255,6 +381,16 @@ class Registry:
             document["deployed_sha"] = self.deployed_sha
         if self.source_hash:
             document["source_hash"] = self.source_hash
+        if self.owner_uid is not None:
+            document["owner_uid"] = self.owner_uid
+        if self.owner_gid is not None:
+            document["owner_gid"] = self.owner_gid
+        if self.owner_image:
+            document["owner_image"] = self.owner_image
+        if self.owner_units:
+            document["owner_units"] = {
+                name: unit.to_document() for name, unit in sorted(self.owner_units.items())
+            }
         if self.publication:
             document["publication"] = dict(self.publication)
         if self.edges:
@@ -323,6 +459,13 @@ class Registry:
             installed_by=document.get("installed_by"),
             deployed_sha=document.get("deployed_sha"),
             source_hash=document.get("source_hash"),
+            owner_uid=_owner_id(document, "owner_uid"),
+            owner_gid=_owner_id(document, "owner_gid"),
+            owner_image=document.get("owner_image"),
+            owner_units={
+                name: OwnerUnit.from_document(entry)
+                for name, entry in (document.get("owner_units") or {}).items()
+            },
             publication=dict(document.get("publication") or {}),
             edges={name: dict(edge or {}) for name, edge in (document.get("edges") or {}).items()},
             provides=list(provides),
@@ -339,6 +482,35 @@ class Registry:
             generated=dict(document.get("generated") or {}),
             immutable=dict(document.get("immutable") or {}),
         )
+
+
+def _owner_id(document: dict, key: str) -> int | None:
+    """One of the probe's two numbers as the document spells it: converted,
+    or refused.
+
+    `owner_uid` is the field an operator edits BY HAND, so a quoted value
+    reaches this reader as a string — and unconverted it walked into the
+    renderer's `uid and uid > 0` and out of `weedr service start` as a
+    TypeError (measured, t350), a traceback instead of the one line spec 1.2
+    promises. Converting is what `OwnerUnit.from_document` already does for
+    the per-unit table, and every OTHER scalar a hand edit can put there — a
+    float (which `int()` truncates into a pin nobody recorded), a bool (which
+    `int()` makes 1), `inf` (which `int()` raises **OverflowError** on, the
+    21-line traceback measured in t350 before this reader refused it) — is
+    refused through the same helper, naming the service and the field: host
+    state that does not hold what guarden wrote (spec 1.2, exit 1).
+    """
+    value = document.get(key)
+    if value is None:
+        return None
+    found = _probe_number(value)
+    if found is None:
+        raise errors.GuardenError(
+            f"{document.get('service', 'the service')}: the registry entry carries "
+            f"{value!r} as {key}, and a uid or gid the probe recorded is a whole number",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    return found
 
 
 def path_for(service: str) -> Path:

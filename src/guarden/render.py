@@ -44,6 +44,7 @@ from guarden import (
     edgeresolve,
     edges,
     errors,
+    images,
     names,
     paths,
     registry,
@@ -128,7 +129,86 @@ GUARDEN_OWNED_ORDER = (
     "Mount",
     "PublishPort",
     "Secret",
+    # ADR-0019: guarden's own `UserNS=` line — quadlet's spelling of the
+    # directive (podman-systemd.unit(5): `UserNS=keep-id:uid=200,gid=210`) —
+    # written from the registry's probed owner and from nothing a repository
+    # can reach. A source's own `UserNS=`/`Userns=` is refused, so the line
+    # this filter lets through is guarden's or it is not there at all.
+    "UserNS",
 )
+
+
+def owner_line(record: Registry, unit: str, image: str) -> str | None:
+    """The `UserNS=` value the renderer writes for THIS unit, and `None` when it
+    writes none — the one spelling of the line, answered per unit (ADR-0019).
+
+    `image` is the reference THIS unit names, and it is part of the answer:
+    the pair is only true of the image it was read from, so a unit naming
+    another one is the probe's condition again and renders no line rather than
+    another image's pin — the failure the per-unit map exists to prevent, and
+    the same question `_owner_plan` asks before the start path probes. The
+    start path reads this to decide whether the installed units already hold
+    what the record renders for each of them, so the check and the render
+    cannot drift apart; what is left once the record answers is `owner_uid`:
+    `None` is "not probed yet" and renders nothing (nothing has been
+    measured), and `0` is an image that declares no user, whose container root
+    the default map already moves onto the service identity — the line would
+    name a mapping already in effect and move the rest of the map to get
+    there.
+    """
+    pair = record.answer_for(unit, image)
+    if pair is None:
+        return None
+    uid, gid = pair
+    if uid and uid > 0 and gid is not None:
+        return f"keep-id:uid={uid},gid={gid}"
+    return None
+
+
+def _unit_image(source: Source, container: str, context: Context) -> str:
+    """The reference this unit names, resolved the way the probe resolves it:
+    the declared `Image=`, or the reference this service's build tags when the
+    unit declares none.
+
+    The same two spellings `_installed_images` answers with, because the
+    record's `owner_image` holds one of them and comparing a unit against any
+    third spelling would read "not this image" for a unit the record does
+    answer.
+    """
+    declared = source.units[container].one("Container", "Image")
+    if declared and declared.strip():
+        return declared.strip()
+    return images.reference_for(context.service)
+
+
+def refuse_pinned_user(unit: Unit, pinned: str, origin: str) -> None:
+    """A source's own `User=` refused while a keep-id pin is in force
+    (ADR-0019).
+
+    The line maps exactly ONE uid — the probed pair — onto the service
+    identity, and `User=` decides the uid the container actually runs as: any
+    other uid runs where the line maps nothing, so its writes land in the
+    service's subuid band (ticket 277), with nothing about the run saying the
+    line named a uid the container never ran as. That is the whole rationale,
+    and it does not rest on who pid 1 is, which is measured two ways and
+    differs by spelling: an image that names a `USER` runs it (t352 asserts
+    `USER root` under a pin has pid 1 = 0) and an image with no `USER` line
+    runs the pinned pair (t351 asserts 2000). What never differs is where
+    each uid LANDS, and two owners of one container's user is one too many —
+    the repository is not one of them. Refused only when a pin is being
+    rendered: with no pin,
+    `User=` is the repository's own field and passes through as it always has,
+    which is what keeps this off every deployment that has no non-root image
+    user to map. Called from the render and from the start path, so the
+    sentence the diagnostic speaks is one sentence.
+    """
+    value = unit.one("Container", "User")
+    if value:
+        raise errors.GuardenError(
+            f"{origin} sets User={value!r}, and a service whose image user is pinned by "
+            f"guarden's {pinned} line does not get a User= of its own",
+            errors.REJECTED_INPUT,
+        )
 
 
 @dataclass
@@ -485,7 +565,12 @@ def refuse_directives(source: Source) -> None:
         return
     for container in source.containers():
         unit = source.units[container]
-        for key in REFUSED_DIRECTIVES:
+        # `REFUSED_DIRECTIVES` stays the list it is, and `UserNS` is checked
+        # beside it because that is quadlet's own spelling of the directive
+        # (podman-systemd.unit(5)) — a source writing it would otherwise pass
+        # the refusal and reach the generated unit, where the invariant is
+        # that only guarden's renderer emits a line at all (ADR-0019).
+        for key in (*REFUSED_DIRECTIVES, "UserNS"):
             for value in unit.get("Container", key):
                 raise errors.GuardenError(
                     f"the unit source {unit.path}: the container {container!r} sets "
@@ -1104,6 +1189,26 @@ def _container_unit(
     requests = _secret_requests(document, schema)
     if requests:
         unit.put("Container", "Secret", requests)
+    # ADR-0019: the keep-id line, and the registry's probed pair for THIS unit
+    # is its only source — the unit's own image's user, so a service whose
+    # units name two images renders two lines rather than the first image's
+    # pair in every unit. A unit with no answer (`None`) renders no line — and
+    # a pair probed to `0` is an image that declares no user, whose container
+    # root the default map already moves onto the service identity, so the
+    # line would name a mapping that is already in effect and change the rest
+    # of the map to get there.
+    owner = (
+        owner_line(context.record, container, _unit_image(source, container, context))
+        if context is not None
+        else None
+    )
+    if owner is not None:
+        refuse_pinned_user(
+            source.units[container],
+            owner,
+            f"the unit source {source.origin}: the container {container!r}",
+        )
+        unit.put("Container", "UserNS", [owner])
     container_keys.extend(_lines(unit, "Container", domain, only=GUARDEN_OWNED_ORDER))
 
     return render_template(
