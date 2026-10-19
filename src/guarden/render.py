@@ -342,6 +342,11 @@ def _compose_source(path: Path) -> Source:
             )
         mounts[container] = compose.mounts(body, container, path)
 
+    # Checked once the whole container set is known and before the converter is
+    # driven: a sibling name is a fact about two services in this file, and the
+    # refusal belongs on the repository's own declaration (spec 7.3, ticket 285).
+    compose.check_siblings(declared, path)
+
     units: dict[str, Unit] = {}
     for translation in compose.convert(path):
         if translation.container in units:
