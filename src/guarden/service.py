@@ -1230,14 +1230,16 @@ def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str 
     Asked of the words of `Entrypoint`/`Cmd` first — `sh -c 'exec gosu app …'`
     carries the name inside one element, and the exec form
     `["su-exec", "app", …]` carries it as the word after a bare handoff
-    command — and then of the script the entrypoint names when that name ends
-    in `.sh`, read by running the image as container root with its entrypoint
-    overridden. A passwd row alone is never the answer: an entrypoint that is
-    the application itself declares nothing to hand off to, and choosing a row
-    would pin the line onto a uid nobody asked for. None means "no defensible
-    user", which the caller records as root — a script that could not be READ
-    raises instead, because that is the host failing to answer and not an
-    answer of "nobody".
+    command — and then of the script ANY of those words names, at whatever
+    position it sits: the stock supervisor shape
+    `["/sbin/tini", "--", "/docker-entrypoint.sh"]` names its script second,
+    and a read gated on `argv[0].endswith(".sh")` never opened it, so the
+    probe answered "no handoff" from having looked at nothing. A passwd row
+    alone is never the answer: an entrypoint that is the application itself
+    declares nothing to hand off to, and choosing a row would pin the line
+    onto a uid nobody asked for. None means "no defensible user", which the
+    caller records as root — a script that could not be READ raises instead,
+    because that is the host failing to answer and not an answer of "nobody".
     """
     for index, word in enumerate(argv):
         if word in HANDOFF_COMMANDS:
@@ -1247,10 +1249,12 @@ def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str 
         found = HANDOFF.search(word)
         if found:
             return found.group(1)
-    if argv and argv[0].endswith(".sh"):
-        script = _image_file(name, record, reference, argv[0])
+    for word in argv:
+        if not word.endswith(".sh"):
+            continue
+        script = _image_file(name, record, reference, word)
         if script is None:
-            raise _cannot_run(name, record, reference, argv[0])
+            raise _cannot_run(name, record, reference, word)
         found = HANDOFF.search(script)
         if found:
             return found.group(1)
