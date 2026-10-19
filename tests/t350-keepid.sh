@@ -793,7 +793,10 @@ echo "MEASURE: stderr of a per-unit owner with an inf uid: $(tr '\n' '|' <"$GUAR
 assert_exit 1
 assert_one_diagnostic "error:"
 assert_stderr_has "kidpair-staging"
-assert_stderr_has "web"
+# The UNIT, not just the service: the refusal must name the unit whose entry
+# is broken, or an operator with several services on the host cannot say which
+# one. "the unit web" is the phrase, and the service name does not carry it.
+assert_stderr_has "the unit web"
 assert_stderr_has "uid"
 assert_stdout_lacks "started kidpair-staging"
 cp "$GUARDEN_FIXTURES/record-pair-backup" "$record_pair"

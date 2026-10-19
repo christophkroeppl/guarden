@@ -26,6 +26,8 @@
 #     file, and the one that must not move.
 #   * no `USER` and no handoff — the row the ADR promises a NO line for: the
 #     default mapping already puts container root on the service identity.
+#   * `USER root` with no handoff — the third spelling of the root row, which
+#     takes the same branch as the empty one and had no fixture at all.
 #   * FOUR fields carrying a character `isdigit` calls a digit and `int()`
 #     refuses — the superscript `²` in the image's own passwd uid field, in
 #     the uid half of `Config.User`, in its gid half beside a numeric uid, and
@@ -325,6 +327,28 @@ record_plain=$registry/kidplain-staging.toml
 [ "$(unit_line "$pin_plain")" = "none" ] \
     || _fail "an image that declares no user and names no handoff renders $(unit_line "$pin_plain"), and it must render no line at all"
 assert_file_has "$record_plain" "owner_uid = 0"
+
+# `USER root` with NO handoff: the third spelling of the root row, and the
+# one the table does not read. It takes the identical branch — the root
+# declaration asks the entrypoint for a handoff and there is none, so the
+# answer is (0, 0) — but no suite exercised the SPELLING, and a spelling
+# that is never run is a spelling that can drift. The control above is the
+# empty spelling; this one names root.
+stage_kid kidrootplain localhost/kidrootplain-staging:latest \
+    "FROM docker.io/library/alpine:3.20" \
+    "USER root" \
+    "CMD [\"sleep\", \"3600\"]"
+run weedr service ingest kidrootplain-staging --from poke kidrootplain@0000001
+assert_exit 0
+run weedr service build kidrootplain-staging
+assert_exit 0
+run weedr service start kidrootplain-staging
+assert_exit 0
+unit_rootplain=/var/lib/guarden/services/kidrootplain-staging/home/.config/containers/systemd/app.container
+record_rootplain=$registry/kidrootplain-staging.toml
+[ "$(unit_line "$unit_rootplain")" = "none" ] \
+    || _fail "a USER root image that names no handoff renders $(unit_line "$unit_rootplain"), and it must render no line at all — the same answer the empty spelling gives"
+assert_file_has "$record_rootplain" "owner_uid = 0"
 
 # --- fields that `isdigit` calls digits and `int()` refuses ------------------
 #
