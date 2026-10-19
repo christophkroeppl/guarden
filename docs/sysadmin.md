@@ -337,11 +337,12 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   `/etc/guarden/creds/<svc>/<KEY>.cred` and asks the credential materialiser to run, which is
   only possible while the service user's manager is alive. If the service has never started, or
   its user manager died, `systemctl start guarden-creds-boot.service` fills podman's store from
-  what is planted. This is the one that bites hardest on a template-created service, which has
-  no `.guarden/.env.schema` for the gate to read: `weedr service start` evaluates an empty
-  schema and answers `not-required` on an ungated track and `ready` on a gated one, so a
-  `Secret=` naming a key nobody planted is refused by podman when the container starts and not
-  by `[gate] reason`. There is no blocked state to look at — plant first, then start.
+  what is planted. A **template-created service** has no `.guarden/.env.schema` for the gate to
+  read, so the gate answers for the **unit** instead: it reads the `Secret=` lines the service's
+  own quadlet files carry, and a key nobody planted is reported by name — `blocked` with a
+  `[gate] reason` on a gated track, a `warning:` naming the key on an ungated one. Either way
+  `weedr service start` refuses with the key in the line rather than letting podman answer
+  `125 no such secret`, and planting it opens the gate with no re-push.
 * **Give the volume an owner the image accepts.** A volume is created `0700` under the service
   uid, and an image that runs as its own uid cannot write it:
   `mkdir: can't create directory '/var/lib/postgresql/data/pgdata': Permission denied`. The
@@ -997,6 +998,14 @@ manifest's schema marks `@required` or `@sensitive`, the generated unit carries
 `<KEY>` from that service's own secret store and presents it at `/run/secrets/<KEY>`. A key
 whose application needs a variable gets `type=env` instead, and it is the application that
 decides, not the repository.
+
+**A key the schema marks `@required` but NOT `@sensitive` is planted by nobody.** It is not a
+credential, so there is no random value to generate for it (spec 5.3 step 9 mints `@sensitive`
+keys, and only those), and it is not a value the repository ships, so there is no default to
+take. It is **yours to plant**: `weedr secret set <svc> <KEY>` and then start. The gate says so
+by name — a `warning:` on an ungated track, a `blocked` gate with a `[gate] reason` on a gated
+one — and `weedr service start` refuses with the key in the line rather than letting podman
+answer `125 no such secret` for a secret that was never there.
 
 ### if the encryption key is lost
 

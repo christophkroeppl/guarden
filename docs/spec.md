@@ -1936,27 +1936,48 @@ The steps, in this order, and the order is the point :
   belongs to the service user and only it may map container-root into it. A failure exits `1`
   and the running container is still running.
 3. **Gate, before the stop.** `weedr service gate <name>` evaluates the credential gate and
-  changes nothing else: for a gated track, every key the schema requires exists in the service's
-  own podman secret store with a value that is neither empty, nor prefixed `EXAMPLE-`, nor
-  equal to `changeme`. It records the verdict in the registry and returns. It is a mutator verb
-  because the store is inside the service's `0700` home and only root can read it
-  — and `furrow` never evaluates the gate, which no permitted verb could support, since the only
-  secret-reading verb on its rule returns booleans and never a value.
+   changes nothing else: for a gated track, every key the schema requires exists in the service's
+   own podman secret store with a value that is neither empty, nor prefixed `EXAMPLE-`, nor
+   equal to `changeme`. It records the verdict in the registry and returns. It is a mutator verb
+   because the store is inside the service's `0700` home and only root can read it
+   — and `furrow` never evaluates the gate, which no permitted verb could support, since the only
+   secret-reading verb on its rule returns booleans and never a value.
 
-  **A blocked gate does not fail the deploy.** The deploy has done what it was asked: the
-  service exists, the image is built, the units are installed, and the container is not started.
-  So `furrow` reports `warning: deployed, waiting for the credential gate — reason: …` and
-  **exits `0`**. A red X on every push until the operator plants credentials is noise, and noise
-  teaches people to want the gate gone. The operator then plants the credentials and runs
-  `weedr service start <name>`, which re-evaluates the gate, probes the image's declared
-  user once when the registry holds no probed owner — rendering guarden's `UserNS=keep-id`
-  line into the units from it (§6.3) — and starts if the gate now passes. **No
-  second push is needed**, and the gate's verdict — which until now existed only in the journal
-  — is a field in the registry.
+   **The gate's subject is the set of credential REQUESTS the service's units make, and not
+   the set of keys its schema declares.** A unit carries `Secret=<KEY>` for every key the
+   renderer asked for (§6.3), and a **service with no schema at all** — a template-created one,
+   which ships quadlet files and nothing else — can carry a request nothing satisfies. The
+   gate reads the service's own quadlet directory and asks podman the question the container
+   would ask: does every `Secret=` line name a key that has a value? A key the units ask for
+   and the schema does not declare is a request nobody can satisfy, and it is reported the way
+   a schema's own missing required key is reported — one answer for one condition.
 
-  For a track with `gated = false`, a missing or example value produces a `warning:` line naming
-  the key, the gate records `not-required`, and the start proceeds. That is the whole difference
-  between the two tracks, and it is the only difference.
+   **A blocked gate does not fail the deploy.** The deploy has done what it was asked: the
+   service exists, the image is built, the units are installed, and the container is not started.
+   So `furrow` reports `warning: deployed, waiting for the credential gate — reason: …` and
+   **exits `0`**. A red X on every push until the operator plants credentials is noise, and noise
+   teaches people to want the gate gone. The operator then plants the credentials and runs
+   `weedr service start <name>`, which re-evaluates the gate, probes the image's declared
+   user once when the registry holds no probed owner — rendering guarden's `UserNS=keep-id`
+   line into the units from it (§6.3) — and starts if the gate now passes. **No
+   second push is needed**, and the gate's verdict — which until now existed only in the journal
+   — is a field in the registry.
+
+   For a track with `gated = false`, a missing or example value produces a `warning:` line naming
+   the key, the gate records `not-required`, and the start proceeds. That is the whole difference
+   between the two tracks, and it is the only difference.
+
+   **A start refuses on an unsatisfied credential request on BOTH tracks, and this is not a
+   difference between them.** The gate's *state* is what the track decides: `blocked` on a
+   gated track, `not-required` on an ungated one. But a container whose unit carries
+   `Secret=<KEY>` and whose store has no `<KEY>` is refused by podman with a raw
+   `125 no such secret` — a runtime error naming a podman message, where the operator needs
+   the key. So `weedr service start` refuses with one line naming the keys and the command
+   that plants them, and it does so on either track: the podman secret does not exist, which
+   is the host not being in the state the request assumed, and so exit `1` (§1.2). The
+   difference between the tracks is what the *deploy* does with it — a gated track's deploy
+   stops at the gate and exits `0` (§6.6 step 5), while an ungated track's deploy reaches the
+   start, and the start is the one that refuses.
 4. Stop the units.
 5. Install the rendered units, record the sha, reload the user manager, and then **start only if
   step 3 recorded `ready` or `not-required`.** A blocked gate stops the sequence here: the units
