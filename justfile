@@ -92,7 +92,23 @@ env:
     @if command -v varlock >/dev/null; then varlock load -p .env.schema; else echo "varlock not installed"; fi
 
 # run the lint and the tests
-ci: lint test
+ci: lint unit test
+
+# The Python unit tests: the ones a VM suite cannot express because they
+# assert on a FUNCTION's answer rather than on a host's state.
+#
+# **They ran under nothing until this recipe existed.** `tests/test_*.py` was
+# three files and no recipe ran any of them, so a unit test that failed was a
+# unit test nobody would ever see fail — which is the same defect as a suite
+# that asserts nothing, wearing a different hat. The adversarial review named
+# it: the sudoers rule's content was pinned only by a unit test that no recipe
+# ran.
+#
+# The interpreter is the checkout's own venv when it has one, for the reason
+# `check` gives: a developer without the distribution's packages still gets a
+# real answer.
+unit:
+    @if [ -x .venv/bin/python ]; then PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -p 'test_*.py' -v; else PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v; fi
 
 # throw the machine away and run the golden VM (minutes, manual)
 golden-vm:

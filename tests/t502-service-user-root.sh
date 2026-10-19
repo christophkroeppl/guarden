@@ -578,13 +578,54 @@ if [ -d /etc/sudoers.d ]; then
     # `0440 root:root`, so a read is refused — and a grant the grantee can
     # read is a grant the grantee can edit, so the mode is part of the
     # boundary and not a detail of it.
-    if [ -f /etc/sudoers.d/guarden ]; then
-        out=$(as_service sh -c "cat /etc/sudoers.d/guarden" 2>&1 || true)
+    #
+    # **The rule's CONTENT is asserted too, and that is the half that was
+    # missing.** The suite above proves the EFFECT (the service user cannot
+    # read it, no rule names a service user) — but a rule with the WRONG
+    # VERBS passes every one of those, because "a rule that grants nothing" and
+    # "a rule that grants the wrong thing" are both invisible to a read-refusal
+    # check. The content is what says the poke may deploy and may not grant a
+    # port; so the verbs are read out of the INSTALLED file, as root, and
+    # compared with what the spec's capability table names.
+    #
+    # Read as root, because the file is `0440 root:root` — which is the point.
+    rule=/etc/sudoers.d/guarden
+    if [ -f "$rule" ]; then
+        out=$(as_service sh -c "cat $rule" 2>&1 || true)
         echo "MEASURE: the service user reading the guarden rule: $out"
         case "$out" in
             *"Permission denied"*) echo "MEASURE: the rule is out of the service user's reach" ;;
             *) _fail "the service user read the guarden sudoers rule: $out" ;;
         esac
+        # The mode, because a world-writable sudoers file is refused by sudo
+        # itself and a readable one is a grant the grantee can edit.
+        mode=$(stat -c '%a %U:%G' "$rule")
+        echo "MEASURE: the rule's mode and owner: $mode"
+        [ "$mode" = "440 root:root" ] \
+            || _fail "the guarden sudoers rule is $mode, not 440 root:root"
+
+        # The verbs, read out of the file and compared with the spec's list
+        # (spec 5.1): the poke may deploy, drop a preview, read the queue and
+        # the lanes, and read the projects — and NOTHING ELSE.
+        echo "MEASURE: the rule's grants: $(grep -c NOPASSWD "$rule")"
+        for verb in "furrow deploy" "furrow preview drop" "furrow queue list" \
+                    "furrow status" "weedr project list"; do
+            if grep -q "NOPASSWD: .*/$verb\$" "$rule"; then
+                echo "MEASURE: the rule grants $verb"
+            else
+                _fail "the guarden sudoers rule does not grant '$verb', which the spec's capability table names"
+            fi
+        done
+        # And it grants the POKE, as the mutator's identity, and nothing that
+        # publishes a port or destroys data.
+        grep -q "^hose ALL=(guarden) NOPASSWD:" "$rule" \
+            || _fail "the guarden sudoers rule does not grant the poke (hose) the mutator's identity"
+        for forbidden in "port open" "firewall open" "service purge" "service rollback"; do
+            if grep -q "NOPASSWD: .*$forbidden" "$rule"; then
+                _fail "the guarden sudoers rule grants '$forbidden', which a push must not reach"
+            fi
+        done
+        echo "MEASURE: the rule grants the poke and nothing else"
     else
         echo "MEASURE: /etc/sudoers.d/guarden is absent — the install phase has not written it"
     fi
