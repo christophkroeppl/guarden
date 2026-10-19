@@ -22,6 +22,11 @@
 
 . "$(dirname "$0")/lib.sh"
 
+# The pinned podlet release, staged the way `t120-deploy` stages it: without
+# it `soil packages` has no record to install and refuses the input (exit 2),
+# which is a rejection rather than a drift — so the suite would die before it
+# asserted anything about templates.
+stage_podlet_release
 run soil packages --apply
 assert_not_rejected
 run soil install --apply
