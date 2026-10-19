@@ -976,9 +976,17 @@ restart.
 To materialise everything by hand after touching the blobs:
 
 ```sh
-systemctl enable guarden-creds.path      # watch /etc/guarden/creds/ and materialise what changed
-systemctl start guarden-creds-boot.service   # or materialise everything, once
+systemctl start guarden-creds-boot.service   # materialise everything, once
 ```
+
+**`weedr secret set` asks for that itself**, so a plant on a converged box needs no hand-run of
+anything: the verb writes the blob and starts the oneshot, and the value is in the service's own
+podman store when the verb returns. The `.path` unit is the other half — it watches
+`/etc/guarden/creds/` and triggers the same oneshot when a blob changes underneath it, which is
+what a blob written by something other than the verb (a restored backup, an operator's own `cp`)
+needs. **`soil install` starts that unit, and starting it is not the same as enabling it:** an
+enabled `.path` unit watches nothing until it runs, so an install that only enabled it left the
+watch dormant until the next boot and the first plant of a fresh box materialised nothing.
 
 Those two units are the only place a blob is decrypted, and they are root because the key is.
 There is no `guarden-creds.service`; a runbook that named one would send an operator to start a

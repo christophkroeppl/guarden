@@ -2188,7 +2188,7 @@ is not a surprise in a monitoring script.
 | `guarden-pins.path` on `/var/lib/guarden/stakes/` and `/var/lib/guarden/registry/` | `weedr pin sync`, under the `snapshots` lock |
 | `guarden-snapshots.timer`, daily | `weedr service snapshot --all`, then `weedr pin sync` |
 | `guarden-snapshots-cleanup.timer`, every 15 minutes | snapper's cleanup, under the `snapshots` lock, replacing the packaged unit |
-| `guarden-creds.path` on `/etc/guarden/creds/`, and `guarden-creds-boot.service`, a boot-time oneshot | the credential materialiser. Both are named here because a runbook that told an operator to `systemctl start guarden-creds.service` would name a unit that does not exist, and this pair is the only place a blob is decrypted |
+| `guarden-creds.path` on `/etc/guarden/creds/`, and `guarden-creds-boot.service`, a boot-time oneshot | the credential materialiser. Both are named here because a runbook that told an operator to `systemctl start guarden-creds.service` would name a unit that does not exist, and this pair is the only place a blob is decrypted. **`soil install` starts the `.path` unit as well as enabling it**: an enabled `.path` unit watches nothing until it runs, so a box whose install only enabled it materialised nothing on its first plant and waited for the next boot |
 | a poke | `furrow deploy` |
 
 There is no long-running daemon. Every recurring job is a `.path` or a `.timer` unit running a
