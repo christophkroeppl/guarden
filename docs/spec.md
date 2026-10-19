@@ -1185,6 +1185,13 @@ grants the `hose` account — the one a poke arrives as — the ability to run t
 deploy reaches `weedr service ingest` as `guarden`; that is how a service comes to exist, and
 the capability it carries is the one the table says: create a service and nothing else.
 
+**There is a SECOND rule in the same file, and it is the one that lets the deploy reach the
+mutator at all:** `guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr`. It names the
+PROGRAM and not the verbs, because a sudoers rule matches a command's arguments as written and
+the real invocation carries a service name and a sha (§6.6). The verbs it carries are the
+ones the mutator itself enforces, and the mutator's list is the spec's §6.6 list — so the
+table above and that list are the same policy, read in the two places each can be read.
+
 Every verb that *is* granted is granted whole. A caller that can run `furrow deploy` creates a
 service and nothing else: it cannot grant a port, cannot destroy data, cannot roll anything
 back, and cannot choose where a service's tree or data comes from, because none of those is a
@@ -2091,21 +2098,39 @@ The steps, in this order, and the order is the point :
 Only builds are queued. A deploy that pulls a prebuilt image competes for no resource with
 anything and does not go behind a build lane.
 
-`furrow` is unprivileged and calls the mutator through a sudoers rule. The rule is written out
-in full, because "unprivileged" is a property of the file and not of the reader's assumption:
+`furrow` is unprivileged and calls the mutator through a sudoers rule. **The rule is one
+line, and the mutator enforces the verbs** — because a sudoers rule matches a command's
+ARGUMENTS as written, and the real invocation carries a service name and a sha:
 
 ```
-guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr service ingest, \
-  /usr/lib/guarden/bin/weedr service remove, /usr/lib/guarden/bin/weedr service gate, \
-  /usr/lib/guarden/bin/weedr service start, \
-  /usr/lib/guarden/bin/weedr service stop, /usr/lib/guarden/bin/weedr service restart, \
-  /usr/lib/guarden/bin/weedr service snapshot, \
-  /usr/lib/guarden/bin/weedr service build, \
-  /usr/lib/guarden/bin/weedr secret list, /usr/lib/guarden/bin/weedr port list, \
-  /usr/lib/guarden/bin/weedr firewall list, \
-  /usr/lib/guarden/bin/weedr service list, /usr/lib/guarden/bin/weedr service status, \
-  /usr/lib/guarden/bin/weedr module list
+guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr
 ```
+
+Measured, with the rule written by hand:
+
+```
+$ sudo -n -u guarden sudo -n -l /usr/lib/guarden/bin/weedr service ingest
+/usr/lib/guarden/bin/weedr service ingest                              <- the rule matches
+$ sudo -n -u guarden sudo -n /usr/lib/guarden/bin/weedr service ingest someapp --from poke someapp@9f2c1ab
+sudo: I'm sorry guarden. I'm afraid I can't do that                    <- THE REAL CALL
+```
+
+So the rule cannot name the verbs, and the verbs are named by the mutator: `weedr` reads
+`SUDO_USER` — the account sudo ran as — and refuses every verb outside this list when the
+caller is `guarden`:
+
+```
+weedr service ingest      weedr secret list        weedr firewall list
+weedr service remove      weedr port list          weedr service list
+weedr service gate        weedr service status     weedr module list
+weedr service start
+weedr service stop        weedr service build
+weedr service restart     weedr service snapshot
+```
+
+A call that did not come through sudo has no `SUDO_USER` and is root's own call, which is
+unrestricted — that is the case the VM harness exercises, and the case the operator's own
+`sudo weedr …` is not.
 
 Note the `(root)`: `furrow` runs as `guarden` and the mutator runs as root. `weedr firewall
 list` is here rather than absent because it reads the registries and the overrides, both
@@ -2113,6 +2138,13 @@ list` is here rather than absent because it reads the registries and the overrid
 pending rule request in the push's log the way it reports a pending port. The **writes** are
 not here and never will be: `weedr firewall open` installs root firewall text, which is the same
 authority class as `weedr port open` (§7.7), and neither is named.
+
+**The list is a policy in the program, and a program is the only place that can say what a verb
+means.** `purge` destroys data, `rollback` replaces it, `port open` publishes a port and
+`firewall open` grants a rule — and a list of program names cannot say that, because a rule
+that named a verb together with "any arguments" is not a thing sudoers can express. The rule
+grants the capability; the program narrows it; and the narrowing is in the same place as the
+refusal, so an operator who reaches the mutator the wrong way is told which verbs it may run.
 
 **Every verb on that rule is granted whole, with no exceptions for particular arguments, and
 that is the property the whole grants design rests on.** A sudoers command with no argument

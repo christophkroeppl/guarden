@@ -1441,11 +1441,18 @@ Both rules are written out in full, once, in `docs/spec.md` §6.6 and §6.7 with
 targets. They are not repeated here, because a rule duplicated across documents is a rule that
 drifts and this one has changed four times. What an operator needs from them:
 
-- **`guarden ALL=(root)`** — the mutator verbs, run as root. `furrow` runs as `guarden` and
-  reaches root through exactly that list. It does **not** name `weedr port open`,
-  `weedr port close`, `weedr service purge`, `weedr service rollback`, `weedr service fork`,
-  `weedr service add`, `weedr module add`, or any `weedr project` verb, so a workflow can create
-  a service and nothing else.
+- **`guarden ALL=(root)`** — the mutator, run as root. `furrow` runs as `guarden` and
+  reaches root through exactly that line: `guarden ALL=(root) NOPASSWD:
+  /usr/lib/guarden/bin/weedr`. **It names the PROGRAM and not the verbs**, because a
+  sudoers rule matches a command's arguments as written and the real invocation
+  carries a service name and a sha — so a rule naming `weedr service ingest`
+  admits the bare command and refuses the call that matters. The verbs are
+  enforced by the mutator, which reads `SUDO_USER` and refuses everything
+  outside the spec's §6.6 list when the caller is `guarden`. So it does **not**
+  reach `weedr port open`, `weedr port close`, `weedr service purge`,
+  `weedr service rollback`, `weedr service fork`, `weedr service add`,
+  `weedr module add`, or any `weedr project` verb, so a workflow can create a
+  service and nothing else — and the refusal says which verbs it may run.
 - **`hose ALL=(guarden)`** — the deploy queue, run as `guarden`. A poke reaches the mutator only
   through `furrow deploy` and `furrow preview drop`, and its only `weedr` verb is
   `weedr project list`.

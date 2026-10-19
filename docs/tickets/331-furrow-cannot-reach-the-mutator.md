@@ -65,6 +65,42 @@ NOT `rollback`, NOT `port open`, NOT `firewall open`.** So the spec's own
 list keeps the destructive and the granting verbs out, and the list is right;
 what is missing is a way to express it that sudoers can honour.
 
+## RESOLVED: option B, implemented and measured (`3e6cf6a`, `1adad69`)
+
+**The rule is one line and the mutator narrows it:**
+
+    guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr
+
+`weedr` reads `SUDO_USER` (the account sudo ran as) and refuses every verb outside
+the spec's §6.6 list when the caller is `guarden`. A call that did not come through
+sudo has no `SUDO_USER` and is root's own call, which is unrestricted.
+
+**MEASURED on a fresh VM, with the chain run as the accounts it actually runs as**
+(`t132-poke-chain.sh` — the first suite that can exercise the unprivileged path,
+because every other VM suite runs as root and `furrow` calls `weedr` directly when
+its euid is 0):
+
+    MEASURE: the rules: 6 grants
+    MEASURE: the mutator as guarden: no services            <- the chain WORKS
+    MEASURE: the guarden account running 'service purge someapp':
+      error: the guarden account may not run weedr service purge; the verbs it may
+      run are weedr firewall list, …, weedr service stop
+    MEASURE: the guarden account running 'service rollback someapp --to …':
+      error: the guarden account may not run weedr service rollback; …
+    MEASURE: the guarden account running 'port open someapp 8080/tcp':
+      error: the guarden account may not run weedr port open; …
+    MEASURE: the guarden account running 'firewall open someapp some-rule':
+      error: the guarden account may not run weedr firewall open; …
+    MEASURE: a root call of the same verb: error: service name 'someapp' has no
+      environment segment naming a track                    <- root is NOT narrowed
+
+So the poke path works, and the destructive and the granting verbs are refused by
+the mutator — the two halves the spec's §6.6 list describes.
+
+**The harness gap is closed for this path.** `t132` runs the chain with
+`setpriv`, the mechanism `t502` already uses for the service user, and it is the
+first suite in the tree that can run something as a program account.
+
 ## What to decide
 
 **The shape of the fix is a design decision, and the ticket exists to have it
