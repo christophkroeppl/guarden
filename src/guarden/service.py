@@ -857,7 +857,7 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
         if pinned is not None:
             render.refuse_pinned_user(unit, pinned, f"{name}: the unit {path.name}")
     if not _carries_owner_line(name, escaped_ref, record):
-        units.install(_unit_source(name, record), name, escaped_ref)
+        units.install(_unit_source(name, record, escaped_ref), name, escaped_ref)
 
 
 # The spellings of one declaration: no `USER` at all, the number, and the name.
@@ -1025,11 +1025,13 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
     uid_text, separator, gid_text = declared.partition(":")
     if uid_text.isdigit():
         uid = int(uid_text)
-        if separator and gid_text.isdigit():
-            return (uid, int(gid_text))
-        passwd = _image_file(name, record, reference, "/etc/passwd")
         if separator:
-            # a numeric uid with a name for its group
+            if gid_text.isdigit():
+                return (uid, int(gid_text))
+            # A numeric uid with a name for its group. The group database is
+            # the only one this row reads: /etc/passwd is not opened for a
+            # `uid:groupname` declaration, which is one `podman run` per probe
+            # saved on the shape that declares its group by name.
             group = _image_file(name, record, reference, "/etc/group")
             if group is None:
                 raise _cannot_run(name, record, reference, gid_text)
@@ -1038,6 +1040,7 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
                 raise _no_such_group(name, reference, gid_text)
             where = f"the gid of the group {gid_text!r} in /etc/group"
             return (uid, _number(name, reference, found[2], where))
+        passwd = _image_file(name, record, reference, "/etc/passwd")
         if passwd is not None:
             entry = _uid_entry(passwd, uid)
             if entry is not None:
@@ -1290,18 +1293,24 @@ def _carries_owner_line(name: str, escaped_ref: str | None, record) -> bool:
 
 
 def _unit_source(name: str, record, escaped_ref: str | None = None) -> Path:
-    """Where `units.install` gets its source for this service: the home, or the
-    module's shipped tree for a service a module created — the same two sources
-    the installs that created these units read from."""
-    home = paths.service_home(name)
-    if _manifest_in(home).is_file():
-        return _render_source(home)
+    """Where `units.install` gets its source for this service: the tree the units
+    being re-rendered were installed from — an instance's own home first when
+    this start is an instance's, then the service's home, and the module's
+    shipped tree for a service a module created. The same sources the installs
+    that created these units read from, looked up in the same order the
+    directory they are being installed into resolves."""
+    homes = [paths.service_home(name)]
+    if escaped_ref:
+        homes.insert(0, paths.instance_home(name, escaped_ref))
+    for home in homes:
+        if _manifest_in(home).is_file():
+            return _render_source(home)
     if record.installed_by:
         shipped = modules_mod.source_of(record.installed_by, name)
         if _manifest_in(shipped).is_file():
             return shipped
     raise errors.GuardenError(
-        f"{name}: no manifest in {home} and no module source, so its units cannot be "
+        f"{name}: no manifest in {homes[-1]} and no module source, so its units cannot be "
         "re-rendered with the probed line",
         errors.HOST_NOT_AS_ASSUMED,
     )
