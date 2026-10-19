@@ -420,18 +420,29 @@ def _filter_set(name: str) -> None:
     to the provider, but the consumer's **uid** joins that publication's accept
     set, so a consumer with no publication of its own still changes the set.
 
-    A service that brings only its uid renders whenever the host has guarden's
-    firewall installed, because that is when there is a set to be missing
-    from: the deny and every accept are one file that unit loads, and a uid
-    absent from an installed file cannot resolve the registry (spec 7.6).
+    A service that brings only its uid renders whenever the host holds a
+    rendered set — the firewall installed **or** `50-services.conf` already
+    written by another verb — because that is when there is a set to be
+    missing from: the deny and every accept are files, and whatever exists is
+    what the first `soil firewall --apply` loads, so a uid absent from an
+    existing file meets the deny from the moment it does (spec 7.6).
     """
     record = registry.load(name)
     if record is None:
         return
-    if not (record.publication or record.edges) and not firewall.unit_installed():
-        # Nothing to be missing from: this host has no ruleset loaded, so no
-        # deny is refusing this uid's resolver, and the render that first
-        # writes the set reads every uid the registry holds.
+    if (
+        not (record.publication or record.edges)
+        and not firewall.unit_installed()
+        and not firewall.SERVICES_CONF.exists()
+    ):
+        # Nothing to be missing from: this host holds no rendered set — no
+        # file, so no `soil firewall --apply` that could later load one without
+        # this uid — and no ruleset loaded, so no deny is refusing this uid's
+        # resolver. The FILE counts as much as the unit because other verbs
+        # write it unconditionally (`weedr port open`, a granted rule): a set
+        # that exists while the unit does not is a set the first apply loads
+        # whole, and a uid absent from it meets the deny the moment it does
+        # (spec 7.6, review finding 4).
         return
     firewall.print_diff(firewall.install(config_mod.load()))
 
