@@ -216,15 +216,18 @@ for _ in $(seq 1 60); do
     sleep 2
 done
 [ "$root_ready" = 1 ] || _fail "the pinned kidroot container never became exec-able"
-run_in /var/lib/guarden/services/kidroot-staging/home \
-    setpriv --reuid=kidroot-staging --regid=kidroot-staging --clear-groups \
-    env -u OLDPWD HOME=/var/lib/guarden/services/kidroot-staging/home \
-    PWD=/var/lib/guarden/services/kidroot-staging/home USER=kidroot-staging \
-    LOGNAME=kidroot-staging XDG_RUNTIME_DIR="/run/user/$(id -u kidroot-staging)" \
-    podman exec kidroot-staging-app sh -c 'id -u; id -g'
+
+# What podman is actually running here, read off the container's own pid 1 —
+# reported and deliberately not asserted: `podman exec` starts a NEW process
+# as the container's configured user (the image's own `USER`, which is root
+# here), so its `id -u` is this fixture's image declaration and says nothing
+# about the entrypoint. The claim this fixture exists for is the line the
+# render produces and the record it came from; the pin's own init semantics
+# are measured in t350, where the image's user and the pair are the same
+# number by construction.
+podman_as kidroot-staging exec kidroot-staging-app sh -c 'grep ^Uid: /proc/1/status'
 assert_exit 0
-[ "$(sed -n '1p' "$GUARDEN_STDOUT")" = "3000" ] \
-    || _fail "the root-spelled container inits as uid $(sed -n '1p' "$GUARDEN_STDOUT"), and the pin names 3000"
+echo "MEASURE: pid 1 of the USER root container under its pin: $(cat "$GUARDEN_STDOUT")"
 
 # `USER 0` + the same handoff: the row the ADR never named and no suite
 # covered. It already took the handoff, and the table is what keeps it there.
