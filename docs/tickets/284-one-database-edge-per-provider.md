@@ -102,3 +102,27 @@ count changes.
   needs.
 - **A distinct `as:` prefix that is not the kind** is *not* a fix on its own:
   reason 1 above is about the kind check, not the name.
+
+## Measured again 2026-10-19 — the gap now produces posture debt, not just refusal
+
+On the fresh box `e2e-fresh-scripts` (manual fleet deploy), umami-staging needed
+postgres-staging's port and the edge model had no path for it, so the deploying
+agent hand-wrote `PublishPort=0.0.0.0:5433:5432` into postgres-staging's quadlet
+(the in-unit comment states the real reason a loopback bind does not work: one
+service user's container cannot reach ANOTHER user's 127.0.0.1 host bind — cross-
+service container traffic must arrive on a host-published port). Verified after:
+
+```
+ferm default-deny holds:  external TCP to <box-ip>:5433  DENIED
+                          control: external TCP to <box-ip>:22 OPEN
+bind itself:              0.0.0.0:5433 (posture rule says loopback unless a
+                          publication is a recorded, gated-track act)
+fleet MD verdict:         claimed "no deviations" — the bind was undisclosed
+                          there, only in the unit's inline comments
+```
+
+So the failure mode has grown: with no edge path for a second service on one box,
+an agent's fastest working move is a public bind whose only barrier is ferm. This
+is the ticket's "what this ticket wants" in miniature — a cross-service edge on
+one box needs the same treatment as the database edge: refused or provisioned,
+never a hand-written 0.0.0.0.
