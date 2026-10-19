@@ -46,6 +46,14 @@ so what a suite executes is in and what it only quotes — `docs/` — is out. T
 suite's own file is added on top of all of that, so two suites are two read
 sets, and a suite that changed is run rather than inherited.
 
+**A suite may name the tree it reads, in its own text: `# reads: <path>`.** A
+doc-assertion suite reads documents, and without this its green would be
+inherited over an edited document — the same stale pass ticket 309 fixed for the
+package, with a different tree. The name is per suite rather than universal
+because a document is read by the suite that asserts on it and by nothing else:
+`docs/` stays out of every key, and a doc enters the key of the one suite that
+names it.
+
 Usage:
 
     suitecache.py golden              identity on stdin, golden digest on stdout
@@ -81,6 +89,21 @@ UNIVERSAL_FILES = (
 )
 UNIVERSAL_GLOBS = ("tests/*.py",)
 UNIVERSAL_TREES = ("fixtures", "modules", "packages", "tools", "examples", "src/guarden")
+# A suite may name the tree it reads, and the name is a line in the suite
+# itself: `# reads: docs/sysadmin.md README.md`. **The claim is per suite,
+# because a doc is read by the suite that asserts on it and by nothing else** —
+# `docs/` is out of every key (a doc-only change must invalidate no cached
+# green), and a suite that reads a doc is the one whose result changes when
+# that doc does. Without this, a doc-assertion suite's green would be
+# inherited over an edited document, which is the failure ticket 309 fixed for
+# the package and the same failure for a different tree.
+#
+# The line is a list of paths relative to the repository root, one per line
+# after the marker, so a suite names several without a parser for a
+# comma-separated field. A path that does not exist is ignored rather than
+# refused: a suite may name a file a future change adds, and a key that
+# depended on a file's absence would move when the file appeared.
+SUITE_READS = "reads:"
 ABSOLUTE_TIME = re.compile(r"^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?")
 IDENTITY_FIELDS = ("instance", "pool", "snapshot", "created")
 LEDGER_SEP = "\t"
@@ -155,6 +178,34 @@ def files_under(root: Path, relative: str) -> list[str]:
     return found
 
 
+def suite_reads(suite: Path) -> list[str]:
+    """The paths a suite names in its own `# reads:` line.
+
+    A line of the form `# reads: <path> [<path> ...]`, and every path after
+    the marker on that line. The marker is read from the suite's text rather
+    than from a list here, for the reason the machine declaration is: the claim
+    travels with the suite that makes it, and a suite that forgets it reads
+    nothing outside the universal set — which is the safe answer, because a
+    missing name can only make a key hit too often, never too rarely for a
+    file the suite does read.
+    """
+    named: list[str] = []
+    try:
+        text = suite.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return named
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            continue
+        body = stripped.lstrip("#").strip()
+        if not body.startswith(SUITE_READS):
+            continue
+        for token in body[len(SUITE_READS):].split():
+            named.append(token)
+    return named
+
+
 def read_set(root: Path, suite: Path) -> list[str]:
     paths: dict[str, None] = {str(suite.relative_to(root)): None}
     for relative in (*UNIVERSAL_FILES, *UNIVERSAL_TREES):
@@ -163,6 +214,9 @@ def read_set(root: Path, suite: Path) -> list[str]:
     for pattern in UNIVERSAL_GLOBS:
         for path in sorted(root.glob(pattern)):
             paths[str(path.relative_to(root))] = None
+    for relative in suite_reads(suite):
+        for relative_path in files_under(root, relative):
+            paths[relative_path] = None
     return sorted(paths)
 
 
