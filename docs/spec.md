@@ -1792,6 +1792,16 @@ renders the edge's file-provider configuration into `/var/lib/guarden/edge/dynam
 `guarden:edge 2750`. The edge's user is in `edge` and is not in `guarden`. `roots` **must not**
 write outside that directory.
 
+The slice carries the routes; the service's **registry record** (§3.4 `route_destinations`)
+carries each route's destination, and the record wins wherever the two disagree. The slice is
+the *next render*'s (§6.2 `weedr expose set` moves the record and the firewall's accept set in
+one act and touches no rendered slice), so between that act and the service's next render a
+row the record no longer carries would be a dial to a publication the publishing uid is no
+longer accepted on. `roots` renders from the record for the same reason the firewall installs
+from it: one authority, read by both, and no window in which the two disagree. A label the
+record does not name keeps the slice's answer — a service created before the field existed has
+no entry, and its slice is the only answer there is.
+
 With the auth-authelia module installed, a route declaring `auth: true` gets the forward-auth rule aimed
 at the service named in `/etc/guarden/edge/auth-provider`, which must be the name of an
 existing service in a gated track; anything else is exit `1` and no configuration is written.

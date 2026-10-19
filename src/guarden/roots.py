@@ -3,15 +3,18 @@
 spec 6.4. Reads the rendered route slice of every service from
 `/var/lib/guarden/shared/<name>/` and renders the edge's file-provider
 configuration into `/var/lib/guarden/edge/dynamic/`, which is the one directory
-it may write. Traefik-specific by decision and with no intermediate route
-format: if the edge is ever replaced, `roots` is replaced.
+it may write for the edge. Traefik-specific by decision and with no
+intermediate route format: if the edge is ever replaced, `roots` is replaced.
 
-One file per service, so a route change is one file changing and the edge
-picks it up from its own watch without a restart, and a service that is removed
-takes its routes with it.
+The slice carries the routes; the **registry record carries the destination**
+(§ `_recorded`), because the record is what `weedr expose set` moves and what
+the firewall's accept set is already rendered from. One file per service, so a
+route change is one file changing and the edge picks it up from its own watch
+without a restart, and a service that is removed takes its routes with it.
 
-With the tunnel module, `roots` also renders a tunnel ingress file into
-`/var/lib/guarden/tunnel/ingress/` for routes whose destination is `tunnel`.
+With the tunnel module, `roots` also renders the tunnel's ingress file into
+`/var/lib/guarden/tunnel/config.yml` for routes whose destination is `tunnel`,
+and removes that file when nothing is left for the tunnel to carry.
 """
 
 from __future__ import annotations
@@ -96,6 +99,39 @@ def file_name(service: str) -> str:
 
 def _router(service: str, route: dict) -> str:
     return f"{service}-{route.get('label', route.get('host', 'route'))}"
+
+
+def _recorded(service: str, routes: list[dict]) -> list[dict]:
+    """The slice's routes with the **record's** destination where it has one.
+
+    The record is the destination's authority: `render._routes` reads it at
+    render time and `firewall.accept_lines` reads it at install time, so this
+    is the third renderer and it has to agree with the other two or the three
+    answers diverge — which is the defect this ticket exists to remove.
+
+    The slice cannot be that authority because it is the *next render*'s
+    (ticket 294): `weedr expose set` moves the record and the firewall's
+    accept set in one act and touches no rendered slice. Between the act and
+    the service's next render, a row the record no longer carries is a dial to
+    a publication the publishing uid is not accepted on any more. The OUTPUT
+    deny catches it, so the host is not exposed — but a configuration that
+    names a route nothing accepts is wrong whether or not it is caught, and
+    "latently wrong" is what the deny makes it, not what makes it right.
+
+    A label the record does not name keeps the slice's answer: a service
+    created before the field existed has no entry, and its slice is the only
+    answer there is (the same grandfathering `render._routes` applies).
+    """
+    record = registry.load(service)
+    if record is None:
+        return routes
+    out = []
+    for route in routes:
+        destination = record.route_destinations.get(route.get("label", ""))
+        if destination:
+            route = {**route, "destination": destination}
+        out.append(route)
+    return out
 
 
 def render_service(service: str, routes: list[dict], entrypoints: list[str],
@@ -206,7 +242,7 @@ def render_tunnel(routes: list[dict], config) -> str:
     previews = []
     if config.tunnel_domain:
         for _service_name, entries in slices().items():
-            for route in entries:
+            for route in _recorded(_service_name, entries):
                 if route.get("destination") == "tunnel" and route.get("ref"):
                     # This is a tunnel route for a preview instance
                     previews.append({
@@ -221,7 +257,16 @@ def render_tunnel(routes: list[dict], config) -> str:
 
 
 def write_tunnel(body: str) -> None:
+    """The tunnel's ingress file, written — and swept, like the edge's files.
+
+    An empty body is not "write nothing": it is "this host publishes nothing
+    through the tunnel", so a config left behind would keep dialling rows for
+    routes that are gone. `sweep` gives the edge's per-service files that
+    guarantee; this is the same guarantee for the one file the tunnel reads.
+    """
     if not body:
+        if paths.TUNNEL_CONFIG.is_file():
+            paths.TUNNEL_CONFIG.unlink()
         return
     paths.TUNNEL.mkdir(parents=True, exist_ok=True)
     conf.write_file(paths.TUNNEL_CONFIG, body, 0o640)
@@ -343,7 +388,12 @@ def sync() -> int:
             errors.HOST_NOT_AS_ASSUMED,
         )
     provider = provider_for(config)
-    routes = slices()
+    # The record answers the destination, the slice supplies everything else.
+    # Both are read here rather than in the renderers so that the edge files
+    # and the tunnel config — which are written in one sync and read by two
+    # different uids — cannot disagree about where a route went.
+    routes = {service: _recorded(service, entries)
+              for service, entries in slices().items()}
     policies = basicauth_flags()
     # **The whole plan is rendered before the first byte is written**, after
     # `provider_for` has refused a marker that does not hold. A validator that
@@ -366,10 +416,7 @@ def sync() -> int:
     if auth_body is not None:
         conf.write_file(paths.EDGE_DYNAMIC / FORWARD_AUTH, auth_body, 0o640)
         written.add(FORWARD_AUTH)
-    if tunnel_body:
-        write_tunnel(tunnel_body)
-    elif paths.TUNNEL_CONFIG.is_file():
-        paths.TUNNEL_CONFIG.unlink()
+    write_tunnel(tunnel_body)
     printed = [f"{service} {len(routes[service])} routes" for service, _ in plan]
     for name in sweep(written):
         printed.append(f"removed {name}")
