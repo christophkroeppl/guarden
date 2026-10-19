@@ -796,8 +796,12 @@ assert_exit 0
 # writes land in the subuid band (ticket 277) while the record and the
 # "an image that changed is the probe's condition again" line both claimed
 # otherwise. The image changes in the build, so that is where the answer goes
-# away — and the next start is the probe's condition again for real.
+# away — and the next start is the probe's condition again for real. The new
+# user is added as root because that is where this fixture's original
+# `USER 10001` left the build: an appended `RUN` inherits the directive above
+# it, and `addgroup` as 10001 is refused by the image.
 printf '%s\n' \
+    "USER root" \
     "RUN addgroup -g 10002 kiduser2" \
     "RUN adduser -D -u 10002 -G kiduser2 kiduser2" \
     "USER 10002" >> "$home/Containerfile"
