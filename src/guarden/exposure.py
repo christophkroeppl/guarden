@@ -7,10 +7,11 @@ Three inputs, in this order, and nothing else decides a destination:
    carries its environment (spec 5.1), so one registry file is one service ×
    environment entry. `public` is the operator's word and `edge` is the slice's
    for the same position: the edge is the host's forwarded 80/443 ingress, and
-   `weedr share list` already refuses an edge-destination route with "the edge
-   is public already".
+   `weedr share issue` refuses an edge-destination route — "a grant may only
+   name a route the tunnel carries" — because a grant to reach what is already
+   public is a second grant of nothing.
 2. The **track's** `expose` field — the per-environment default the root-owned
-   `[[environments]]` row states (spec 3.3 references the field, spec 10 puts
+   `[[environments]]` row states (spec 3.1 states the field, spec 10 puts
    the track table in `guarden.toml`).
 3. The **derived default** (ticket 293): the tunnel when the `cloudflared`
    module is enabled, loopback-only otherwise. Fail-closed: a tunnel with no

@@ -73,10 +73,11 @@ TRACK_DEFAULTS = {
     "cap": None,
     # Ticket 293: unset is the default, and unset resolves from the module set —
     # the tunnel when `cloudflared` is enabled, loopback-only otherwise
-    # (`guarden.exposure`). Spec 3.3's sentence "the track's expose field
-    # already defaults to edge" is the line this supersedes: the operator's
-    # decision of 2026-10-19 makes private the default and edge a choice a
-    # track states.
+    # (`guarden.exposure`). Spec 3.1's track-field list and 3.3's overrides
+    # sentence state exactly this default; the previous "defaults to edge"
+    # wording was corrected in the spec in the same change that made the code
+    # behave this way, because a ticket sits below the spec in the authority
+    # order (docs/spec.md:12) and cannot supersede a sentence of it.
     "expose": "",
 }
 NETWORK_KEYS = {"backend", "pasta_options"}

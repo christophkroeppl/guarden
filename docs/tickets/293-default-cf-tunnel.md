@@ -81,11 +81,12 @@ hold for exposure at all.
 
 ## Known gaps (reported, not invented)
 
-- **Spec 3.3's sentence "defaults to `edge`" becomes stale** once the default
-  is the derived one; the spec is the contract and this ticket is not an ADR,
-  so the line is flagged here for the spec's next edit rather than rewritten
-  silently: the ticket above it in the authority order (operator decision
-  2026-10-19) supersedes the sentence until then.
+- **Spec 3.3's sentence "defaults to `edge`" is corrected in this branch.** The
+  spec is the contract and a ticket sits below it in the authority order
+  (`docs/spec.md:12`), so nothing here supersedes a sentence of it: spec 3.1's
+  track-field list and 3.3's overrides sentence were rewritten to state the
+  derived default, in the same change that made the code behave that way
+  (review-exposure.out finding 1).
 - Tunnel hostnames are still allocated by nobody (the backlog's open question):
   `roots` publishes a route to whatever host the mutator allocated in
   `host.domain`; the tunnel zone (`[ingress] tunnel_domain`) is only used for

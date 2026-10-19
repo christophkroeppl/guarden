@@ -55,8 +55,8 @@ POLICY_MODE = 0o640
 POLICY_BODY = "required\n"
 
 # The host directory the edge unit mounts. It exists before any unit mounts it:
-# `soil install` converges it, and the policy write creates it again for the
-# host that mounts before its next install run. `0755 root:root` — the
+# `soil install` converges it, and `weedr module add gate-traefik` creates it
+# before the module's own unit is installed. `0755 root:root` — the
 # directory must be traversable by the edge user (the *files* inside carry the
 # `0640 root:edge` restriction), and it sits beside `dynamic/` under
 # `/var/lib/guarden/edge` precisely because that parent is one the edge's uid
@@ -96,12 +96,14 @@ def _edge_group() -> int | None:
 def ensure_directory() -> None:
     """`/var/lib/guarden/edge/basicauth`, `0755 root:root`.
 
-    Called from the policy write and from `soil install`: the shipped edge unit
-    mounts this path, and a bind source that does not exist is podman's mkdir —
-    which an unprivileged edge user cannot perform under a root-owned parent,
-    so the unit would fail to start rather than degrade. The parent directory
-    is created with the same default the edge's own `dynamic/` directory has
-    always been created with; this function states the mode of the directory it
+    Called from `weedr module add gate-traefik`, which creates it before the
+    module's own unit is installed, and from `soil install`, which converges it
+    on a host that has never had a module: the shipped edge unit mounts this
+    path, and a bind source that does not exist is podman's mkdir — which an
+    unprivileged edge user cannot perform under a root-owned parent, so the
+    unit would fail to start rather than degrade. The parent directory is
+    created with the same default the edge's own `dynamic` directory has always
+    been created with; this function states the mode of the directory it
     creates and touches nothing it does not own.
     """
     HTPASSWD_DIR.mkdir(parents=True, exist_ok=True)
