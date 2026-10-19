@@ -1828,13 +1828,13 @@ answer. Before this, a rebuilt Containerfile that changed `USER` kept the old pi
 container ran the new image user, the line mapped the old pair, and those writes landed in
 the subuid band.
 
-**The invalidation is one-sided: it clears the RECORD, not the installed unit.** The unit
-keeps the line it was rendered with until something re-renders it, and the thing that
-re-renders it is `weedr service start` — the start path re-renders whenever the installed
-unit does not carry exactly what the record renders for it. A unit started by anything else
-— a systemd `Restart=`, an operator's own `systemctl --user start` — comes up under the
-OLD pin with the NEW image, which is the failure the invalidation exists to stop, and
-nothing says so: the record holds no answer, so nothing contradicts the unit. The
+**The invalidation is one-sided: it clears the RECORD, not the installed pin.** The
+drop-in guarden owns keeps the line it was written with until something re-writes it, and
+the thing that re-writes it is `weedr service start` — the start path re-renders whenever
+that file does not hold exactly what the record renders for the unit. A unit started by
+anything else — a systemd `Restart=`, an operator's own `systemctl --user start` — comes up
+under the OLD pin with the NEW image, which is the failure the invalidation exists to stop,
+and nothing says so: the record holds no answer, so nothing contradicts the pin. The
 operator's `weedr service start` is the supported way to start a service, and it re-renders
 first; the gap is between a rebuild and a start through any other door.
 

@@ -162,16 +162,17 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   new image user, the line mapped the old pair, and those writes landed in the subuid band
   with the record and this ADR's "an image that changed is the probe's condition again" both
   claiming otherwise. **The invalidation is one-sided: it clears the RECORD, not the
-  installed unit.** The unit keeps the line it was rendered with until something re-renders
-  it, and what re-renders it is `weedr service start` — the start path re-renders whenever
-  the installed unit does not carry exactly what the record renders for it. A unit started
-  by anything else — a systemd `Restart=`, an operator's own `systemctl --user start` —
-  comes up under the OLD pin with the NEW image, and nothing says so, because the record
-  holds no answer and nothing contradicts the unit. `weedr service start` is the supported
+  installed pin.** The drop-in guarden owns keeps the line it was written with until
+  something re-writes it, and what re-writes it is `weedr service start` — the start path
+  re-renders whenever that file does not hold exactly what the record renders for the
+  unit. A unit started by anything else — a systemd `Restart=`, an operator's own
+  `systemctl --user start` — comes up under the OLD pin with the NEW image, and nothing
+  says so, because the record holds no answer and nothing contradicts the pin.
+  `weedr service start` is the supported
   way to start a service and it re-renders first; the gap is between a rebuild and a start
   through any other door, and it is stated here rather than closed, because closing it
-  means the build verb writing into the installed unit, which is the mutator's own
-  directory and would need the renderer's lock the build does not hold. What this does NOT
+  means the build verb writing into the drop-in directory, which is root-owned and would
+  need a lock the build does not hold. What this does NOT
   cover is an image replaced outside that verb — a hand `podman pull` under the same tag,
   a hand `podman build --tag` under it, or a per-container `Containerfile` layout the build
   verb does not read at all (it looks only at the home's own `Containerfile`/`Dockerfile`,
