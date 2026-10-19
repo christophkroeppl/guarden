@@ -91,18 +91,39 @@ def slices() -> dict[str, list[dict]]:
 def basicauth_flags() -> dict[str, bool]:
     """The per-service basic-auth policy the renderer recorded (ticket 292).
 
-    Read from the same slice file `slices()` reads, so the middleware and the
+    Read from the same slice files `slices()` reads, so the middleware and the
     routes it attaches to can never come from two sources. A service whose
     slice predates the flag (or carries `false`) is grandfathered: no flag, no
     middleware, byte-identical output.
+
+    **An instance's slice is one of the places the flag is read from, and that
+    is what keeps the middleware on a preview.** The flag is a SERVICE's
+    policy — one login, one record, one slice flag — and the instance's render
+    carries it into the instance's own slice at
+    `shared/<service>/instances/<escaped-ref>/routes.toml`. Reading only the
+    service's own `routes.toml` found nothing for a preview: on an instance
+    track no render writes the slot's file, so the flag was absent and the
+    edge served the preview with no basic auth at all — on the one posture
+    where it matters, `expose = "edge"` (review r2, finding F4).
+
+    The flag is a service's, so any one of the service's slices answers for
+    it: an instance's slice carries the same value the service's own would.
+    The service's own file is read first, so a service with a slot slice and
+    an instance slice renders exactly as it did before.
     """
     out: dict[str, bool] = {}
     if not paths.SHARED.is_dir():
         return out
     for directory in sorted(path for path in paths.SHARED.iterdir() if path.is_dir()):
-        out[directory.name] = bool(
-            conf.read_toml(directory / "routes.toml").get("basicauth")
-        )
+        flag = bool(conf.read_toml(directory / "routes.toml").get("basicauth"))
+        if not flag:
+            instances = directory / "instances"
+            if instances.is_dir():
+                for own in sorted(path for path in instances.iterdir() if path.is_dir()):
+                    if conf.read_toml(own / "routes.toml").get("basicauth"):
+                        flag = True
+                        break
+        out[directory.name] = flag
     return out
 
 
