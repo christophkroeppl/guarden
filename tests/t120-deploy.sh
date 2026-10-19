@@ -254,6 +254,7 @@ assert_stdout_has "on /run type tmpfs"
 # form: a raw one may contain a `/`, and a file named after one is a path that
 # does not exist.
 run furrow deploy qapp-preview/feature/login --from poke qapp@9f2c1ab
+assert_exit 0
 assert_file_has "$registry/qapp-preview.toml" '[instances."feature\\x2flogin"]'
 assert_file_has "$registry/qapp-preview.toml" 'ref = "feature/login"'
 assert_file_exists "/run/guarden/locks/deploy-qapp-preview-feature\\x2flogin.lock"
