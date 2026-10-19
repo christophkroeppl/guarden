@@ -203,15 +203,22 @@ def refuse(body: dict[str, Any], container: str, path: Path) -> None:
 
 
 def _refuse_templated_ports(body: dict[str, Any], container: str, path: Path) -> None:
-    """A `ports:` entry carrying `${...}`, refused before the converter sees it.
+    """A `ports:` entry carrying a `$`, in either interpolation form, refused
+    before the converter sees it.
 
     The converter parses the host-IP field before any substitution, so
     `127.0.0.1:${PORT:-19069}:8069` dies in *its* parser with "invalid IP address
     syntax" — a message about an IP address that is written correctly — and the
-    reader is sent to the wrong line. Guarden answers instead, naming the
-    construct, and it does so before podlet runs: a guarden host allocates the
-    loopback publication itself from the manifest's ingress, so a repository's
-    published port is not the thing that decides where a service is reached.
+    reader is sent to the wrong line. The bare form is the same rule and was not
+    covered: `127.0.0.1:$PORT:8069` reached the converter and died in it with
+    "error parsing `$PORT` as an integer: invalid digit found in string"
+    (measured, t431). So the rule is one line and holds for the whole dollar: a
+    port entry carries no `$`, neither `${NAME}` nor `$NAME` nor the `$$` escape
+    that becomes a literal one, because every one of them lands in a field that
+    has to be a number. Guarden answers instead, naming the construct, and it
+    does so before the converter runs: a guarden host allocates the loopback
+    publication itself from the manifest's ingress, so a repository's published
+    port is not the thing that decides where a service is reached.
     """
     entries = body.get("ports") or []
     if not isinstance(entries, list):
@@ -223,11 +230,12 @@ def _refuse_templated_ports(body: dict[str, Any], container: str, path: Path) ->
             shown = ", ".join(f"{key}={value}" for key, value in entry.items())
         else:
             shown = str(entry)
-        if "${" in shown:
+        if "$" in shown:
             raise errors.GuardenError(
                 f"the unit source {path}: the service {container!r} has a ports entry "
-                f"{shown!r} carrying ${{...}}: a port's host-IP cannot be templated, and "
-                f"guarden allocates the loopback publication from the manifest's ingress"
+                f"{shown!r} carrying a $: a port's host-IP cannot be templated in either "
+                f"form — ${{NAME}} or $NAME — and guarden allocates the loopback "
+                f"publication from the manifest's ingress"
             )
 
 
