@@ -3,23 +3,30 @@
 guarden's isolation boundary is one host uid per service and its 0700 tree, but a rootless
 container's non-root image user maps into the service's subuid band, so image-uid writes are
 denied on entry and, if allowed, would land on disk as subuid-aliased owners. We decided that
-guarden probes the image's user at first start and renders
-`Userns=keep-id:uid=...,gid=...` into the unit itself — moving the process's mapping onto the
-service identity — instead of ever chowning files. Operator decision locked 2026-10-18 after a
-measured option review; this ADR supersedes the spec's blanket refusal of `Userns=` for
-guarden-generated lines (repository-supplied `Userns` stays refused).
+guarden probes the image's user at a start that has no probed answer yet — the first start of
+a service, and every start after a build re-tags the image the answer was read from — and
+renders `Userns=keep-id:uid=...,gid=...` into the unit itself — moving the process's mapping
+onto the service identity — instead of ever chowning files. Operator decision locked
+2026-10-18 after a measured option review; this ADR amends the spec's refusal of `Userns=` for
+guarden-generated lines (repository-supplied `Userns` stays refused) — the spec was amended
+alongside it (7bc9715), so it no longer refuses the directive at all.
 
 ## Status
 
-accepted (2026-10-18, operator) — implemented on branch `feat/keep-id-uid` (this file's
-commit ba6c114 plus six commits: 3c52158, 00decc3, ee40e14, 20ebc73, 7bc9715 and the
-206ff58 scaffold), amended by 3abc671 and 1fb02de, and amended again by the round-3 series
-7156644…HEAD — every finding of the third adversarial review closed: the 4242 pid-1 row
-re-measured on a container started under that pin, the two refuted prose claims out of the
+accepted (2026-10-18, operator) — implemented on branch `feat/keep-id-uid` and merged into
+`develop` as d9f48e0; amended by 3abc671 and 1fb02de, and amended again by the round-3
+series 7156644…84209f0 — every finding of the third adversarial review closed: the 4242 pid-1
+row re-measured on a container started under that pin, the two refuted prose claims out of the
 tree, the owner keys refusing every other TOML scalar whole, the renderer answering per
-image, a rebuild invalidating the pair it re-tags, and both handoff seams — tests t350-keepid
-/ t351-keepid-diagnostics / t352-keepid-boundaries — the pid-1 readings that settle what a
-pin decides are asserted in the last two and in t350 — pending review and merge.
+image, a rebuild invalidating the pair it re-tags, and both handoff seams — and then by the
+round-4 series, which closed the two findings that blocked the merge (a passwd row with a
+uid and no gid was an `IndexError` out of the probe, and the exec-form `user:group` handoff
+was skipped and the probe settled on root in silence) and corrected this document's four
+overstatements of the tree. The tests are t350-keepid / t351-keepid-diagnostics /
+t352-keepid-boundaries — the pid-1 readings that settle what a pin decides are asserted in
+the last two and in t350. This file records the DECISION and what it costs; the commit
+series is the history, and this Status names the series rather than counting the commits
+in it.
 
 **Amended 2026-10-19 (operator): the pin is a DROP-IN, not a line in the base unit.**
 The line this ADR describes is now carried by
