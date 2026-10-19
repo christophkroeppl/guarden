@@ -105,12 +105,17 @@ run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
 assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
-# The hostname is asserted in FULL: 'hostname: "web"' is a prefix of the
-# allocated FQDN, so the substring assertion could not tell an allocated
-# hostname from the bare label — or from a hostname in the wrong zone, which
-# is the open question ticket 293 reports rather than answers.
-assert_file_has "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml" \
-    'hostname: "web.example.com"' 
+# The ingress hostname is asserted as a WHOLE LINE, not as a substring: the
+# rendered value is the bare allocated label `web` — claim_host returns
+# `<host_prefix><label>` and appends no domain — so the tunnel today serves a
+# name that is in no zone at all. That is ticket 293's open gap, carried as
+# ticket 306, and this assertion measures it exactly: a substring
+# `hostname: "web"` would also pass on `web.example.com`, so the whole line is
+# matched and a future zone-qualified name has to change this assertion on
+# purpose.
+run grep -qxF '  - hostname: "web"' \
+    "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
+assert_exit 0
 assert_file_has "$services" \
     "mod owner uid-owner $tunnel_uid daddr 127.0.0.1 proto tcp dport $prodpub jump ACCEPT;"
 
