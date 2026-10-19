@@ -157,3 +157,33 @@ assert_stderr_has "routed-production"
 sed -i '/^expose = "loopback"$/d' "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
 run soil firewall --check
 assert_exit 0
+
+# 8. The record is the destination's authority and the tunnel config follows
+# it at the next sync, not the next render. `weedr expose set` moves the
+# record and the firewall's accept set in one act; the rendered slice is the
+# next render's (ticket 294). A tunnel ingress row kept in the meantime dials
+# a publication the tunnel's uid is no longer accepted on, and the OUTPUT deny
+# behind it is defence in depth rather than a design (review finding 6).
+run weedr expose set routed-production loopback
+assert_exit 0
+# The tunnel's accept went with the act...
+[ "$(grep -cE "uid-owner $tunnel_uid daddr 127\.0\.0\.1 proto tcp dport $prodpub jump ACCEPT;" \
+    "$services" || true)" = 0 ] \
+    || _fail "the tunnel still holds an accept on a demoted service's publication"
+# ...and the slice still says tunnel, which is what the act promises.
+[ "$(destination_of "$prodslice")" = "tunnel" ] \
+    || _fail "the slice moved without a render: $(destination_of "$prodslice")"
+run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
+assert_exit 0
+assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
+assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
+# The render catches up and the file stays gone: what is published follows the
+# record, and the slice catching up later changes no answer.
+printf '\n# demoted\n' >>"$GUARDEN_PREFIX/var/lib/guarden/staging/routed/9f2c1ab/.guarden/quadlet/web.container"
+run weedr service ingest routed-production --from poke routed@9f2c1ab
+assert_exit 0
+[ "$(destination_of "$prodslice")" = "loopback" ] \
+    || _fail "the demotion rendered destination $(destination_of "$prodslice") after the render"
+run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
+assert_exit 0
+assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
