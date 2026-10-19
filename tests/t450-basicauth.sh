@@ -35,9 +35,14 @@ entries=/var/lib/guarden/edge/basicauth
 
 # The directory the edge unit mounts is converged by `soil install`, long
 # before any unit mounts it: an unprivileged edge user cannot mkdir under a
-# root-owned parent, so the bind source has to already be there.
+# root-owned parent, so the bind source has to already be there. Its mode and
+# owner are asserted too: the directory is the one the whole credential
+# isolation rests on (everyone traverses, nobody but root writes), and a suite
+# that only checks it exists would pass on a `0777` one.
 run test -d "$entries"
 assert_exit 0
+assert_mode "$entries" 755
+assert_owner "$entries" root:root
 
 # Before the gate module is installed there is no policy and no service may be
 # flagged — this is the state a staged, module-less host starts from.
@@ -178,3 +183,56 @@ assert_exit 0
 run cmp -s "$oldrendered" "$GUARDEN_FIXTURES/first-sync.yml"
 assert_exit 0
 assert_file_lacks "$oldrendered" "basicAuth"
+
+# Removing the module takes the policy and every htpasswd entry with it, but
+# the records keep their flags: `basicauth = true` was decided at creation and
+# a module's absence does not undo a decision. What must NOT survive is a
+# dangling middleware: `roots` renders `usersFile` at the entry's path for any
+# flagged service, whether or not the file is there.
+run weedr module remove gate-traefik
+assert_exit 0
+assert_file_missing "$policy"
+assert_file_missing "$htpasswd"
+assert_file_missing "$entries/oldapp-staging.htpasswd"
+assert_file_has "$newreg" "basicauth = true"
+
+# Re-adding the module must put the entries back — from the blobs that were
+# never dropped, so the restored login is the same one and not a re-mint.
+# Without this the edge points every flagged service's basicAuth middleware at
+# a file that does not exist, and nothing in guarden reports it.
+run weedr module add gate-traefik
+assert_exit 0
+# The act that restores an entry says which service it restored it for: a
+# silent repair is a repair an operator cannot audit.
+assert_stdout_has "restored the basic-auth login for newapp-staging"
+assert_stdout_lacks "restored the basic-auth login for oldapp-staging"
+assert_file_exists "$policy"
+assert_file_exists "$htpasswd"
+assert_mode "$htpasswd" 640
+assert_owner "$htpasswd" root:edge
+restored=$(cat "$htpasswd")
+[ "$before" = "$restored" ] \
+    || _fail "re-adding the gate did not restore the basic-auth login it dropped"
+# And the restored entry is still the credential's other half: it verifies
+# against the same encrypted blob, so nothing was re-minted underneath an
+# operator's stored copy.
+run python3 -c "
+import base64, hashlib, subprocess, sys
+blob, path, user = sys.argv[1], sys.argv[2], sys.argv[3]
+password = subprocess.run(
+    ['systemd-creds', 'decrypt', blob],
+    capture_output=True, text=True, check=True,
+).stdout.rstrip('\n')
+name, found = open(path, encoding='utf-8').read().strip().split(':', 1)
+expect = '{SHA}' + base64.b64encode(hashlib.sha1(password.encode()).digest()).decode()
+sys.exit(0 if name == user and found == expect else 1)
+" "$blob" "$htpasswd" "newapp-staging"
+assert_exit 0
+
+# The grandfathered service gained nothing from the round trip, and the edge's
+# rendered file names a usersFile that is really on the host again.
+assert_file_missing "$entries/oldapp-staging.htpasswd"
+run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
+assert_exit 0
+assert_file_has "$rendered" 'usersFile: "/etc/guarden/basicauth/newapp-staging.htpasswd"'
+assert_file_lacks "$oldrendered" "basicauth"
