@@ -633,6 +633,12 @@ def _remove(args) -> int:
     resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
     for line in service.remove(resolved, config, _now()):
         sys.stdout.write(f"{line}\n")
+    # Spec 5.3: a removal releases every grant the service held and the
+    # firewall is re-rendered (§7.7) — the record is out of the registry by
+    # now, so this render drops the removed uid's accepts and any forwarded
+    # port (and, for one instance, its released publication's accepts) instead
+    # of leaving them for a recycled uid to inherit (review finding 6).
+    firewall.print_diff(firewall.install(config))
     _sync_dashboard()
     return 0
 
