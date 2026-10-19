@@ -31,18 +31,20 @@ machine. Both come from `tests/lxc.sh` deciding the whole selection before it
 runs anything, so a key never depends on which of its neighbours hit or missed.
 
 The tree a suite reads is over-approximated, never narrowed below what is
-provable. `tests/lib.sh`, `tests/lxc.sh`, `tests/*.sh`, `tests/*.py`,
-`fixtures/`, `modules/`, `packages/`, `tools/`, `examples/`, `src/guarden/**`
-and `pyproject.toml` (with `.env.schema`) are in every key, because a suite
-reaches those through helpers whose arguments cannot be resolved from outside —
-`stage_config` reads `fixtures/$1` and `$1` is a bare name in the suite, and
-`tests/t370-apt-lock-wait.sh` runs `tests/aptlock.sh` beside it. **The package is
-hashed whole rather than narrowed to an import closure** (ticket 309): the
-closure asked which modules the suite's text named, and a suite's result is not
-a function of that, so a src-only change could leave every inherited green
-standing over code nothing had re-run. A key that misses is worse than a key
-that hits too often, so what a suite executes is in and what it only quotes —
-`docs/` — is out.
+provable. `tests/lib.sh`, `tests/lxc.sh`, `tests/aptlock.sh`,
+`tests/failure_messages.sh`, `tests/*.py`, `fixtures/`, `modules/`, `packages/`,
+`tools/`, `examples/`, `src/guarden/**` and `pyproject.toml` (with
+`.env.schema`) are in every key, because a suite reaches those through helpers
+whose arguments cannot be resolved from outside — `stage_config` reads
+`fixtures/$1` and `$1` is a bare name in the suite, and `t370-apt-lock-wait.sh`
+runs `tests/aptlock.sh` beside `lxc.sh`. **The package is hashed whole rather
+than narrowed to an import closure** (ticket 309): the closure asked which
+modules the suite's text named, and a suite's result is not a function of that,
+so a src-only change could leave every inherited green standing over code
+nothing had re-run. A key that misses is worse than a key that hits too often,
+so what a suite executes is in and what it only quotes — `docs/` — is out. The
+suite's own file is added on top of all of that, so two suites are two read
+sets, and a suite that changed is run rather than inherited.
 
 Usage:
 
@@ -69,8 +71,15 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-UNIVERSAL_FILES = ("pyproject.toml", ".env.schema", "tests/lib.sh", "tests/lxc.sh")
-UNIVERSAL_GLOBS = ("tests/*.sh", "tests/*.py")
+UNIVERSAL_FILES = (
+    "pyproject.toml",
+    ".env.schema",
+    "tests/lib.sh",
+    "tests/lxc.sh",
+    "tests/aptlock.sh",
+    "tests/failure_messages.sh",
+)
+UNIVERSAL_GLOBS = ("tests/*.py",)
 UNIVERSAL_TREES = ("fixtures", "modules", "packages", "tools", "examples", "src/guarden")
 ABSOLUTE_TIME = re.compile(r"^[0-9]{4}[-/][0-9]{2}[-/][0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?")
 IDENTITY_FIELDS = ("instance", "pool", "snapshot", "created")

@@ -410,7 +410,8 @@ printf '\n# the suite changed\n' >>"$TREE_COPY/tests/$SUITE_NAME"
 # rather than inferred from a digest: the package as a whole (ticket 309), the
 # module definitions whose templates render the units, the runner's own shell
 # helpers — a suite runs `tests/aptlock.sh` and `tests/failure_messages.sh`
-# beside `lib.sh`, so `tests/*.sh` is carried like `tests/*.py` already was —
+# beside `lib.sh`, so both are named like `lib.sh` and `lxc.sh` rather than
+# globbed (a glob of `tests/*.sh` would put every other suite in every key) —
 # the example services a suite installs as they are, and the tracked
 # `.env.schema` a suite resolves.
 cache readset "$SUITE"
