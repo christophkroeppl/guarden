@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 # Example service templates: the copyable set under examples/services/ is what
 # `weedr service create` reads once it is installed into a prefix's template
-# directory, and the set does not ship — `src/guarden/templates/` has no
-# `services/` subdirectory, so a fresh host refuses `create` until one is
-# installed (docs/sysadmin.md, "Deploying a service by hand").
+# directory.
+#
+# **THE SET NOW SHIPS.** Ticket 330 fixed the install path — the install phase
+# copies `src/guarden/templates/`, and that tree now carries the `services/`
+# subdirectory, so a fresh host has `postgres` and `vaultwarden` installed and
+# `create` works out of the box.
+#
+# **This suite was rewritten when that changed.** It used to assert
+# `assert_file_missing /usr/lib/guarden/templates/services` and prove the
+# refusal a host with NO templates gives. That refusal is still the verb's
+# behaviour — and it is still proved here, but it is proved by REMOVING the
+# installed set for the duration of the assertion, because the set is now
+# installed by default and the old assertion was failing on the new world
+# rather than on a defect.
 #
 # What the suite is about, in order: the refusal a host with no templates gives,
 # the refusal a host with no terminal gives, what `create` does make (the
@@ -28,13 +39,24 @@ assert_not_rejected
 run soil install --apply
 assert_not_rejected
 
-# --- a fresh host has no template set -----------------------------------------
+# --- the set SHIPS, and it is the set the suite is about -----------------------
 #
-# `soil install` installs the checkout's `src/guarden/templates/`, and that tree
-# carries no `services/` subdirectory: the directory `create` reads is the one
-# that is absent, which is why the first refusal below names a path that holds
-# nothing rather than a name that is unknown.
-assert_file_missing /usr/lib/guarden/templates/services
+# The install phase copies `src/guarden/templates/`, and that tree carries the
+# `services/` subdirectory (ticket 330). So a fresh host has the templates
+# installed, root-owned, and `create` can read them.
+assert_file_exists /usr/lib/guarden/templates/services
+assert_file_exists /usr/lib/guarden/templates/services/postgres
+assert_file_exists /usr/lib/guarden/templates/services/vaultwarden
+assert_owner /usr/lib/guarden/templates/services/postgres root:root
+assert_mode /usr/lib/guarden/templates/services/postgres 755
+
+# --- the refusal a host with NO templates gives --------------------------------
+#
+# **The set is taken away for the duration of this block.** The refusal is the
+# verb's behaviour and it is still worth proving — but the set is installed by
+# default now, so the refusal has to be reached by removing what is there.
+# The set is put back immediately after, and the rest of the suite uses it.
+rm -rf /usr/lib/guarden/templates/services
 
 run weedr service create emptyapp --env staging --template postgres
 assert_exit 1
@@ -57,6 +79,13 @@ assert_stderr_has "no template was chosen"
 assert_stderr_has "holds none"
 assert_stdout_empty
 
+# And the set comes back: the install phase owns it, so the install phase
+# restores it.
+run soil install --apply
+assert_not_rejected
+assert_file_exists /usr/lib/guarden/templates/services/postgres
+assert_file_exists /usr/lib/guarden/templates/services/vaultwarden
+
 # `--template` is on the verb's own surface, which is what makes the runbook's
 # synopsis complete.
 run weedr service create --help
@@ -64,14 +93,17 @@ assert_exit 0
 assert_stdout_has "--env"
 assert_stdout_has "--template"
 
-# --- install the examples into this prefix's template directory ---------------
+# --- the installed set is what `create` reads ----------------------------------
 #
-# The install command the runbook gives: the directory first, then the examples
-# copied in beside it. Root-owned `0755`/`0644` is what a root `cp` leaves and
-# what a root-owned template set is supposed to be.
-install -d -m 0755 /usr/lib/guarden/templates/services
-cp -r "$GUARDEN_ROOT/examples/services/postgres" /usr/lib/guarden/templates/services/
-cp -r "$GUARDEN_ROOT/examples/services/vaultwarden" /usr/lib/guarden/templates/services/
+# **The set is already there** — the install phase put it there, and the block
+# above proved the install phase restores it. So there is nothing to copy in
+# here any more; what the block still has to do is prove the behaviour that
+# follows from there being a set.
+#
+# The templates are root-owned `0755`/`0644`, which is what a root `cp` leaves
+# and what a root-owned template set is supposed to be.
+assert_owner /usr/lib/guarden/templates/services/postgres root:root
+assert_mode /usr/lib/guarden/templates/services/postgres 755
 
 # Two templates and no terminal: the verb asks for one at a prompt when it is
 # omitted, and under a harness whose stdin is /dev/null there is nothing to ask.
@@ -188,6 +220,13 @@ assert_file_exists "$pg_unit"
 assert_file_exists /var/lib/guarden/services/pgexample-staging/home/.config/containers/systemd/web.container
 
 # Nothing here depends on the order suites happen to run in: the template set
-# is this suite's own and goes away with its assertions.
-rm -rf /usr/lib/guarden/templates/services/postgres
-rm -rf /usr/lib/guarden/templates/services/vaultwarden
+# is the INSTALL PHASE's, and the install phase puts it back, so this suite
+# leaves it alone rather than taking it away again.
+#
+# The old suite deleted the two template directories at the end, because it had
+# copied them in itself. Now the install phase owns them, and a suite that
+# deleted them would leave the next suite on this machine with no templates
+# and would have to reinstall them to do anything. The install phase is the
+# thing that owns the set, so the set stays.
+assert_file_exists /usr/lib/guarden/templates/services/postgres
+assert_file_exists /usr/lib/guarden/templates/services/vaultwarden
