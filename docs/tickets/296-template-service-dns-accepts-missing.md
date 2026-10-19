@@ -1,5 +1,13 @@
 # 296 — a template-created service meets the loopback DNS deny on its first pull
 
+**Status:** implemented on `fix/instance-start-path` and green in the VM
+(`ok t441-template-dns.sh` — the creation's uid carries both stub-resolver
+accepts above the deny in `50-services.conf` and in the loaded ruleset, before
+any start, both when the firewall unit is already installed and when the set
+exists without it; the start itself exits 0). The predicate that made the
+second case work is `2f59cda` (review finding 4), and the removal that must
+reverse it is `2ef4efc` (finding 6).
+
 Blockers: none. Found 2026-10-19 by an adversarial review of develop 10f7457
 (verified: weedr.py:419-421).
 
