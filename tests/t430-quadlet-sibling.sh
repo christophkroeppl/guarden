@@ -105,3 +105,66 @@ two_units "Environment=API_URL=https://dbmetrics.example.com"
 run loom check "$project"
 assert_exit 0
 assert_stderr_empty
+
+# --- a quoted Environment= line reads as systemd reads it --------------------
+# systemd takes a quoted stretch as ONE string: `Environment="ROLE=db
+# mode=prod"` is the single variable ROLE with the value `db mode=prod`,
+# which dials nothing. Splitting the line on whitespace and unquoting each
+# token read it as ROLE=db beside mode=prod, and the sibling rule refused a
+# file on a dial systemd would never make. The quoted shape is refused at
+# write time anyway (`unitsource.format_line`, one quoted argument holding
+# several words), so what this pins is WHICH refusal the reader gets: the
+# repository's, not the rule's.
+two_units 'Environment="ROLE=db mode=prod"'
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_lacks "sibling container"
+assert_stderr_has "one quoted argument"
+
+# The other direction, which the correct reader refuses for the right reason:
+# the quoted string is ONE value, and `http://db:3000` inside it dials the
+# sibling exactly as the unquoted form does.
+two_units 'Environment="API_URL=http://db:3000 mode=prod"'
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "sibling container 'db'"
+assert_stderr_has "needs:"
+
+# --- the rule reads the value ${domain} becomes ------------------------------
+# `${domain}` is the host's own `host.domain` (spec 4), substituted as the
+# unit is written. The sibling rule read the value before that, so
+# `Environment=APP_HOST=${domain}` beside a `domain.container` rendered
+# APP_HOST=<domain> — the same dead dial as the literal form — and was
+# refused by nothing. The host's domain is not repository input, so `check`
+# cannot know it (loom: check reads no host) and answers as it always did;
+# the refusal is `render`'s, on the values the unit will carry.
+registry=$GUARDEN_PREFIX/var/lib/guarden/registry
+seed "$registry/myapp-staging.toml" \
+    'service = "myapp-staging"' 'workload = "myapp"' 'project = "myapp"' \
+    'environment = "staging"' 'uid = 1103' 'created = "2026-10-19T08:00:00Z"'
+# The domain has to equal the sibling's stem for the dial to happen at all,
+# and `db` is the sibling this suite has always staged.
+sed -i 's/^domain = .*/domain = "db"/' "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+
+two_units 'Environment=APP_HOST=${domain}'
+out=$GUARDEN_FIXTURES/render-substituted
+run loom check "$project"
+assert_exit 0
+assert_stdout_has "is renderable"
+run loom render "$project" --service myapp-staging --out "$out"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "sibling container 'db' as a host in environment APP_HOST"
+assert_stderr_has "needs:"
+assert_file_missing "$out"
+
+# And the same render with a domain that names no sibling renders, carrying
+# the value the substitution gives it: the rule refuses the dial, not the
+# marker, and a unit source that has always written ${domain} still renders.
+sed -i 's/^domain = .*/domain = "example.com"/' "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+run loom render "$project" --service myapp-staging --out "$out"
+assert_exit 0
+assert_stderr_empty
+assert_file_has "$out/units/api.container" "APP_HOST=example.com"

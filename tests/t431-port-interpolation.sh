@@ -90,3 +90,22 @@ seed_port '3000:3000'
 run loom check "$project"
 assert_exit 0
 assert_stderr_empty
+
+# The `$$` escape is the same rule: Compose writes `$$` for a literal `$`, so
+# the entry still carries one after interpolation and it lands in a field that
+# has to be a number. The refusal has to NAME the form it refused — a
+# repository that wrote `$$` was told about two forms it did not use.
+refuse_port '127.0.0.1:$$:8069'
+assert_stderr_has '$$ escape'
+
+# The rule is the whole entry, not only its host-IP field: a long-syntax
+# entry is tested in full, all of its keys, so the diagnostic says that
+# rather than naming a field this entry did not template.
+seed "$project/compose.yaml" "services:" "  web:" \
+    "    image: docker.io/library/nginx:1.27" "    ports:" \
+    "      - target: 8069" "        published: \"\$PUBLISH\""
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "no field of a ports entry may be templated"
+assert_stderr_has "publication"
