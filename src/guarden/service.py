@@ -1041,11 +1041,15 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
             where = f"the gid of the group {gid_text!r} in /etc/group"
             return (uid, _number(name, reference, found[2], where))
         passwd = _image_file(name, record, reference, "/etc/passwd")
-        if passwd is not None:
-            entry = _uid_entry(passwd, uid)
-            if entry is not None:
-                where = f"the gid of uid {uid} in /etc/passwd"
-                return (uid, _number(name, reference, entry[3], where))
+        if passwd is None:
+            # The read FAILED, which is not "this uid has no passwd row": the
+            # row is what says whether the image carries one, and a file the
+            # host could not read leaves the question unanswered (spec 1.2).
+            raise _cannot_run(name, record, reference, declared)
+        entry = _uid_entry(passwd, uid)
+        if entry is not None:
+            where = f"the gid of uid {uid} in /etc/passwd"
+            return (uid, _number(name, reference, entry[3], where))
         # A number the image's passwd does not carry is what podman runs the
         # container with a gid of 0 for, and the line has to map the gid the
         # container will actually have.
@@ -1223,8 +1227,10 @@ def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str 
     entrypoint names when that name ends in `.sh`, read by running the image as
     container root with its entrypoint overridden. A passwd row alone is never
     the answer: an entrypoint that is the application itself declares nothing
-    to hand off to, and choosing a row would pin init onto a uid nobody asked
-    for. None means "no defensible user", which the caller records as root.
+    to hand off to, and choosing a row would pin the line onto a uid nobody
+    asked for. None means "no defensible user", which the caller records as
+    root — a script that could not be READ raises instead, because that is the
+    host failing to answer and not an answer of "nobody".
     """
     for word in argv:
         found = HANDOFF.search(word)
@@ -1232,19 +1238,67 @@ def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str 
             return found.group(1)
     if argv and argv[0].endswith(".sh"):
         script = _image_file(name, record, reference, argv[0])
-        if script:
-            found = HANDOFF.search(script)
-            if found:
-                return found.group(1)
+        if script is None:
+            raise _cannot_run(name, record, reference, argv[0])
+        found = HANDOFF.search(script)
+        if found:
+            return found.group(1)
     return None
+
+
+# The entrypoint name resolved before `cat` is handed it: PATH first, then the
+# name itself. A bare entrypoint — `docker-entrypoint.sh`, the stock postgres
+# and mysql shape — is a name the image carries on its PATH while its WORKDIR
+# is somewhere else entirely, and `cat` alone resolves that name against the
+# WORKDIR instead, so the read failed for exactly the images ADR-0019 exists
+# for: the failure was read as "no handoff", and the record settled on root
+# with nothing printed. The literal-name fallback is the other half of what a
+# name means — `bin/entry.sh` is read against the WORKDIR, where a shell would
+# read it too.
+RESOLVE_THEN_CAT = """found=$(command -v "$1")
+if [ -n "$found" ]; then
+    target=$found
+else
+    target=$1
+fi
+cat -- "$target"
+"""
 
 
 def _image_file(name: str, record, reference: str, path: str) -> str | None:
     """The image's own file, read by running the image as container root —
-    `--user 0` and not the declared user, for the reason probe_image gives."""
-    result = _podman(
-        name, record, "run", "--rm", "--user", "0", "--entrypoint", "cat", reference, path
-    )
+    `--user 0` and not the declared user, for the reason probe_image gives.
+
+    `None` is a read that FAILED and never an answer: podman could not run,
+    the file is not there, the name resolves to nothing. Every caller turns it
+    into `_cannot_run`'s one line (spec 1.2), because reading it as "no such
+    row / no handoff" is what settled the record on root while the host had
+    simply not been able to look.
+
+    A name with no slash goes through the shell above; a path — `/etc/passwd`,
+    `/etc/group`, an entrypoint the image names absolutely — goes to `cat`
+    verbatim, exactly as it always did.
+    """
+    if "/" in path:
+        result = _podman(
+            name, record, "run", "--rm", "--user", "0", "--entrypoint", "cat", reference, path
+        )
+    else:
+        result = _podman(
+            name,
+            record,
+            "run",
+            "--rm",
+            "--user",
+            "0",
+            "--entrypoint",
+            "sh",
+            reference,
+            "-c",
+            RESOLVE_THEN_CAT,
+            "sh",
+            path,
+        )
     if not result.ok:
         return None
     return result.stdout

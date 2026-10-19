@@ -236,3 +236,32 @@ record_rel=$registry/kidrel-staging.toml
     || _fail "a relative entrypoint whose script is on the image's PATH renders $(unit_line "$unit_rel"), and the handoff its script names is keep-id:uid=3000,gid=3000"
 assert_file_has "$record_rel" "owner_uid = 3000"
 assert_file_lacks "$record_rel" "owner_uid = 0"
+
+# The same name answered by the RUNTIME: the container is only running if the
+# image's `ENTRYPOINT ["entry.sh"]` was resolved and started, so coming up
+# exec-able is what shows the probe reads the same file the container runs.
+podman_as() {
+    local service=$1 home uid
+    shift
+    home=/var/lib/guarden/services/$service/home
+    uid=$(id -u "$service")
+    run_in "$home" setpriv --reuid="$service" --regid="$service" --clear-groups \
+        env -u OLDPWD HOME="$home" PWD="$home" USER="$service" LOGNAME="$service" \
+        XDG_RUNTIME_DIR="/run/user/$uid" podman "$@"
+}
+runtime_rel=/run/user/"$(id -u kidrel-staging)"
+for _ in $(seq 1 30); do
+    [ -d "$runtime_rel" ] && break
+    sleep 1
+done
+assert_file_exists "$runtime_rel"
+rel_ready=0
+for _ in $(seq 1 60); do
+    podman_as kidrel-staging exec kidrel-staging-app true
+    if [ "$GUARDEN_EXIT" = 0 ]; then
+        rel_ready=1
+        break
+    fi
+    sleep 2
+done
+[ "$rel_ready" = 1 ] || _fail "the kidrel container never became exec-able, so nothing resolved its bare entrypoint name"
