@@ -32,8 +32,13 @@ lanes = 1
 [modules]
 enabled = []
 
+# Every track here pins `expose = "edge"` on purpose: these suites exercise
+# the public (edge) posture explicitly, because the shipped default is the
+# derived one (ticket 293) — loopback-only until cloudflared is installed.
+# A suite testing the derived default removes the rows.
 [[environments]]
 name = "production"
+expose = "edge"
 host_prefix = ""
 gated = true
 weight = 1000
@@ -44,6 +49,7 @@ fork_from = ""
 
 [[environments]]
 name = "staging"
+expose = "edge"
 host_prefix = "staging."
 gated = false
 weight = 100
@@ -54,6 +60,7 @@ fork_from = "production"
 
 [[environments]]
 name = "preview"
+expose = "edge"
 host_prefix = "preview."
 gated = false
 weight = 10

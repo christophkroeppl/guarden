@@ -4,8 +4,8 @@ spec 6.2 and spec 1.2's field set. The field set is **closed**: an unknown field
 is never emitted and never read, and adding one to a program is a change to that
 table and not a compatible addition. So every one of the sixteen fields is
 present on every service object — two of them, `route_hosts` and
-`route_destinations` (6d36a00, 120a9e6), postdate the spec's table and the
-table has not grown with them — and a field with nothing to say is `null` or an
+`route_destinations` (6d36a00, 120a9e6), once postdated the spec's table; the
+table has grown with them (spec 3.4) — and a field with nothing to say is `null` or an
 empty collection rather than absent — with the one distinction the spec insists
 on, that `gate: null` is **not** the same as `gate.state = "ready"`, because one
 is a verdict nobody took.

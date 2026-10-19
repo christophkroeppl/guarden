@@ -44,6 +44,7 @@ from guarden import (
     edgeresolve,
     edges,
     errors,
+    exposure,
     images,
     names,
     paths,
@@ -1479,9 +1480,24 @@ def _routes(
     """The route slice `roots` reads. The target is `<name>:<publication>` — the
     service's own name, with no suffix and no alias — and the full host is the
     one the mutator allocated from the manifest's label and the track's prefix."""
-    granted = overrides_mod.load(context.service) if context else None
-    tunnel_labels = set(granted.expose_tunnel) if granted else set()
-    track_expose = context.track.expose if context else "edge"
+    # Ticket 293: the slice carries what the **mutator recorded**, and only a
+    # host the registry has never seen falls back to the resolver (ticket 294's
+    # one function, which the mutator, this slice and the firewall all ask).
+    # Rendering the default live would make it a per-render vote: installing
+    # the cloudflared module would re-posture every running service on the next
+    # render, which is the surprise ticket 293's grandfathering forbids. The
+    # first answer stands until `weedr expose set` gives another, and
+    # `soil firewall --check` reports a default that moved underneath a record.
+    hosts = [route.host for route in document.routes]
+    recorded = context.record.route_destinations if context else {}
+    # The context-less path is `loom check`, which writes nothing; its fallback
+    # is still the fail-closed one, because `edge` is the answer nothing may
+    # default to (tickets 293/294).
+    fallback = (
+        exposure.resolve(context.record, context.track, context.config.modules)
+        if context else exposure.LOOPBACK
+    )
+    dests = {host: recorded.get(host, fallback) for host in hosts}
 
     rows = [
         {
@@ -1493,7 +1509,7 @@ def _routes(
             "auth": route.auth,
             "target": f"{context.service}:{ports[route.container][0]}" if context and
             route.container in ports else "",
-            "destination": "tunnel" if route.host in tunnel_labels else track_expose,
+            "destination": dests.get(route.host, exposure.EDGE),
             "ref": context.instance_ref() if context else "",
         }
         for route in document.routes
@@ -1503,6 +1519,12 @@ def _routes(
         service=context.service if context else "",
         project=context.record.project if context else "",
         track=context.track.name if context else "",
+        # Ticket 292: the basic-auth policy the mutator recorded at creation
+        # (registry `basicauth`), carried to `roots` in the slice so the
+        # renderer — never the renderer re-reading a manifest — is what places
+        # the middleware. Absent/false is a grandfathered service, and it
+        # renders byte for byte what it rendered before.
+        basicauth=bool(context.record.basicauth) if context else False,
         rows=rows,
     )
 

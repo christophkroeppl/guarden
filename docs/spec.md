@@ -456,7 +456,12 @@ other.
 A track's fields are `host_prefix` for route hosts, `gated` for the credential gate, `weight`
 for resource priority, `free_limit` and `keep_last` as retention defaults, `fork_from` for
 lineage (§8.3), `kind` to say
-whether a track holds one service or one instance per ref, and `cap` for the instance cap.
+whether a track holds one service or one instance per ref, `cap` for the instance cap, and
+`expose` for the environment's default exposure. `expose` is one of `loopback`, `tunnel` or
+`edge` (§3.3), and **absent is the default**: a track that states nothing resolves from the
+module set — the tunnel when the `cloudflared` module is enabled, loopback-only when it is
+not (§10 "the module set"). Any other value is exit `2` naming the track, the way a
+`kind`/`cap` mistake is refused.
 A track with `kind = "slot"` **must not** carry `cap`, and a track with `kind = "instance"`
 **must**; either mistake is exit `2` naming the track. `cap` appears nowhere else in this file
 — there is no top-level `[preview]` table, because a second place to set it is a second place
@@ -617,7 +622,8 @@ add = ["video", "render"]  # supplementary groups for the service user
 allow = ["/dev/dri"]  # host paths this service's units may bind-mount
 
 [expose]
-tunnel = ["web"]  # route labels published through the tunnel instead of the edge
+tunnel = ["web"]  # route labels published through the tunnel instead of the service's
+  # resolved destination; a loopback record still wins (§3.3)
 ```
 
 `keep_last` and `free_limit` override the track's defaults. `groups.add` gives the service
@@ -627,8 +633,16 @@ host path outside the service's own volumes and `/etc/guarden` becomes bind-moun
 renderer refuses every other one, and an entry here is a grant in the same sense a port is.
 `firewall.allow` is the same shape of grant in the same file and for the same reason: the
 manifest asks, the admin decides, and the repository cannot widen it (§7.7).
-`expose.tunnel` names route labels that are published through the tunnel instead of the edge;
-the track's `expose` field already defaults to `edge`, so no `[expose] edge` key is needed.
+`expose.tunnel` names route labels that are published through the tunnel instead of the
+service's resolved destination: a labelled route resolves to the tunnel when the
+`cloudflared` module is enabled and to loopback when it is not, and a service whose
+**record** is `loopback` (§3.4 `[exposure]`) keeps it — the grant is a widening, and private
+is the answer that loses nothing. The track's `expose` field (§3.1) states the
+per-environment default — `loopback`, `tunnel` or `edge` — and **absent is the default**: an
+unset `expose` resolves from the module set, the tunnel when `cloudflared` is enabled and
+loopback-only when it is not, so no `[expose] edge` key is needed and no track has to state
+a posture to be private. `edge` is a value a track states and `public` is the record's word
+for the same position (§3.4, §6.2 `weedr expose set`).
 
 Nothing else is overridable. Routes, edges, state volumes, the unit source and the credential
 schema are the repository's, and this file does not touch them.
@@ -653,6 +667,13 @@ installed_by = "gate-traefik"  # the module that created this service, or absent
   # record provenance at all: without it "a service the module
   # installed is not the module's own" has nothing to consult
 deployed_sha = "9f2c1ab"
+basicauth = true  # the default edge login (basic auth) was minted for this service at
+  # creation, while the gate module's policy was in force. Absent
+  # is a service created before the policy — grandfathered, with
+  # no middleware — and that absence is a state, exactly like
+  # `[gate]` never having been evaluated. Written by the mutator
+  # at creation and read by the renderer through the route slice;
+  # no manifest key reaches it (§4's closed key sets)
 
 [publication]
 web = 20114  # container name -> allocated loopback port
@@ -673,6 +694,15 @@ kinds = [ "db" ]  # what the manifest's provides: listed, and only that. Written
 [route_hosts]
 web = "web.myapp.com"  # manifest label -> the full name, prefix applied. A claim, like a
   # publication: allocated, refused when taken, released on remove
+
+[route_destinations]
+web = "loopback"  # manifest label -> where that route is published: `loopback`, `tunnel`
+  # or `edge`. The mutator's resolution at creation (§3.3), stored
+  # because the first answer stands: installing a module or editing
+  # a track re-postures services that do not exist yet and never a
+  # running fleet. `soil --check` reports a recorded destination
+  # that no longer matches what it resolves to now, naming the
+  # service, and never corrects it
 
 [ports]
 requested = ["8080/tcp"]  # what the manifest asked for, in manifest order
@@ -723,6 +753,17 @@ checked = "2026-09-29T10:12:03Z"  # when the verdict was last taken, by `weedr s
   # which is a different thing: pinning also raises the
   # snapshot to important=yes under the number cleaner, so
   # it was a retention side effect presented as note-taking
+
+[exposure]  # the operator's exposure record for this service in this environment,
+  # and the only writers are `weedr expose set` and `weedr expose
+  # unset` (§6.2). Absent means the default — the track's `expose`
+  # (§3.1) or the derived posture — and the absence is a state,
+  # like `[gate]` being absent. A service's name carries its
+  # environment (§5.1), so this registry file IS the service ×
+  # environment entry
+value = "public"  # `loopback` | `tunnel` | `public`; `public` is the operator's word for
+  # the `edge` destination, and `tunnel` resolves to `loopback`
+  # when the `cloudflared` module is not enabled (fail-closed)
 ```
 
 `workload` and `project` are different things and may differ. `workload` is the service name
@@ -735,7 +776,14 @@ because two repositories may declare the same project name.
 The registry is the single record of a service's identity, its edges, its publications, its
 lineage and its ports. It is a **projection**: anything derivable from the manifest and the
 host is recomputed, and only what cannot be — the uid, the sha, the allocated ports, the
-snapshot numbers, the seeds — is stored.
+snapshot numbers, the seeds — is stored. Three values are recorded **decisions** rather than
+derivations, and their first answer stands: `route_destinations` (the exposure each route
+resolved to when it was created, §3.3), `basicauth` (whether the default edge login was
+minted at creation) and `[exposure]` (the operator's act, §6.2). Each was decided once, by
+an act, and recomputing it from the current module set or track would re-posture a running
+fleet behind its operator's back. They move only through the acts that write them — service
+creation, `weedr expose set`/`unset` — and `soil --check` reports a recorded exposure that no
+longer matches what it resolves to now rather than correcting it.
 
 ### 3.5 The write protocol
 
@@ -1514,6 +1562,15 @@ weedr share issue <name[/ref]> <email> --until <duration>  # record a time-bound
 weedr share revoke <id>  # end one issuance immediately
 weedr share list [--json]  # live, expired and revoked, with their deadlines
 weedr share reconcile  # recompute the vendor's Access policies from the record
+
+weedr expose set <name> <loopback|tunnel|public>  # record the service's exposure for its
+  # environment (§3.4 `[exposure]`). `public` is refused off a
+  # gated track, `tunnel` without the cloudflared module, and
+  # anything else lists the three — each exit 2, one line, before
+  # any record is written. Not on any sudoers rule.
+weedr expose unset <name>  # return the service to its default exposure; already at
+  # the default is exit 0 and changes nothing
+weedr expose list [--json]  # every service's recorded exposure and what it resolves to
 
 weedr module list [--json]
 weedr module add <name>

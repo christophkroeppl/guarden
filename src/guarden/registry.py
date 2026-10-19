@@ -285,6 +285,20 @@ class OwnerUnit:
                 errors.HOST_NOT_AS_ASSUMED,
             )
         return cls(image=image, uid=uid, gid=gid)
+def _exposure(value: Any) -> str | None:
+    """Ticket 294's record: a `[exposure] value` table, or `None` for default.
+
+    A table rather than a bare string so the registry's own key set says what
+    it is (the `[gate]`, `[generated]` and `[immutable]` tables speak this way),
+    and an empty table is the same as no record: an act that wrote nothing is
+    not a posture.
+    """
+    if not isinstance(value, dict):
+        return None
+    found = value.get("value")
+    if not isinstance(found, str) or not found:
+        return None
+    return found
 
 
 @dataclass
@@ -340,6 +354,16 @@ class Registry:
     gate: dict[str, Any] | None = None
     generated: dict[str, str] = field(default_factory=dict)
     immutable: dict[str, str] = field(default_factory=dict)
+    # Ticket 292: the basic-auth login was minted for this service. True is a
+    # record and absent is a state — a service created before the gate module
+    # generated the policy has no flag and renders without the middleware, which
+    # is the whole of what grandfathering means here (spec 3.4: only what cannot
+    # be derived is stored, and this was decided once, at creation).
+    basicauth: bool = False
+    # Ticket 294: the operator's exposure record for this service in this
+    # environment — "loopback" | "tunnel" | "public". Absent means the default,
+    # and that absence is a state rather than a value, exactly like `gate`.
+    exposure: str | None = None
 
     def volume_list(self) -> list[Volume]:
         """`state` before `bulk`, then by name: a fixed order, so a regenerated
@@ -443,6 +467,10 @@ class Registry:
             document["generated"] = dict(self.generated)
         if self.immutable:
             document["immutable"] = dict(self.immutable)
+        if self.basicauth:
+            document["basicauth"] = True
+        if self.exposure:
+            document["exposure"] = {"value": self.exposure}
         return document
 
     @classmethod
@@ -491,6 +519,8 @@ class Registry:
             gate=document.get("gate"),
             generated=dict(document.get("generated") or {}),
             immutable=dict(document.get("immutable") or {}),
+            basicauth=bool(document.get("basicauth")),
+            exposure=_exposure(document.get("exposure")),
         )
 
 

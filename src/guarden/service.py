@@ -34,10 +34,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from guarden import basicauth as basicauth_mod
 from guarden import (
     conf,
     edges,
     errors,
+    exposure,
     gate,
     images,
     names,
@@ -293,6 +295,14 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     ]
     if source.kind == "module":
         record.installed_by = str(source.module)
+    # Ticket 292: the basic-auth login is minted once, for a brand-new service,
+    # while the gate module's policy marker exists. `existing is None` is the
+    # grandfathering: a re-ingest or a redeploy of a running fleet mints
+    # nothing, so no surprise auth arrives on a service created before the
+    # policy — and a service without routes has nothing the edge would serve,
+    # so it holds no login at all.
+    if existing is None and manifest.routes and basicauth_mod.in_force():
+        basicauth_mod.mint(record, now)
     _ensure_admin_units(identity.uid)
 
     if resolved.escaped_ref and resolved.escaped_ref not in record.instances:
@@ -577,17 +587,44 @@ def _allocate(resolved, record, manifest, config, source: Source) -> None:
         wanted, record.publication, taken, config.publication_range, record.service,
     )
     holders = publications.host_holders(records)
+    # A label the manifest dropped stops being claimed — and stops being
+    # carried. `route_hosts` is keyed to the manifest's routes, so this
+    # record, the expose verbs and the drift item (all of which key off it)
+    # compute over one host set rather than an accumulating one that is a
+    # second place to be wrong (tickets 293/294).
+    claimed = {route.host for route in manifest.routes}
+    record.route_hosts = {
+        label: full for label, full in record.route_hosts.items() if label in claimed
+    }
     for route in manifest.routes:
         record.route_hosts[route.host] = publications.claim_host(
             route.host, resolved.track.host_prefix, holders, record.service
         )
-        # Record the destination for this route (edge or tunnel)
-        granted = overrides_mod.load(resolved.name) if resolved.name else None
-        tunnel_labels = set(granted.expose_tunnel) if granted else set()
-        track_expose = resolved.track.expose
-        record.route_destinations[route.host] = (
-            "tunnel" if route.host in tunnel_labels else track_expose
-        )
+    # Ticket 293/294: destinations are resolved here and written into the
+    # registry, and the slice and the firewall both read that record — one
+    # answer, one writer (spec 3.4: only what cannot be derived is stored, and
+    # once stored it is the record). The first answer **stands**: a host the
+    # record already holds keeps the posture it was created under, so
+    # installing a module or editing a track re-postures services that do not
+    # exist yet and never a running fleet. A label the manifest dropped stops
+    # being claimed, because the rebuild is over the manifest's hosts.
+    granted = overrides_mod.load(resolved.name) if resolved.name else None
+    tunnel_labels = set(granted.expose_tunnel) if granted else set()
+    resolved_destinations = exposure.destinations(
+        record,
+        resolved.track,
+        config.modules,
+        tunnel_labels,
+        [route.host for route in manifest.routes],
+    )
+    record.route_destinations = {
+        **resolved_destinations,
+        **{
+            host: record.route_destinations[host]
+            for host in resolved_destinations
+            if host in record.route_destinations
+        },
+    }
 
     if resolved.escaped_ref:
         instance = record.instances.get(resolved.escaped_ref)
@@ -1731,6 +1768,7 @@ def _remove_service(resolved, record, now: str) -> list[str]:
     _drop(paths.service_tree(resolved.name))
     _drop(paths.ETC_SERVICES / resolved.name)
     _drop(paths.SHARED / resolved.name)
+    basicauth_mod.drop(resolved.name)
     with conf.lock("registry"):
         registry.delete(resolved.name)
     printed.append("its snapper configurations are left for `soil storage` to remove")

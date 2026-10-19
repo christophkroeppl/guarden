@@ -89,6 +89,12 @@ REFUSED_KEYS = {
     "published_ports": "the published-port set is the renderer's, from the grants and the "
     "allocations",
     "mounts": "[mounts] allow in the root-owned overrides.toml is the only mount surface",
+    "exposure": "exposure is an operator's act, recorded per service per "
+                "environment with `weedr expose set` on the root-owned registry; "
+                "the host decides it and a manifest cannot request it",
+    "public": "public exposure is an operator's act recorded with `weedr expose "
+              "set`, selectable only on a gated track; a manifest cannot place "
+              "itself on the internet",
     "zram": "a zram device is host configuration, in the root-owned "
             "/etc/guarden/guarden.toml, and it is the operator's",
     "swap": "a swap device is host configuration, and it is the operator's",
@@ -296,6 +302,12 @@ def _check_blocks(document: dict, path: Path) -> None:
     **first** and gets its own message, because it is the one mistake the block
     structure exists to make impossible and an "unknown key" diagnostic would
     not say which of the two things a developer has to tell apart went wrong.
+
+    A REFUSED_KEYS name (`environment`, `exposure`, …) is checked second and
+    gets its own message for the same reason the top-level check gives it one:
+    the generic "unknown key" line names the key but not who owns the decision,
+    and a developer who reaches for `exposure:` inside a route entry is asking
+    the question the refusal exists to answer.
     """
     for block in ("ports", "routes", "widgets"):
         entries = document.get(block)
@@ -319,6 +331,12 @@ def _check_blocks(document: dict, path: Path) -> None:
                 raise errors.GuardenError(
                     f"the manifest {path}: a {block} entry is not a mapping; a bare "
                     f"string is not a valid entry"
+                )
+            refused = sorted(key for key in entry if key in REFUSED_KEYS)
+            if refused:
+                raise errors.GuardenError(
+                    f"the manifest {path}: a {block} entry has a {refused[0]!r} key: "
+                    f"{REFUSED_KEYS[refused[0]]}"
                 )
             extra = sorted(set(entry) - allowed)
             if extra:

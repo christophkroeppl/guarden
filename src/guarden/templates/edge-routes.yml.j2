@@ -6,6 +6,13 @@
   loom wrote into its units, and a loopback address would be the host's, which
   a container does not share. One file per service, so a route change is one
   file changing and the edge picks it up from its own watch.
+
+  `basicauth` is the mutator's per-service policy (ticket 292), and it is a
+  service's property rather than a route's: when it is on, every router in
+  this file carries the service's own basicAuth middleware, ahead of
+  forward-auth when the route asked for that too. The definition sits at the
+  bottom of this same file so a service without the policy renders byte for
+  byte what it rendered before, and the file provider merges the directory.
 #}
 # Written by roots. Do not edit: the next sync overwrites this file.
 http:
@@ -18,9 +25,14 @@ http:
         - {{ entrypoint }}
 {% endfor %}
       service: {{ row.router }}
-{% if row.middleware %}
+{% if row.middleware or row.basicauth %}
       middlewares:
+{% if row.basicauth %}
+        - {{ basicauth_name }}
+{% endif %}
+{% if row.middleware %}
         - guarden-forward-auth
+{% endif %}
 {% endif %}
 {% endfor %}
   services:
@@ -30,3 +42,9 @@ http:
         servers:
           - url: "{{ row.target }}"
 {% endfor %}
+{% if users_file %}
+  middlewares:
+    {{ basicauth_name }}:
+      basicAuth:
+        usersFile: "{{ users_file }}"
+{% endif %}
