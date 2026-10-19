@@ -439,6 +439,18 @@ if grep -qF '.venv' "$GUARDEN_FIXTURES/venv-readset.list"; then
     _fail "the developer's .venv is in the read set, so a pip install invalidates every cached green"
 fi
 
+# **And the machine does not have one either.** The key not carrying the venv
+# is only half the claim: what the suite actually ran against is the machine's
+# own `python3-yaml` and `python3-jinja2`, and the only way to know that is
+# to look at the machine. The checkout in the guest is the tree the runner
+# pushed, so a `.venv` there would be the developer's, on PATH, supplying the
+# interpreter and the two libraries the renderer needs.
+assert_file_missing "$GUARDEN_ROOT/.venv"
+
+# And the machine's own libraries are what a program would import there.
+run python3 -c 'import yaml, jinja2'
+assert_exit 0
+
 # --- one changed file invalidates what read it ------------------------------
 
 # The digest is a function of the bytes, so a change to a file in the read set
