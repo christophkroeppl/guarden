@@ -242,3 +242,48 @@ run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 assert_file_has "$rendered" 'usersFile: "/etc/guarden/basicauth/newapp-staging.htpasswd"'
 assert_file_lacks "$oldrendered" "basicauth"
+
+# --- a PREVIEW keeps the middleware -------------------------------------------
+# The policy is a SERVICE's, and a preview is an instance of one service — so
+# a preview's routes carry the same basic-auth middleware the service's own
+# do. It is also the only place the interaction between two branches shows:
+# the instance's render installs its slice at
+# `shared/<service>/instances/<escaped-ref>/routes.toml` and the service's own
+# `routes.toml` is never written on an instance track, so a reader that only
+# looked at the service's own file found no policy and served the preview with
+# no middleware at all (review r2, finding F4).
+#
+# The preview track in this fixture carries `expose = "edge"`, which is the
+# posture where the middleware is the only thing between the internet and a
+# developer's branch.
+prevapp=$GUARDEN_PREFIX/var/lib/guarden/staging/prevapp/9f2c1ab
+mkdir -p "$prevapp/.guarden/quadlet"
+seed "$prevapp/.guarden/service.yml" "project: prevapp" "units: .guarden/quadlet/" \
+    "routes:" "  - container: web" "    port: 8080" "    host: prev"
+seed "$prevapp/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27"
+run weedr service ingest prevapp-preview/feature-a --from poke prevapp@9f2c1ab
+assert_exit 0
+
+# The service is flagged, and the instance's own slice carries the flag — the
+# slice is the only place the flag travels to the edge.
+prevreg=$GUARDEN_PREFIX/var/lib/guarden/registry/prevapp-preview.toml
+assert_file_has "$prevreg" "basicauth = true"
+prevescaped=feature-a
+prevslice=$GUARDEN_PREFIX/var/lib/guarden/shared/prevapp-preview/instances/$prevescaped/routes.toml
+assert_file_exists "$prevslice"
+assert_file_has "$prevslice" "basicauth = true"
+
+# And the edge's own file for that service carries the middleware. This is
+# the assertion that failed before the fix: the policy was in the record and
+# in the instance's slice, and the edge served the preview with no login.
+run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
+assert_exit 0
+prevrendered=/var/lib/guarden/edge/dynamic/prevapp-preview.yml
+assert_file_exists "$prevrendered"
+assert_file_has "$prevrendered" "- prevapp-preview-basicauth"
+assert_file_has "$prevrendered" "basicAuth:"
+assert_file_has "$prevrendered" 'usersFile: "/etc/guarden/basicauth/prevapp-preview.htpasswd"'
+# The login it names is really on the host: a middleware pointed at a file
+# that is not there is a 401 nobody can get past.
+assert_file_exists "$entries/prevapp-preview.htpasswd"

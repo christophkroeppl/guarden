@@ -155,11 +155,14 @@ assert_file_exists "$slot_quadlet/web-$second.container"
 # instance's key is the ESCAPED ref, TOML-quoted — so the header on disk holds
 # the escaped form with its backslash doubled by the TOML string quoting.
 registry=/var/lib/guarden/registry/routed-preview.toml
-pub_header=$(grep -nF '[instances."feature\\x2fx".publication]' "$registry" | cut -d: -f1)
-[ -n "$pub_header" ] \
-    || _fail "the instance feature\\x2fx holds no publication table in the registry"
-instance_pub=$(sed -n "$((pub_header + 1)),/^\[/p" "$registry" \
-    | sed -n 's/^web = \([0-9]*\)$/\1/p' | head -n 1)
+# The instance's publication is read with a TOML parser, not with `sed`: the
+# registry writes an instance's publications as an INLINE TABLE inside the
+# instance's own table (`publication = { web = 20006 }`), and a grep for a
+# flat sub-table never matches it. The key is the ESCAPED ref, which is what
+# the registry is keyed by (spec 5.2).
+run python3 "$GUARDEN_ROOT/tests/registryfield.py" "$registry" 'feature\x2fx' web
+assert_exit 0
+instance_pub=$(cat "$GUARDEN_STDOUT")
 [ -n "$instance_pub" ] \
     || _fail "the instance feature\\x2fx holds no publication in the registry"
 services=/etc/guarden/firewall/50-services.conf
@@ -221,3 +224,31 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 [ "$active" = active ] || _fail "the second instance's unit web-$second.service is '${active:-unreadable}', not active"
+
+# --- a bare start names no instance, and is refused ---------------------------
+# The preview track is `kind = "instance"`, so a name with no `/<ref>` names
+# the SLOT — and the slot of an instance track holds no unit of its own. Every
+# render on that track is an instance's, and the slot's own quadlet directory
+# holds only the entries the search path needs: one `<unit>-<escaped-ref>` per
+# instance.
+#
+# Before the fix that directory was read as if it were the slot's own, so the
+# "has no unit to start" guard passed, and the start then fanned out to every
+# instance — plus, because keep-id re-renders the units before a start, a
+# phantom `web.container` for a slot that has no render. A start that starts
+# every preview and a unit nobody declared is not a start (review r2, F3).
+#
+# The refusal is exit 2 — the argument named something the track does not
+# have — and it names the instances, so the operator is told which to name.
+run weedr service start routed-preview
+assert_exit 2
+assert_stderr_has "kind = \"instance\""
+assert_stderr_has "routed-preview/<ref>"
+assert_stderr_has "feature/x"
+assert_stdout_lacks "started routed-preview"
+
+# And nothing was started by it: the slot's own unit is not there, and the two
+# instances are exactly the ones the starts above named.
+assert_file_missing "$slot_quadlet/web.container"
+assert_file_exists "$slot_quadlet/web-$escaped.container"
+assert_file_exists "$slot_quadlet/web-$second.container"
