@@ -222,6 +222,12 @@ harness = [
     "nginx",
     "postgresql-client",
     "libpq-dev",
+    # `fuser` (from psmisc) is how the harness proves the apt locks are free
+    # before it calls `soil packages` — without it the wait cannot run at all,
+    # and the harness refuses to cut a box rather than lose the race silently
+    # (tests/lxc.sh's guard names this package). It is a harness tool, not a
+    # host dependency: the golden VM needs it, a real host does not.
+    "psmisc",
 ]
 
 [harness.fedora]
@@ -240,6 +246,9 @@ harness = [
     "nginx",
     "postgresql",
     "libpq-devel",
+    # `fuser` (from psmisc) proves the apt/dnf locks are free before the
+    # harness calls `soil packages` — the same harness tool as on debian.
+    "psmisc",
 ]
 
 [harness.arch]
@@ -257,4 +266,7 @@ harness = [
     "nginx",
     "postgresql",
     "libpq",
+    # `fuser` (from psmisc) proves the package-manager locks are free before
+    # the harness calls `soil packages` — the same harness tool as on debian.
+    "psmisc",
 ]
