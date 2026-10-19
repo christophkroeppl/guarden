@@ -403,9 +403,13 @@ def _unit_body(unit: Unit) -> dict:
     environment: dict[str, str] = {}
     for line in unit.get("Container", "Environment"):
         # systemd splits a value on whitespace, so one line carries several
-        # assignments, and a quoted line is one string holding them all.
-        for assignment in line.split():
-            key, separator, value = assignment.strip('"').partition("=")
+        # assignments, and a quoted stretch is ONE string holding whatever it
+        # holds: `Environment="A=1 B=2"` is the single variable `A` with the
+        # value `1 B=2`, and `B` does not exist (systemd.syntax). Splitting on
+        # whitespace and unquoting each token is what read the quoted form as
+        # two assignments and refused files on dials systemd would never make.
+        for assignment in _assignments(line):
+            key, separator, value = assignment.partition("=")
             if separator:
                 environment[key] = value
     body: dict = {"environment": environment}
@@ -419,6 +423,33 @@ def _unit_body(unit: Unit) -> dict:
     if hosts:
         body["extra_hosts"] = hosts
     return body
+
+
+def _assignments(line: str) -> list[str]:
+    """One `Environment=` value as systemd reads it: whitespace separates the
+    assignments and a double-quoted stretch is ONE of them, quotes dropped
+    because the check reads the values the container will see.
+
+    Only double quotes group, because that is all systemd.syntax gives one —
+    an apostrophe is a character like any other, which is why `shlex` is not
+    the reader here (it would refuse `Environment=WHO=alice's` outright).
+    """
+    out: list[str] = []
+    token = ""
+    quoted = False
+    for char in line:
+        if char == '"':
+            quoted = not quoted
+            continue
+        if char.isspace() and not quoted:
+            if token:
+                out.append(token)
+                token = ""
+            continue
+        token += char
+    if token:
+        out.append(token)
+    return out
 
 
 def _mounts_of_unit(unit: Unit) -> list[Mount]:

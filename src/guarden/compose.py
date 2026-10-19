@@ -231,11 +231,18 @@ def _refuse_templated_ports(body: dict[str, Any], container: str, path: Path) ->
         else:
             shown = str(entry)
         if "$" in shown:
+            # The message names every form and the whole entry, because the
+            # test above IS the whole entry — all keys of a long-syntax dict —
+            # and the rule refuses the `$$` escape too: a repository that
+            # wrote `$$` was told about two forms it did not use, and one
+            # that templated `published:` was told about the host-IP (review
+            # finding 5).
             raise errors.GuardenError(
                 f"the unit source {path}: the service {container!r} has a ports entry "
-                f"{shown!r} carrying a $: a port's host-IP cannot be templated in either "
-                f"form — ${{NAME}} or $NAME — and guarden allocates the loopback "
-                f"publication from the manifest's ingress"
+                f"{shown!r} carrying a $: no field of a ports entry may be templated — "
+                f"not ${{NAME}}, not $NAME, and not the $$ escape that becomes a "
+                f"literal one — because guarden allocates the loopback publication "
+                f"from the manifest's ingress"
             )
 
 
