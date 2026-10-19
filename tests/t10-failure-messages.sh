@@ -73,11 +73,11 @@ echo "$line" | grep -qF 'exceeded 456s' || _fail "a configured wall clock does n
 unset SUITE_TIMEOUT
 
 # **The runner calls this function twice, every `error:` line in it is one of
-# five known, and every bound it runs is the measured shape.** `_push`
+# six known, and every bound it runs is the measured shape.** `_push`
 # delivers tests/lxc.sh into the machine, so the drift the extraction could
 # grow is greppable from here, and each pin spans spellings rather than one of
-# them: the count moves on any sixth line naming `error:` in any form (an
-# `echo`, a format variable, a continuation line); the five signatures pin
+# them: the count moves on any seventh line naming `error:` in any form (an
+# `echo`, a format variable, a continuation line); the six signatures pin
 # each line's leading literal over the comment-stripped stream, so a site that
 # changed or went away fails — while a reword confined to a continuation
 # line's tail beyond that literal is not caught, and the pins catch presence,
@@ -110,21 +110,51 @@ marker_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_failure_message 
 plain_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_failure_message "\$name" "\$rc"[[:space:]]*$' || true)
 [ "$plain_calls" = 1 ] || _fail "the plain call is gone, duplicated, or silenced; it must end its line exactly once"
 sites=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'error:' || true)
-[ "$sites" = 5 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of five is the enumeration"
-for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after 60 checks spread over at least '" "printf 'error: cannot cut a clean %s\\n'"; do
+[ "$sites" = 6 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of six is the enumeration"
+# (ticket 271 split one line into two: a lock that was held and a lock that
+# could not be measured were printed as the same failure, and the ticket's
+# whole complaint is that the message could not tell them apart.)
+for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after %ss (held by %s; last answer: %s); '" "printf 'error: the apt locks on %s could not be shown free after %ss (last answer: %s); '" "printf 'error: cannot cut a clean %s\\n'"; do
     # `grep -c`, not `grep -q`: a `grep -q` that exits on its first match sends
     # SIGPIPE to the `grep -vE` still writing upstream, and under `pipefail`
     # the pipeline then reads as a failed match — measured here as a race that
     # failed a different signature on each of two identical runs.
     n=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- "$sig" || true)
-    [ "$n" -ge 1 ] || _fail "the runner lost one of its five known error lines: $sig"
+    [ "$n" -ge 1 ] || _fail "the runner lost one of its six known error lines: $sig"
 done
 kills=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c -- '--foreground --signal=KILL' || true)
-[ "$kills" = 4 ] || _fail "the runner carries $kills '--foreground --signal=KILL' uses; four is the measured set"
+[ "$kills" = 6 ] || _fail "the runner carries $kills '--foreground --signal=KILL' uses; six is the measured set (lock-file check, probe poll, cloud-init status, evidence, the suite's marker, the suite itself)"
 grep -qE '^SUITE_TIMEOUT=\$\{GUARDEN_LXC_SUITE_TIMEOUT:-' "$runner" \
     || _fail "the runner no longer takes its wall clock from GUARDEN_LXC_SUITE_TIMEOUT"
 kill_arg=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '--signal=KILL "$SUITE_TIMEOUT"' || true)
 [ "$kill_arg" -ge 1 ] || _fail "the runner no longer feeds SUITE_TIMEOUT into its kill"
+# **Ticket 271's half of the wait, pinned the same way as everything above: a
+# wall clock instead of a count of checks, both budgets taken from the variables
+# that name them, the guest's half of the measurement read from the file a suite
+# runs, the evidence printed before the verdict, and the two verdicts kept
+# apart.** A wait that had gone back to counting polls — whose wall time nobody
+# knew, hence the old "at least 300s" — or that printed an evidence block it
+# never named, fails here rather than in the next occurrence.
+grep -qE '^APT_LOCK_WAIT=\$\{GUARDEN_LXC_APT_LOCK_WAIT:-' "$runner" \
+    || _fail "the runner no longer takes its apt-lock budget from GUARDEN_LXC_APT_LOCK_WAIT"
+grep -qE '^CLOUD_INIT_WAIT=\$\{GUARDEN_LXC_CLOUD_INIT_WAIT:-' "$runner" \
+    || _fail "the runner no longer bounds cloud-init's status wait from GUARDEN_LXC_CLOUD_INIT_WAIT"
+deadline=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '-lt "$APT_LOCK_WAIT"' || true)
+[ "$deadline" -ge 1 ] || _fail "the runner's lock wait no longer polls until the APT_LOCK_WAIT clock runs out"
+guest=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'tests/aptlock.sh' || true)
+[ "$guest" -ge 1 ] || _fail "the runner no longer reads the guest half of the wait from tests/aptlock.sh"
+for verb in probe evidence; do
+    n=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- "aptlock $verb" || true)
+    [ "$n" -ge 1 ] || _fail "the runner no longer asks the guest for 'aptlock $verb'"
+done
+# `grep -c`, not `grep -q`, for the same SIGPIPE reason the signature loop
+# gives: a `grep -q` that exits on its first match can leave the `grep -vE`
+# upstream writing into a closed pipe, and under `pipefail` the pipeline then
+# reads as a failed match — which is exactly how this pin failed the first time
+# it was written (measured: "the runner no longer prints its evidence block
+# under a line that names it", on a line the runner carried all along).
+note=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- "note: apt lock evidence on %s, waited %ss:" || true)
+[ "$note" -ge 1 ] || _fail "the runner no longer prints its evidence block under a line that names it"
 returns=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '^[[:space:]]*return "\$rc"[[:space:]]*$' || true)
 [ "$returns" = 1 ] || _fail "the runner does not return the suite's own code exactly once; a failure could be recorded as a pass"
 passes=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE 'line pass "\$name"[[:space:]]*$' || true)

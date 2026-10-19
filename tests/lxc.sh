@@ -71,6 +71,16 @@ REPO=${GUARDEN_LXC_REPO:-$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}"
 VM_REPO=${GUARDEN_LXC_VM_REPO:-/home/ubuntu/guarden}
 CACHE_TOOL=${GUARDEN_LXC_CACHE_TOOL:-$REPO/tests/suitecache.py}
 
+# The guest half of the apt-lock wait (ticket 271), read once at load. These
+# bytes travel with the exec because `_wait_cloud_init` runs *before* the
+# checkout is pushed into the cut, and `tests/t370-apt-lock-wait.sh` runs this
+# same file in the machine — so what a suite asserts about the measurement is
+# what a cut runs, not a copy of it. An absent file is caught before a machine
+# is cut, the way a missing failure_messages.sh is caught before a run starts.
+APT_LOCK_SH=$REPO/tests/aptlock.sh
+APT_LOCK_GUEST=''
+[ -r "$APT_LOCK_SH" ] && APT_LOCK_GUEST=$(<"$APT_LOCK_SH")
+
 # Tests that cannot run in the machine, by construction rather than by accident.
 #
 # t35-env-schema.sh asks git about the repository: `check-ignore` and
@@ -263,6 +273,29 @@ vm_exec_t() {
 # `GUARDEN_LXC_SUITE_TIMEOUT` still overrides it for a run that wants tighter.
 SUITE_TIMEOUT=${GUARDEN_LXC_SUITE_TIMEOUT:-480}
 
+# Two more wall clocks, both on the way to handing a machine to a suite
+# (ticket 271).
+#
+# `APT_LOCK_WAIT` is how long a cut waits for apt's locks to come free, in
+# seconds. It replaces a count of 60 checks — each of which could spend 20s in
+# `lxc exec` before its 5s sleep, so the budget was somewhere between 300s and
+# 25 minutes and the failure message had to say "at least 300s" because it did
+# not know. 600s is twice what the three occurrences of 2026-10-13 burned; each
+# one expired while a transient holder was still working (every suite skipped
+# for one was green on a later re-run and green in the other pass), and this
+# repository has already widened a bound against the same kind of holder —
+# `apt_waits` in tests/lib.sh went from 12s to 60s when a boot-time
+# `unattended-upgrades` proved it walks a whole machine's package set. No bound
+# wins against every holder, so the budget is the guard and the evidence the
+# failure prints is the answer when it does not.
+APT_LOCK_WAIT=${GUARDEN_LXC_APT_LOCK_WAIT:-600}
+# `cloud-init status --wait` polls until cloud-init reports a final state and
+# has no end of its own: cloud-init that never gets there would hold the cut
+# with nothing printed, which is the wedge every other exec on this path is
+# bounded against. Its result was never read, and the lock wait is what decides
+# readiness, so past the bound the only thing lost is the honest signal.
+CLOUD_INIT_WAIT=${GUARDEN_LXC_CLOUD_INIT_WAIT:-600}
+
 # Ready means the agent answers, not that the state says RUNNING.
 _wait_ready() {
     local instance=$1 i
@@ -307,15 +340,19 @@ _wait_cloud_init() {
     # The cloud-init wait is kept because it is the honest signal when it works,
     # and its result is deliberately not used to skip the lock wait: `status
     # --wait` can return before `package_update` has released the lists lock,
-    # which is the race this function exists to close.
-    $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1 || :
+    # which is the race this function exists to close. It is bounded — see
+    # `CLOUD_INIT_WAIT` above — because `status --wait` has no end of its own;
+    # the lock wait below is what decides readiness, so past the bound the only
+    # thing lost is that signal.
+    timeout --foreground --signal=KILL "$CLOUD_INIT_WAIT" \
+        $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1 || :
     # **`fuser` may be absent, and its absence would make this a silent no-op.**
     # It comes from `psmisc`, which is NOT in the cloud-init package list below —
     # it is present on the golden only because `ubuntu-standard` pulls it in
     # (measured: `apt-cache rdepends --installed psmisc` lists ubuntu-standard).
     # A minimal image that drops that metapackage would lose it, and the wait
-    # below would then spend its whole 60-check budget answering `unmeasured`
-    # before failing: a slow failure where an immediate, named one is what a
+    # below would then spend its whole budget answering `unmeasured` before
+    # failing: a slow failure where an immediate, named one is what a
     # host this broken deserves. That is why the check exists, and why it is
     # checked rather than assumed.
     #
@@ -378,44 +415,73 @@ _wait_cloud_init() {
     # stat …: Permission denied` say so on stderr and exit 1 — and an `lxc
     # exec` that cannot reach the instance exits 1 as well. The man page says
     # it outright: non-zero covers "none accessed **or a fatal error**". So
-    # the guest decides — `free`, `held` or `unmeasured` — and a transport
-    # failure produces no word at all, which is a fourth way of not having
-    # measured and is treated as such.
-    local i answer
-    for ((i = 0; i < 60; i++)); do
+    # the guest decides — `free`, `held:<who>(<pid>),…` or `unmeasured` — and a
+    # transport failure produces no word at all, which is a fourth way of not
+    # having measured and is treated as such. The held word now carries the
+    # holder because ticket 271's message could not say who: `last answer: held`
+    # told a run that a lock existed and nothing about whether it was
+    # cloud-init's apt, `unattended-upgrades`, or the measurement itself.
+    # **The loop runs to a wall clock and not to a count of checks** (see
+    # `APT_LOCK_WAIT`): a count whose every iteration may cost 20s of `lxc exec`
+    # before its sleep is a budget nobody can state, which is why the old
+    # message had to print "at least 300s" — the loop did not know its own
+    # elapsed time. `SECONDS` is the shell's own clock and the elapsed time it
+    # gives back is what the failure below prints.
+    local started=$SECONDS answer='' holder='' elapsed
+    while [ $((SECONDS - started)) -lt "$APT_LOCK_WAIT" ]; do
         # The poll itself is bounded, so a wedged `lxc exec` cannot hold the
-        # loop past its budget: a 124 from `timeout` leaves the word empty and
+        # loop past a single pass: a 124 from `timeout` leaves the word empty and
         # is retried like any other failed measurement. `--foreground` is as
         # load-bearing here as it is on the suite exec below — without it
         # `timeout` puts the child in a new process group, and `lxc exec`'s
         # session does not survive that: the client then waits on a session
         # nobody will close, so the bound would reintroduce the wedge it is
         # here to cap.
-        answer=$(timeout --foreground --signal=KILL 20 $LXC exec -T "$instance" -- sh -c '
-            err=$(fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock 2>&1 >/dev/null)
-            rc=$?
-            case $rc in
-                0) printf held ;;
-                1) if [ -n "$err" ]; then printf unmeasured; else printf free; fi ;;
-                *) printf unmeasured ;;
-            esac
-        ' 2>/dev/null)
+        answer=$(timeout --foreground --signal=KILL 20 $LXC exec -T "$instance" \
+            -- sh -c "$APT_LOCK_GUEST" aptlock probe 2>/dev/null)
         # Only `free` — measured with an empty stderr — is the answer being
-        # waited for. `held` and `unmeasured` and the empty word all want
-        # another pass, so the loop simply falls through to the sleep.
-        [ "$answer" = free ] && return 0
+        # waited for. A `held:` word keeps the last holder it named, and
+        # `unmeasured` and the empty word both want another pass, so anything
+        # but `free` falls through to the sleep.
+        case $answer in
+            free) return 0 ;;
+            held:*) holder=${answer#held:} ;;
+        esac
         sleep 5
     done
-    # **Held after the whole budget, or not askable at all.** Both mean the wait
-    # did not do its job, and a silent success here is the failure mode this
-    # function exists to prevent: the caller proceeds, loses the race, and the
-    # suite dies with no diagnostic. Named, with the last word the guest gave,
-    # so the run says which of the two it was.
-    printf 'error: %s still holds the apt lock after 60 checks spread over at least ' \
-        "$instance" >&2
-    printf '300s, or the wait could not measure it (last answer: %s); a suite that runs ' \
-        "${answer:-no answer from the exec}" >&2
-    printf '`soil packages` now may exit 100\n' >&2
+    # **Held after the whole budget, or not askable at all — and ticket 271 says
+    # printing those as one line is the defect.** The old message read
+    # "still holds the apt lock after …, or the wait could not measure it (last
+    # answer: held)": two diagnoses and the evidence for neither, so the next
+    # occurrence was a re-run rather than a fact. So the expiry prints what was
+    # seen first — `fuser -v` naming whoever has the locks open, the
+    # `systemctl status` of cloud-init.service, apt-daily.service and
+    # unattended-upgrades.service, and the tail of cloud-init's own log, which
+    # is the ticket's list in the ticket's order — and then one of two lines:
+    # the holder, if one was ever named, or the plain fact that nothing could be
+    # measured. A silent success here is the failure mode this function exists
+    # to prevent: the caller proceeds, loses the race, and the suite dies with
+    # no diagnostic.
+    elapsed=$((SECONDS - started))
+    local evidence
+    evidence=$(timeout --foreground --signal=KILL 30 $LXC exec -T "$instance" \
+        -- sh -c "$APT_LOCK_GUEST" aptlock evidence 2>/dev/null) || evidence=''
+    if [ -n "$evidence" ]; then
+        printf 'note: apt lock evidence on %s, waited %ss:\n' "$instance" "$elapsed" >&2
+        printf '%s\n' "$evidence" >&2
+    else
+        printf 'note: no apt lock evidence could be captured from %s (the exec did not answer)\n' \
+            "$instance" >&2
+    fi
+    if [ -n "$holder" ]; then
+        printf 'error: %s still holds the apt lock after %ss (held by %s; last answer: %s); ' \
+            "$instance" "$elapsed" "$holder" "${answer:-no answer from the exec}" >&2
+        printf 'the evidence above is fuser -v, systemctl status and cloud-init.log; a suite that runs `soil packages` now may exit 100\n' >&2
+    else
+        printf 'error: the apt locks on %s could not be shown free after %ss (last answer: %s); ' \
+            "$instance" "$elapsed" "${answer:-no answer from the exec}" >&2
+        printf 'the evidence above is what the wait could see; a suite that runs `soil packages` now may exit 100\n' >&2
+    fi
     return 1
 }
 
@@ -567,6 +633,14 @@ _prove() {
 }
 
 cmd_provision() {
+    # A missing guest half of the wait is a broken checkout, not a machine's
+    # problem, so it stops the run here — before a machine is cut — the way a
+    # missing failure_messages.sh stops `cmd_run`. Waiting without it would
+    # spend the whole budget answering nothing and report the wrong cause; and
+    # `die` rather than a returned 1, because every caller of the wait treats a
+    # failure as that one machine's and would skip suites instead of the run.
+    [ -n "$APT_LOCK_GUEST" ] \
+        || die "$APT_LOCK_SH is unreadable; a cut cannot wait for apt's locks without it"
     _ensure_pool
 
     # The rebuild decision needs the machine's own conversion state, which needs
