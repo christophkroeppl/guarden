@@ -125,7 +125,7 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
             "basicauth": bool(basicauthed),
         }
         for route in routes
-        if route.get("destination") != "tunnel"
+        if route.get("destination") == "edge"
     ]
     if not rows:
         return ""

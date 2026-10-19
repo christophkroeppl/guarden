@@ -80,6 +80,9 @@ enabled = ["gate-traefik", "homepage"]
 # level = 6
 # size_percent = 50
 
+# No track states `expose`: a fresh host's posture resolves from the module
+# set (ticket 293) — the tunnel when `cloudflared` is enabled, loopback-only
+# when it is not — and a track that wants one of those by name says so.
 [[environments]]
 name = "production"
 host_prefix = ""
@@ -89,7 +92,6 @@ free_limit = 0.10
 keep_last = 7
 kind = "slot"
 fork_from = ""
-expose = "edge"
 
 [[environments]]
 name = "staging"
@@ -100,7 +102,6 @@ free_limit = 0.20
 keep_last = 0
 kind = "slot"
 fork_from = "production"
-expose = "edge"
 
 [[environments]]
 name = "preview"
@@ -112,4 +113,3 @@ keep_last = 0
 kind = "instance"
 fork_from = "staging"
 cap = 3
-expose = "edge"

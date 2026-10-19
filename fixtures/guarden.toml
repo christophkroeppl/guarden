@@ -22,6 +22,7 @@ enabled = ["gate-traefik", "homepage"]
 
 [[environments]]
 name = "production"
+expose = "edge"
 host_prefix = ""
 gated = true
 weight = 1000
@@ -32,6 +33,7 @@ fork_from = ""
 
 [[environments]]
 name = "staging"
+expose = "edge"
 host_prefix = "staging."
 gated = false
 weight = 100
@@ -42,6 +44,7 @@ fork_from = "production"
 
 [[environments]]
 name = "preview"
+expose = "edge"
 host_prefix = "preview."
 gated = false
 weight = 10

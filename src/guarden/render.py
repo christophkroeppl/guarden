@@ -1251,21 +1251,21 @@ def _routes(
     """The route slice `roots` reads. The target is `<name>:<publication>` — the
     service's own name, with no suffix and no alias — and the full host is the
     one the mutator allocated from the manifest's label and the track's prefix."""
-    granted = overrides_mod.load(context.service) if context else None
-    tunnel_labels = set(granted.expose_tunnel) if granted else set()
-    # Ticket 294: one resolver for every consumer — the mutator, this slice and
-    # the firewall all ask `exposure.destinations` the same question, so the
-    # destination `roots` reads here and the one recorded in the registry can
-    # no longer disagree (spec 6.3: the same manifest, registry and overrides
-    # always produce the same bytes).
+    # Ticket 293: the slice carries what the **mutator recorded**, and only a
+    # host the registry has never seen falls back to the resolver (ticket 294's
+    # one function, which the mutator, this slice and the firewall all ask).
+    # Rendering the default live would make it a per-render vote: installing
+    # the cloudflared module would re-posture every running service on the next
+    # render, which is the surprise ticket 293's grandfathering forbids. The
+    # first answer stands until `weedr expose set` gives another, and
+    # `soil firewall --check` reports a default that moved underneath a record.
     hosts = [route.host for route in document.routes]
-    dests = (
-        exposure.destinations(
-            context.record, context.track, context.config.modules,
-            tunnel_labels, hosts,
-        )
-        if context else {host: exposure.EDGE for host in hosts}
+    recorded = context.record.route_destinations if context else {}
+    fallback = (
+        exposure.resolve(context.record, context.track, context.config.modules)
+        if context else exposure.EDGE
     )
+    dests = {host: recorded.get(host, fallback) for host in hosts}
 
     rows = [
         {

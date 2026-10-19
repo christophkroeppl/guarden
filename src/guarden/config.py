@@ -71,7 +71,13 @@ TRACK_DEFAULTS = {
     "kind": SLOT,
     "fork_from": "",
     "cap": None,
-    "expose": "edge",
+    # Ticket 293: unset is the default, and unset resolves from the module set —
+    # the tunnel when `cloudflared` is enabled, loopback-only otherwise
+    # (`guarden.exposure`). Spec 3.3's sentence "the track's expose field
+    # already defaults to edge" is the line this supersedes: the operator's
+    # decision of 2026-10-19 makes private the default and edge a choice a
+    # track states.
+    "expose": "",
 }
 NETWORK_KEYS = {"backend", "pasta_options"}
 
@@ -512,8 +518,9 @@ def _tracks(rows: Any, where_file: Any) -> list[Track]:
             raise errors.GuardenError(
                 f"{where}: fork_from {track.fork_from!r} names no track in the table"
             )
-        if track.expose not in ("edge", "tunnel"):
+        if track.expose and track.expose not in ("loopback", "tunnel", "edge"):
             raise errors.GuardenError(
-                f"{where}: expose is {track.expose!r}; it must be 'edge' or 'tunnel'"
+                f"{where}: expose is {track.expose!r}; it must be 'loopback', 'tunnel' or "
+                f"'edge', and absent means this host's default posture"
             )
     return tracks

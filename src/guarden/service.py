@@ -527,20 +527,31 @@ def _allocate(resolved, record, manifest, config, source: Source) -> None:
         record.route_hosts[route.host] = publications.claim_host(
             route.host, resolved.track.host_prefix, holders, record.service
         )
-    # Ticket 294: the recorded destinations are the resolver's answer — the
-    # same answer the renderer writes into the slice and the firewall reads
-    # back — so one service's record, its rendered routes and its uid-matched
-    # accepts cannot drift apart. Replaced wholesale rather than updated per
-    # route, so a label the manifest dropped stops being claimed here too.
+    # Ticket 293/294: destinations are resolved here and written into the
+    # registry, and the slice and the firewall both read that record — one
+    # answer, one writer (spec 3.4: only what cannot be derived is stored, and
+    # once stored it is the record). The first answer **stands**: a host the
+    # record already holds keeps the posture it was created under, so
+    # installing a module or editing a track re-postures services that do not
+    # exist yet and never a running fleet. A label the manifest dropped stops
+    # being claimed, because the rebuild is over the manifest's hosts.
     granted = overrides_mod.load(resolved.name) if resolved.name else None
     tunnel_labels = set(granted.expose_tunnel) if granted else set()
-    record.route_destinations = exposure.destinations(
+    resolved_destinations = exposure.destinations(
         record,
         resolved.track,
         config.modules,
         tunnel_labels,
         [route.host for route in manifest.routes],
     )
+    record.route_destinations = {
+        **resolved_destinations,
+        **{
+            host: record.route_destinations[host]
+            for host in resolved_destinations
+            if host in record.route_destinations
+        },
+    }
 
     if resolved.escaped_ref:
         instance = record.instances.get(resolved.escaped_ref)

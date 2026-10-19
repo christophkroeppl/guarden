@@ -38,7 +38,20 @@ import zipfile
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
 
-from guarden import basicauth, conf, config, errors, packagelist, paths, users, volumes, zram
+from guarden import (
+    basicauth,
+    conf,
+    config,
+    errors,
+    exposure,
+    overrides,
+    packagelist,
+    paths,
+    registry,
+    users,
+    volumes,
+    zram,
+)
 from guarden import hosttool as h
 from guarden.config import PASTA_OPTIONS, TRACK_DEFAULTS, float_value, int_value
 from guarden.hosttool import Item, hostpath, lock
@@ -1785,6 +1798,41 @@ def _admin_dropin() -> str:
     ) + "\n"
 
 
+def _exposure_offenders() -> list[str]:
+    """Services whose recorded exposure no longer matches what it resolves to.
+
+    Ticket 293's drift: the record was made against one configuration — the
+    track's `expose`, the enabled module set — and a track edited or a module
+    removed afterwards moves the default underneath it. The record still
+    governs the slice and the firewall (a running fleet does not re-posture
+    itself), so this is reported and never corrected: the way back is the act,
+    `weedr expose set`, or a deploy that re-records. A host whose
+    configuration will not parse is some other phase's drift, not this item's,
+    so it reports nothing here.
+    """
+    try:
+        host = config.load()
+    except errors.GuardenError:
+        return []
+    found: list[str] = []
+    for name in registry.names():
+        record = registry.load(name)
+        if record is None or not record.route_destinations:
+            continue
+        track = host.track(record.environment)
+        granted = overrides.load(record.service)
+        expected = exposure.destinations(
+            record,
+            track,
+            host.modules,
+            set(granted.expose_tunnel) if granted else set(),
+            list(record.route_hosts),
+        )
+        if expected != record.route_destinations:
+            found.append(record.service)
+    return sorted(found)
+
+
 def firewall_items(family: str | None = None) -> list[Item]:
     config = h.read_config(h.config_path()) or h.shipped_config()
     interface = h.ingress_interface(config)
@@ -1871,6 +1919,22 @@ def firewall_items(family: str | None = None) -> list[Item]:
             "00-ssh.conf is first in INPUT and its accept is first in guarden-ssh",
             lambda: _verify_ssh_accept_position(),
             _verify_and_raise,
+            correctable=False,
+        )
+    )
+    # Ticket 293: exposure drift is a fact about the record and the
+    # configuration beside it, so `--check` reports it and `--apply` leaves it
+    # alone — an operator who changed a track on purpose is not a machine to
+    # argue with, and the service's posture is the record's until the act says
+    # otherwise. The offenders are named in the line itself, because a drift
+    # an operator cannot attribute to a service is a drift they cannot act on.
+    offenders = _exposure_offenders()
+    items.append(
+        Item(
+            "every service's recorded exposure matches what it resolves to now"
+            + (f" (off: {', '.join(offenders)})" if offenders else ""),
+            lambda: not offenders,
+            lambda: None,
             correctable=False,
         )
     )

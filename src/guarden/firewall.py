@@ -196,12 +196,18 @@ def edge_uids() -> set[int]:
     return found
 
 
-def route_publications(record) -> set[str]:
+def route_publications(record, destination: str | None = None) -> set[str]:
     """The publication names this service's own manifest gives a route.
 
     Read from the manifest in the service's home, which is `0700` to the
     service: the firewall has to converge whether or not anybody has rendered
     the units, and a rendered file is not the input it is derived from.
+
+    With `destination`, only the routes whose **recorded** destination is that
+    one (ticket 293): the edge is granted what it serves, a `tunnel` route is
+    dialled by cloudflared and a `loopback` route is served by nobody outside
+    the box. A host the record says nothing about is an edge route — the same
+    pre-293 reading `tunnel_publications` gives it.
     """
     path = paths.manifest_in_home(record.service)
     if not path.is_file():
@@ -210,7 +216,14 @@ def route_publications(record) -> set[str]:
         manifest = manifest_mod.read(path)
     except errors.GuardenError:
         return set()
-    return {route.container for route in manifest.routes}
+    routes = manifest.routes
+    if destination is not None:
+        routes = [
+            route
+            for route in routes
+            if record.route_destinations.get(route.host, "edge") == destination
+        ]
+    return {route.container for route in routes}
 
 
 def tunnel_uids() -> set[int]:
@@ -267,8 +280,9 @@ def accept_lines(config) -> list[str]:
 
     A publication's accept set is: the service itself, the uid of every consumer
     that declared an edge to it **on that publication**, the edge's uid for every
-    route publication, the tunnel's uid for every route publication the tunnel
-    carries, and `host.admin_user` alone on the API. The API replaces
+    route publication recorded `edge` (ticket 293 — the edge is granted what it
+    serves), the tunnel's uid for every route publication the tunnel carries, and
+    `host.admin_user` alone on the API. The API replaces
     the whole set, because it is a control surface and the edge's own uid is not
     an answer to "who may see it".
 
@@ -283,7 +297,11 @@ def accept_lines(config) -> list[str]:
     tunnel = tunnel_uids()
     everything = [record for record in (registry.load(n) for n in registry.names())
                   if record is not None]
-    routed = {record.service: route_publications(record) for record in everything}
+    # Ticket 293: only the routes recorded `edge` — only what the edge
+    # actually serves — take an edge accept on their publication.
+    routed = {
+        record.service: route_publications(record, "edge") for record in everything
+    }
     tunnelled = {record.service: tunnel_publications(record) for record in everything}
     consumers = consumer_uids(everything)
     admin: int | None = None
