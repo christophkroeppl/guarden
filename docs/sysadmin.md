@@ -275,10 +275,11 @@ error: the template '../x' is not a template name; /usr/lib/guarden/templates/se
 ```
 
 The same line with templates installed: a name that breaks no rule and a set that does not hold
-it is still `1`, while an empty answer at a prompt that had a set to offer is `2`, because there
-the input itself named nothing. With templates installed and `--template` omitted, the verb
-takes the set's only entry without asking, asks at a terminal when there is more than one, and
-when stdin is not a terminal says so rather than reading an answer from it:
+it is still `1`, while an empty answer at a prompt that had a set to offer — or an explicitly
+empty `--template`, an answer that reaches the same refusal without asking — is `2`, because
+there the input itself named nothing. With templates installed and `--template` omitted, the
+verb takes the set's only entry without asking, asks at a terminal when there is more than one,
+and when stdin is not a terminal says so rather than reading an answer from it:
 
 ```
 error: create needs a terminal to answer its prompts; run it interactively

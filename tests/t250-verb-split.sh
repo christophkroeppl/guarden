@@ -147,6 +147,29 @@ assert_stderr_lacks "not a template name"
 assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/rejectedapp-staging.toml
 
+# The case the argument itself reaches: no name where a set offered a choice.
+# An empty `--template` is an answer that named nothing — input, so `2` on the
+# same line — rather than the `1` of an empty set and rather than a `0` that
+# quietly creates the service from the set's only entry, which is what the
+# front end did while `args.template or _choose_template()` swallowed the
+# empty value before the line could be drawn. The case needs a set, so this
+# run installs one directory the way `staged` and `probe` do below and takes
+# it away again; every earlier run in this block keeps its empty set.
+
+install -d -m 0755 /usr/lib/guarden/templates/services/emptyslot
+
+run weedr service create rejectedapp-staging --template ""
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "no template was chosen"
+assert_stderr_has "emptyslot"
+assert_stderr_lacks "usage:"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/rejectedapp-staging.toml
+assert_no_passwd rejectedapp-staging
+
+rmdir /usr/lib/guarden/templates/services/emptyslot
+
 # --- where the re-deploys went ------------------------------------------------
 #
 # This suite used to carry the source-hash section as well: a converged second

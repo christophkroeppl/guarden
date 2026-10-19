@@ -538,7 +538,13 @@ def _create_service(args) -> int:
             "environment; a create request names each environment once",
             errors.REJECTED_INPUT,
         )
-    template = service.require_template(args.template or _choose_template()).name
+    # An absent flag asks the chooser; an empty value is an answer and reaches
+    # `require_template` as "no name", where a set to choose from makes naming
+    # nothing the input's fault (exit 2, spec 1.2) — `or` swallowed it and
+    # handed over the set's only entry.
+    template = service.require_template(
+        args.template if args.template is not None else _choose_template()
+    ).name
     if os.geteuid() != 0:
         _become_root(
             "create",
