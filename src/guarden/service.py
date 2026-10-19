@@ -903,7 +903,8 @@ def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int,
             found = _named(group, gid_text)
             if found is None:
                 raise _no_such_group(name, reference, gid_text)
-            return (uid, int(found[2]))
+            where = f"the gid of the group {gid_text!r} in /etc/group"
+            return (uid, _number(name, reference, found[2], where))
         if passwd is not None:
             entry = _uid_entry(passwd, uid)
             if entry is not None:
@@ -936,7 +937,8 @@ def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int,
     found = _named(group, gid_text)
     if found is None:
         raise _no_such_group(name, reference, gid_text)
-    return (uid, int(found[2]))
+    where = f"the gid of the group {gid_text!r} in /etc/group"
+    return (uid, _number(name, reference, found[2], where))
 
 
 def _cannot_run(name: str, record, reference: str, declared: str) -> errors.GuardenError:
