@@ -21,6 +21,7 @@ import grp
 import os
 import pwd
 import shutil
+import stat
 import subprocess
 import sys
 import tomllib
@@ -36,6 +37,10 @@ PREFIX = Path(os.environ.get("GUARDEN_PREFIX", "/"))
 MODE_DIR = 0o755
 MODE_DIR_LOCKS = 0o2770
 MODE_CONFIG = 0o640
+# A file under /etc/sudoers.d/: root owns it and root alone reads it. sudo
+# refuses a world-writable sudoers file, and a readable one is a grant the
+# grantee could read and edit.
+MODE_SUDOERS = 0o440
 
 # The one group the lock files belong to, spelled once here because both lock
 # implementations state it: spec 3.5's fixed set is taken by root and by
@@ -176,6 +181,32 @@ def text_item(what: str, path: Path, content: str, mode: int = MODE_CONFIG) -> I
         what,
         lambda: path.is_file() and path.read_text(encoding="utf-8") == content,
         lambda: write_file(path, content, mode),
+    )
+
+
+def sudoers_item(what: str, path: Path, content: str) -> Item:
+    """A file sudo reads, compared as text AND as mode.
+
+    **The mode is part of the fact, and for this file it is not a detail.** sudo
+    refuses a sudoers file that is world-writable, and a file under
+    `/etc/sudoers.d/` that is not readable by root alone is a grant the
+    grantee could edit. `0440` says: root owns it, root alone reads it, and
+    everyone can execute it (which is meaningless for a text file, and is what
+    the `o` bit costs nothing).
+
+    A plain `text_item` would compare the CONTENT only, so a file whose content
+    is right and whose mode is `0644` — readable by every account on the host —
+    would pass `--check` and keep passing, and the grant would be readable by
+    the very accounts it binds.
+    """
+    return Item(
+        what,
+        lambda: (
+            path.is_file()
+            and path.read_text(encoding="utf-8") == content
+            and stat.S_IMODE(path.stat().st_mode) == MODE_SUDOERS
+        ),
+        lambda: write_file(path, content, MODE_SUDOERS),
     )
 
 

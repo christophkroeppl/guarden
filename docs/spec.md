@@ -1165,7 +1165,11 @@ flag therefore do not have one, and each capability is a separate verb instead:
 
 | capability | verb | on the `guarden` sudoers rule? |
 |---|---|---|
-| create a service from a poke | `weedr service ingest` | **yes** |
+| deploy a poke's staged tree | `furrow deploy` | **yes** |
+| drop a preview instance | `furrow preview drop` | **yes** |
+| read the deploy queue | `furrow queue list` | **yes** |
+| read the deploy lanes | `furrow status` | **yes** |
+| read the projects | `weedr project list` | **yes** |
 | create a service from another service's tree | `weedr service add` | **no** |
 | create a new service from a template | `weedr service create` | **no** |
 | fork, with a chosen source | `weedr service fork` | **no** |
@@ -1174,10 +1178,22 @@ flag therefore do not have one, and each capability is a separate verb instead:
 | destroy a service's volumes | `weedr service purge` | **no** |
 | roll a service back to a snapshot | `weedr service rollback` | **no** |
 
-Every verb that *is* granted is granted whole. A caller that can run `weedr service ingest`
-creates a service and nothing else: it cannot grant a port, cannot destroy data, cannot roll
-anything back, and cannot choose where a service's tree or data comes from, because none of those
-is a flag on something it can run.
+The rule is written by `soil install --apply` as `/etc/sudoers.d/guarden`, `0440 root:root`. It
+grants the `hose` account — the one a poke arrives as — the ability to run the listed verbs **as
+`guarden`**, the mutator's own identity, and nothing else. A poke reaches a deploy, and the
+deploy reaches `weedr service ingest` as `guarden`; that is how a service comes to exist, and
+the capability it carries is the one the table says: create a service and nothing else.
+
+Every verb that *is* granted is granted whole. A caller that can run `furrow deploy` creates a
+service and nothing else: it cannot grant a port, cannot destroy data, cannot roll anything
+back, and cannot choose where a service's tree or data comes from, because none of those is a
+flag on something it can run.
+
+**A rule naming a program without its verb matches any arguments at all**, which is why every
+entry names a verb and not a program — and why the argument is part of the grant rather than a
+detail of it. Measured on a live host: a rule naming `furrow status` admits `furrow status` and
+refuses `furrow deploy`; a rule naming the bare `furrow` admits `furrow deploy --from poke
+<anything>` and everything else the program can do.
 
 Names are service names everywhere. There is no separate host-name convention, no suffix, and
 no alias: the name a consumer resolves is the service's own name, and the route target Traefik

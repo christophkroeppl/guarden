@@ -48,6 +48,7 @@ from guarden import (
     packagelist,
     paths,
     registry,
+    sudoers,
     users,
     volumes,
     zram,
@@ -2417,6 +2418,29 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             )
             for parts, mode, owner, group in INSTALL_DIRECTORIES
         ],
+        # The sudoers rule, after the users it names (spec 5.1, 6.6).
+        #
+        # **This file is the boundary the whole capability argument rests on**,
+        # and until this row existed it was described in nine places and written
+        # in none. The rule grants the POKE — the `hose` account a poke arrives
+        # as — the mutator's deploy verbs and nothing else, running as the
+        # mutator's own identity.
+        #
+        # It names the verbs WHOLE, because a sudoers rule cannot tell one
+        # argument from another: a rule naming a bare program matches any
+        # arguments, and an argument is a capability. And it names no mutating
+        # `weedr` verb, so the request/grant split survives — a push can
+        # deploy, and it cannot grant a port, grant a firewall rule, destroy
+        # data or roll anything back.
+        #
+        # The mode is part of the row: `0440`, so the grantee cannot read or
+        # edit the grant it runs under, and sudo does not refuse the file for
+        # being writable.
+        h.sudoers_item(
+            "the guarden sudoers rule grants the poke the deploy verbs and nothing else",
+            sudoers.SUDOERS_FILE,
+            sudoers.rule_text(),
+        ),
     ]
     items += [
         Item("the host configuration exists", lambda: config_path.is_file(), _seed_config),
