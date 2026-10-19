@@ -384,6 +384,18 @@ for _ in $(seq 1 30); do
     sleep 1
 done
 assert_file_exists "$runtime_pin"
+# What makes the reading at the bottom of this block a reading: the start
+# above re-rendered and installed the 4242 line, then asked systemctl --user
+# to start a unit that was already ACTIVE — a no-op — so the container still
+# running was the one that came up under the FIRST pin (that is what the
+# uid_map read below showed before this stop: rows for 10001 and none for
+# 4242, with pid 1 answering 10001 only because that fixture's image user and
+# its first pin are the same number). A stop is what makes the start mean it,
+# and the assertion below is what proves the pin is live before pid 1 is read.
+run weedr service stop kid-staging
+assert_exit 0
+run weedr service start kid-staging
+assert_exit 0
 pin_ready=0
 for _ in $(seq 1 60); do
     podman_as kid-staging exec "$container" true
