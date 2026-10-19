@@ -31,7 +31,7 @@ run soil install --apply
 assert_not_rejected
 
 policy=/etc/guarden/edge/basicauth-policy
-entries=/etc/guarden/edge/basicauth
+entries=/var/lib/guarden/edge/basicauth
 
 # The directory the edge unit mounts is converged by `soil install`, long
 # before any unit mounts it: an unprivileged edge user cannot mkdir under a
@@ -78,7 +78,7 @@ assert_exit 0
 # cannot see, which is a traefik error per request rather than a login.
 edge_unit=/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.container
 assert_file_has "$edge_unit" \
-    "Volume=/etc/guarden/edge/basicauth:/etc/guarden/basicauth:ro"
+    "Volume=/var/lib/guarden/edge/basicauth:/etc/guarden/basicauth:ro"
 
 # A new service created now carries the credential, and the manifest did not
 # ask for any of it — its route even says `auth: false`, which is the default
