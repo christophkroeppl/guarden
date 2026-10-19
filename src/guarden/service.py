@@ -325,7 +325,14 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     if source.kind != "module":
         # `_render_source`, not `directory`: `units.install` hands this to `loom`
         # as `guarden` (ADR-0012), and a home is `0700` to its own service.
-        outcome.notes += units.install(_render_source(directory), resolved.name)
+        # `resolved.escaped_ref` is the other half of the same call: without it
+        # `loom` is never given `--instance`, so the render has no instance
+        # context and lands in the service's shared quadlet directory instead of
+        # the instance's own (spec 5.2) — `units_of(<name>, <ref>)` then finds
+        # nothing and `weedr service start <name>/<ref>` answers 1 (ticket 295).
+        outcome.notes += units.install(
+            _render_source(directory), resolved.name, resolved.escaped_ref
+        )
     return outcome
 
 

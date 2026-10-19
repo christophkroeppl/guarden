@@ -169,6 +169,20 @@ class Context:
         """
         return edgeresolve.resolve(self.config, self.track.name, logical)
 
+    def instance_ref(self) -> str:
+        """This render's instance, as the ref the operator typed.
+
+        `--instance` carries the **escaped** key (spec 5.2: a verb takes the ref
+        raw and the escaping is internal), and the slice's `ref` is what
+        `roots.render_tunnel` escapes again on the way into cloudflared's
+        `ingress.path` — the escaped key here would be escaped twice and match
+        no request.
+        """
+        if not self.instance:
+            return ""
+        instance = self.record.instances.get(self.instance)
+        return instance.ref if instance is not None else ""
+
     def unit_dir(self) -> Path:
         home = paths.service_home(self.service)
         if self.instance:
@@ -1265,7 +1279,7 @@ def _routes(
             "target": f"{context.service}:{ports[route.container][0]}" if context and
             route.container in ports else "",
             "destination": "tunnel" if route.host in tunnel_labels else track_expose,
-            "ref": context.instance if context and context.instance else "",
+            "ref": context.instance_ref() if context else "",
         }
         for route in document.routes
     ]
