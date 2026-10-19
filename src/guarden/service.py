@@ -34,6 +34,7 @@ from guarden import (
     conf,
     edges,
     errors,
+    exposure,
     gate,
     names,
     paths,
@@ -526,13 +527,20 @@ def _allocate(resolved, record, manifest, config, source: Source) -> None:
         record.route_hosts[route.host] = publications.claim_host(
             route.host, resolved.track.host_prefix, holders, record.service
         )
-        # Record the destination for this route (edge or tunnel)
-        granted = overrides_mod.load(resolved.name) if resolved.name else None
-        tunnel_labels = set(granted.expose_tunnel) if granted else set()
-        track_expose = resolved.track.expose
-        record.route_destinations[route.host] = (
-            "tunnel" if route.host in tunnel_labels else track_expose
-        )
+    # Ticket 294: the recorded destinations are the resolver's answer — the
+    # same answer the renderer writes into the slice and the firewall reads
+    # back — so one service's record, its rendered routes and its uid-matched
+    # accepts cannot drift apart. Replaced wholesale rather than updated per
+    # route, so a label the manifest dropped stops being claimed here too.
+    granted = overrides_mod.load(resolved.name) if resolved.name else None
+    tunnel_labels = set(granted.expose_tunnel) if granted else set()
+    record.route_destinations = exposure.destinations(
+        record,
+        resolved.track,
+        config.modules,
+        tunnel_labels,
+        [route.host for route in manifest.routes],
+    )
 
     if resolved.escaped_ref:
         instance = record.instances.get(resolved.escaped_ref)

@@ -44,6 +44,7 @@ from guarden import (
     edgeresolve,
     edges,
     errors,
+    exposure,
     names,
     paths,
     registry,
@@ -1252,7 +1253,19 @@ def _routes(
     one the mutator allocated from the manifest's label and the track's prefix."""
     granted = overrides_mod.load(context.service) if context else None
     tunnel_labels = set(granted.expose_tunnel) if granted else set()
-    track_expose = context.track.expose if context else "edge"
+    # Ticket 294: one resolver for every consumer — the mutator, this slice and
+    # the firewall all ask `exposure.destinations` the same question, so the
+    # destination `roots` reads here and the one recorded in the registry can
+    # no longer disagree (spec 6.3: the same manifest, registry and overrides
+    # always produce the same bytes).
+    hosts = [route.host for route in document.routes]
+    dests = (
+        exposure.destinations(
+            context.record, context.track, context.config.modules,
+            tunnel_labels, hosts,
+        )
+        if context else {host: exposure.EDGE for host in hosts}
+    )
 
     rows = [
         {
@@ -1264,7 +1277,7 @@ def _routes(
             "auth": route.auth,
             "target": f"{context.service}:{ports[route.container][0]}" if context and
             route.container in ports else "",
-            "destination": "tunnel" if route.host in tunnel_labels else track_expose,
+            "destination": dests.get(route.host, exposure.EDGE),
             "ref": context.instance if context and context.instance else "",
         }
         for route in document.routes

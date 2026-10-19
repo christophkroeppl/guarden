@@ -23,12 +23,14 @@ from guarden import (
     credentials,
     edgeconf,
     errors,
+    exposure,
     firewall,
     firewallrules,
     gate,
     lineage,
     modules,
     names,
+    overrides,
     paths,
     ports,
     projects,
@@ -102,6 +104,12 @@ SECRET = (
     ("materialise", "decrypt the blobs into a service's podman store"),
 )
 
+EXPOSE = (
+    ("set", "record a service's exposure for its environment: loopback, tunnel or public"),
+    ("unset", "return a service to its default exposure"),
+    ("list", "every service's recorded exposure and what it resolves to"),
+)
+
 PORT = (
     ("list", "requested, granted and pending, per service"),
     ("open", "grant a public port the manifest requested"),
@@ -146,6 +154,7 @@ GROUPS = (
     ("share", "the time-bounded grants that reach a tunnel route", SHARE),
     ("module", "the shipped bundles of services and shared programs", MODULE),
     ("firewall", "the firewall rules a service asks for", FIREWALL),
+    ("expose", "the per-service exposure record: loopback, tunnel or public", EXPOSE),
     ("project", "repositories, their refs and their poke keys", PROJECT),
 )
 
@@ -157,7 +166,8 @@ Not on the guarden sudoers rule, and not reachable from a deploy:
 `weedr port open`, `weedr port close`, `weedr firewall open`,
 `weedr firewall close`, `weedr service purge`,
 `weedr service rollback`, `weedr service add`, `weedr service create`,
-`weedr module add`, `weedr project add`,
+`weedr module add`, `weedr expose set`, `weedr expose unset`,
+`weedr project add`,
 `weedr project grant`, `weedr project revoke`, and every `weedr share`
 verb. A customer-facing grant is safe to have precisely because a poke
 can deploy to a preview and cannot mint, extend or revoke access to one.
@@ -296,6 +306,18 @@ def build_parser() -> argparse.ArgumentParser:
         verb_parser = top["firewall"]["verbs"][verb]
         verb_parser.add_argument("name", metavar="NAME", help="the service")
         verb_parser.add_argument("rule", metavar="RULE", help="the name it asked for")
+
+    expose_set = top["expose"]["verbs"]["set"]
+    _add_service_name(expose_set, "the service whose exposure is recorded")
+    expose_set.add_argument(
+        "value",
+        metavar="VALUE",
+        help="loopback, tunnel or public; public is refused off a gated track",
+    )
+    _add_service_name(
+        top["expose"]["verbs"]["unset"], "the service returned to its default exposure"
+    )
+    cli.add_json(top["expose"]["verbs"]["list"])
 
     cli.add_json(top["module"]["verbs"]["list"])
     for verb in ("add", "remove"):
@@ -1524,6 +1546,111 @@ def _firewall_list(args) -> int:
     return firewallrules.list_rules(args.json)
 
 
+def _exposure_record(config, name: str):
+    """The service's record and its track, or the refusal that names one."""
+    record = registry.load(name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{name} has no registry entry, so it has no environment to record an "
+            f"exposure against; `weedr service list` reports the services that exist",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    track = config.track(record.environment)
+    if track is None:
+        raise errors.GuardenError(
+            f"{record.service} is in the environment {record.environment!r}, which names "
+            f"no track in {paths.GUARDEN_TOML}; the tracks are what the "
+            f"[[environments]] table holds",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return record, track
+
+
+def _write_exposure(config, record, track, value: str | None) -> None:
+    """One record written, and every decision it makes re-resolved with it.
+
+    The destinations are rewritten in the same act as the record so the
+    registry never carries a record and a stale answer beside it; the firewall
+    re-renders for the same reason `weedr port open` re-renders — the accept
+    set is a consequence of the record, and a consequence that lags is drift
+    the check would then report. The rendered slice is the *next render*'s
+    (ticket 294): this verb changes one record and nothing a repository owns.
+    """
+    record.exposure = value
+    granted = overrides.load(record.service)
+    record.route_destinations = exposure.destinations(
+        record,
+        track,
+        config.modules,
+        set(granted.expose_tunnel) if granted else set(),
+        list(record.route_hosts),
+    )
+    with conf.lock("registry"):
+        registry.save(record, (0, users.group_id(PROGRAM_GROUP)))
+    firewall.print_diff(firewall.install(config))
+    firewall.load_set()
+
+
+def _expose_set(args) -> int:
+    config = config_mod.load()
+    record, track = _exposure_record(config, args.name)
+    if args.value not in exposure.RECORD_VALUES:
+        raise errors.GuardenError(
+            f"{args.value!r} is not an exposure; the values are "
+            f"{', '.join(exposure.RECORD_VALUES)}",
+            errors.REJECTED_INPUT,
+        )
+    if args.value == "public" and not track.gated:
+        raise errors.GuardenError(
+            f"{record.service} is on the track {track.name!r}, and public exposure is "
+            f"selectable only on a gated track; {track.name} stays loopback or tunnel",
+            errors.REJECTED_INPUT,
+        )
+    if args.value == "tunnel" and not exposure.tunnel_enabled(config.modules):
+        raise errors.GuardenError(
+            f"the {exposure.CF_MODULE} module is not enabled, so a tunnel route would "
+            f"have nothing to carry it; `weedr module add {exposure.CF_MODULE}` first",
+            errors.REJECTED_INPUT,
+        )
+    _write_exposure(config, record, track, args.value)
+    sys.stdout.write(f"{record.service} exposure {args.value}\n")
+    return 0
+
+
+def _expose_unset(args) -> int:
+    config = config_mod.load()
+    record, track = _exposure_record(config, args.name)
+    if record.exposure is None:
+        sys.stdout.write(f"{record.service} is already at its default exposure\n")
+        return 0
+    _write_exposure(config, record, track, None)
+    sys.stdout.write(f"{record.service} exposure default\n")
+    return 0
+
+
+def _expose_list(args) -> int:
+    config = config_mod.load()
+    services = []
+    for name in registry.names():
+        record = registry.load(name)
+        if record is None:
+            continue
+        track = config.track(record.environment)
+        services.append(
+            {
+                "service": record.service,
+                "exposure": record.exposure or "default",
+                "destination": exposure.resolve(record, track, config.modules),
+            }
+        )
+    if args.json:
+        sys.stdout.write(json.dumps({"services": services}) + "\n")
+        return 0
+    for row in services:
+        sys.stdout.write(f"{row['service']} {row['exposure']} {row['destination']}\n")
+    return 0
+
+
 HANDLERS = {
     "weedr project list": projects.list_json,
     "weedr project add": projects.do_add,
@@ -1534,6 +1661,9 @@ HANDLERS = {
     "weedr firewall open": _firewall_open,
     "weedr firewall close": _firewall_close,
     "weedr firewall list": _firewall_list,
+    "weedr expose set": _expose_set,
+    "weedr expose unset": _expose_unset,
+    "weedr expose list": _expose_list,
     "weedr service ingest": _ingest,
     "weedr service add": _add,
     "weedr service create": _create_service,

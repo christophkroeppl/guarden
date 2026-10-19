@@ -89,6 +89,12 @@ REFUSED_KEYS = {
     "published_ports": "the published-port set is the renderer's, from the grants and the "
     "allocations",
     "mounts": "[mounts] allow in the root-owned overrides.toml is the only mount surface",
+    "exposure": "exposure is an operator's act, recorded per service per "
+                "environment with `weedr expose set` on the root-owned registry; "
+                "the host decides it and a manifest cannot request it",
+    "public": "public exposure is an operator's act recorded with `weedr expose "
+              "set`, selectable only on a gated track; a manifest cannot place "
+              "itself on the internet",
     "zram": "a zram device is host configuration, in the root-owned "
             "/etc/guarden/guarden.toml, and it is the operator's",
     "swap": "a swap device is host configuration, and it is the operator's",
