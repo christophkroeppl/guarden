@@ -348,11 +348,12 @@ def require_template(template_name: str | None) -> Path:
     host" — and which one is asked is which thing is at fault.**
 
     `2`, the input rejected, when the argument itself breaks a rule: a value
-    that is not a template name at all (anything with a `/`, a leading `.` or
-    an upper-case letter in it) is §1.2's row "a name that breaks a rule", and
-    it is `2` whatever the host holds — the same answer the same-shaped
-    `add --from /tmp` gives (pinned by t250). An answer that names nothing where
-    the installed set offered a choice is input too, so it is `2` as well.
+    that does not match `names.NAME_RE` — `^[a-z0-9][a-z0-9._-]*$`, the whole
+    of "a template name" — is not a template name at all and is §1.2's row
+    "a name that breaks a rule"; it is `2` whatever the host holds, the same
+    answer the same-shaped `add --from /tmp` gives (pinned by t250). An answer
+    that names nothing where the installed set offered a choice is input too,
+    so it is `2` as well.
 
     `1`, the host not in the state the request assumed, when the name breaks no
     rule and the host is what says no: a set that does not hold the name, and a
@@ -373,8 +374,6 @@ def require_template(template_name: str | None) -> Path:
     )
     if not template_name:
         problem = "no template was chosen"
-        # No answer with nothing to answer *from* is the host's emptiness;
-        # no answer with a set on the prompt is an input that named nothing.
         code = errors.HOST_NOT_AS_ASSUMED if not available else errors.REJECTED_INPUT
     elif directory is None:
         problem = f"the template {template_name!r} is not a template name"
