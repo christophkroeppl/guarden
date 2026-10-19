@@ -97,6 +97,56 @@ assert_stderr_has "template"
 assert_stderr_lacks "usage:"
 assert_stdout_empty
 
+# --- the template argument: the name's shape is input, the set is the host ----
+#
+# spec 1.2 draws one line — "The dividing line is input against host. A manifest
+# and a unit source are input; the filesystem, the installed services and the
+# remote are the host" — and its table writes `2` for "a name that breaks a
+# rule", adding "Nothing else writes `2`". A `--template` value that is not a
+# template name at all is that row, and it is the same shape as `add --from /tmp`
+# above, which this suite already pins at `2` (t250:43 region). The host's own
+# state is the other half: a **well-formed** name the installed set does not
+# hold, and an empty set with no flag at all, are the filesystem — `1`, as the
+# next two runs assert.
+#
+# No template is installed at this point in the suite, and that must not matter
+# to the shape refusal: the argument is at fault whatever the host holds, so the
+# run below answers `2` with an empty set, a registry-free name and nothing
+# written.
+
+run weedr service create rejectedapp-staging --template ../x
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "not a template name"
+assert_stderr_has "../x"
+assert_stderr_lacks "usage:"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/rejectedapp-staging.toml
+assert_no_passwd rejectedapp-staging
+
+run weedr service create rejectedapp-staging --template BAD
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "not a template name"
+assert_stderr_has "BAD"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/rejectedapp-staging.toml
+assert_no_passwd rejectedapp-staging
+
+# The other side of the same line, asked with the same flag: a name that breaks
+# no rule, and a set that does not hold it. The answer came from the host's
+# filesystem, so it stays `1` — the same answer `add --from <service>` gives for
+# a service the host has never heard of, and the answer spec 1.2's `needs:` row
+# states for a provider that does not exist.
+
+run weedr service create rejectedapp-staging --template postgres
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "does not exist"
+assert_stderr_lacks "not a template name"
+assert_stdout_empty
+assert_file_missing /var/lib/guarden/registry/rejectedapp-staging.toml
+
 # --- where the re-deploys went ------------------------------------------------
 #
 # This suite used to carry the source-hash section as well: a converged second

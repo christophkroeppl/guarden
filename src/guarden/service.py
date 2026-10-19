@@ -334,10 +334,24 @@ def require_template(template_name: str | None) -> Path:
 
     Raised here and nowhere else, so the verb that validates its answer before
     it asks for anything and the mutator that is about to copy the template
-    answer with the same line and the same code: `1`, because what is missing is
-    on the host and not in the argument (spec 1.2). A name that is not a template
-    name at all — anything with a `/` or a leading `.` in it — stops here too,
-    and stops before it can name a directory outside the template set.
+    answer with the same line and the same code. Either way the refusal stops
+    before it can name a directory outside the template set.
+
+    **Two codes on spec 1.2's one line — "The dividing line is input against
+    host" — and which one is asked is which thing is at fault.**
+
+    `2`, the input rejected, when the argument itself breaks a rule: a value
+    that is not a template name at all (anything with a `/`, a leading `.` or
+    an upper-case letter in it) is §1.2's row "a name that breaks a rule", and
+    it is `2` whatever the host holds — the same answer the same-shaped
+    `add --from /tmp` gives (pinned by t250). An answer that names nothing where
+    the installed set offered a choice is input too, so it is `2` as well.
+
+    `1`, the host not in the state the request assumed, when the name breaks no
+    rule and the host is what says no: a set that does not hold the name, and a
+    set that is empty at all. §1.2 puts "the filesystem, the installed services
+    and the remote" on the host's side, which is the same reason its `needs:`
+    row answers `1` for a provider that does not exist.
     """
     templates = paths.TEMPLATES / "services"
     directory = None
@@ -352,10 +366,15 @@ def require_template(template_name: str | None) -> Path:
     )
     if not template_name:
         problem = "no template was chosen"
+        # No answer with nothing to answer *from* is the host's emptiness;
+        # no answer with a set on the prompt is an input that named nothing.
+        code = errors.HOST_NOT_AS_ASSUMED if not available else errors.REJECTED_INPUT
     elif directory is None:
         problem = f"the template {template_name!r} is not a template name"
+        code = errors.REJECTED_INPUT
     else:
         problem = f"the template {template_name!r} does not exist at {directory}"
+        code = errors.HOST_NOT_AS_ASSUMED
     raise errors.GuardenError(
         problem
         + (
@@ -363,7 +382,7 @@ def require_template(template_name: str | None) -> Path:
             if available
             else f"; {templates} holds none"
         ),
-        errors.HOST_NOT_AS_ASSUMED,
+        code,
     )
 
 
