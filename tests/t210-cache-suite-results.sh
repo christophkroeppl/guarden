@@ -447,6 +447,18 @@ fi
 # interpreter and the two libraries the renderer needs.
 assert_file_missing "$GUARDEN_ROOT/.venv"
 
+# **The absence above is only as good as the push that causes it, and on a
+# checkout with no venv it is vacuous.** So the push itself is pinned: the
+# runner must exclude the venv from the tar it sends, or the machine gets a
+# developer's interpreter the moment the developer has one. The pin is on the
+# runner's own source — the runner cannot be driven from inside a machine,
+# where `lxc` does not exist.
+runner=$GUARDEN_ROOT/tests/lxc.sh
+[ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
+venv_excludes=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '--exclude=./.venv' || true)
+[ "$venv_excludes" -ge 1 ] \
+    || _fail "the runner pushes the developer's .venv into the machine, so a suite runs against a host's pip install"
+
 # And the machine's own libraries are what a program would import there.
 run python3 -c 'import yaml, jinja2'
 assert_exit 0
