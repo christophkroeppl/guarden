@@ -1088,7 +1088,8 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
         if pinned is not None:
             render.refuse_pinned_user(unit, pinned, f"{name}: the unit {path.name}")
     if not _carries_owner_line(name, escaped_ref, record):
-        units.install(_unit_source(name, record, escaped_ref), name, escaped_ref)
+        with _unit_source(name, record, escaped_ref) as source:
+            units.install(source, name, escaped_ref)
 
 
 # The spellings of one declaration: no `USER` at all, the number, and the name.
@@ -1613,23 +1614,37 @@ def _carries_owner_line(name: str, escaped_ref: str | None, record) -> bool:
     return True
 
 
-def _unit_source(name: str, record, escaped_ref: str | None = None) -> Path:
+@contextmanager
+def _unit_source(name: str, record, escaped_ref: str | None = None) -> Iterator[Path]:
     """Where `units.install` gets its source for this service: the tree the units
     being re-rendered were installed from — an instance's own home first when
     this start is an instance's, then the service's home, and the module's
     shipped tree for a service a module created. The same sources the installs
     that created these units read from, looked up in the same order the
-    directory they are being installed into resolves."""
+    directory they are being installed into resolves.
+
+    A CONTEXT MANAGER, because the service's own home is not readable by the
+    renderer (it is `0700` to that service) and has to be staged for it
+    (ADR-0012, ticket 301): the staged tree must exist for the whole install
+    and go away with it. Handing the caller the staged PATH without staging it
+    would read a tree that is not there, and handing over the manager object
+    instead of entering it would read a path named
+    "<contextlib._GeneratorContextManager object at 0x…>" — a manifest that
+    "does not exist" for a reason that has nothing to do with the manifest.
+    """
     homes = [paths.service_home(name)]
     if escaped_ref:
         homes.insert(0, paths.instance_home(name, escaped_ref))
     for home in homes:
         if _manifest_in(home).is_file():
-            return _render_source(home)
+            with _render_source(home) as staged:
+                yield staged
+            return
     if record.installed_by:
         shipped = modules_mod.source_of(record.installed_by, name)
         if _manifest_in(shipped).is_file():
-            return shipped
+            yield shipped
+            return
     raise errors.GuardenError(
         f"{name}: no manifest in {homes[-1]} and no module source, so its units cannot be "
         "re-rendered with the probed line",
