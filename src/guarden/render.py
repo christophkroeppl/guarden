@@ -378,7 +378,47 @@ def _quadlet_source(directory: Path) -> Source:
         unit = unitsource.parse(path)
         units[unit.stem()] = unit
     mounts = {name: _mounts_of_unit(unit) for name, unit in units.items()}
+    # Checked once the whole set is known and before anything is written: spec
+    # 7.3 states the refusal for a unit source and names no vocabulary, so a
+    # hand-written unit reaches the check a Compose file reaches (ticket 299 —
+    # it was wired into `_compose_source` only, and a `.guarden/quadlet/` source
+    # rendered names that resolve to nothing).
+    compose.check_siblings(
+        {name: _unit_body(unit) for name, unit in units.items()}, directory
+    )
     return Source(kind="quadlet", origin=directory, units=units, mounts=mounts)
+
+
+def _unit_body(unit: Unit) -> dict:
+    """The unit's host-naming values in the vocabulary `check_siblings` reads.
+
+    The refusal is one rule and must have one reader: spec 7.3 names the
+    container, the sibling, the key and the value for "a unit source", and the
+    keys a hand-written unit writes those facts in are `Environment=`, `Exec=`,
+    `HealthCmd=` and `AddHost=` where a Compose file writes `environment`,
+    `command`, `healthcheck` and `extra_hosts`. The values are mapped here
+    rather than the check growing a second reader that could disagree with the
+    first about what counts as dialling a host.
+    """
+    environment: dict[str, str] = {}
+    for line in unit.get("Container", "Environment"):
+        # systemd splits a value on whitespace, so one line carries several
+        # assignments, and a quoted line is one string holding them all.
+        for assignment in line.split():
+            key, separator, value = assignment.strip('"').partition("=")
+            if separator:
+                environment[key] = value
+    body: dict = {"environment": environment}
+    command = unit.one("Container", "Exec")
+    if command is not None:
+        body["command"] = command
+    health = unit.one("Container", "HealthCmd")
+    if health is not None:
+        body["healthcheck"] = {"test": health}
+    hosts = unit.get("Container", "AddHost")
+    if hosts:
+        body["extra_hosts"] = hosts
+    return body
 
 
 def _mounts_of_unit(unit: Unit) -> list[Mount]:
