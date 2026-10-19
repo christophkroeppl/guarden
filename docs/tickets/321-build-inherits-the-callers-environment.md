@@ -78,6 +78,33 @@ weedr.py:1467/1487  runuser -u guarden -- …                           ← unsa
 a cgroup. The build was the one that showed it because a build actually
 RUNS a container; the others fail more quietly.
 
+## Independently confirmed by an adversarial security review
+
+**`deepseek-v4.1-flash-free` found this on its own**, in the first of the ten
+security reviews (prompt: the whole platform, one bounded question). Its F1
+is this ticket, stated independently:
+
+> **F1 — MEDIUM: `USER`/`LOGNAME` not set at five `runuser` call sites**
+> The other six call sites do **not** set `USER` or `LOGNAME`. They inherit
+> root's environment. […] **This is a functional bug, not a direct security
+> exploit.** The container still runs as the service user's uid […] A wrong
+> subuid mapping means *fewer* privileges inside the container, not more.
+> […] **Fix.** Set `USER` and `LOGNAME` at every `runuser` call site that runs
+> podman, matching the `_podman` function's pattern.
+
+The review's own severity assessment is **lower than this ticket's**, and the
+reasoning is worth keeping: a wrong `USER` gives a container FEWER privileges,
+not more, so the defect is a denial of service on the build path rather than
+an escalation. The ticket is not closed by that — a build that fails is a
+build that fails — but the finding is **not** a privilege escalation and should
+not be described as one.
+
+The review also checked the other three properties it was asked about and
+found **no critical exploitable vulnerability**: the per-service uid, the
+`0700` tree, the subuid band, the capability set, the firewall's default
+deny, the credential blob's `0600 root:root`, the request/grant split, and
+the `hose` path-traversal guard all hold against the threat model.
+
 ## What to build
 
 Give the build the same scrub the probe has — `USER=`, `LOGNAME=` and
