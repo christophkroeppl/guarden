@@ -98,11 +98,14 @@ assert_exit 0
 run weedr module add gate-traefik
 assert_exit 0
 
-# Three previews of one service in the slice `roots` reads, each ref chosen for
-# the hole it exercises: `.` is the bare metacharacter, `abc` is the prefix an
-# unanchored path would match `/abcd` with, `feature-x` carries `\x2d` through
-# `systemd_escape` and is the byte a double-quoted YAML scalar decodes back to
-# `-`. The routes are tunnel routes, which is what puts them on the tunnel.
+# Three previews of one service, each ref chosen for the hole it exercises: `.` is
+# the bare metacharacter, `abc` is the prefix an unanchored path would match
+# `/abcd` with, `feature-x` carries `\x2d` through `systemd_escape` and is the
+# byte a double-quoted YAML scalar decodes back to `-`. The routes are tunnel
+# routes, which is what puts them on the tunnel. Two are seeded in the service's
+# own slice and the third in its instance's own directory — the path an
+# instance's render installs to (spec 2) — so `roots sync` has to walk to it,
+# and the route count below is where a walk that does not read it shows.
 slice=$GUARDEN_PREFIX/var/lib/guarden/shared/routed-preview/routes.toml
 seed "$slice" \
     'service = "routed-preview"' \
@@ -129,7 +132,12 @@ seed "$slice" \
     'auth = false' \
     'target = "routed-preview:32002"' \
     'destination = "tunnel"' \
-    'ref = "abc"' \
+    'ref = "abc"'
+
+seed "$GUARDEN_PREFIX/var/lib/guarden/shared/routed-preview/instances/feature\\x2dx/routes.toml" \
+    'service = "routed-preview"' \
+    'project = "routed"' \
+    'track = "preview"' \
     '' \
     '[[routes]]' \
     'container = "web"' \
