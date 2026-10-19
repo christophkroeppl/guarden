@@ -59,7 +59,7 @@ registry=/var/lib/guarden/registry
 # the run prints what matched. The bracketed spellings keep this line out of
 # its own match; `-I` keeps a stale `__pycache__` byte-compilation of an
 # older docstring from answering for the file beside it.
-run grep -rnI -e 'forced on[t]o' -e 'exactly\*\* the characte[r]s' \
+run grep -rnI -e 'forced on[t]o' -e 'digits are exactl[y]' \
     "$GUARDEN_ROOT/docs" "$GUARDEN_ROOT/src" "$GUARDEN_ROOT/tests"
 echo "MEASURE: refuted claims still in the tree: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
 assert_exit 1
