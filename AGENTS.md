@@ -219,6 +219,24 @@ a new ADR that supersedes it. The short version:
   deploy exits `0`, the service is installed and waiting, `[gate] reason` in the registry says
   why, and `weedr service start` re-checks and starts once the operator has planted the
   credentials. Do not disable the unit instead — see docs/sysadmin.md.
+  **The gate's subject is the credential REQUESTS the units make, not the keys the schema
+  declares.** A unit carries `Secret=<KEY>` for every key the renderer asked for, and a
+  service with no schema at all — a template-created one ships quadlet files and nothing else —
+  can carry a request nothing satisfies. The gate reads the service's own quadlet directory and
+  asks podman the question the container would ask: does every `Secret=` line name a key that
+  has a value? A key the units ask for and nothing plants is a request nobody can satisfy, and
+  it is reported the way a schema's own missing required key is reported — one answer for one
+  condition. On a track the gate does not hold, the same question is asked at the START, and the
+  refusal names the keys and the command that plants them, so the operator meets a named key
+  instead of podman's `125 no such secret`.
+  **A plant materialises on its own.** `weedr secret set` writes the blob and starts the
+  materialiser, so the value is in the service's own podman store when the verb returns.
+  `guarden-creds.path` is the other half — it watches `/etc/guarden/creds/` and triggers the
+  same materialiser when a blob changes underneath it, which is what a blob written by
+  something other than the verb (a restored backup, an operator's own `cp`) needs. **`soil
+  install` starts that unit, and starting it is not the same as enabling it**: an enabled
+  `.path` unit watches nothing until it runs, so an install that only enabled it left the watch
+  dormant until the next boot and the first plant of a fresh box materialised nothing.
 - Every mutation that renders a shared file holds one lock across render, diff and install, or
   a stale render can install last and drop what the previous mutation granted. `guarden.toml` has
   three writers, not one — `weedr module add` appends to `[modules] enabled`, and `soil install`
