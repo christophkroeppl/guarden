@@ -254,7 +254,22 @@ assert_stdout_has "on /run type tmpfs"
 # form: a raw one may contain a `/`, and a file named after one is a path that
 # does not exist.
 run furrow deploy qapp-preview/feature/login --from poke qapp@9f2c1ab
-assert_exit 0
+# The assertion ticket 302 asks for, and the one that would have caught ticket
+# 295: before its fix every preview deploy died on this step with
+# "has no unit to start", because the mutator never passed the instance's ref to
+# `units.install`. That phrase in stderr is what fails here without the fix —
+# `assert_exit 1` alone could not have told the two apart, because the deploy
+# still exits 1.
+#
+# It exits 1 for a reason further down that is not this ticket's: the unit the
+# start now finds asks podman for `Secret=LOG_LEVEL` (the schema marks it
+# required, `@defaultRequired=infer` makes a key with a value required), and
+# nothing plants it — spec 5.3 step 9 mints only `@sensitive` keys on an
+# ungated track — so `podman run` answers 125 "no such secret". The same
+# start path is asserted end to end where the credentials do exist, in
+# `tests/t440-instance-start.sh`.
+assert_exit 1
+assert_stderr_lacks "has no unit to start"
 assert_file_has "$registry/qapp-preview.toml" '[instances."feature\\x2flogin"]'
 assert_file_has "$registry/qapp-preview.toml" 'ref = "feature/login"'
 assert_file_exists "/run/guarden/locks/deploy-qapp-preview-feature\\x2flogin.lock"
