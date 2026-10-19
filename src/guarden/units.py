@@ -335,6 +335,34 @@ def entry_stem(unit: str, escaped_ref: str | None) -> str:
     return f"{unit}-{escaped_ref}"
 
 
+def _is_instance_entry(unit: str, escaped_ref: str) -> bool:
+    """Whether a unit name in the admin search path is THIS instance's.
+
+    An instance's drop-in directory is named after the ENTRY STEM, so it is
+    `<unit>-<escaped-ref>.container.d` — the service's own is
+    `<unit>.container.d`, and another instance's is `<unit>-<other-ref>
+    .container.d`. The question is therefore "does this name carry THIS
+    instance's ref suffix?", which the suffix answers.
+
+    The comparison this replaces asked the opposite question — "is this name
+    the BASE unit?" — and `entry_stem` answers that with "no" for every
+    instance, because it appends the ref to the name it is given. So the guard
+    skipped every directory and the instance's own drop-in survived the
+    instance (spec 5.3: an instance that is removed takes its own directory
+    with it).
+
+    The suffix is compared against the END of the name and the base unit must
+    be non-empty, so a unit literally named `-<ref>` is not this instance's
+    entry: there is no unit before the suffix.
+    """
+    if not escaped_ref:
+        return False
+    suffix = f"-{escaped_ref}"
+    if not unit.endswith(suffix):
+        return False
+    return len(unit) > len(suffix)
+
+
 def search_entry(relative: Path, escaped_ref: str | None) -> Path | None:
     """The same unit where podman's generator reads it, for an instance —
     built on `entry_stem`, the rule's one home.
@@ -412,7 +440,7 @@ def _drop_instance_admin_dropins(service: str, escaped_ref: str) -> None:
         if not path.is_dir() or not path.name.endswith(".container.d"):
             continue
         unit = path.name[: -len(".container.d")]
-        if entry_stem(unit, escaped_ref) != unit:
+        if not _is_instance_entry(unit, escaped_ref):
             continue
         for dropin in sorted(path.iterdir()):
             if dropin.is_file() and dropin.name == paths.KEEPID_DROPIN:

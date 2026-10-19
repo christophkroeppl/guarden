@@ -2046,10 +2046,6 @@ The steps, in this order, and the order is the point :
    a schema's own missing required key is reported — one answer for one condition.
 
 
-   For a track with `gated = false`, a missing or example value produces a `warning:` line naming
-   the key, the gate records `not-required`, and the start proceeds. That is the whole difference
-   between the two tracks, and it is the only difference.
-
    **A start refuses on an unsatisfied credential request on BOTH tracks, and this is not a
    difference between them.** The gate's *state* is what the track decides: `blocked` on a
    gated track, `not-required` on an ungated one. But a container whose unit carries

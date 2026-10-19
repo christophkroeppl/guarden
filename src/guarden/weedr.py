@@ -838,7 +838,7 @@ def _start(args) -> int:
     return 0
 
 
-def _refuse_slot_start(resolved, record) -> None:
+def _refuse_slot_start(resolved, record, verb: str = "start") -> None:
     """A bare `<name>` on an instance track names no instance, and is refused.
 
     An instance track holds one service per workload and one INSTANCE per ref
@@ -872,7 +872,7 @@ def _refuse_slot_start(resolved, record) -> None:
         instance.ref for _, instance in sorted(record.instances.items())
     )
     raise errors.GuardenError(
-        f"the track {resolved.track.name!r} is kind = \"instance\", so every start names "
+        f"the track {resolved.track.name!r} is kind = \"instance\", so every {verb} names "
         f"one instance: {resolved.name}/<ref>"
         + (f" (the instances are: {live})" if live else ""),
         errors.REJECTED_INPUT,
@@ -885,9 +885,17 @@ def _stop(args) -> int:
     The deploy order stops between the gate and the install (ADR-0011), so this
     is the verb that half of it calls; `service.remove` and the fork reach the
     same function rather than a second stop path.
+
+    A bare `<name>` on an instance track names the SLOT, and the slot holds no
+    unit of its own — so a stop that went on would iterate the slot's quadlet
+    directory and stop EVERY instance, which is a fan-out, not a stop. The
+    same refusal the start gives (spec 5.2) applies here.
     """
     config = config_mod.load()
     resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
+    record = registry.load(resolved.name)
+    if record is not None:
+        _refuse_slot_start(resolved, record, "stop")
     service.stop_units(resolved.name, resolved.escaped_ref)
     sys.stdout.write(f"stopped {resolved.name}\n")
     return 0
