@@ -19,6 +19,12 @@
 # resolved inside the image, and the rendered line carries the uid and gid that
 # file names — the same resolution these two failures are the edges of.
 #
+# The handoff fixtures are the other positive half: the exec form
+# (`["su-exec", "app"]`) and the exec form with a `user:group` spec
+# (`["su-exec", "app:app"]`) are the SAME declaration, and the second spelling
+# is the one the stock postgres image carries. The probe used to skip it and
+# settle on root — silently, with no line rendered and nothing printed.
+#
 # Real host, real rootless podman: `GUARDEN_PREFIX=/`, as `t230-build` does.
 
 # machine: fresh
@@ -405,3 +411,50 @@ record_tini=$registry/kidtini-staging.toml
 assert_file_has "$record_tini" "owner_uid = 2200"
 assert_file_has "$record_tini" "owner_gid = 2200"
 assert_file_lacks "$record_tini" "owner_uid = 0"
+
+# --- the exec form with a `user:group` spec: the SAME handoff ---------------
+#
+# `ENTRYPOINT ["su-exec", "postgres:postgres"]` is the shape the stock postgres
+# image actually carries: the handoff command and its target are two argv
+# elements, and the target names BOTH the user and the group. `su-exec` and
+# `gosu` both accept that spelling, and the resolver downstream already
+# understood it — the declaration is split on its first colon before the
+# number or name branches are taken.
+#
+# The defect this fixture exists for: the exec form's user token was matched
+# against a pattern that accepts a name or digits and NOT a colon, so the
+# handoff was SKIPPED. The probe then answered "no handoff", recorded
+# `(0, 0)`, rendered no line, printed nothing — and the application's uid
+# landed in the subuid band, which is ticket 277's hazard. The IN-WORD form
+# of the very same handoff (`exec su-exec postgres:postgres` inside one word)
+# resolved it, so the two spellings of one rule disagreed and the one that
+# failed did so SILENTLY: a refusal, which ADR-0019's table promises, had
+# become a wrong answer.
+#
+# The assertion is not the number: it is that the probe did not settle on
+# root. A wrong number would be as bad as a traceback, but a SILENT wrong
+# answer is worse, because nothing says the question was answered wrongly.
+stage_kid kidexecpg localhost/kidexecpg-staging:latest \
+    "FROM docker.io/library/alpine:3.20" \
+    "RUN apk add --no-cache su-exec" \
+    "RUN addgroup -g 2300 pguser" \
+    "RUN adduser -D -u 2300 -G pguser pguser" \
+    "USER 0" \
+    "ENTRYPOINT [\"su-exec\", \"pguser:pguser\"]" \
+    "CMD [\"sleep\", \"3600\"]"
+run weedr service ingest kidexecpg-staging --from poke kidexecpg@0000001
+assert_exit 0
+run weedr service build kidexecpg-staging
+assert_exit 0
+
+run weedr service start kidexecpg-staging
+assert_exit 0
+unit_execpg=/var/lib/guarden/services/kidexecpg-staging/home/.config/containers/systemd/app.container
+record_execpg=$registry/kidexecpg-staging.toml
+[ "$(unit_line "$unit_execpg")" = "UserNS=keep-id:uid=2300,gid=2300" ] \
+    || _fail "an exec-form su-exec entrypoint naming user:group renders $(unit_line "$unit_execpg"), and the user it hands execution to is pguser with uid and gid 2300 in the image's own passwd — keep-id:uid=2300,gid=2300"
+assert_file_has "$record_execpg" "owner_uid = 2300"
+assert_file_has "$record_execpg" "owner_gid = 2300"
+# The silent root this fixture exists for: the exec form with a colon was
+# skipped, the probe recorded root, and the record called that answered.
+assert_file_lacks "$record_execpg" "owner_uid = 0"
