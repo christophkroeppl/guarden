@@ -1111,14 +1111,14 @@ def _is_number(value: str) -> bool:
     field the resolver reads goes through: both halves of `Config.User` and
     every uid/gid field of the image's own `/etc/passwd` and `/etc/group`.
 
-    `isdecimal`, not `isdigit`: Unicode decimal digits are exactly the
-    characters `int()` converts (`int('٣')` is 3), while `isdigit` also counts
-    the superscripts and fractions `int()` refuses — `'²'.isdigit()` is True
-    and `int('²')` raises ValueError. A guard that is a strict superset of the
-    `int()` behind it lets a field through the guard and kills it in the
-    conversion, which is what an image-controlled field did: a passwd uid of
-    `²` walked out of `weedr service start` as a traceback instead of the
-    refusal it is (measured, t352).
+    `isdecimal`, not `isdigit`: every decimal digit is one `int()` accepts
+    (`int('٣')` is 3), while `isdigit` also counts the superscripts and
+    fractions `int()` refuses — `'²'.isdigit()` is True and `int('²')`
+    raises ValueError. A guard that is a strict superset of the `int()` behind
+    it lets a field through the guard and kills it in the conversion, which is
+    what an image-controlled field did: a passwd uid of `²` walked out of
+    `weedr service start` as a traceback instead of the refusal it is
+    (measured, t352).
     """
     return value.isdecimal()
 
