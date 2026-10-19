@@ -21,6 +21,35 @@ image, a rebuild invalidating the pair it re-tags, and both handoff seams — te
 / t351-keepid-diagnostics / t352-keepid-boundaries — the pid-1 readings that settle what a
 pin decides are asserted in the last two and in t350 — pending review and merge.
 
+**Amended 2026-10-19 (operator): the pin is a DROP-IN, not a line in the base unit.**
+The line this ADR describes is now carried by
+`/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf`, and the
+base unit carries no `UserNS=` line at all. The three files and their three writers are
+the model, and the reasons are measured (`probe-quadlet-dropins.md`, podman 5.7.0):
+
+- **The base unit carries no line** because the renderer's own merge of the admin path
+  and the generator's merge of the drop-in directory are two different merges — a base
+  unit that carried the line would carry it twice over, and a key with two of them has
+  two writers.
+- **The pin is in the drop-in** because that directory is searched AFTER the home's own,
+  so a regeneration of the unit cannot disturb the pin; and because drop-ins merge **in
+  alphabetical order by filename** — not by mtime, not by directory of origin — so the
+  alphabetically LAST file's value of a scalar key is the one in force. A drop-in in the
+  system path IS picked up for a base unit in the home (probe row 8).
+- **The admin's `90-admin.conf` is the human's file**, and it wins by that same order.
+  Guarden writes exactly one file in that directory, never writes `90-admin.conf`, and
+  never deletes it — not on a re-render, and not on a removal of the service, which takes
+  guarden's own file and leaves the admin's where it is. The admin's slot BYPASSES the
+  refusal of a repository's own `Userns=` (that refusal is about repository input), it is
+  not the record and does not become one, and a change to it takes effect only after a
+  daemon-reload.
+
+The re-render trigger moved with it: it reads the drop-in guarden owns, not the base unit,
+because a base unit that holds no line would answer "no line" on every start and reinstall
+the units for ever. The measured facts the probe produced are the ones the model rests on,
+and they are recorded where the spec states the model (§6.3) and where the admin reads it
+(docs/sysadmin.md).
+
 ## Considered Options
 
 All options were evaluated against the standing constraints: do not change uid/gid inside

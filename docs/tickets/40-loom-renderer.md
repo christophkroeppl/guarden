@@ -94,7 +94,13 @@ It refuses to render anything it cannot fully resolve.
       the source file before generation, and a drop-in that sets `[Service] MemoryMax=`,
       `MemoryHigh=`, `CPUWeight=` or `IOWeight=` lands in the generated scope. quadlet's own
       `[Container]` has only `Memory=`, so the systemd keys are the only way to express a soft
-      and a hard limit together
+      and a hard limit together.
+      **Amended by ADR-0019's drop-in model**: the renderer's merge **excludes the one
+      file guarden owns** — `50-guarden-keepid.conf`, the keep-id pin — because the base
+      unit carries no `UserNS=` line at all and merging the pin into it would give the
+      key two writers. The admin's own files are still merged, and a `UserNS=` in one of
+      them is refused in the base unit rather than carried into it: the base unit has no
+      `UserNS=` line in any spelling
 - [ ] `loom check` validates without writing anything
 - [ ] Units are rendered from `templates/` files with jinja2, not from heredocs, and a changed
       template changes the output on the next run

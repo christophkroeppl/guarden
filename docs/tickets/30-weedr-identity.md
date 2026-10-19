@@ -120,10 +120,17 @@ Configuration is read from the root-owned files, and never written by us.
       from `/etc/guarden` into one**: a home belongs to the service user, and a service user can
       unlink anything in it. Admin units go to
       `/etc/containers/systemd/users/<uid>/<unit>.container.d/`, which podman merges into the
-      source file before generating
+      source file before generation
 - [ ] `weedr` reconciles only the existence of that directory on add and remove, and never
       reads, parses, copies or rewrites anything inside it: the service user owns that
-      tree completely, which is what makes a regenerated unit harmless
+      tree completely, which is what makes a regenerated unit harmless.
+      **Amended by ADR-0019's drop-in model**: the renderer DOES read the drop-ins in it
+      and puts them back into the rendered unit (`render._dropins`), so "never reads
+      anything inside it" is no longer true and is not to be restored. What is true is
+      the narrower and the load-bearing half — **the mutator writes exactly one file
+      inside it** (`50-guarden-keepid.conf`, the keep-id pin), and **the admin's own
+      `90-admin.conf` beside it is never written and never deleted**, not on a re-render
+      and not on a removal of the service
 - [ ] `weedr service list` prints uid, track, publications with their allocated ports, granted
       ports with pending marked, volumes with snapshot counts and effective retention, the
       deployed sha, the snapper configuration names, instances, the generated values, and the two

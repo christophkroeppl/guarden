@@ -798,9 +798,10 @@ def _start(args) -> int:
             errors.HOST_NOT_AS_ASSUMED,
         )
     # ADR-0019: the probe, the record and guarden's own `UserNS=keep-id` line
-    # come before the units are handed to systemctl — the line has to be in the
-    # unit the generator reads, and `start_units` reloads the manager after it
-    # is written.
+    # come before the units are handed to systemctl — the line has to be in
+    # the file the generator reads, and `start_units` reloads the manager
+    # after it is written. The line is a drop-in in the uid-scoped search
+    # path, not a line in the base unit.
     service.ensure_owner_line(resolved.name, resolved.escaped_ref)
     service.start_units(resolved.name, resolved.escaped_ref)
     sys.stdout.write(f"started {resolved.name}\n")
