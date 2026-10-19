@@ -48,6 +48,11 @@ SUBUID = ETC / "subuid"
 SUBGID = ETC / "subgid"
 GROUP = ETC / "group"
 ADMIN_UNITS = ETC / "containers" / "systemd" / "users"
+# Guarden's own drop-in, the one file the mutator writes in the admin path
+# (ADR-0019). **The name is the whole of the ordering rule**: quadlet merges
+# drop-ins in alphabetical order and the last one wins, so an admin's own
+# file — `90-admin.conf` — overrides the pin without guarden ever touching it.
+KEEPID_DROPIN = "50-guarden-keepid.conf"
 
 LIB = PREFIX / "var" / "lib" / "guarden"
 SERVICES = LIB / "services"
@@ -117,6 +122,30 @@ TEMPLATES = Path(os.environ.get("GUARDEN_TEMPLATES") or (PREFIX / "usr/lib/guard
 
 def overrides(service: str) -> Path:
     return ETC_SERVICES / service / "overrides.toml"
+
+
+def admin_parents() -> list[Path]:
+    """Every directory of the uid-scoped search path, outermost first.
+
+    The generator reads through all of them as the service user, so each one
+    has to be traversable by a uid that is neither root nor in the `guarden`
+    group — which is a stated mode and not the umask's answer (spec 2.1).
+    """
+    return [
+        ETC / "containers",
+        ETC / "containers" / "systemd",
+        ADMIN_UNITS,
+    ]
+
+
+def admin_dropin_dir(uid: int, unit: str) -> Path:
+    """One unit's drop-in directory in podman's uid-scoped search path.
+
+    `unit` is the unit's NAME as the generator sees it — the entry stem, so
+    an instance's own `<unit>-<escaped-ref>` and not the `<unit>` its
+    directory holds.
+    """
+    return ADMIN_UNITS / str(uid) / f"{unit}.container.d"
 
 
 def creds(service: str) -> Path:

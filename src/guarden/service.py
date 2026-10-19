@@ -1009,7 +1009,23 @@ def _render_source(directory: Path) -> Iterator[Path]:
 def _ensure_admin_units(uid: int) -> None:
     """Reconcile the existence of podman's uid-scoped search path and nothing
     inside it: a regenerated unit must not clobber a root-owned drop-in, which is
-    what that path being searched after the home's own directory buys (ADR-0003)."""
+    what that path being searched after the home's own directory buys (ADR-0003).
+
+    **The path's own directories are created with a stated mode**, because the
+    generator walks them as the service user: a directory the umask made
+    `0700` would be invisible to the very uid the units are for, and a
+    `0750` one would refuse the edge and every other uid the generator may
+    run as. `0755` on the way down and `0644` on the file inside is what the
+    probe measured (`probe-quadlet-dropins.md` rows 8 and 10).
+
+    Nothing inside the uid's own directory is created, read or removed here:
+    the admin's own `90-admin.conf` is the human's file, and the one file
+    guarden writes in there is written where it is written — by the install,
+    with the name it has.
+    """
+    for parent in paths.admin_parents():
+        parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(parent, ADMIN_UNITS_MODE)
     target = paths.ADMIN_UNITS / str(uid)
     if not target.exists():
         target.mkdir(parents=True, exist_ok=True)
@@ -1032,26 +1048,33 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
 
 def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
     """Probe what the record does not answer yet, record it, and put guarden's
-    `UserNS=` line into the units before they are started (ADR-0019).
+    `UserNS=` line where the generator reads it, before the units are started
+    (ADR-0019).
 
     `weedr service start` calls this in front of `start_units`. A first start
     probes each DISTINCT image the installed units name, as the service user,
     writes the answers into the registry — `owner_uid`/`owner_gid` for a
     service whose units name one image, those plus a per-unit `owner_units` map
-    when they name several — and re-renders so every unit carries the
-    `UserNS=keep-id:uid=...,gid=...` of ITS OWN image before the container it
-    is about to start. The line is rendered, never hand-written, so the refusal
-    of a repository's own `Userns=` is untouched (spec 6.3), and a unit whose
-    image cannot be read or resolved raises the probe's one line rather than
-    being skipped.
+    when they name several — and re-renders so every unit's OWN drop-in
+    carries the `UserNS=keep-id:uid=...,gid=...` of ITS OWN image before the
+    container it is about to start. The line is rendered, never hand-written,
+    so the refusal of a repository's own `Userns=` is untouched (spec 6.3),
+    and a unit whose image cannot be read or resolved raises the probe's one
+    line rather than being skipped.
+
+    **The line is a DROP-IN, and not a line in the base unit**
+    (`50-guarden-keepid.conf` in the uid-scoped search path). The base unit
+    carries no `UserNS=` line at all, which is what makes the pin survive a
+    regeneration of the unit and lets an admin's own `90-admin.conf` override
+    it by name order alone.
 
     A later start finds every unit answered and does not probe again, and
-    re-renders only when an installed unit does not hold exactly the line the
-    record renders for it — so the line is stable across starts, re-renders and
-    re-ingests, an edited record is rendered through rather than overwritten by
-    a second probe, a unit a re-ingest added (or an image that changed) is the
-    probe's condition again, and a record with the probe removed is probed
-    again.
+    re-renders only when the drop-in guarden owns does not hold exactly the
+    line the record renders for that unit — so the line is stable across
+    starts, re-renders and re-ingests, an edited record is rendered through
+    rather than overwritten by a second probe, a unit a re-ingest added (or an
+    image that changed) is the probe's condition again, and a record with the
+    probe removed is probed again.
     """
     record = registry.load(name)
     if record is None:
@@ -1588,14 +1611,27 @@ def _carries_owner_line(name: str, escaped_ref: str | None, record) -> bool:
     renders FOR THAT UNIT — or holds none at all when the record renders it
     none. Anything else is a render that has not happened yet.
 
-    Read through `unitsource.parse` rather than by scanning lines: the answer
-    is per unit now, the unit's own stem is what the renderer keys its pair by,
-    and a file that cannot be read is the one-line refusal unitsource already
-    makes rather than a decode error out of this walk. The image each unit
-    names goes to the renderer with it, because the record renders FOR THAT
-    UNIT only what that unit's own image answered (ADR-0019): a unit whose
-    `Image=` changed holds no line the record renders any more, which is the
-    same question `_owner_plan` answered before this runs.
+    **The answer is read from the DROP-IN, and not from the base unit**
+    (ADR-0019). The pin lives in
+    `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf`
+    and the base unit carries no `UserNS=` line at all, so a base unit that
+    holds no line is the CORRECT state and not a missing one. Reading the
+    base unit would reinstall the units on every single start — churn, and a
+    reinstall that would overwrite nothing but would also mean guarden and an
+    admin whose `90-admin.conf` says something different fight over the file
+    for ever.
+
+    What this therefore answers is one question per unit: **does the file
+    guarden owns in that unit's drop-in directory carry exactly the line the
+    record renders for that unit?** A unit the record answers with no line
+    must have NO drop-in of guarden's own — a stale pin left behind by a
+    record that changed is as wrong as a missing one, and the mapping it
+    carries would be in force.
+
+    The admin's own `90-admin.conf` is **not read and not compared**: it is
+    the human's file, guarden never writes it, and the two of them coexist
+    by name order alone. A different `UserNS=` in it is the admin's decision
+    and it wins — that is the model, not a drift.
     """
     files = sorted(units_dir(name, escaped_ref).glob("*.container"))
     if not files:
@@ -1604,13 +1640,33 @@ def _carries_owner_line(name: str, escaped_ref: str | None, record) -> bool:
     for path in files:
         unit = unitsource.parse(path)
         want = render.owner_line(record, unit.stem(), unit_images[unit.stem()])
-        found = unit.get("Container", "UserNS")
-        if want is None:
-            if found:
-                return False
-        elif found != [want]:
+        found = _installed_owner_line(record, unit.stem(), escaped_ref)
+        if found != want:
             return False
     return True
+
+
+def _installed_owner_line(record, stem: str, escaped_ref: str | None) -> str | None:
+    """The line guarden's own drop-in carries for this unit, or `None`.
+
+    The file is named for the unit **the generator reads** — the entry stem,
+    so an instance's `<unit>-<escaped-ref>` and not the `<unit>` its own
+    directory holds — and its content is the one line guarden wrote. A file
+    that is not there, or that carries no `UserNS=` line, is `None`; a file
+    that carries one is that line.
+    """
+    if not record.uid:
+        return None
+    unit = units.entry_stem(stem, escaped_ref)
+    directory = paths.admin_dropin_dir(record.uid, unit)
+    dropin = directory / paths.KEEPID_DROPIN
+    if not dropin.is_file():
+        return None
+    try:
+        parsed = unitsource.parse(dropin)
+    except errors.GuardenError:
+        return None
+    return parsed.one("Container", "UserNS")
 
 
 def _unit_source(name: str, record, escaped_ref: str | None = None) -> Path:
@@ -1764,7 +1820,7 @@ def _remove_service(resolved, record, now: str) -> list[str]:
         printed.append(f"moved the {volume.kind} volume {volume.name} to {target}")
 
     users.destroy(resolved.name, record.uid)
-    _drop(paths.ADMIN_UNITS / str(record.uid))
+    _drop_admin_units(record.uid, printed)
     _drop(paths.service_tree(resolved.name))
     _drop(paths.ETC_SERVICES / resolved.name)
     _drop(paths.SHARED / resolved.name)
@@ -1787,6 +1843,54 @@ def _drop(path: Path) -> None:
         shutil.rmtree(path)
     elif path.exists():
         path.unlink()
+
+
+def _drop_admin_units(uid: int, printed: list[str]) -> None:
+    """The uid's admin path, with the human's own files left in it (ADR-0019).
+
+    **The removal takes guarden's own file and leaves the admin's.** A
+    `rmtree` of `/etc/containers/systemd/users/<uid>/` would delete the
+    operator's `90-admin.conf` — a file guarden never wrote, never reads and
+    never promised to keep, and the one place the admin's own decision
+    about a container's user lives. Deleting it would make the admin's
+    override vanish the moment the service was removed and come back, and
+    there is no way to tell "the admin had nothing there" from "the admin
+    had something there" afterwards.
+
+    So the directory is emptied of what guarden wrote — the
+    `50-guarden-keepid.conf` files, and the drop-in directories guarden
+    created for them — and **every other file in it is left exactly where
+    it is**. An empty directory guarden created and an empty directory the
+    admin had are the same state, so the directory itself is removed only
+    when nothing of the admin's is left in it.
+
+    The instances' directories are the same: an instance's drop-in
+    directory is named for the entry stem, and it is guarden's own file in
+    it, so the same rule applies to them.
+    """
+    root = paths.ADMIN_UNITS / str(uid)
+    if not root.is_dir():
+        return
+    kept = 0
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and path.name != paths.KEEPID_DROPIN:
+            kept += 1
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and path.name == paths.KEEPID_DROPIN:
+            path.unlink()
+    # The directories guarden created for its own file go with it; a directory
+    # that still holds one of the admin's files stays. Deepest first, so an
+    # inner directory is gone before the one above it is asked whether it is
+    # empty.
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if path.is_dir() and not any(path.iterdir()):
+            shutil.rmtree(path, ignore_errors=True)
+    if kept == 0 and root.is_dir() and not any(root.iterdir()):
+        shutil.rmtree(root, ignore_errors=True)
+    if kept:
+        printed.append(
+            f"left the admin's own drop-ins in {root} alone ({kept} file(s))"
+        )
 
 
 def _stamp(now: str) -> str:
