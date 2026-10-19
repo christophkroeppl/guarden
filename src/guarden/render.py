@@ -1665,7 +1665,8 @@ def _widget_file(directory: Path, relative: str) -> str:
         resolved = path.resolve()
     except OSError as exc:  # pragma: no cover - a resolve that cannot answer
         raise errors.GuardenError(
-            f"the manifest declares the widget file {relative}, and its path could not be read: {exc}"
+            f"the manifest declares the widget file {relative}, and its path "
+            f"could not be read: {exc}"
         ) from exc
     root = directory.resolve()
     if resolved != root and root not in resolved.parents:
