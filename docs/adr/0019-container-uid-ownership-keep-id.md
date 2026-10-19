@@ -71,10 +71,14 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
 - The unit gains a guarden-generated keep-id line rendered after the first probe — quadlet
   documents the key as `UserNS=`, guarden emits that spelling, the repository-input refusal
   accepts both spellings, and this prose keeps `Userns=` — one directive. The probe is
-  entrypoint-aware: `Config.User` first, then the image's gosu/su-exec handoff target when
-  empty; an image with neither gets **no line** and keeps the default mapping (the
-  no-self-heal class is a documented gap left to the A3 fallback or a future manifest
-  runtime-uid field — not invented here).
+  entrypoint-aware by **one table**, and every `Config.User` shape takes exactly one row of
+  it: empty, `0` and `root` are one declaration (container root) and are answered by the
+  image's gosu/su-exec handoff target when the entrypoint names one, and by nothing — **no
+  line**, the default mapping — when it does not; a non-root number or name is resolved
+  against the image's own `/etc/passwd` and `/etc/group`, where a field that is not a number
+  is refused the way a user the image does not carry is (spec 1.2: one line, exit `2`). An
+  image that reaches no user at all is the no-self-heal class, a documented gap left to the
+  A3 fallback or a future manifest runtime-uid field — not invented here.
 - The registry records `owner_uid`/`owner_gid` (ticket 277's drift anchor). Re-ingest can no
   longer break ownership because nothing chowns.
 - While a pin renders, a repository-supplied `User=` is refused (it would silently beat the

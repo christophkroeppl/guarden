@@ -853,16 +853,39 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
         units.install(_unit_source(name, record), name, escaped_ref)
 
 
+# The spellings of one declaration: no `USER` at all, the number, and the name.
+# All three say "this container runs its entrypoint as container root", so all
+# three take the probe's root row and no other — a group part cannot make a
+# root declaration non-root. Reading `root` through the passwd row while `0`
+# took the entrypoint's handoff was two paths for one declaration, and the
+# second path recorded root without ever asking the entrypoint who it hands
+# off to (ADR-0019's Consequences).
+ROOT_DECLARATIONS = frozenset({"", "0", "root"})
+
+
+def _is_root_declaration(declared: str) -> bool:
+    """Whether `Config.User` declares container root, in any of its spellings."""
+    return declared.partition(":")[0] in ROOT_DECLARATIONS
+
+
 def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int, int]:
     """The uid and gid the service's image declares, read at first start.
 
     `podman image inspect` gives `Config.User` — a number, a `uid:gid`, a name,
-    or nothing — and a name (and a bare number's gid) is resolved against the
-    image's OWN `/etc/passwd` and `/etc/group`, read by running the image as
-    container root: a probe that started the container as the declared user
-    could not answer the one case that matters, an image whose declared user
-    does not exist in it. A missing image is pulled first, once, because the
-    start below needs it either way.
+    or nothing — and every shape is resolved by ONE table (ADR-0019):
+
+        `Config.User`     the answer
+        ----------------  --------------------------------------------------
+        empty             the entrypoint's handoff, else (0, 0)
+        `0`, `root`       the same row: one declaration, one path
+        a number          that uid; its gid from `:gid`, its passwd row, or 0
+        a name            that passwd row, then `:group` or the row's own gid
+
+    The last two rows read the image's OWN `/etc/passwd` and `/etc/group`, by
+    running the image as container root: a probe that started the container as
+    the declared user could not answer the one case that matters, an image
+    whose declared user does not exist in it. A missing image is pulled first,
+    once, because the start below needs it either way.
 
     Exit `1` when the image is not on the host and cannot be pulled — the
     filesystem — and `2` when the image names a user or group it does not
@@ -873,18 +896,20 @@ def probe_owner(name: str, record, escaped_ref: str | None = None) -> tuple[int,
     reference = _installed_reference(name, escaped_ref)
     user, entrypoint, command = _image_config(name, record, reference)
     declared = user
-    if not declared or declared == "0":
-        # The stock postgres and alpine shape: no USER of the image's own. The
-        # answer is the handoff the entrypoint names — the app user a gosu or
-        # su-exec would switch to — and never a passwd row picked by itself:
-        # every row of a base image is a system account, and pinning one would
-        # force init onto a uid the application never asked for. Nothing
-        # defensible falls out, and this is the record for it: container root,
-        # which the default map already moves onto the service identity, so no
-        # line is rendered and the service runs exactly as it did before
-        # ADR-0019 (the keep-id map for uid=0 was measured to carry only the
-        # pinned pair, which would stop an entrypoint that drops privileges
-        # rather than fix its owner).
+    if _is_root_declaration(declared):
+        # The stock postgres and alpine shape, and the two spellings of it: no
+        # `USER` at all, `USER 0`, and `USER root` are one declaration — this
+        # container runs its entrypoint as container root — so all three take
+        # this row. The answer is the handoff the entrypoint names (the app
+        # user a gosu or su-exec would switch to) and never a passwd row picked
+        # by itself: every row of a base image is a system account, and
+        # pinning one would force init onto a uid the application never asked
+        # for. Nothing defensible falls out, and this is the record for it:
+        # container root, which the default map already moves onto the service
+        # identity, so no line is rendered and the service runs exactly as it
+        # did before ADR-0019 (the keep-id map for uid=0 was measured to carry
+        # only the pinned pair, which would stop an entrypoint that drops
+        # privileges rather than fix its owner).
         handoff = _entrypoint_user(name, record, reference, [*entrypoint, *command])
         if handoff is None:
             return (0, 0)

@@ -1703,10 +1703,11 @@ may carry one is the render itself: `UserNS=keep-id:uid=…,gid=…`,
 emitted at the service's first start from the user `podman image inspect` reports for the
 image the installed units name — a name, and a bare number's group, resolved against the
 image's own `/etc/passwd` and `/etc/group` — and recorded in the registry as `owner_uid` and
-`owner_gid`. An image that declares no user of its own is answered from the handoff its
-entrypoint names — the `gosu` or `su-exec` user the entrypoint would switch to, never a
-passwd row chosen by itself — and records root, and renders no line, when neither yields a
-user: the default map already moves container root onto the service identity, and a line
+`owner_gid`. An image whose user is root — no `USER` at all, `USER 0` or `USER root`, which
+are one declaration and take one path — is answered from the handoff its entrypoint names,
+the `gosu` or `su-exec` user the entrypoint would switch to, never a passwd row chosen by
+itself — and records root, and renders no line, when neither yields a user: the default map
+already moves container root onto the service identity, and a line
 carrying only the pinned pair would stop an entrypoint that drops privileges rather than
 fix its owner. A unit source that sets `User=` on a service whose line is rendered is
 refused with the key named, because an explicit `--user` beats the pin and would run the
