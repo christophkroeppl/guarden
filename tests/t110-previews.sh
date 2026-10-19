@@ -43,6 +43,16 @@ assert_not_rejected
 
 stage_poke myapp 9f2c1ab
 
+# --- an empty ref is refused, not collapsed into the slot (review finding 7) ---
+# `split("myapp-preview/")` gives `ref = ""`, and the empty string is falsy
+# everywhere the code asks whether there is an instance — so before this fix
+# the ingest rendered into the SHARED slot and answered 0, silently deploying
+# `myapp-preview` as a slot service. A trailing slash names no instance, and
+# `<name>[/<ref>]` with an empty ref is rejected input (spec 1.2), exit 2.
+run weedr service ingest myapp-preview/ --from poke myapp@9f2c1ab
+assert_exit 2
+assert_stderr_has "empty ref"
+
 # --- a fork source that is not on the box -------------------------------------
 
 # The source is read from the track's `fork_from` field and there is no argument

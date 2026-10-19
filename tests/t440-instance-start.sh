@@ -16,6 +16,13 @@
 # carrying the ref raw (the form `roots` escapes for itself), and the unit
 # running. No call log and no stand-in.
 #
+# Two instances of ONE service, because the second one is what the review's
+# findings bite on: before their fixes every instance's shared slices were
+# installed into `shared/<service>/`, so the second ingest overwrote the
+# first's route slice, and `ContainerName=<service>-<container>` was computed
+# without the instance, so both instances asked podman for one container name
+# (the second `podman run` is refused with the name already in use).
+#
 # machine: fresh
 
 . "$(dirname "$0")/lib.sh"
@@ -41,12 +48,68 @@ assert_not_rejected
 # has nothing to withhold and the start reaches systemd.
 stage_poke routed 9f2c1ab
 
-# --- the instance, created the way the deploy path creates it -----------------
+# --- two instances, created the way the deploy path creates them --------------
 
 run weedr service ingest routed-preview/feature/x --from poke routed@9f2c1ab
 assert_exit 0
 assert_stderr_empty
 assert_file_exists /var/lib/guarden/registry/routed-preview.toml
+
+# The second instance is the whole point of the block below: one service, two
+# refs, two renders, and neither render may erase the other's.
+run weedr service ingest routed-preview/plain --from poke routed@9f2c1ab
+assert_exit 0
+assert_stderr_empty
+
+# --- neither instance's route slice clobbers the other's ----------------------
+escaped='feature\x2fx'
+second='plain'
+instance_quadlet="/var/lib/guarden/services/routed-preview/home/$escaped/.config/containers/systemd"
+instance_quadlet_b="/var/lib/guarden/services/routed-preview/home/$second/.config/containers/systemd"
+slot_quadlet="/var/lib/guarden/services/routed-preview/home/.config/containers/systemd"
+slice_a="/var/lib/guarden/shared/routed-preview/instances/$escaped/routes.toml"
+slice_b="/var/lib/guarden/shared/routed-preview/instances/$second/routes.toml"
+
+# Before the fix `units.install` copied every instance's `out/shared/` into
+# `shared/routed-preview/` — ticket 295's "fold in 264:87's wrong SHARED slice
+# path, units.py writes every slice to SHARED/<service>" — so the second
+# ingest's routes.toml replaced the first's and instance A's routes existed
+# nowhere. Each instance's slices are its own (spec 2), and the raw ref is what
+# the slice carries: `roots.render_tunnel` escapes it itself on the way into
+# cloudflared's `ingress.path` (spec 5.2).
+assert_file_exists "$slice_a"
+assert_file_has "$slice_a" 'ref = "feature/x"'
+assert_file_exists "$slice_b"
+assert_file_has "$slice_b" 'ref = "plain"'
+# The service's own routes.toml is the slot's file: on an instance track no
+# render writes it, and it is exactly the file every instance used to clobber.
+assert_file_missing /var/lib/guarden/shared/routed-preview/routes.toml
+
+# --- every instance's container has a name of its own -------------------------
+# `ContainerName=<service>-<container>` was computed without `context.instance`,
+# so two instances of one service asked podman for one name and the second
+# container could never start. The suffix is the instance's registry key in
+# hex: podman's container-name grammar allows `[A-Za-z0-9][A-Za-z0-9_.-]*`
+# only, where systemd's `\xNN` key carries a backslash podman refuses, and hex
+# of the key is valid and injective (spec 5.2).
+hex_a=$(printf %s "$escaped" | od -An -tx1 | tr -d ' \n')
+hex_b=$(printf %s "$second" | od -An -tx1 | tr -d ' \n')
+assert_file_has "$instance_quadlet/web.container" "ContainerName=routed-preview-web-$hex_a"
+assert_file_has "$instance_quadlet_b/web.container" "ContainerName=routed-preview-web-$hex_b"
+
+# --- where the render had to land for a start to find it -----------------------
+assert_file_exists "$instance_quadlet/web.container"
+assert_mode "$instance_quadlet/web.container" 640
+assert_file_exists "$instance_quadlet_b/web.container"
+# The shared slot is where the render used to land, and the service's own `web`
+# is not there: an instance track deploys a ref every time. What the slot does
+# hold is the one entry podman's generator reads — the unit plus the escaped
+# ref, one per instance — because the generator reads the home's own quadlet
+# directory and nothing below it, and without that entry `systemctl start`
+# answers "Unit web.service not found" (measured).
+assert_file_missing "$slot_quadlet/web.container"
+assert_file_exists "$slot_quadlet/web-$escaped.container"
+assert_file_exists "$slot_quadlet/web-$second.container"
 
 # --- the step no suite ever ran -------------------------------------------------
 # Before the fix this answers 1: `routed-preview has no unit to start:
@@ -54,27 +117,6 @@ assert_file_exists /var/lib/guarden/registry/routed-preview.toml
 run weedr service start routed-preview/feature/x
 assert_exit 0
 assert_stdout_has "started routed-preview"
-
-# --- and where the render had to land for that to be true -----------------------
-escaped='feature\x2fx'
-instance_quadlet="/var/lib/guarden/services/routed-preview/home/$escaped/.config/containers/systemd"
-assert_file_exists "$instance_quadlet/web.container"
-assert_mode "$instance_quadlet/web.container" 640
-# The shared slot is where the render used to land, and the service's own `web`
-# is not there: an instance track deploys a ref every time. What the slot does
-# hold is the one entry podman's generator reads — the unit plus the escaped
-# ref — because the generator reads the home's own quadlet directory and
-# nothing below it, and without that entry `systemctl start` answers
-# "Unit web.service not found" (measured).
-slot_quadlet="/var/lib/guarden/services/routed-preview/home/.config/containers/systemd"
-assert_file_missing "$slot_quadlet/web.container"
-assert_file_exists "$slot_quadlet/web-$escaped.container"
-
-# The route slice carries the ref **raw**: `roots.render_tunnel` escapes it
-# itself on the way into cloudflared's `ingress.path` (spec 5.2: the verb takes
-# the ref raw and the escaping is internal), so the escaped form here would be
-# escaped a second time downstream.
-assert_file_has /var/lib/guarden/shared/routed-preview/routes.toml 'ref = "feature/x"'
 
 # The unit the generator made from the entry above — `<unit>-<escaped-ref>`,
 # the name the start translated to — and it running: a start that exits 0 while
@@ -89,3 +131,18 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 [ "$active" = active ] || _fail "the instance's unit web-$escaped.service is '${active:-unreadable}', not active"
+
+# ...and the same for the second instance, whose container name has to differ
+# for it to be running at all.
+run weedr service start routed-preview/plain
+assert_exit 0
+assert_stdout_has "started routed-preview"
+active=''
+for _ in $(seq 1 60); do
+    active=$(systemctl --user --machine routed-preview@ is-active "web-$second.service" 2>/dev/null || true)
+    if [ "$active" = active ]; then
+        break
+    fi
+    sleep 1
+done
+[ "$active" = active ] || _fail "the second instance's unit web-$second.service is '${active:-unreadable}', not active"
