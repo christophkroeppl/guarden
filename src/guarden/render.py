@@ -389,7 +389,7 @@ def _quadlet_source(directory: Path) -> Source:
     return Source(kind="quadlet", origin=directory, units=units, mounts=mounts)
 
 
-def _unit_body(unit: Unit) -> dict:
+def _unit_body(unit: Unit, domain: str = "") -> dict:
     """The unit's host-naming values in the vocabulary `check_siblings` reads.
 
     The refusal is one rule and must have one reader: spec 7.3 names the
@@ -399,6 +399,15 @@ def _unit_body(unit: Unit) -> dict:
     `command`, `healthcheck` and `extra_hosts`. The values are mapped here
     rather than the check growing a second reader that could disagree with the
     first about what counts as dialling a host.
+
+    `domain` is the render's own `${domain}` substitution (spec 4), and the
+    values are substituted here before they are mapped: a value is not final
+    until the marker is replaced, and the rule has to read what the unit will
+    carry — `Environment=APP_HOST=${domain}` beside a `domain.container`
+    renders `APP_HOST=<domain>`, the same dead dial as the literal form.
+    `_quadlet_source` maps with the default (no domain) because the literal
+    forms are refused there, before the host is asked anything; `build` passes
+    the domain once the host has answered.
     """
     environment: dict[str, str] = {}
     for line in unit.get("Container", "Environment"):
@@ -408,18 +417,18 @@ def _unit_body(unit: Unit) -> dict:
         # value `1 B=2`, and `B` does not exist (systemd.syntax). Splitting on
         # whitespace and unquoting each token is what read the quoted form as
         # two assignments and refused files on dials systemd would never make.
-        for assignment in _assignments(line):
+        for assignment in _assignments(_substitute(line, domain)):
             key, separator, value = assignment.partition("=")
             if separator:
                 environment[key] = value
     body: dict = {"environment": environment}
     command = unit.one("Container", "Exec")
     if command is not None:
-        body["command"] = command
+        body["command"] = _substitute(command, domain)
     health = unit.one("Container", "HealthCmd")
     if health is not None:
-        body["healthcheck"] = {"test": health}
-    hosts = unit.get("Container", "AddHost")
+        body["healthcheck"] = {"test": _substitute(health, domain)}
+    hosts = [_substitute(host, domain) for host in unit.get("Container", "AddHost")]
     if hosts:
         body["extra_hosts"] = hosts
     return body
@@ -964,6 +973,19 @@ def build(
     dropins = _dropins(context, source)
     ports = _publications(document, context)
     domain = context.config.domain if context else ""
+    if context is not None:
+        # The same rule, once more, on the values the render will actually
+        # write: `${domain}` is still literal when `_quadlet_source` and
+        # `_compose_source` refuse the literal forms, so
+        # `Environment=APP_HOST=${domain}` beside a `domain.container` rendered
+        # APP_HOST=<domain> — the same dead dial — and was refused by nothing
+        # (review finding 4). `check` reads no host (loom, spec 6.3) and cannot
+        # know the domain; `render` can, and refuses. One reader of the rule —
+        # `compose.check_siblings` — on the same vocabulary, once more.
+        compose.check_siblings(
+            {name: _unit_body(unit, domain) for name, unit in source.units.items()},
+            source.origin,
+        )
 
     for container in source.containers():
         plan.add(
