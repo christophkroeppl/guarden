@@ -359,11 +359,13 @@ owner=$(stat -c %u "$written")
 # non-root user. ADR-0019 is explicit that "each unit maps its own user onto
 # the same service identity" — so the probe asks each distinct unit image, the
 # registry records a pair per unit, and the renderer writes each unit's own
-# line. One pair for the whole service would put the first image's uid onto
-# every other container's init, and keep-id with an explicit `uid=` FORCES
-# init (asserted above and asserted again for both containers below), so that
-# would break a container whose image user is somebody else's — silently,
-# because nothing about the run would say the pin named the wrong image.
+# line. One pair for the whole service would put the first image's user on every
+# other unit, and init is the image's own `USER` — a pin decides WHERE that uid
+# lands, not who starts (measured in t352) — so the units it did not probe
+# would keep the subuid-aliased writes ticket 277 opened ADR-0019 to stop,
+# while the pin mapped a uid their containers never run as. Silently: nothing
+# about the run says the pin named the wrong image. Each container's own uid is
+# asserted below, next to the uid_map row that says it landed on the service.
 #
 # The two images are built as the service user from two Containerfiles in the
 # service's own tree: `weedr service build` tags every container from the one

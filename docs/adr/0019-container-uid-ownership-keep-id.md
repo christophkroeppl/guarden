@@ -86,18 +86,25 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   image, a per-unit `owner_units` map** of image/uid/gid. A single-image service's document
   keeps the shape it always had: the scalar pair and no table. Only units that disagree about
   their user grow one, and the renderer answers **each unit from its own entry**, so each unit
-  maps its own image's user onto the same service identity and no image's uid is ever forced
-  onto another container's init (an explicit `uid=` forces init — measured, t350). A unit the
+  maps its own image's user onto the same service identity and no image's uid is ever taken up
+  by another container (init is the image's own `USER`, and the pin decides where that uid
+  lands — measured, t350 and t352). A unit the
   record does not answer renders no line and is the probe's condition again at the next start,
   never another unit's pin. Re-ingest can no longer break ownership because nothing chowns.
 - While a pin renders, a repository-supplied `User=` is refused (it would silently beat the
   pin); `UserNS=`/`Userns=` from repositories stay refused. Spec §6.3/§6.6 amended
   (7bc9715). AGENTS.md is a protected file and was left untouched — its refusal statements
   remain true for repository input.
-- The root-then-drop class is now MEASURED, not open: an explicit pin forces init onto the
-  probed pair (no root-start phase exists under a pin), container uid 0 lands on the
-  service's first-subuid band, and a second process appending after stop/start writes files
-  owned by the service uid (t350).
+- The root-then-drop class is now MEASURED, not open — with one measured boundary: a pin does
+  not override the image's `USER` (podman 5.7.0: a `USER root` image's pid 1 is uid 0 under
+  `keep-id:uid=3000,gid=3000`, read off `/proc/1/status`, t352), so what a pin decides is
+  where the container's uid LANDS, not who it starts as. For an image whose declared user is
+  the pair the probe pins (t350's shape), init is on that pair and there is no root-start
+  phase: container uid 0 sits on the service's first-subuid band, and a second process
+  appending after stop/start writes files owned by the service uid (t350). For the root row
+  of the table the entrypoint starts as container root and the HANDOFF is what the pinned pair
+  moves onto the service identity; anything written before that handoff is the root-start
+  phase, and A3 remains the fallback for it.
 - Fallback stack: A3 subdir chown with `.snapshots/` skipped, plus a per-service owner
   override for volumes shared by two images — both deferred to the A3 follow-up (the
   overrides contract deliberately has no `[volumes] owner` key: "five tables and nothing
