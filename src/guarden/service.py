@@ -221,7 +221,13 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     check_hosts(resolved.name, manifest, resolved.track)
 
     existing = registry.load(resolved.name)
-    source_hash = _source_hash(directory) if source.kind == "poke" else ""
+    # spec 5.3: "`add` requires `--from`, and is also the reconcile command: run
+    # either again to apply an edited manifest", so the hash that makes an edit
+    # visible to the convergence check is computed for `add` as well as for a
+    # poke (ticket 297): without it an edited source still answered `converged`
+    # and installed nothing. A module's source is guarden's own shipped tree and
+    # no caller edits it, so it stays unhashed.
+    source_hash = _source_hash(directory) if source.kind in ("poke", "service") else ""
     if existing is not None and _converged(existing, resolved, manifest, project, source_hash):
         outcome.converged = True
         outcome.uid = existing.uid
