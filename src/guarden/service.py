@@ -1121,7 +1121,14 @@ def _podman(name: str, record, *argv: str):
     env = ["env", f"USER={name}", f"LOGNAME={name}"]
     if runtime.is_dir():
         env.append(f"XDG_RUNTIME_DIR={runtime}")
-    return tool.call(["runuser", "-u", name, "--", *env, "podman", *argv], cwd=home)
+    try:
+        return tool.call(["runuser", "-u", name, "--", *env, "podman", *argv], cwd=home)
+    except errors.GuardenError as exc:
+        # Every failure `tool.call` reports here is bytes it could not read —
+        # an image's own file or podman's own answer, which is what this run
+        # was asked about — and the probe's contract is one line NAMING THE
+        # SERVICE (spec 1.2), so the name is put on before it leaves.
+        raise errors.GuardenError(f"{name}: {exc.message}", exc.code) from None
 
 
 def _installed_reference(name: str, escaped_ref: str | None) -> str:
