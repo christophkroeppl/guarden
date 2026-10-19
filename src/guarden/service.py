@@ -1023,10 +1023,10 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
             return (0, 0)
         declared = handoff
     uid_text, separator, gid_text = declared.partition(":")
-    if uid_text.isdigit():
+    if _is_number(uid_text):
         uid = int(uid_text)
         if separator:
-            if gid_text.isdigit():
+            if _is_number(gid_text):
                 return (uid, int(gid_text))
             # A numeric uid with a name for its group. The group database is
             # the only one this row reads: /etc/passwd is not opened for a
@@ -1065,7 +1065,7 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
     if not separator:
         where = f"the gid of the user {uid_text!r} in /etc/passwd"
         return (uid, _number(name, reference, entry[3], where))
-    if gid_text.isdigit():
+    if _is_number(gid_text):
         return (uid, int(gid_text))
     group = _image_file(name, record, reference, "/etc/group")
     if group is None:
@@ -1095,6 +1095,23 @@ def _no_such_group(name: str, reference: str, group: str) -> errors.GuardenError
     )
 
 
+def _is_number(value: str) -> bool:
+    """Whether a uid or gid field is a number — THE predicate, the one every
+    field the resolver reads goes through: both halves of `Config.User` and
+    every uid/gid field of the image's own `/etc/passwd` and `/etc/group`.
+
+    `isdecimal`, not `isdigit`: Unicode decimal digits are exactly the
+    characters `int()` converts (`int('٣')` is 3), while `isdigit` also counts
+    the superscripts and fractions `int()` refuses — `'²'.isdigit()` is True
+    and `int('²')` raises ValueError. A guard that is a strict superset of the
+    `int()` behind it lets a field through the guard and kills it in the
+    conversion, which is what an image-controlled field did: a passwd uid of
+    `²` walked out of `weedr service start` as a traceback instead of the
+    refusal it is (measured, t352).
+    """
+    return value.isdecimal()
+
+
 def _number(name: str, reference: str, value: str, where: str) -> int:
     """One uid or gid field read out of the image's OWN passwd or group.
 
@@ -1102,10 +1119,12 @@ def _number(name: str, reference: str, value: str, where: str) -> int:
     not a number is the image's declaration rejected where it is visible: an
     `int()` allowed to raise instead walks out of the probe as a traceback, and
     the probe promises one line naming the service (spec 1.2). The check is
-    `isdigit` and not a `try`, because the same predicate decides which fields
-    the resolver treats as numbers at all.
+    `_is_number` and not a `try`, because the same predicate decides which
+    fields the resolver treats as numbers at all — and while that predicate
+    was `isdigit` the equivalence was false, `isdigit` being a superset of
+    what `int()` takes (see `_is_number`).
     """
-    if not value.isdigit():
+    if not _is_number(value):
         raise errors.GuardenError(
             f"{name}: the image {reference} carries {value!r} as {where}, and a uid "
             "or a gid is a number",
