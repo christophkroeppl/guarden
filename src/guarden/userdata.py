@@ -48,7 +48,7 @@ VPS = "vps"
 PROFILES = (GOLDEN_VM, VPS)
 
 DEFAULT_REPO_URL = "https://github.com/christophkroeppl/guarden.git"
-DEFAULT_REPO_BRANCH = "develop"
+DEFAULT_REPO_BRANCH = "main"
 DEFAULT_REPO_DIR = "/usr/local/src/guarden"
 
 
@@ -79,6 +79,49 @@ def sequence() -> str:
     apply = ";".join(f"soil {phase} --apply" for phase in names)
     check = ";".join(f"soil {phase} --check" for phase in names)
     return f"{apply};{check}"
+
+
+def own_branch() -> str:
+    """The branch of the checkout this renderer runs from.
+
+    **The renderer is aware of its branch, and this is where it learns it.**
+    A document rendered from a checkout of `develop` must install `develop`,
+    and a document rendered from a checkout of `main` must install `main`:
+    an operator who rendered the document from the tree they are testing
+    would otherwise get a document that installs a different tree. The branch
+    is therefore read out of the checkout rather than carried as a constant,
+    and the default is `main` — the branch a raw URL names when it names the
+    repository's own head.
+
+    **The question is asked of git, and not of `.git/HEAD`.** A worktree's
+    `.git` is a *file* naming the real git directory, and a linked
+    worktree's `HEAD` is in that directory rather than beside the
+    checkout — so reading `.git/HEAD` answers `main` for every worktree,
+    which is exactly the case this repository spends its time in. `git
+    rev-parse --abbrev-ref HEAD` answers the same question in both shapes
+    and knows where the real `HEAD` is.
+
+    A checkout with no branch to be had — a tarball, a copy without its
+    `.git`, a machine with no git at all — answers `main`, which is the same
+    answer the constant carries. The question is asked of the checkout and
+    not of the remote, so a renderer never needs the network to answer it.
+    """
+    checkout = Path(__file__).resolve().parent.parent.parent
+    try:
+        import subprocess
+
+        done = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return DEFAULT_REPO_BRANCH
+    branch = done.stdout.strip()
+    if done.returncode != 0 or not branch or branch == "HEAD":
+        return DEFAULT_REPO_BRANCH
+    return branch
 
 
 def templates_dir() -> Path:
