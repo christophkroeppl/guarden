@@ -1515,7 +1515,23 @@ def _strlist(value) -> list[str]:
 # `su-exec app …`, the two spellings that mean "and then run as this user".
 # The token after the command is the whole answer, and it is looked up in the
 # image's own passwd rather than trusted as a number.
-HANDOFF = re.compile(r"(?:^|[\s;|&])(?:gosu|su-exec)\s+([A-Za-z_][A-Za-z0-9_.\-]*|\d+)")
+#
+# **The target may carry a group after a colon** — `postgres:postgres` is what
+# `gosu` and `su-exec` both accept, and the stock postgres image spells its
+# entrypoint that way. The resolver already understands the colon (the
+# declaration is split on its first colon before the number and the name
+# branches are taken), so the two spellings of this rule — the in-word form
+# and the exec form — must accept the SAME set of targets. They used not to:
+# the in-word form took the user part and went on, and the exec form's
+# pattern had no colon in it at all, so `ENTRYPOINT ["su-exec",
+# "postgres:postgres"]` was SKIPPED — the probe answered "no handoff",
+# recorded root, rendered no line and printed nothing, and the application's
+# uid landed in the subuid band (ticket 277). A silent wrong answer, where
+# the rule's own table promises a refusal.
+#
+# One pattern, used by both, so the two spellings cannot drift apart again.
+HANDOFF_TARGET = r"(?:[A-Za-z_][A-Za-z0-9_.\-]*|\d+)(?::(?:[A-Za-z_][A-Za-z0-9_.\-]*|\d+))?"
+HANDOFF = re.compile(r"(?:^|[\s;|&])(?:gosu|su-exec)\s+(" + HANDOFF_TARGET + ")")
 
 # The same command and the same user as TWO argv elements, which is how an OCI
 # image spells them: `ENTRYPOINT ["su-exec", "app"]` puts them in separate
@@ -1526,7 +1542,7 @@ HANDOFF = re.compile(r"(?:^|[\s;|&])(?:gosu|su-exec)\s+([A-Za-z_][A-Za-z0-9_.\-]
 # followed by something that is not a user (`gosu --help`, a stray `--`) is
 # skipped rather than answered with a name the image's passwd will refuse.
 HANDOFF_COMMANDS = frozenset({"gosu", "su-exec"})
-HANDOFF_USER = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_.\-]*|\d+)")
+HANDOFF_USER = re.compile(HANDOFF_TARGET)
 
 
 def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str | None:
