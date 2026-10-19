@@ -316,3 +316,85 @@ for _ in $(seq 1 60); do
     sleep 2
 done
 [ "$rel_ready" = 1 ] || _fail "the kidrel container never became exec-able, so nothing resolved its bare entrypoint name"
+
+# --- the handoff in EXEC FORM: the command and its user are two elements ------
+#
+# `ENTRYPOINT ["su-exec", "handoff"]` is the same root-then-drop declaration
+# the fixtures above read out of a script, spelled the way an OCI image usually
+# carries it: the handoff command and the user are SEPARATE argv elements, so a
+# scan that looks for `gosu <user>` inside one word never sees them together.
+# The probe then answered "no handoff" without having looked, recorded
+# `owner_uid = 0`, and the record called that answered — the container starts
+# as container root under the default map, drops to the app uid, and that uid's
+# writes land in the subuid band (ticket 277), which is the failure ADR-0019
+# exists to stop. What makes that answer instead of a refusal is the whole
+# point: nothing prints, and the next start does not ask again.
+#
+# `USER 0` is declared because the run is asserted as well: podman honours a
+# declared `USER` over the pin (t352 measures `USER 0` → pid 1 = 0), so init
+# starts as container root here and the handoff the probe read is the handoff
+# the container actually makes. `su-exec` is installed because it is the tool
+# this entrypoint names, taken from the distribution repository into the image
+# — not a stand-in anywhere on a PATH (AGENTS.md, "Test seam").
+stage_kid kidexec localhost/kidexec-staging:latest \
+    "FROM docker.io/library/alpine:3.20" \
+    "RUN apk add --no-cache su-exec" \
+    "RUN addgroup -g 2100 handoff" \
+    "RUN adduser -D -u 2100 -G handoff handoff" \
+    "USER 0" \
+    "ENTRYPOINT [\"su-exec\", \"handoff\"]" \
+    "CMD [\"sleep\", \"3600\"]"
+run weedr service ingest kidexec-staging --from poke kidexec@0000001
+assert_exit 0
+run weedr service build kidexec-staging
+assert_exit 0
+
+run weedr service start kidexec-staging
+assert_exit 0
+unit_exec=/var/lib/guarden/services/kidexec-staging/home/.config/containers/systemd/app.container
+record_exec=$registry/kidexec-staging.toml
+[ "$(unit_line "$unit_exec")" = "UserNS=keep-id:uid=2100,gid=2100" ] \
+    || _fail "an exec-form su-exec entrypoint renders $(unit_line "$unit_exec"), and the user it hands execution to is handoff with uid and gid 2100 in the image's own passwd — keep-id:uid=2100,gid=2100"
+assert_file_has "$record_exec" "owner_uid = 2100"
+assert_file_has "$record_exec" "owner_gid = 2100"
+# The miss this fixture exists for was recorded as an ANSWER of root, which is
+# why nothing printed and nothing re-asked.
+assert_file_lacks "$record_exec" "owner_uid = 0"
+
+# --- the handoff in a script that is NOT argv[0] -----------------------------
+#
+# `ENTRYPOINT ["/sbin/tini", "--", "/docker-entrypoint.sh"]`: the entrypoint is
+# a supervisor and the script that names the handoff sits second, so a read
+# gated on `argv[0].endswith(".sh")` never opened the file — and an entrypoint
+# that was never read is a fabricated "no handoff", recorded as
+# `owner_uid = 0` and printed nowhere. Every argv element that names a `.sh`
+# script is the script the image's entrypoint runs, so every one of them is
+# read; the script is the same guarded shape t351's first fixture uses, so the
+# container stays readable whichever way the pid-1 measurement lands.
+stage_kid kidtini localhost/kidtini-staging:latest \
+    "FROM docker.io/library/alpine:3.20" \
+    "RUN apk add --no-cache tini" \
+    "RUN addgroup -g 2200 handoff" \
+    "RUN adduser -D -u 2200 -G handoff handoff" \
+    "ADD .guarden/entry.sh /docker-entrypoint.sh" \
+    "RUN chmod +x /docker-entrypoint.sh" \
+    "ENTRYPOINT [\"/sbin/tini\", \"--\", \"/docker-entrypoint.sh\"]" \
+    "CMD [\"sleep\", \"3600\"]"
+seed /var/lib/guarden/staging/kidtini/0000001/.guarden/entry.sh \
+    '#!/bin/sh' \
+    'if [ x$(id -u) = x0 ] && [ -x /usr/sbin/su-exec ] ; then exec su-exec handoff /docker-entrypoint.sh ; fi' \
+    'exec sleep 3600'
+run weedr service ingest kidtini-staging --from poke kidtini@0000001
+assert_exit 0
+run weedr service build kidtini-staging
+assert_exit 0
+
+run weedr service start kidtini-staging
+assert_exit 0
+unit_tini=/var/lib/guarden/services/kidtini-staging/home/.config/containers/systemd/app.container
+record_tini=$registry/kidtini-staging.toml
+[ "$(unit_line "$unit_tini")" = "UserNS=keep-id:uid=2200,gid=2200" ] \
+    || _fail "an entrypoint whose script is not argv[0] renders $(unit_line "$unit_tini"), and the handoff that script names is handoff with uid and gid 2200 in the image's own passwd — keep-id:uid=2200,gid=2200"
+assert_file_has "$record_tini" "owner_uid = 2200"
+assert_file_has "$record_tini" "owner_gid = 2200"
+assert_file_lacks "$record_tini" "owner_uid = 0"

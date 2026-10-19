@@ -48,6 +48,22 @@ export GUARDEN_PREFIX=/
 
 registry=/var/lib/guarden/registry
 
+# --- the two claims round 3 found still written in the tree ------------------
+#
+# A sentence describing a failure mode the measured rule does not have (the
+# spec's §6.3 clause and this file's own worker message below), and a
+# docstring stating an equivalence that holds only as a subset. Prose and
+# comments are the one surface no assertion in this family reads, which is how
+# both survived a round that had already been told to grep them out — so the
+# claim is checked here, on the tree the runner just pushed into the cut, and
+# the run prints what matched. The bracketed spellings keep this line out of
+# its own match; `-I` keeps a stale `__pycache__` byte-compilation of an
+# older docstring from answering for the file beside it.
+run grep -rnI -e 'forced on[t]o' -e 'exactly\*\* the characte[r]s' \
+    "$GUARDEN_ROOT/docs" "$GUARDEN_ROOT/src" "$GUARDEN_ROOT/tests"
+echo "MEASURE: refuted claims still in the tree: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
+assert_exit 1
+
 ensure_accounts
 stage_config guarden-nomodules.toml
 stage_podlet_release
@@ -378,6 +394,22 @@ for _ in $(seq 1 60); do
     sleep 2
 done
 [ "$pin_ready" = 1 ] || _fail "the kid-staging container never became exec-able under the 4242 pin"
+# The pin the record rendered, read where it is falsifiable: the RUNNING
+# container's own uid_map, with the same `map_row` read the two map assertions
+# above make. A row `4242 0 1` is the pinned pair sitting on the service
+# identity, and it only exists in a container that was STARTED under the 4242
+# line — without it the pid 1 read just below is the container that came up
+# under the first pin, and answering 10001 there says nothing about 4242 (it
+# is the same-number case this file's own header calls out as proving nothing).
+run_in "$home" setpriv --reuid=kid-staging --regid=kid-staging --clear-groups \
+    env -u OLDPWD HOME="$home" PWD="$home" USER=kid-staging LOGNAME=kid-staging \
+    XDG_RUNTIME_DIR="$runtime_pin" \
+    podman exec "$container" cat /proc/self/uid_map
+assert_exit 0
+cp "$GUARDEN_STDOUT" "$GUARDEN_FIXTURES/uid-map-pin"
+echo "MEASURE: uid_map of the container the record pins at 4242: $(tr '\n' '|' <"$GUARDEN_FIXTURES/uid-map-pin")"
+[ "$(map_row "$GUARDEN_FIXTURES/uid-map-pin" 4242)" = "4242 0 1" ] \
+    || _fail "the running container answers uid_map row [$(map_row "$GUARDEN_FIXTURES/uid-map-pin" 4242)] for 4242 where the record's pin puts that pair on the service identity with [4242 0 1], so the pin is not live in this container and the pid 1 below is not a reading taken under 4242"
 podman_as kid-staging exec "$container" sh -c 'grep ^Uid: /proc/1/status'
 assert_exit 0
 echo "MEASURE: pid 1 of the image-USER-10001 container pinned at 4242: $(cat "$GUARDEN_STDOUT")"
@@ -396,6 +428,97 @@ assert_stdout_lacks "started kid-staging"
 # The record is rendered through, so what the rest of this file reads is the
 # probe's own pair again.
 sed -i 's/^owner_uid = "not-a-number"$/owner_uid = 10001/' "$record"
+
+# --- every scalar TOML holds in those two keys, answered the same way --------
+#
+# The reader converts a number it can convert and refuses one it cannot, and
+# these are the shapes beside the string case — `owner_uid` first and each
+# one's twin on `owner_gid`, because both keys go through ONE reader and a
+# future key-specific special case would otherwise be invisible here. Each
+# refusal is the start an operator meets: exit 1, one line, naming the service
+# and the key (spec 1.2), never a traceback from inside the reader and never a
+# truncation with no diagnostic at all.
+#
+# `inf` comes first because it is the shape that escapes `int()` entirely:
+# TOML parses it to float('inf') and `int(inf)` raises OverflowError, which a
+# `try` of TypeError and ValueError does not catch — the same traceback class
+# the string case was fixed for, one scalar type over.
+sed -i 's/^owner_uid = .*/owner_uid = inf/' "$record"
+run weedr service start kid-staging
+echo "MEASURE: stderr of an inf owner_uid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "kid-staging"
+assert_stderr_has "owner_uid"
+assert_stdout_lacks "started kid-staging"
+sed -i 's/^owner_uid = .*/owner_uid = 10001/' "$record"
+
+# A legal TOML float: `int(4242.9)` truncates to 4242, which is a wrong pin
+# with no diagnostic — the value silently becomes a number nobody wrote.
+sed -i 's/^owner_uid = .*/owner_uid = 4242.9/' "$record"
+run weedr service start kid-staging
+echo "MEASURE: stderr of a fractional owner_uid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "owner_uid"
+assert_stdout_lacks "started kid-staging"
+sed -i 's/^owner_uid = .*/owner_uid = 10001/' "$record"
+
+# A boolean is an `int` in Python and not one in TOML: `int(True)` is 1, and a
+# pin of 1 is a pair the probe never recorded.
+sed -i 's/^owner_uid = .*/owner_uid = true/' "$record"
+run weedr service start kid-staging
+echo "MEASURE: stderr of a boolean owner_uid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "owner_uid"
+assert_stdout_lacks "started kid-staging"
+sed -i 's/^owner_uid = .*/owner_uid = 10001/' "$record"
+
+# The gid's own half of the three cases the uid got above: an unnumbered
+# spelling is rendered through verbatim, a quoted number is converted and
+# lands in the record as the number it was read as, and a value that is no
+# number at all is refused naming the key. The gid goes through the same
+# reader, and this is what says so rather than the code's symmetry.
+sed -i 's/^owner_gid = .*/owner_gid = 9998/' "$record"
+run weedr service start kid-staging
+assert_exit 0
+assert_file_has "$record" "owner_gid = 9998"
+assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=9998"
+
+sed -i 's/^owner_gid = .*/owner_gid = "9997"/' "$record"
+run weedr service start kid-staging
+assert_exit 0
+assert_file_has "$record" "owner_gid = 9997"
+assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=9997"
+assert_file_lacks "$record" "owner_gid = \"9997\""
+
+sed -i 's/^owner_gid = .*/owner_gid = not-a-number/' "$record"
+run weedr service start kid-staging
+echo "MEASURE: stderr of an unnumbered owner_gid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "owner_gid"
+assert_stdout_lacks "started kid-staging"
+sed -i 's/^owner_gid = .*/owner_gid = '"$kid_gid"'/' "$record"
+
+sed -i 's/^owner_gid = .*/owner_gid = inf/' "$record"
+run weedr service start kid-staging
+echo "MEASURE: stderr of an inf owner_gid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "owner_gid"
+assert_stdout_lacks "started kid-staging"
+sed -i 's/^owner_gid = .*/owner_gid = '"$kid_gid"'/' "$record"
+
+# Back on the recorded pair, unit and record together: every refusal above
+# left the installed unit where it was, and the record is what the next render
+# reads.
+run weedr service start kid-staging
+assert_exit 0
+assert_file_has "$record" "owner_uid = 10001"
+assert_file_has "$record" "owner_gid = $kid_gid"
+assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=$kid_gid"
 
 # --- create AND modify: a second process after a restart ---------------------
 #
@@ -622,3 +745,56 @@ assert_exit 0
 after_pair=$(sha256sum "$unit_web" "$unit_worker" | sha256sum | cut -d' ' -f1)
 [ "$before_pair" = "$after_pair" ] \
     || _fail "a second start rendered a different pair of units ($before_pair -> $after_pair)"
+
+# --- a render the record does not answer: no line, not another image's pair ---
+#
+# `weedr service start` probes what the record does not answer before it
+# renders, so the start path never meets this question; `loom render` on its
+# own — the deploy path — does, and ADR-0019's rule is that a unit the record
+# does not answer renders NO line rather than the pair read from another
+# image, with the next start probing it. This service's record answers
+# `localhost/kid-staging:latest` (owner_image), so a source naming any other
+# reference has no pair to be given. The render reads the SOURCE, so the image
+# is changed in a copy of it — the home beside it is the one the rest of this
+# file still starts.
+changed=$GUARDEN_FIXTURES/changed-image
+mkdir -p "$changed/.guarden"
+cp -R "$home/.guarden/." "$changed/.guarden/"
+
+# Control: the same source naming its own image renders the recorded pair, so
+# the half below fails on the image and on nothing else about the render.
+run loom render "$changed" --service kid-staging --out "$changed/out-own"
+assert_exit 0
+[ "$(unit_line "$changed/out-own/units/app.container")" = "UserNS=keep-id:uid=10001,gid=$kid_gid" ] \
+    || _fail "the record's own image renders $(unit_line "$changed/out-own/units/app.container") and the pair it holds is keep-id:uid=10001,gid=$kid_gid"
+
+sed -i 's|^Image=localhost/kid-staging:latest$|Image=localhost/kid-other:latest|' \
+    "$changed/.guarden/quadlet/app.container"
+run loom render "$changed" --service kid-staging --out "$changed/out-other"
+assert_exit 0
+[ "$(unit_line "$changed/out-other/units/app.container")" = "none" ] \
+    || _fail "a unit naming localhost/kid-other:latest renders $(unit_line "$changed/out-other/units/app.container") from a record whose owner_image is localhost/kid-staging:latest, and a unit the record does not answer renders no line (ADR-0019) — the render alone never probes, so a line here is another image's pin installed until the next start repairs it"
+
+# --- a rebuild under the same tag is a DIFFERENT image -----------------------
+#
+# `owner_image` records the reference and `weedr service build` re-tags it, so
+# a Containerfile that changes USER kept the pair read from the image that no
+# longer stands behind that tag: the record answered the unit, no probe ran,
+# the container came up as the NEW user under the OLD pin, and that uid's
+# writes land in the subuid band (ticket 277) while the record and the
+# "an image that changed is the probe's condition again" line both claimed
+# otherwise. The image changes in the build, so that is where the answer goes
+# away — and the next start is the probe's condition again for real.
+printf '%s\n' \
+    "RUN addgroup -g 10002 kiduser2" \
+    "RUN adduser -D -u 10002 -G kiduser2 kiduser2" \
+    "USER 10002" >> "$home/Containerfile"
+run weedr service build kid-staging
+assert_exit 0
+assert_file_lacks "$record" "owner_uid"
+assert_file_lacks "$record" "owner_image"
+run weedr service start kid-staging
+assert_exit 0
+assert_file_has "$record" "owner_uid = 10002"
+assert_file_has "$unit" "UserNS=keep-id:uid=10002,gid=10002"
+assert_file_lacks "$unit" "uid=10001"
