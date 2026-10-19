@@ -671,7 +671,7 @@ line_worker=$(unit_line "$unit_worker")
 [ "$line_web" = "UserNS=keep-id:uid=10011,gid=$web_gid" ] \
     || _fail "the web unit of a two-image service carries $line_web, and its own image's user is keep-id:uid=10011,gid=$web_gid"
 [ "$line_worker" = "UserNS=keep-id:uid=20021,gid=$worker_gid" ] \
-    || _fail "the worker unit of a two-image service carries $line_worker, and its own image's user is keep-id:uid=20021,gid=$worker_gid — one image's uid must not be forced onto another container's init"
+    || _fail "the worker unit of a two-image service carries $line_worker, and its own image's user is keep-id:uid=20021,gid=$worker_gid — a pin read from another image maps a uid that container never runs as, and that container's own uid would land in the subuid band"
 [ "$line_web" != "$line_worker" ] \
     || _fail "both units render $line_web, which cannot be two images' users"
 

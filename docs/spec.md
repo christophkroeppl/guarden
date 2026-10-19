@@ -1705,8 +1705,9 @@ distinct image the installed units carry is probed once, the user `podman image 
 reports for it resolved (a name, and a bare number's group) against that image's own
 `/etc/passwd` and `/etc/group` — and recorded in the registry as `owner_uid` and `owner_gid`,
 with a per-unit table beside them when the units name more than one image, so a service whose
-units name two images renders two lines and no image's uid is ever forced onto another
-container's init. An image whose user is root — no `USER` at all, `USER 0` or `USER root`,
+units name two images renders two lines and no unit is pinned to an image it does not name: a
+pin read from another image maps a uid that container never runs as, and that container's own
+uid then lands in the subuid band. An image whose user is root — no `USER` at all, `USER 0` or `USER root`,
 which are one declaration and take one path — is answered from the handoff its entrypoint
 names, the `gosu` or `su-exec` user the entrypoint would switch to, never a passwd row chosen
 by itself — and records root, and renders no line, when neither yields a user: the default map
