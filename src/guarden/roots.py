@@ -132,7 +132,60 @@ def file_name(service: str) -> str:
 
 
 def _router(service: str, route: dict) -> str:
-    return f"{service}-{route.get('label', route.get('host', 'route'))}"
+    """The router's key in the edge's file: unique per route, per service.
+
+    **An instance's router is keyed by its ref, and this is what makes two
+    instances of one service both routable.** A preview service's route host is
+    the SERVICE's own (`record.route_hosts` is per service), so every instance
+    of one service produced the same key and the same `Host()` rule — and a
+    YAML map holds one definition per key, so only one instance was served
+    (spec 9, spec 7.4).
+
+    The key is `<service>-<label>-<suffix>` for an instance and
+    `<service>-<label>` for a slot's own route, and a slot's key is byte for
+    byte what it was before, so a service with no instance renders exactly as
+    it did.
+
+    **The suffix is the ref in hex, and the reason is the name's grammar.** A
+    ref is a path of unreserved segments and may hold `/` (spec 5.2), and the
+    edge's element names take no `/`; the escaped key holds a backslash, which
+    they take neither. Hex of the escaped key is `[0-9a-f]` only — always a
+    valid name — and it is injective, so two instances of one service never
+    answer to one router. The same encoding the container's name carries, and
+    for the same reason (spec 5.2).
+    """
+    label = route.get("label", route.get("host", "route"))
+    ref = route.get("ref", "")
+    if not ref:
+        return f"{service}-{label}"
+    return f"{service}-{label}-{names.systemd_escape(ref).encode().hex()}"
+
+
+def _rule(route: dict) -> str:
+    """The edge's rule for one route: the host, and a path for an instance.
+
+    **An instance is a path prefix on the service's own host, and this is the
+    whole of how two instances of one service are told apart.** A preview
+    service's route host is the SERVICE's own — `record.route_hosts` is per
+    service, and the spec says so: "Route hosts for an instance are a **path
+    prefix** on one host: `preview.$DOMAIN/<ref>`" (spec 9). So the rule for an
+    instance is `Host(...) && PathPrefix(...)` and the rule for a slot's own
+    route is `Host(...)`, byte for byte what it was before.
+
+    The path is the RAW ref, quoted, because the rule is a matcher and the ref
+    is a path: `feature/x` is two segments and `/feature/x` is the path that
+    reaches it. A ref is a path of unreserved segments (spec 5.2), so it holds
+    no character a matcher reads as a metacharacter — but the path is quoted
+    anyway, so a future ref that does cannot silently become a wildcard.
+
+    The same shape the tunnel renders for a preview (`roots._ingress_path`),
+    so the two postures agree on what a preview's URL is.
+    """
+    host = route.get("host", "")
+    ref = route.get("ref", "")
+    if not ref:
+        return f"Host(`{host}`)"
+    return f"Host(`{host}`) && PathPrefix(`/{ref}`)"
 
 
 def _recorded(service: str, routes: list[dict]) -> list[dict]:
@@ -187,7 +240,7 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
     rows = [
         {
             "router": _router(service, route),
-            "rule": f"Host(`{route.get('host', '')}`)",
+            "rule": _rule(route),
             "entrypoints": entrypoints,
             "target": f"http://{route.get('target', '')}",
             "middleware": bool(route.get("auth")) and provider is not None
