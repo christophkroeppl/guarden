@@ -472,7 +472,87 @@ def _quadlet_source(directory: Path) -> Source:
         unit = unitsource.parse(path)
         units[unit.stem()] = unit
     mounts = {name: _mounts_of_unit(unit) for name, unit in units.items()}
+    # Checked once the whole set is known and before anything is written: spec
+    # 7.3 states the refusal for a unit source and names no vocabulary, so a
+    # hand-written unit reaches the check a Compose file reaches (ticket 299 —
+    # it was wired into `_compose_source` only, and a `.guarden/quadlet/` source
+    # rendered names that resolve to nothing).
+    compose.check_siblings(
+        {name: _unit_body(unit) for name, unit in units.items()}, directory
+    )
     return Source(kind="quadlet", origin=directory, units=units, mounts=mounts)
+
+
+def _unit_body(unit: Unit, domain: str = "") -> dict:
+    """The unit's host-naming values in the vocabulary `check_siblings` reads.
+
+    The refusal is one rule and must have one reader: spec 7.3 names the
+    container, the sibling, the key and the value for "a unit source", and the
+    keys a hand-written unit writes those facts in are `Environment=`, `Exec=`,
+    `HealthCmd=` and `AddHost=` where a Compose file writes `environment`,
+    `command`, `healthcheck` and `extra_hosts`. The values are mapped here
+    rather than the check growing a second reader that could disagree with the
+    first about what counts as dialling a host.
+
+    `domain` is the render's own `${domain}` substitution (spec 4), and the
+    values are substituted here before they are mapped: a value is not final
+    until the marker is replaced, and the rule has to read what the unit will
+    carry — `Environment=APP_HOST=${domain}` beside a `domain.container`
+    renders `APP_HOST=<domain>`, the same dead dial as the literal form.
+    `_quadlet_source` maps with the default (no domain) because the literal
+    forms are refused there, before the host is asked anything; `build` passes
+    the domain once the host has answered.
+    """
+    environment: dict[str, str] = {}
+    for line in unit.get("Container", "Environment"):
+        # systemd splits a value on whitespace, so one line carries several
+        # assignments, and a quoted stretch is ONE string holding whatever it
+        # holds: `Environment="A=1 B=2"` is the single variable `A` with the
+        # value `1 B=2`, and `B` does not exist (systemd.syntax). Splitting on
+        # whitespace and unquoting each token is what read the quoted form as
+        # two assignments and refused files on dials systemd would never make.
+        for assignment in _assignments(_substitute(line, domain)):
+            key, separator, value = assignment.partition("=")
+            if separator:
+                environment[key] = value
+    body: dict = {"environment": environment}
+    command = unit.one("Container", "Exec")
+    if command is not None:
+        body["command"] = _substitute(command, domain)
+    health = unit.one("Container", "HealthCmd")
+    if health is not None:
+        body["healthcheck"] = {"test": _substitute(health, domain)}
+    hosts = [_substitute(host, domain) for host in unit.get("Container", "AddHost")]
+    if hosts:
+        body["extra_hosts"] = hosts
+    return body
+
+
+def _assignments(line: str) -> list[str]:
+    """One `Environment=` value as systemd reads it: whitespace separates the
+    assignments and a double-quoted stretch is ONE of them, quotes dropped
+    because the check reads the values the container will see.
+
+    Only double quotes group, because that is all systemd.syntax gives one —
+    an apostrophe is a character like any other, which is why `shlex` is not
+    the reader here (it would refuse `Environment=WHO=alice's` outright).
+    """
+    out: list[str] = []
+    token = ""
+    quoted = False
+    for char in line:
+        if char == '"':
+            quoted = not quoted
+            continue
+        if char.isspace() and not quoted:
+            if token:
+                out.append(token)
+                token = ""
+            continue
+        token += char
+    if token:
+        out.append(token)
+    return out
 
 
 def _mounts_of_unit(unit: Unit) -> list[Mount]:
@@ -992,6 +1072,19 @@ def build(
     dropins = _dropins(context, source)
     ports = _publications(document, context)
     domain = context.config.domain if context else ""
+    if context is not None:
+        # The same rule, once more, on the values the render will actually
+        # write: `${domain}` is still literal when `_quadlet_source` and
+        # `_compose_source` refuse the literal forms, so
+        # `Environment=APP_HOST=${domain}` beside a `domain.container` rendered
+        # APP_HOST=<domain> — the same dead dial — and was refused by nothing
+        # (review finding 4). `check` reads no host (loom, spec 6.3) and cannot
+        # know the domain; `render` can, and refuses. One reader of the rule —
+        # `compose.check_siblings` — on the same vocabulary, once more.
+        compose.check_siblings(
+            {name: _unit_body(unit, domain) for name, unit in source.units.items()},
+            source.origin,
+        )
 
     for container in source.containers():
         plan.add(

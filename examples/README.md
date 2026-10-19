@@ -5,7 +5,7 @@ directory out of the installed template set into the service's own quadlet
 directory. The set is read from
 
 ```
-$GUARDEN_TEMPLATES           when that is set
+$GUARDEN_TEMPLATES/services  when that is set
 <prefix>/usr/lib/guarden/templates/services/      otherwise
 ```
 

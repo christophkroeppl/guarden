@@ -2240,7 +2240,7 @@ generated environment variable per edge carries `DB_HOST` and `DB_PORT`, and for
 edge the credential arrives as `/run/secrets/DB_PASSWORD`.
 
 **A name inside a unit source is not a name.** Every container of one service runs in its own
-pasta namespace and there is no shared network (§7.1), so the containers of one `compose.yaml`
+pasta namespace and there is no shared network (§7.1), so the containers of one unit source
 cannot resolve each other, and `AddHost=` carries service names only: it is written for an edge
 and for the edge's routed services, never for a container. A value in a unit source that names
 one of the file's own other containers as a host therefore renders units in which the name
