@@ -38,6 +38,13 @@
 #     and a failed read is the host not being able to answer (exit `1`, one
 #     line, nothing recorded) rather than the answer "no handoff" settled into
 #     the record as `owner_uid = 0`.
+#   * a passwd row that names a user and carries NO gid (`app:x:1000`) and one
+#     that carries an EMPTY gid (`app:x:1000:`) — a field that is not a
+#     number and a field that is not there are the same class of the image's
+#     own declaration, and both are refused the same way: exit `2`, one line
+#     naming the service, the field and the value it found. The short row was
+#     an `IndexError` out of the probe — a traceback where the spec promises
+#     one line — because the row was accepted and its gid read unguarded.
 #
 # The other two shapes of `Config.User` are asserted where they were written:
 # a name the image's passwd carries (and one it does not) in
@@ -406,6 +413,69 @@ assert_stderr_has "kiduname-staging"
 assert_stderr_has "²"
 assert_stderr_has "group"
 assert_stdout_lacks "started kiduname-staging"
+
+# --- a passwd row that carries NO gid: a missing field is a refusal ---------
+#
+# `app:x:1000` names a user and a uid and stops. The gid the container will
+# run with is a field of that row, and a row without one says nothing about
+# it — so the row is the image's own declaration and it is rejected where it
+# is visible, the same way a gid that is not a number is (spec 1.2: one line,
+# exit `2`).
+#
+# The defect this fixture exists for: the row was ACCEPTED (three fields is
+# enough to name a user) and its gid was then read out of it unguarded, so
+# `app:x:1000` walked out of `weedr service start` as an `IndexError` — a
+# traceback where the spec promises one line, and the same class the chain
+# has already paid for twice (the unicode digits and the TOML float).
+#
+# The empty-gid row below is the same field with a value that is not a
+# number, and it is here as the control: the two refusals must be the same
+# refusal, and the empty one was already refused before the short one was.
+stage_kid kidnogid localhost/kidnogid-staging:latest \
+    "FROM docker.io/library/alpine:3.20" \
+    "RUN echo 'app:x:1000' >> /etc/passwd" \
+    "USER app" \
+    "CMD [\"sleep\", \"3600\"]"
+run weedr service ingest kidnogid-staging --from poke kidnogid@0000001
+assert_exit 0
+run weedr service build kidnogid-staging
+assert_exit 0
+
+run weedr service start kidnogid-staging
+echo "MEASURE: stderr of a start whose image's passwd row carries no gid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "kidnogid-staging"
+assert_stderr_has "gid"
+assert_stdout_lacks "started kidnogid-staging"
+# Nothing is recorded either: a refused declaration is not an answer, and a
+# record that holds `owner_uid = 0` would be the "no handoff" answer this
+# whole family of refusals exists to keep out of the tree.
+record_nogid=$registry/kidnogid-staging.toml
+recorded_nogid=$(grep '^owner_uid' "$record_nogid" 2>/dev/null || printf 'none\n')
+echo "MEASURE: the record of the short-row refusal holds: $recorded_nogid"
+[ "$recorded_nogid" = "none" ] \
+    || _fail "the image's passwd row carries no gid and the record settled on $recorded_nogid instead of refusing — a missing field is not an answer"
+
+# The same field, EMPTY rather than absent: the control that says the two
+# refusals are one refusal and not two accidents.
+stage_kid kidemptygid localhost/kidemptygid-staging:latest \
+    "FROM docker.io/library/alpine:3.20" \
+    "RUN echo 'app:x:1000:' >> /etc/passwd" \
+    "USER app" \
+    "CMD [\"sleep\", \"3600\"]"
+run weedr service ingest kidemptygid-staging --from poke kidemptygid@0000001
+assert_exit 0
+run weedr service build kidemptygid-staging
+assert_exit 0
+
+run weedr service start kidemptygid-staging
+echo "MEASURE: stderr of a start whose image's passwd row carries an empty gid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "kidemptygid-staging"
+assert_stderr_has "gid"
+assert_stdout_lacks "started kidemptygid-staging"
 
 # --- a read that FAILED is not an answer -------------------------------------
 #
