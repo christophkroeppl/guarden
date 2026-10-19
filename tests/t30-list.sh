@@ -50,6 +50,11 @@ run soil packages --apply
 assert_not_rejected
 run soil install --apply
 assert_not_rejected
+# The `source` field reports a poke of a project this host registered as
+# `gitops` (spec 6.7, ticket 291), so the project is registered before the
+# pokes below make that claim.
+run weedr project add myapp --repository https://example.invalid/myapp.git
+assert_exit 0
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 0
 run weedr service ingest myapp-staging --from poke myapp@9f2c1ab

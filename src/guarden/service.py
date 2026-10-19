@@ -37,6 +37,7 @@ from guarden import (
     names,
     paths,
     previews,
+    projects,
     publications,
     registry,
     tool,
@@ -180,6 +181,32 @@ def _manifest_directory(source: Source, name: str) -> Path:
     return paths.service_home(name)
 
 
+def _source_label(source: Source) -> str:
+    """What the registry may claim about where this tree came from.
+
+    spec 3.4 records `source` as `manual` or `gitops` and says it changes
+    nothing, so the field's whole job is to be true — and `gitops` names one
+    path: the receiver (spec 6.7), which refuses a project this host has never
+    registered (`hose` -> `projects.get`) and can only stage into a directory
+    `weedr project grant` created for a registered project. A poke naming no
+    registered project cannot have come through it, so it records `manual`:
+    seven records on one box claimed a gitops deploy that never ran because the
+    label came from the `--from` shape alone (ticket 291).
+
+    The alternative — refusing the poke — would give the label a force the
+    spec denies it and add a precondition spec 5.3's step list does not carry;
+    the registration check belongs to `hose` and to `furrow` (spec 6.6), and
+    what the mutator owes here is an honest record.
+    """
+    if source.kind != "poke":
+        return registry.SOURCE_MANUAL
+    return (
+        registry.SOURCE_GITOPS
+        if str(source.project) in projects.load()
+        else registry.SOURCE_MANUAL
+    )
+
+
 def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcome:
     directory = _manifest_directory(source, resolved.name)
     manifest = manifest_mod.read(_manifest_in(directory))
@@ -226,7 +253,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
         environment=resolved.track.name,
         uid=identity.uid,
         created=now,
-        source=registry.SOURCE_GITOPS if source.kind == "poke" else registry.SOURCE_MANUAL,
+        source=_source_label(source),
     )
     record.project = project
     record.environment = resolved.track.name
