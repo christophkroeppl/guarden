@@ -44,6 +44,7 @@ from guarden import (
     edgeresolve,
     edges,
     errors,
+    images,
     names,
     paths,
     registry,
@@ -137,33 +138,47 @@ GUARDEN_OWNED_ORDER = (
 )
 
 
-def owner_line(record: Registry, unit: str) -> str | None:
+def owner_line(record: Registry, unit: str, image: str) -> str | None:
     """The `UserNS=` value the renderer writes for THIS unit, and `None` when it
     writes none — the one spelling of the line, answered per unit (ADR-0019).
 
-    The start path reads this to decide whether the installed units already
-    hold what the record renders for each of them, so the check and the render
-    cannot drift apart. A record that answers per unit — `owner_units`, the
-    map a service whose units name more than one image grows — answers this
-    unit from its own entry and from nothing else: a unit it does not answer
-    gets no line rather than another image's pin, which is the failure the map
-    exists to prevent. What is left is the single-image record, and
-    `owner_uid` is the probe's answer: `None` is "not probed yet" and renders
-    nothing (nothing has been measured), and `0` is an image that declares no
-    user, whose container root the default map already moves onto the service
-    identity — the line would name a mapping already in effect and move the
-    rest of the map to get there.
+    `image` is the reference THIS unit names, and it is part of the answer:
+    the pair is only true of the image it was read from, so a unit naming
+    another one is the probe's condition again and renders no line rather than
+    another image's pin — the failure the per-unit map exists to prevent, and
+    the same question `_owner_plan` asks before the start path probes. The
+    start path reads this to decide whether the installed units already hold
+    what the record renders for each of them, so the check and the render
+    cannot drift apart; what is left once the record answers is `owner_uid`:
+    `None` is "not probed yet" and renders nothing (nothing has been
+    measured), and `0` is an image that declares no user, whose container root
+    the default map already moves onto the service identity — the line would
+    name a mapping already in effect and move the rest of the map to get
+    there.
     """
-    if record.owner_units:
-        entry = record.owner_units.get(unit)
-        if entry is None:
-            return None
-        uid, gid = entry.uid, entry.gid
-    else:
-        uid, gid = record.owner_uid, record.owner_gid
+    pair = record.answer_for(unit, image)
+    if pair is None:
+        return None
+    uid, gid = pair
     if uid and uid > 0 and gid is not None:
         return f"keep-id:uid={uid},gid={gid}"
     return None
+
+
+def _unit_image(source: Source, container: str, context: Context) -> str:
+    """The reference this unit names, resolved the way the probe resolves it:
+    the declared `Image=`, or the reference this service's build tags when the
+    unit declares none.
+
+    The same two spellings `_installed_images` answers with, because the
+    record's `owner_image` holds one of them and comparing a unit against any
+    third spelling would read "not this image" for a unit the record does
+    answer.
+    """
+    declared = source.units[container].one("Container", "Image")
+    if declared and declared.strip():
+        return declared.strip()
+    return images.reference_for(context.service)
 
 
 def refuse_pinned_user(unit: Unit, pinned: str, origin: str) -> None:
@@ -1103,7 +1118,11 @@ def _container_unit(
     # root the default map already moves onto the service identity, so the
     # line would name a mapping that is already in effect and change the rest
     # of the map to get there.
-    owner = owner_line(context.record, container) if context is not None else None
+    owner = (
+        owner_line(context.record, container, _unit_image(source, container, context))
+        if context is not None
+        else None
+    )
     if owner is not None:
         refuse_pinned_user(
             source.units[container],

@@ -844,6 +844,7 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
             _record_owners(current, name, escaped_ref, probed)
             registry.save(current, (0, users.group_id(GUARDEN_GROUP)))
         record = current
+    unit_images = _installed_images(name, escaped_ref)
     for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
         unit = unitsource.parse(path)
         # A pin and a source's own `User=` cannot both decide the container's
@@ -855,7 +856,7 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
         # renderer's exit plumbing. It is asked per unit, because
         # the line is per unit: a service whose other unit is pinned does not
         # take this unit's `User=` away.
-        pinned = render.owner_line(record, unit.stem())
+        pinned = render.owner_line(record, unit.stem(), unit_images[unit.stem()])
         if pinned is not None:
             render.refuse_pinned_user(unit, pinned, f"{name}: the unit {path.name}")
     if not _carries_owner_line(name, escaped_ref, record):
@@ -897,20 +898,6 @@ def _installed_images(name: str, escaped_ref: str | None) -> dict[str, str]:
     return found
 
 
-def _recorded(record, stem: str, image: str) -> tuple[int, int] | None:
-    """The pair the record already holds for THIS unit and the image it names,
-    or `None` when what the record holds was read from another image or from no
-    image at all — either of which makes the unit the probe's condition."""
-    if record.owner_units:
-        entry = record.owner_units.get(stem)
-        if entry is None or entry.image != image:
-            return None
-        return (entry.uid, entry.gid)
-    if record.owner_image and record.owner_image != image:
-        return None
-    return (record.owner_uid, record.owner_gid)
-
-
 def _owner_plan(name: str, record, escaped_ref: str | None) -> list[str]:
     """The images a probe still owes this record, and `[]` when it owes none.
 
@@ -923,7 +910,7 @@ def _owner_plan(name: str, record, escaped_ref: str | None) -> list[str]:
     if record.owner_uid is None or record.owner_gid is None:
         return sorted(set(unit_images.values())) or [images.reference_for(name)]
     return sorted(
-        {image for stem, image in unit_images.items() if _recorded(record, stem, image) is None}
+        {image for stem, image in unit_images.items() if record.answer_for(stem, image) is None}
     )
 
 
@@ -947,7 +934,7 @@ def _record_owners(current, name: str, escaped_ref: str | None,
         if image in probed:
             uid, gid = probed[image]
         else:
-            held = _recorded(current, stem, image)
+            held = current.answer_for(stem, image)
             if held is None:
                 raise errors.GuardenError(
                     f"{name}: the registry entry holds no probed image user for the unit "
@@ -1355,14 +1342,19 @@ def _carries_owner_line(name: str, escaped_ref: str | None, record) -> bool:
     Read through `unitsource.parse` rather than by scanning lines: the answer
     is per unit now, the unit's own stem is what the renderer keys its pair by,
     and a file that cannot be read is the one-line refusal unitsource already
-    makes rather than a decode error out of this walk.
+    makes rather than a decode error out of this walk. The image each unit
+    names goes to the renderer with it, because the record renders FOR THAT
+    UNIT only what that unit's own image answered (ADR-0019): a unit whose
+    `Image=` changed holds no line the record renders any more, which is the
+    same question `_owner_plan` answered before this runs.
     """
     files = sorted(units_dir(name, escaped_ref).glob("*.container"))
     if not files:
         return False
+    unit_images = _installed_images(name, escaped_ref)
     for path in files:
         unit = unitsource.parse(path)
-        want = render.owner_line(record, unit.stem())
+        want = render.owner_line(record, unit.stem(), unit_images[unit.stem()])
         found = unit.get("Container", "UserNS")
         if want is None:
             if found:

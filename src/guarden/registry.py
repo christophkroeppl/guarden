@@ -336,6 +336,35 @@ class Registry:
         registry and a rendered list agree byte for byte."""
         return sorted(self.volumes.values(), key=lambda v: (v.kind != "state", v.name))
 
+    def answer_for(self, unit: str, image: str) -> tuple[int, int] | None:
+        """The pair this record holds for THIS unit when it names THIS image,
+        and `None` when what the record holds was read from another image or
+        from no image at all — either of which makes the unit the probe's
+        condition again (ADR-0019).
+
+        One predicate for the two halves that read it: the start path, which
+        asks whether the record still answers a unit before deciding to probe,
+        and the renderer, which asks whether it may write a line at all. They
+        were two answers — the renderer took only the unit, so a record whose
+        `owner_image` named one thing wrote that pair into a unit naming
+        another (round-3 finding 4: the deploy path installs a line the start
+        path would have probed first). A record with no `owner_image` — the
+        shape written before that field existed — still answers every unit
+        with its pair, which is the only case where the image is not part of
+        the answer, and a record holding only one of the two numbers has no
+        pair to give: unanswered like one never probed.
+        """
+        if self.owner_units:
+            entry = self.owner_units.get(unit)
+            if entry is None or entry.image != image:
+                return None
+            return (entry.uid, entry.gid)
+        if self.owner_image and self.owner_image != image:
+            return None
+        if self.owner_uid is None or self.owner_gid is None:
+            return None
+        return (self.owner_uid, self.owner_gid)
+
     def to_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {
             "service": self.service,
