@@ -211,8 +211,8 @@ record_root=$registry/kidroot-staging.toml
 assert_file_has "$record_root" "owner_uid = 3000"
 assert_file_has "$record_root" "owner_gid = 3000"
 
-# The pin is the line and the init it forces: the container answers its own
-# uid and gid, read the way t350 reads them.
+# The pin is the line, and what is running under it is read below: the
+# container has to be up before its pid 1 can be asked anything.
 root_runtime=/run/user/"$(id -u kidroot-staging)"
 for _ in $(seq 1 30); do
     [ -d "$root_runtime" ] && break
@@ -237,8 +237,10 @@ done
 # `root` and the pin is `keep-id:uid=3000,gid=3000`, so pid 1 answering `0`
 # settles that a pin decides where a uid LANDS and does not decide who starts,
 # while pid 1 answering `3000` would settle that keep-id with an explicit
-# `uid=` forces init — and the refusal of a repository's own `User=` (spec
-# §6.3) was argued from the forcing claim. `podman exec`'s own `id -u` cannot
+# `uid=` forces init. The forcing claim is what the refusal of a repository's
+# own `User=` used to rest on; it now rests on the mapping (a `User=` that is
+# not the pinned pair runs where the line maps nothing), which both readings
+# leave standing. `podman exec`'s own `id -u` cannot
 # answer this: exec starts a NEW process as the container's configured user
 # (the image's own `USER`), which is why every fixture where image USER and
 # pinned pair are the same number proves nothing about init.

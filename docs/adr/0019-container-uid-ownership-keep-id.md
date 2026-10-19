@@ -91,14 +91,23 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   lands — measured, t350 and t352). A unit the
   record does not answer renders no line and is the probe's condition again at the next start,
   never another unit's pin. Re-ingest can no longer break ownership because nothing chowns.
-- While a pin renders, a repository-supplied `User=` is refused (it would silently beat the
-  pin); `UserNS=`/`Userns=` from repositories stay refused. Spec §6.3/§6.6 amended
+- While a pin renders, a repository-supplied `User=` is refused (it would run the container
+  outside the mapping the line exists to create: the line puts exactly the pinned pair on the
+  service identity, and a `User=` that names anything else runs where it maps nothing — spec
+  §6.3's own words, and the refusal's whole rationale now that the init-forcing reading is
+  measured false, t351/t352); `UserNS=`/`Userns=` from repositories stay refused. Spec
+  §6.3/§6.6 amended
   (7bc9715). AGENTS.md is a protected file and was left untouched — its refusal statements
   remain true for repository input.
 - The root-then-drop class is now MEASURED, not open — with one measured boundary: a pin does
   not override the image's `USER` (podman 5.7.0: a `USER root` image's pid 1 is uid 0 under
-  `keep-id:uid=3000,gid=3000`, read off `/proc/1/status`, t352), so what a pin decides is
-  where the container's uid LANDS, not who it starts as. For an image whose declared user is
+  `keep-id:uid=3000,gid=3000`, read off `/proc/1/status`), so what a pin decides is
+  where the container's uid LANDS, not who it starts as. That reading is **asserted** now and
+  on both spellings of the root row: t352 asserts pid 1 = 0 for `USER root` under a pin, and
+  t351 asserts pid 1 = 0 for an image carrying no `USER` line at all under
+  `keep-id:uid=2000` — the discriminating measurement, since every other fixture's image
+  user and pinned pair are the same number by construction and cannot tell the two doctrines
+  apart. For an image whose declared user is
   the pair the probe pins (t350's shape), init is on that pair and there is no root-start
   phase: container uid 0 sits on the service's first-subuid band, and a second process
   appending after stop/start writes files owned by the service uid (t350). For the root row

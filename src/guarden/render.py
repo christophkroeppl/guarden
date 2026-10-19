@@ -170,14 +170,19 @@ def refuse_pinned_user(unit: Unit, pinned: str, origin: str) -> None:
     """A source's own `User=` refused while a keep-id pin is in force
     (ADR-0019).
 
-    An explicit `--user` beats keep-id's init-forcing, so a unit that sets
-    `User=` would run the container outside the very mapping the line exists to
-    create — silently, because nothing about the run says the pin was skipped.
-    Refused only when a pin is being rendered: with no pin, `User=` is the
-    repository's own field and passes through as it always has, which is what
-    keeps this off every deployment that has no non-root image user to map.
-    Called from the render and from the start path, so the sentence the
-    diagnostic speaks is one sentence.
+    The line maps exactly ONE uid — the probed pair — onto the service
+    identity, and `User=` decides the uid the container actually runs as: any
+    other uid runs where the line maps nothing, so its writes land in the
+    service's subuid band (ticket 277), with nothing about the run saying the
+    line named a uid the container never ran as. That is the whole rationale,
+    and it is not about forcing init: a pin does NOT override the image's
+    `USER` (pid 1 of a root-spelled image under a pin is 0 — measured, t352),
+    so this is two owners of one container's user and the repository is not
+    one of them. Refused only when a pin is being rendered: with no pin,
+    `User=` is the repository's own field and passes through as it always has,
+    which is what keeps this off every deployment that has no non-root image
+    user to map. Called from the render and from the start path, so the
+    sentence the diagnostic speaks is one sentence.
     """
     value = unit.one("Container", "User")
     if value:

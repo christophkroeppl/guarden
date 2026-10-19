@@ -63,6 +63,21 @@ stage_kid() {
     fi
 }
 
+# podman_as <service> <podman args...>: podman as the service user, with USER
+# and LOGNAME named for the service — `runuser`/`setpriv` keep the CALLER's
+# environment and the caller is root, and podman's keep-id mapping reads the
+# subid files keyed by USER (the shape t350 and t352 drive the machine's
+# answers with).
+podman_as() {
+    local service=$1 home uid
+    shift
+    home=/var/lib/guarden/services/$service/home
+    uid=$(id -u "$service")
+    run_in "$home" setpriv --reuid="$service" --regid="$service" --clear-groups \
+        env -u OLDPWD HOME="$home" PWD="$home" USER="$service" LOGNAME="$service" \
+        XDG_RUNTIME_DIR="/run/user/$uid" podman "$@"
+}
+
 # --- a user the image does not name: rejected input --------------------------
 
 stage_kid kidc localhost/kidbad-staging:latest \
@@ -139,10 +154,16 @@ assert_file_has "$record_b" "owner_gid = $daemon_gid"
 #
 # The stock postgres shape: `Config.User` empty, and the app account the
 # entrypoint would gosu to. The pin comes from the words of the script, the
-# image's passwd only resolves them, and the root branch of that script is
-# exactly what the pin makes unreachable: init is forced to the pinned uid, so
-# `id -u` is never 0 and the gosu line — which alpine does not even ship —
-# never runs. A passwd row on its own would never have found `appuser` here.
+# image's passwd only resolves them, and a passwd row on its own would never
+# have found `appuser` here.
+#
+# What runs in it, read off pid 1 below: a pin decides where a uid LANDS and
+# does not override the image's `USER` — the entrypoint starts as container
+# root on this row too, so the script's `id -u = 0` branch is the branch it
+# takes. It is guarded by gosu's own absence for the same reason t352's root
+# fixture guards it: alpine ships no gosu, and the fixture exists for the pin
+# the probe renders and for the pid 1 that says which doctrine is true — not
+# for a handoff it cannot complete.
 stage_kid kidgosu localhost/kidgosu-staging:latest \
     "FROM docker.io/library/alpine:3.20" \
     "RUN adduser -D -u 2000 appuser" \
@@ -151,7 +172,7 @@ stage_kid kidgosu localhost/kidgosu-staging:latest \
     "ENTRYPOINT [\"/entry.sh\"]"
 seed /var/lib/guarden/staging/kidgosu/0000001/.guarden/entry.sh \
     '#!/bin/sh' \
-    'if [ x$(id -u) = x0 ] ; then exec gosu appuser /entry.sh ; fi' \
+    'if [ x$(id -u) = x0 ] && [ -x /usr/sbin/gosu ] ; then exec gosu appuser /entry.sh ; fi' \
     'exec sleep 3600'
 run weedr service ingest kidgosu-staging --from poke kidgosu@0000001
 assert_exit 0
@@ -166,15 +187,49 @@ assert_file_has "$unit_g" "UserNS=keep-id:uid=2000,gid=2000"
 assert_file_has "$record_g" "owner_uid = 2000"
 assert_file_has "$record_g" "owner_gid = 2000"
 
+# The empty-USER row, read off pid 1: the measurement the two sides of
+# ADR-0019's amendment disagree about, taken on the spelling that carries no
+# `USER` line at all (t352 asserts the same for `USER root`, which is one
+# table with it). pid 1 answering 0 says the entrypoint starts as the image's
+# own user and the pin decides where a uid LANDS; pid 1 answering 2000 would
+# say keep-id with an explicit `uid=` forces init to the pinned pair — which
+# is what the refusal of a repository's own `User=` was argued from.
+runtime_g=/run/user/"$(id -u kidgosu-staging)"
+for _ in $(seq 1 30); do
+    [ -d "$runtime_g" ] && break
+    sleep 1
+done
+assert_file_exists "$runtime_g"
+gosu_ready=0
+for _ in $(seq 1 60); do
+    podman_as kidgosu-staging exec kidgosu-staging-app true
+    if [ "$GUARDEN_EXIT" = 0 ]; then
+        gosu_ready=1
+        break
+    fi
+    sleep 2
+done
+[ "$gosu_ready" = 1 ] || _fail "the kidgosu container never became exec-able, so nothing can read its pid 1"
+podman_as kidgosu-staging exec kidgosu-staging-app sh -c 'grep ^Uid: /proc/1/status'
+assert_exit 0
+echo "MEASURE: pid 1 of the empty-USER container under its pin: $(cat "$GUARDEN_STDOUT")"
+pid1_g=$(awk '/^Uid:/ { print $2 }' "$GUARDEN_STDOUT")
+[ "$pid1_g" = 0 ] \
+    || _fail "pid 1 under keep-id:uid=2000 answers uid $pid1_g, and ADR-0019 says a pin does not override the image's USER — the empty-USER row must say what the root row in t352 says"
+
 # --- a repository's own `User=`, which would silently outrun the pin ---------
 #
-# An explicit `--user` beats keep-id's init-forcing, so a source that sets
-# `User=` would run the container outside the mapping the line exists to
-# create — with nothing in the run saying so. Refused where the start would
-# apply the pin: exit 2, one line, naming the service, the key and the value,
-# and no start at all. With no pin this field passes through as it always
-# has; this service's image declares a non-root user, which is what puts a pin
-# in force.
+# The line maps exactly ONE uid — the probed pair — onto the service identity,
+# and `User=` names the uid the container actually runs as: anything but the
+# pinned pair runs where the line maps nothing, so its writes land in the
+# subuid band (ticket 277) with nothing in the run saying the line named a uid
+# the container never ran as. It is not about forcing init — a pin does not
+# override the image's `USER` (measured above: pid 1 is the image's own user)
+# — it is two owners of one container's user, and the repo is not one of them.
+# Refused where the start would apply the pin: exit 2, one line, naming the
+# service, the key and the value, and no start at all. With no pin this field
+# passes through as it always has; this service's image declares a non-root
+# user, which is what puts a pin in force.
 stage_kid kiduser localhost/kiduser-staging:latest \
     "FROM docker.io/library/alpine:3.20" \
     "USER daemon"
@@ -240,15 +295,6 @@ assert_file_lacks "$record_rel" "owner_uid = 0"
 # The same name answered by the RUNTIME: the container is only running if the
 # image's `ENTRYPOINT ["entry.sh"]` was resolved and started, so coming up
 # exec-able is what shows the probe reads the same file the container runs.
-podman_as() {
-    local service=$1 home uid
-    shift
-    home=/var/lib/guarden/services/$service/home
-    uid=$(id -u "$service")
-    run_in "$home" setpriv --reuid="$service" --regid="$service" --clear-groups \
-        env -u OLDPWD HOME="$home" PWD="$home" USER="$service" LOGNAME="$service" \
-        XDG_RUNTIME_DIR="/run/user/$uid" podman "$@"
-}
 runtime_rel=/run/user/"$(id -u kidrel-staging)"
 for _ in $(seq 1 30); do
     [ -d "$runtime_rel" ] && break

@@ -847,10 +847,12 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
     for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
         unit = unitsource.parse(path)
         # A pin and a source's own `User=` cannot both decide the container's
-        # user — an explicit `--user` beats keep-id's init-forcing — so the
-        # refusal happens here as well as in the render: this is the path that
-        # answers the start, and it answers with the input code rather than
-        # through the renderer's exit plumbing. It is asked per unit, because
+        # user — the line maps the probed pair onto the service identity while
+        # `User=` names the uid the container runs as, and a uid that is not
+        # the pair is one the pin maps nowhere — so the refusal happens here
+        # as well as in the render: this is the path that answers the start,
+        # and it answers with the input code rather than through the
+        # renderer's exit plumbing. It is asked per unit, because
         # the line is per unit: a service whose other unit is pinned does not
         # take this unit's `User=` away.
         pinned = render.owner_line(record, unit.stem())
@@ -1010,9 +1012,13 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
         # container runs its entrypoint as container root — so all three take
         # this row. The answer is the handoff the entrypoint names (the app
         # user a gosu or su-exec would switch to) and never a passwd row picked
-        # by itself: every row of a base image is a system account, and
-        # pinning one would force init onto a uid the application never asked
-        # for. Nothing defensible falls out, and this is the record for it:
+        # by itself: every row of a base image is a system account, and a pin
+        # on one would map a uid the container never runs as — init is the
+        # image's own `USER`, which on this row is root (t352 measures pid 1
+        # answering 0 under `keep-id:uid=3000`), so the line would move the map
+        # for a number the entrypoint drops away from and leave the writes
+        # where the default map already puts them. Nothing defensible falls
+        # out, and this is the record for it:
         # container root, which the default map already moves onto the service
         # identity, so no line is rendered and the service runs exactly as it
         # did before ADR-0019 (the keep-id map for uid=0 was measured to carry

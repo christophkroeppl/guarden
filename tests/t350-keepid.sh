@@ -15,8 +15,8 @@
 #     still sees itself as the image's uid. Nothing here chowns by construction.
 #   * **create and modify, twice over**: a stop, a start, and a second process
 #     appending to the first one's file — so a create-only pass cannot hide a
-#     file the app phase could not modify later (the root-forced-past-the-pin
-#     residual class).
+#     file the app phase could not modify later (the root-then-drop residual
+#     class).
 #   * **the unit and the record**: the installed unit carries
 #     `UserNS=keep-id:uid=10001,gid=<probed gid>` with numbers matching the
 #     registry's `owner_uid`/`owner_gid`, a second start leaves the unit
@@ -25,9 +25,12 @@
 #   * **uid 0 and the pin, measured on podman 5.7.0**: a container started with
 #     the generated line and run as root answers `/proc/self/uid_map`, the
 #     running service container answers its init uid/gid and both maps, and the
-#     init uid is asserted to BE the probed uid — keep-id with an explicit
-#     uid= forces init to that uid, so there is no root-start phase under a pin
-#     and the ADR's root-then-drop class collapses to exactly this.
+#     init uid is asserted to BE the probed uid — which here it is by
+#     construction: init is the image's own `USER`, this image's `USER` is the
+#     pinned pair, and what the pin decides is where that uid LANDS (a pin does
+#     not override `USER`: pid 1 of a root-spelled image under a pin is
+#     asserted to be 0 in t352, so ADR-0019's root-start phase is real and that
+#     ADR, not this file, owns it).
 #   * **the machine's own answers first**: the default map and the podman
 #     version are echoed before anything is asserted about guarden, so a run
 #     that stops below still carries them.
@@ -168,11 +171,13 @@ echo "MEASURE: the image resolves uid 10001 to gid $kid_gid"
 #     default map reads them (`0 <svc uid> 1 / 1 231072 65536` — the subuid
 #     band ticket 277 measured aliases into), a plain `podman unshare` mounts
 #     devpts fine, and `runuser … podman run` needs no XDG_RUNTIME_DIR.
-#   * With USER named for the service, keep-id's map is complete and the pin
-#     forces init onto it: init uid/gid came back 10001/10001 under
-#     `keep-id:uid=10001,gid=10001`, and the three rows of each map are the
-#     ones asserted below — the pinned pair onto the service identity, the ids
-#     above it onto the service's subordinate band, the rest carried through.
+#   * With USER named for the service, keep-id's map is complete: init uid/gid
+#     came back 10001/10001 under `keep-id:uid=10001,gid=10001` — the image's
+#     own `USER` and the pinned pair are this fixture's same number, and the
+#     pin is what puts that pair on the service identity — and the three rows
+#     of each map are the ones asserted below — the pinned pair onto the
+#     service identity, the ids above it onto the service's subordinate band,
+#     the rest carried through.
 default_map=$(capture_as kid-staging run --rm localhost/kid-staging:latest cat /proc/self/uid_map)
 echo "MEASURE: default map: $default_map"
 [ -n "$default_map" ] || _fail "podman answered no uid_map for the default namespace"
@@ -247,11 +252,15 @@ printf '%s\n' "$root_map" > "$GUARDEN_FIXTURES/root-map"
 [ "$(map_row "$GUARDEN_FIXTURES/root-map" 0)" = "0 1 10001" ] \
     || _fail "uid 0 under $generated maps to [$(map_row "$GUARDEN_FIXTURES/root-map" 0)], expected [0 1 10001]"
 
-# The pin's semantics, asserted where they are citable: keep-id with an
-# explicit uid= FORCES init to that uid, overriding anything else, so init IS
-# the probed uid (fact 2) and init's gid IS the probed gid (fact 5 — one
-# measured run in eight landed files on the first subgid instead, which is the
-# anomaly this gid assertion exists to catch).
+# What runs here, asserted where it is citable: init IS the probed uid (fact
+# 2) and init's gid IS the probed gid (fact 5 — one measured run in eight
+# landed files on the first subgid instead, which is the anomaly this gid
+# assertion exists to catch) — because init is the image's own `USER` and this
+# image's USER and the pinned pair are the same number, so init lands on the
+# mapping the line creates. What the pin decides is where that uid LANDS, not
+# who starts: a pin does not override `USER`, measured and asserted on the
+# root row of the same table in t352 (pid 1 answers 0 under
+# `keep-id:uid=3000`).
 run_in "$home" setpriv --reuid=kid-staging --regid=kid-staging --clear-groups \
     env -u OLDPWD HOME="$home" PWD="$home" USER=kid-staging LOGNAME=kid-staging \
     XDG_RUNTIME_DIR="$runtime" \
@@ -261,7 +270,7 @@ init_uid=$(sed -n '1p' "$GUARDEN_STDOUT")
 init_gid=$(sed -n '2p' "$GUARDEN_STDOUT")
 echo "MEASURE: init uid/gid of the pinned container: $init_uid/$init_gid"
 [ "$init_uid" = "10001" ] \
-    || _fail "init uid $init_uid under $generated is not the probed uid 10001; the pin must force init (podman 5.7.0)"
+    || _fail "init uid $init_uid under $generated is not the probed uid 10001, and this image's USER is that pair (podman 5.7.0)"
 [ "$init_gid" = "$kid_gid" ] \
     || _fail "init gid $init_gid under $generated is not the probed gid $kid_gid"
 
@@ -354,9 +363,10 @@ sed -i 's/^owner_uid = "not-a-number"$/owner_uid = 10001/' "$record"
 
 # --- create AND modify: a second process after a restart ---------------------
 #
-# The residual class the review names: an entrypoint that forced root past the
-# pin would leave root-created files on the subuid band that the app phase
-# cannot modify later. So the file is created by one process, the container is
+# The residual class the review names: an entrypoint that comes up as
+# container root and drops later — which a pin does not move, init being the
+# image's own USER — would leave root-created files on the subuid band that
+# the app phase cannot modify later. So the file is created by one process, the container is
 # stopped and started, and a SECOND process appends to it — and the round trip
 # must leave both the permission and the owner standing.
 run weedr service stop kid-staging
@@ -554,7 +564,7 @@ pair_init() {
 
 pair_init kidpair-staging-web
 [ "$init_uid" = "10011" ] \
-    || _fail "the web container inits as uid $init_uid under $line_web, and its own image's user is 10011 — keep-id with an explicit uid= must force init"
+    || _fail "the web container inits as uid $init_uid under $line_web, and its own image's user is 10011 — init is the image's own USER, which is this unit's pinned pair"
 [ "$init_gid" = "$web_gid" ] \
     || _fail "the web container inits as gid $init_gid under $line_web, and its own image resolves gid $web_gid"
 [ "$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-web" 10011)" = "10011 0 1" ] \
@@ -562,7 +572,7 @@ pair_init kidpair-staging-web
 
 pair_init kidpair-staging-worker
 [ "$init_uid" = "20021" ] \
-    || _fail "the worker container inits as uid $init_uid under $line_worker, and its own image's user is 20021 — two images must init at two uids"
+    || _fail "the worker container inits as uid $init_uid under $line_worker, and its own image's user is 20021 — two images, two own users: init follows each image's USER and not one pinned pair"
 [ "$init_gid" = "$worker_gid" ] \
     || _fail "the worker container inits as gid $init_gid under $line_worker, and its own image resolves gid $worker_gid"
 [ "$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-worker" 20021)" = "20021 0 1" ] \
