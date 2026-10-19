@@ -41,6 +41,7 @@ from guarden import (
     registry,
     snapper,
     tool,
+    units,
     users,
     volumes,
 )
@@ -207,6 +208,11 @@ def forget(resolved, record) -> list[str]:
             tool.run(["snapper", "--config", config, "delete-config"])
     _drop(paths.instance_tree(resolved.name, key))
     _drop(paths.instance_home(resolved.name, key))
+    # The search-path entries the instance's units were given in the service's
+    # own quadlet directory go with them: a declaration left behind would keep
+    # being generated into a unit for volumes, publications and a registry entry
+    # that are all gone.
+    units.drop_instance_entries(resolved.name, key)
     del record.instances[key]
 
     released = ", ".join(

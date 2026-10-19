@@ -838,9 +838,22 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
     return sorted(path.stem for path in directory.glob("*.container"))
 
 
+def _systemd_unit(unit: str, escaped_ref: str | None) -> str:
+    """The name systemd knows this declaration by (see `units.search_entry`).
+
+    `units_of` reports what the instance's own directory holds — `web` — while
+    the entry podman's generator turned into a unit is `web-<escaped-ref>`, so
+    every start and every stop translates the one into the other here and
+    nowhere else.
+    """
+    if not escaped_ref:
+        return unit
+    return f"{unit}-{escaped_ref}"
+
+
 def stop_units(name: str, escaped_ref: str | None = None) -> None:
     for unit in units_of(name, escaped_ref):
-        _unit(name, "stop", unit)
+        _unit(name, "stop", _systemd_unit(unit, escaped_ref))
 
 
 def start_units(name: str, escaped_ref: str | None = None) -> None:
@@ -860,7 +873,7 @@ def start_units(name: str, escaped_ref: str | None = None) -> None:
     # _unit's own docstring names and says is the host, not the program.
     tool.call(["systemctl", "--user", "--machine", f"{name}@", "daemon-reload"])
     for unit in units_of(name, escaped_ref):
-        _unit(name, "start", unit)
+        _unit(name, "start", _systemd_unit(unit, escaped_ref))
 
 
 def _unit(name: str, verb: str, unit: str) -> None:

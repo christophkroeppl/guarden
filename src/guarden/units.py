@@ -139,9 +139,16 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
     written: list[str] = []
 
     for path in sorted(_files(out / "units")):
-        target = unit_dir(service, escaped_ref) / path.relative_to(out / "units")
-        conf.write_file(target, path.read_text(encoding="utf-8"), UNIT_MODE, owner)
+        relative = path.relative_to(out / "units")
+        body = path.read_text(encoding="utf-8")
+        target = unit_dir(service, escaped_ref) / relative
+        conf.write_file(target, body, UNIT_MODE, owner)
         written.append(str(target))
+        entry = search_entry(relative, escaped_ref)
+        if entry is not None:
+            mirror = unit_dir(service) / entry
+            conf.write_file(mirror, body, UNIT_MODE, owner)
+            written.append(str(mirror))
 
     for path in sorted(_files(out / "system")):
         target = paths.PREFIX / "etc" / "systemd" / "system" / path.name
@@ -163,6 +170,59 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
 
     reload_system()
     return written
+
+
+QUADLET_KINDS = (".container.d", ".container")
+
+
+def search_entry(relative: Path, escaped_ref: str | None) -> Path | None:
+    """The same unit where podman's generator reads it, for an instance.
+
+    An instance's units live in the instance's own quadlet directory (spec 2),
+    which is a subdirectory of the service's home — and the generator reads
+    `$XDG_CONFIG_HOME/containers/systemd` and the uid-scoped system paths and
+    nothing below them (podman-systemd.unit(5)), so a declaration only there is
+    a declaration systemd never makes: `systemctl start` answers
+    "Unit <name> not found" (measured, ticket 295).
+
+    So an instance's units also get one entry in the service's own quadlet
+    directory, named after the unit and the instance's escaped ref — the same
+    escaped form that names the instance's directory, its registry key and its
+    deploy lock (spec 5.2), so two instances of one service never answer to one
+    unit name. `None` for anything that is not a quadlet source: `guarden.env`
+    is read by the path the unit carries, not found by search, and a ref is
+    always present here or there is no instance at all.
+    """
+    if not escaped_ref:
+        return None
+    head = relative.parts[0]
+    for kind in QUADLET_KINDS:
+        if head.endswith(kind):
+            return Path(
+                f"{head[: -len(kind)]}-{escaped_ref}{kind}", *relative.parts[1:]
+            )
+    return None
+
+
+def drop_instance_entries(service: str, escaped_ref: str) -> None:
+    """Every search-path entry one instance's units were given, gone with it.
+
+    Called from the one path that forgets an instance (spec 5.3), so a dropped
+    preview does not leave a declaration behind for a container whose volumes,
+    publications and registry entry are all gone — the generator would keep
+    making a unit out of it.
+    """
+    directory = unit_dir(service)
+    if not directory.is_dir():
+        return
+    for path in sorted(directory.iterdir()):
+        if not path.name.endswith((f"-{escaped_ref}.container",
+                                   f"-{escaped_ref}.container.d")):
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
 
 
 def _files(directory: Path) -> list[Path]:

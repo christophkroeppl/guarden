@@ -60,9 +60,15 @@ escaped='feature\x2fx'
 instance_quadlet="/var/lib/guarden/services/routed-preview/home/$escaped/.config/containers/systemd"
 assert_file_exists "$instance_quadlet/web.container"
 assert_mode "$instance_quadlet/web.container" 640
-# The shared slot is where the render used to land; an instance track deploys a
-# ref every time, so nothing of this service's belongs in the slot.
-assert_dir_empty "/var/lib/guarden/services/routed-preview/home/.config/containers/systemd"
+# The shared slot is where the render used to land, and the service's own `web`
+# is not there: an instance track deploys a ref every time. What the slot does
+# hold is the one entry podman's generator reads — the unit plus the escaped
+# ref — because the generator reads the home's own quadlet directory and
+# nothing below it, and without that entry `systemctl start` answers
+# "Unit web.service not found" (measured).
+slot_quadlet="/var/lib/guarden/services/routed-preview/home/.config/containers/systemd"
+assert_file_missing "$slot_quadlet/web.container"
+assert_file_exists "$slot_quadlet/web-$escaped.container"
 
 # The route slice carries the ref **raw**: `roots.render_tunnel` escapes it
 # itself on the way into cloudflared's `ingress.path` (spec 5.2: the verb takes
@@ -70,15 +76,16 @@ assert_dir_empty "/var/lib/guarden/services/routed-preview/home/.config/containe
 # escaped a second time downstream.
 assert_file_has /var/lib/guarden/shared/routed-preview/routes.toml 'ref = "feature/x"'
 
-# The unit the generator made from that file, and it running: a start that
-# exits 0 while the container never comes up would be a start that proved
-# nothing. Bounded, because a pull is the network's own pace.
+# The unit the generator made from the entry above — `<unit>-<escaped-ref>`,
+# the name the start translated to — and it running: a start that exits 0 while
+# the container never comes up would be a start that proved nothing. Bounded,
+# because a pull is the network's own pace.
 active=''
 for _ in $(seq 1 60); do
-    active=$(systemctl --user --machine routed-preview@ is-active web.service 2>/dev/null || true)
+    active=$(systemctl --user --machine routed-preview@ is-active "web-$escaped.service" 2>/dev/null || true)
     if [ "$active" = active ]; then
         break
     fi
     sleep 1
 done
-[ "$active" = active ] || _fail "the instance's unit web.service is '${active:-unreadable}', not active"
+[ "$active" = active ] || _fail "the instance's unit web-$escaped.service is '${active:-unreadable}', not active"
