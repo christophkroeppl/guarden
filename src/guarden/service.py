@@ -1311,10 +1311,21 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
             "/etc/passwd does not name",
             errors.REJECTED_INPUT,
         )
-    uid = _number(name, reference, entry[2], f"the uid of the user {uid_text!r} in /etc/passwd")
+    # The row must carry the fields this branch reads: the uid at index 2 and
+    # — where the declaration names no group of its own — the gid at index 3.
+    # A row that stops short of the gid (`app:x:1000`) is the image's own
+    # declaration, incomplete, and an incomplete declaration is refused where
+    # it is visible, the same way a gid that is not a number is (spec 1.2: one
+    # line, exit `2`). It used to be an `IndexError` out of the probe instead
+    # (measured, t352).
+    uid_where = f"the uid of the user {uid_text!r} in /etc/passwd"
+    uid_text_read = _row_field(name, reference, entry, 2, "uid", "/etc/passwd", uid_text)
     if not separator:
-        where = f"the gid of the user {uid_text!r} in /etc/passwd"
-        return (uid, _number(name, reference, entry[3], where))
+        gid_where = f"the gid of the user {uid_text!r} in /etc/passwd"
+        gid_text_read = _row_field(name, reference, entry, 3, "gid", "/etc/passwd", uid_text)
+        return (_number(name, reference, uid_text_read, uid_where),
+                _number(name, reference, gid_text_read, gid_where))
+    uid = _number(name, reference, uid_text_read, uid_where)
     if _is_number(gid_text):
         return (uid, int(gid_text))
     group = _image_file(name, record, reference, "/etc/group")
@@ -1325,6 +1336,34 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
         raise _no_such_group(name, reference, gid_text)
     where = f"the gid of the group {gid_text!r} in /etc/group"
     return (uid, _number(name, reference, found[2], where))
+
+
+def _row_field(name: str, reference: str, row: list[str], index: int, field: str,
+               database: str, subject: str) -> str:
+    """One field of a passwd or group row, or a refusal when the row does not
+    carry it.
+
+    A row is a list of fields, and the resolver reads the uid at index 2 and
+    the gid at index 3 of a passwd row. A row that stops short of them —
+    `app:x:1000` names a user and a uid and no gid — says nothing about the
+    gid the container would run with, so it is the image's own declaration and
+    it is incomplete.
+
+    **A missing field is the same class as a field that is not a number**, and
+    the refusal is the same refusal: one line naming the service, the
+    database and the field, exit `2` (spec 1.2). The difference is only that
+    the missing one was an `IndexError` out of the probe — a traceback where
+    the spec promises one line — while the other was already refused
+    (measured, t352: `app:x:1000` came back as `IndexError: list index out of
+    range` from `entry[3]`).
+    """
+    if len(row) > index:
+        return row[index]
+    raise errors.GuardenError(
+        f"{name}: the image {reference} carries {subject!r} in its {database} without "
+        f"a {field}, and a uid or a gid is a field of that row",
+        errors.REJECTED_INPUT,
+    )
 
 
 def _cannot_run(name: str, record, reference: str, declared: str) -> errors.GuardenError:
@@ -1385,7 +1424,21 @@ def _number(name: str, reference: str, value: str, where: str) -> int:
 
 def _named(document: str, name: str) -> list[str] | None:
     """A passwd or group record by its name, or `None` when the databases do
-    not carry one."""
+    not carry one.
+
+    **A row is only a row for the fields it carries.** The passwd row
+    `app:x:1000` names a user and a uid and stops: the gid the container
+    would run with is a field of that row which the row does not carry, and
+    the caller read it out of the row unguarded — so the short row came back
+    as an `IndexError` out of `weedr service start` (measured, t352), a
+    traceback where spec 1.2 promises one line.
+
+    A missing field is the same class of the image's own declaration as a
+    field that is not a number, and the refusal is the same refusal
+    (ADR-0019). So the reader answers with the row it found and the CALLER
+    checks that the row carries the fields it is about to read, naming the
+    service and the field when it does not.
+    """
     for line in document.splitlines():
         fields = line.split(":")
         if len(fields) >= 3 and fields[0] == name:
