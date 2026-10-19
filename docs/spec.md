@@ -1818,6 +1818,26 @@ source: a later start reads it instead of probing again, a record edited by hand
 through instead of being probed over, and no file's ownership is ever changed to agree with
 a container (ADR-0019).
 
+**A rebuild takes the record's answer away, so the next start probes again.** The record
+names the image the pair was read from, and `weedr service build` re-tags that reference,
+so the reference is not an anchor for the answer: after a successful build the record's
+answer for the rebuilt reference is cleared — the scalar pair and its `owner_image` whole,
+a per-unit entry only for the image it names — under the registry lock. The next start
+therefore finds no answer and probes the image again, and the line is rendered from the new
+answer. Before this, a rebuilt Containerfile that changed `USER` kept the old pin: the
+container ran the new image user, the line mapped the old pair, and those writes landed in
+the subuid band.
+
+**The invalidation is one-sided: it clears the RECORD, not the installed pin.** The
+drop-in guarden owns keeps the line it was written with until something re-writes it, and
+the thing that re-writes it is `weedr service start` — the start path re-renders whenever
+that file does not hold exactly what the record renders for the unit. A unit started by
+anything else — a systemd `Restart=`, an operator's own `systemctl --user start` — comes up
+under the OLD pin with the NEW image, which is the failure the invalidation exists to stop,
+and nothing says so: the record holds no answer, so nothing contradicts the pin. The
+operator's `weedr service start` is the supported way to start a service, and it re-renders
+first; the gap is between a rebuild and a start through any other door.
+
 **The line is a DROP-IN, and the base unit carries no `UserNS=` line at all.** Three files,
 three writers, and no file with two of them:
 
@@ -1857,6 +1877,7 @@ the generator reads that name — so the instance's keep-id drop-in is
 service's.** Two instances of one service have two pins, neither lands in the other's, and
 an instance that is removed takes its own directory with it — the admin's own file in it is
 left alone, by the same rule the service's removal follows.
+
 
 **A `firewall:` entry is validated here and installed nowhere.** The renderer checks the closed
 shape of §4 and refuses the same malformed input it refuses everywhere else, and it writes the

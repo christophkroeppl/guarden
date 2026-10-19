@@ -174,11 +174,14 @@ a new ADR that supersedes it. The short version:
   units may bind-mount. The renderer refuses every other one, and an entry there is a grant in
   the same sense a port is.
 - `loom` refuses `PodmanArgs=`, `--privileged`, `cap_add`, `cap_drop`, `devices`,
-  `network_mode: host`, `pid: host`, `userns_mode`, `network_mode: container:`, and any host-path
+  `network_mode: host`, `pid: host`, `userns_mode`, `Userns=`, `UserNS=`,
+  `network_mode: container:`, and any host-path
   bind outside the service's own volumes, `/etc/guarden` and `mounts.allow`. A repository cannot
   bind a host socket, another service's home, or anything else on the machine. These refusals are
   guardrails against accidents; the isolation boundary is the per-service uid and the `0700` on
-  its tree.
+  its tree. The user-namespace directive is refused as repository input in BOTH of quadlet's
+  spellings and in the Compose vocabulary; the one line that may carry it is guarden's own
+  `UserNS=keep-id:uid=…,gid=…`, rendered from the image's probed user (ADR-0019, spec §6.3).
 - There is no name map and no `/etc/hosts`. For each edge the renderer writes
   `AddHost=<provider>:<ingress.alias>` into every unit of the consumer, and a route target is
   `<name>:<publication>`. The names are service names, with no suffix and no alias. The alias is

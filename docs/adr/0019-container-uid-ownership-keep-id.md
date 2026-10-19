@@ -3,23 +3,30 @@
 guarden's isolation boundary is one host uid per service and its 0700 tree, but a rootless
 container's non-root image user maps into the service's subuid band, so image-uid writes are
 denied on entry and, if allowed, would land on disk as subuid-aliased owners. We decided that
-guarden probes the image's user at first start and renders
-`Userns=keep-id:uid=...,gid=...` into the unit itself — moving the process's mapping onto the
-service identity — instead of ever chowning files. Operator decision locked 2026-10-18 after a
-measured option review; this ADR supersedes the spec's blanket refusal of `Userns=` for
-guarden-generated lines (repository-supplied `Userns` stays refused).
+guarden probes the image's user at a start that has no probed answer yet — the first start of
+a service, and every start after a build re-tags the image the answer was read from — and
+renders `Userns=keep-id:uid=...,gid=...` into the unit itself — moving the process's mapping
+onto the service identity — instead of ever chowning files. Operator decision locked
+2026-10-18 after a measured option review; this ADR amends the spec's refusal of `Userns=` for
+guarden-generated lines (repository-supplied `Userns` stays refused) — the spec was amended
+alongside it (7bc9715), so it no longer refuses the directive at all.
 
 ## Status
 
-accepted (2026-10-18, operator) — implemented on branch `feat/keep-id-uid` (this file's
-commit ba6c114 plus six commits: 3c52158, 00decc3, ee40e14, 20ebc73, 7bc9715 and the
-206ff58 scaffold), amended by 3abc671 and 1fb02de, and amended again by the round-3 series
-7156644…HEAD — every finding of the third adversarial review closed: the 4242 pid-1 row
-re-measured on a container started under that pin, the two refuted prose claims out of the
+accepted (2026-10-18, operator) — implemented on branch `feat/keep-id-uid` and merged into
+`develop` as d9f48e0; amended by 3abc671 and 1fb02de, and amended again by the round-3
+series 7156644…84209f0 — every finding of the third adversarial review closed: the 4242 pid-1
+row re-measured on a container started under that pin, the two refuted prose claims out of the
 tree, the owner keys refusing every other TOML scalar whole, the renderer answering per
-image, a rebuild invalidating the pair it re-tags, and both handoff seams — tests t350-keepid
-/ t351-keepid-diagnostics / t352-keepid-boundaries — the pid-1 readings that settle what a
-pin decides are asserted in the last two and in t350 — pending review and merge.
+image, a rebuild invalidating the pair it re-tags, and both handoff seams — and then by the
+round-4 series, which closed the two findings that blocked the merge (a passwd row with a
+uid and no gid was an `IndexError` out of the probe, and the exec-form `user:group` handoff
+was skipped and the probe settled on root in silence) and corrected this document's four
+overstatements of the tree. The tests are t350-keepid / t351-keepid-diagnostics /
+t352-keepid-boundaries — the pid-1 readings that settle what a pin decides are asserted in
+the last two and in t350. This file records the DECISION and what it costs; the commit
+series is the history, and this Status names the series rather than counting the commits
+in it.
 
 **Amended 2026-10-19 (operator): the pin is a DROP-IN, not a line in the base unit.**
 The line this ADR describes is now carried by
@@ -112,26 +119,36 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   it: empty, `0` and `root` are one declaration (container root) and are answered by the
   image's gosu/su-exec handoff target when the entrypoint names one (asked of every word of
   `Entrypoint`/`Cmd` — a bare `gosu`/`su-exec` element takes the word after it, exec form
-  included — and of the script any of those words names, at whatever position it sits), and
+  included, and the word may carry a `user:group` spec, which is the spelling the stock
+  postgres image uses — and of every `.sh` script any of those words names, at whatever
+  position it sits; a word naming a script that does not end in `.sh` is not read), and
   by nothing — **no line**, the default mapping — when it does not; a non-root number or
   name is resolved
-  against the image's own `/etc/passwd` and `/etc/group`, where a field that is not a number
-  is refused the way a user the image does not carry is (spec 1.2: one line, exit `2`). The
+  against the image's own `/etc/passwd` and `/etc/group`, where a field that is not a
+  decimal number — or a field the row does not carry at all — is refused the way a user
+  the image does not carry is (spec 1.2: one line, exit `2`). The
   table decides the RECORD; what each of the three root spellings then RUNS as under the line
   is measured per spelling below, and they do not all run the same way. An
   image that reaches no user at all is the no-self-heal class, a documented gap left to the
-  A3 fallback or a future manifest runtime-uid field — not invented here.
+  A3 fallback or a future manifest runtime-uid field — not invented here. The table names
+  `gosu` and `su-exec` and no other privilege-dropping tool: a wrapper that drops
+  privileges with `setpriv`, `runuser` or `chroot --userspec` reaches no user here, and
+  is the same no-self-heal class.
 - The registry records `owner_uid`/`owner_gid` (ticket 277's drift anchor) plus `owner_image`,
   the image that pair was read from — and, **for a service whose units name more than one
   image, a per-unit `owner_units` map** of image/uid/gid. A single-image service's document
-  keeps the shape it always had: the scalar pair and no table. Only units that disagree about
-  their user grow one, and the renderer answers **each unit from its own entry**, so each unit
+  keeps the shape it always had: the scalar pair and no table. **The table grows when the
+  units name more than one image** — two units on one image never grow it, and two units on
+  two images grow it whether or not the two images declare the same user — and the renderer
+  answers **each unit from its own entry**, so each unit
   maps its own image's user onto the same service identity and no image's uid is ever taken up
   by another container (each unit runs what its own image puts on pid 1 — or, where the image
   names no user, its own pin — and either way the pin decides where that uid
   lands — measured, t350/t351/t352). A unit the
   record does not answer renders no line and is the probe's condition again at the next start,
-  never another unit's pin — and the renderer asks that per unit AND per image, the
+  never another unit's pin — except for a record that carries no `owner_image` at all, the
+  shape written before that field existed, which answers every unit with its one pair, because
+  there is no image to disagree with — and the renderer asks that per unit AND per image, the
   reference the unit names resolved the way the probe resolves it, so a deploy that renders
   a unit whose `Image=` changed writes no line rather than the pair read from another image
   (round 3, measured t350). Re-ingest can no longer break ownership because nothing chowns.
@@ -144,9 +161,24 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   this, a rebuilt Containerfile that changed `USER` kept the old pin: the container ran the
   new image user, the line mapped the old pair, and those writes landed in the subuid band
   with the record and this ADR's "an image that changed is the probe's condition again" both
-  claiming otherwise. What this does NOT cover is an image replaced outside that verb — a
-  hand `podman pull` under the same tag — which a reference anchor cannot see and an
-  image-ID anchor would: the deliberate trade, recorded here rather than in a comment.
+  claiming otherwise. **The invalidation is one-sided: it clears the RECORD, not the
+  installed pin.** The drop-in guarden owns keeps the line it was written with until
+  something re-writes it, and what re-writes it is `weedr service start` — the start path
+  re-renders whenever that file does not hold exactly what the record renders for the
+  unit. A unit started by anything else — a systemd `Restart=`, an operator's own
+  `systemctl --user start` — comes up under the OLD pin with the NEW image, and nothing
+  says so, because the record holds no answer and nothing contradicts the pin.
+  `weedr service start` is the supported
+  way to start a service and it re-renders first; the gap is between a rebuild and a start
+  through any other door, and it is stated here rather than closed, because closing it
+  means the build verb writing into the drop-in directory, which is root-owned and would
+  need a lock the build does not hold. What this does NOT
+  cover is an image replaced outside that verb — a hand `podman pull` under the same tag,
+  a hand `podman build --tag` under it, or a per-container `Containerfile` layout the build
+  verb does not read at all (it looks only at the home's own `Containerfile`/`Dockerfile`,
+  so a tree with `.guarden/images/<container>/Containerfile` is never built and its image
+  is never invalidated) — which a reference anchor cannot see and an image-ID anchor would:
+  the deliberate trade, recorded here rather than in a comment.
 - While a pin renders, a repository-supplied `User=` is refused (it would run the container
   outside the mapping the line exists to create: the line puts exactly the pinned pair on the
   service identity, and a `User=` that names anything else runs where it maps nothing — spec
@@ -154,8 +186,11 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   also picks pid 1: it does where the image names no `USER` (t351) and it does not where the
   image names one (t352)); `UserNS=`/`Userns=` from repositories stay refused. Spec
   §6.3/§6.6 amended
-  (7bc9715). AGENTS.md is a protected file and was left untouched — its refusal statements
-  remain true for repository input.
+  (7bc9715). AGENTS.md's copy of the refusal list is brought up to the spec's — it had
+  gained `Userns=`/`UserNS=` in the spec and not here, and AGENTS.md's own rule ("one
+  canonical statement per rule … grep for it") is the rule that applies; there is no rule in
+  this repository that protects AGENTS.md from an edit, and the file has been edited on this
+  lineage (130db5f).
 - The root-then-drop class is now MEASURED **per spelling**, not open, and the spellings do not
   all behave the same at run time. Who pid 1 is, read off `/proc/1/status` under the rendered
   line on podman 5.7.0, and every row of this list asserted:
