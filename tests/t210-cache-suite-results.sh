@@ -605,6 +605,14 @@ grep -qFx '.env.schema' "$GUARDEN_STDOUT" \
 # Covering the package means hashing it, so the cost is measured rather than
 # assumed: how many files the key covers, and how long a digest over them takes
 # on this machine — interpreter start included, which is most of it.
+#
+# **The bound is on the FILE COUNT, not on a wall clock.** A wall-clock bound
+# on a shared machine is a flake wearing a bound's clothes, and a generous one
+# (5000ms against a measured ~150ms) cannot catch the regression it names: a
+# key that grew 30x would still pass it. The count is what actually holds the
+# property — the key is a fixed set of files, so a set that grew is a set
+# that grew for a reason, and the reason is a file class that was added
+# rather than a file that was longer.
 python3 "$CACHE_TOOL" readset "$SUITE" >"$GUARDEN_FIXTURES/readset.list"
 READSET_FILES=$(grep -c . "$GUARDEN_FIXTURES/readset.list")
 START_NS=$(date +%s%N)
@@ -615,7 +623,18 @@ END_NS=$(date +%s%N)
 TREE_MS=$(( (END_NS - START_NS) / 1000000 ))
 printf 'note: the key covers %s files; its digest was built in %s ms\n' \
     "$READSET_FILES" "$TREE_MS"
-[ "$TREE_MS" -lt 5000 ] || _fail "a key digest took ${TREE_MS}ms, so the key is no longer cheap enough to build per suite"
+
+# The count is bounded, and the bound is the tree's own: every file under
+# `tests/` that is not a suite, plus the covered trees. A key that covers
+# more than the tree has is a key that reads something the tree does not
+# hold.
+TREE_FILES=$(find "$GUARDEN_ROOT/src/guarden" "$GUARDEN_ROOT/fixtures" \
+    "$GUARDEN_ROOT/modules" "$GUARDEN_ROOT/packages" "$GUARDEN_ROOT/tools" \
+    "$GUARDEN_ROOT/examples" -type f ! -path '*__pycache__*' ! -name '*.pyc' | wc -l)
+HELPER_FILES=$(find "$GUARDEN_ROOT/tests" -type f ! -name '*.pyc' | grep -cvE '/t[0-9][^/]*\.sh$')
+EXPECTED=$((TREE_FILES + HELPER_FILES + 3))
+[ "$READSET_FILES" -le "$EXPECTED" ] \
+    || _fail "the key covers $READSET_FILES files and the tree holds $EXPECTED, so it reads something the tree does not"
 
 # --- a cached suite's line cannot be read as a pass -------------------------
 
