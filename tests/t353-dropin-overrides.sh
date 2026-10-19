@@ -322,13 +322,39 @@ seed "$preview_staged/Containerfile" \
 
 run weedr service ingest dropin-preview/feature/x --from poke dropinprev@0000001
 assert_exit 0
+
+# **The service user's systemd manager has to be up before the build.**
+#
+# A rootless podman build runs its `RUN` steps in a container, and it puts
+# that container in the **systemd sandbox cgroup** of the user running it —
+# which means it asks the service user's own manager for a cgroup. The
+# manager comes up on its own because linger is enabled, but it comes up
+# *asynchronously*: right after an ingest the uid exists and `/run/user/<uid>`
+# may not be there yet, and a build that runs in that window dies with
+#
+#   error running container: from /usr/bin/crun creating container for
+#   [/bin/sh -c ...]: sd-bus call: Access denied as the requested operation
+#   requires interactive authentication
+#   Failed to add pause process to systemd sandbox cgroup: dial unix
+#   /run/user/<uid>/bus: connect: connection refused
+#
+# The first line is the sd-bus denial and the second is the reason: the
+# manager's bus was not there to be asked. So the wait is for the manager, and
+# it is the same premise t350 waits for before its probe.
+preview_uid=$(id -u dropin-preview)
+preview_runtime=/run/user/"$preview_uid"
+for _ in $(seq 1 30); do
+    [ -d "$preview_runtime" ] && break
+    sleep 1
+done
+assert_file_exists "$preview_runtime"
+
 run weedr service build dropin-preview
 assert_exit 0
 assert_stdout_has "localhost/dropin-preview:latest"
 
 # The escaped ref is what the registry and the directory are keyed by.
 escaped='feature\x2fx'
-preview_uid=$(id -u dropin-preview)
 preview_dir=/etc/containers/systemd/users/"$preview_uid"
 instance_dir=$preview_dir/app-"$escaped".container.d
 instance_dropin=$instance_dir/50-guarden-keepid.conf
