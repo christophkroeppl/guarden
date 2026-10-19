@@ -87,7 +87,14 @@ seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml" \
 run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "a routes entry has an unknown key 'zram'"
+# The nested case is refused BY NAME, exactly like the top-level one — the
+# by-name refusal is the stronger claim, and it is what the comment above
+# demands ("a refusal that only worked at the top level would be bypassed by
+# one level of indentation"). This assertion used to expect the generic
+# "unknown key" wording; the by-name refusal says what the right answer is,
+# and that is the better message.
+assert_stderr_has "a routes entry has a 'zram' key"
+assert_stderr_has "the operator's"
 
                                                                                
 
