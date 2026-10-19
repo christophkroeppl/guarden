@@ -41,6 +41,7 @@ from guarden import (
     service,
     snapper,
     snapshotid,
+    sudoers,
     tool,
     units,
     users,
@@ -1926,6 +1927,46 @@ HANDLERS = {
 }
 
 
+def _guarden_may(call: str) -> None:
+    """Whether the `guarden` account may run this verb, when it is the caller.
+
+    **The second sudoers rule grants the mutator WHOLE, and the mutator
+    decides.** The rule has to be one line — `guarden ALL=(root) NOPASSWD:
+    /usr/lib/guarden/bin/weedr` — because sudoers matches a command's ARGUMENTS
+    as written, and the real invocation carries a service name and a sha:
+
+        $ sudo -n -u guarden sudo -n -l …/weedr service ingest
+        …/weedr service ingest                              <- the rule matches
+        $ sudo -n -u guarden sudo -n …/weedr service ingest someapp --from poke p@s
+        sudo: I'm sorry guarden. I'm afraid I can't do that  <- THE REAL CALL
+
+    So the rule cannot name the verbs, and the verbs have to be named HERE —
+    in the one program that knows what a verb means. `purge` destroys data and
+    `port open` publishes a port; a list of program names cannot say that, and a
+    program can.
+
+    **The caller is read from `SUDO_USER`**, which sudo sets to the account the
+    rule ran as. A call that did not come through sudo has no `SUDO_USER` and
+    is root's own call, which is unrestricted — that is the case the VM harness
+    exercises, and the case the operator's own `sudo weedr …` is not.
+
+    The list is the spec's §6.6 list, which is the best statement of the
+    intended policy that exists. `purge`, `rollback`, `port open` and
+    `firewall open` are NOT in it, and that is the point: a push may deploy and
+    may not destroy, publish or grant.
+    """
+    caller = os.environ.get("SUDO_USER")
+    if caller != sudoers.GUARDEN_USER:
+        return
+    if call in sudoers.GUARDEN_MAY:
+        return
+    raise errors.GuardenError(
+        f"the {sudoers.GUARDEN_USER} account may not run {call}; the verbs it may run are "
+        + ", ".join(sorted(sudoers.GUARDEN_MAY)),
+        errors.REJECTED_INPUT,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1934,6 +1975,7 @@ def main(argv: list[str] | None = None) -> int:
     if handler is None:
         return cli.pending(call)
     try:
+        _guarden_may(call)
         return handler(args)
     except errors.GuardenError as exc:
         sys.stderr.write(f"{exc.report(call)}\n")
