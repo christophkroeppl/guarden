@@ -1158,6 +1158,15 @@ def _install_module(module: modules.Module, config) -> int:
         if not basicauth.in_force():
             sys.stdout.write(f"basic auth policy in {basicauth.POLICY}\n")
             basicauth.write_policy()
+        # Re-adding the module dropped every entry with the policy while the
+        # registries kept their flags (ticket 292), so each flagged service's
+        # entry is put back from its own minted blob before any unit reads it:
+        # a flagged service whose htpasswd is missing is a login nobody can
+        # use and nothing else in guarden reports it.
+        for name in registry.names():
+            record = registry.load(name)
+            if record is not None and basicauth.restore(record):
+                sys.stdout.write(f"restored the basic-auth login for {record.service}\n")
     found: dict[str, dict] = {}
     for entry in module.services:
         source = modules.source_of(module.name, entry.name)
@@ -1474,8 +1483,10 @@ def _module_remove(args) -> int:
     if module.name == GATE_MODULE:
         # Ticket 292: the policy goes with the module that generated it, and
         # the entries with it — a host with no edge has no login in front of
-        # nothing, and a re-install starts from a policy, not from logins for
-        # services that may no longer exist.
+        # nothing. The records keep their flags; re-adding the module restores
+        # each flagged service's entry from its own minted blob
+        # (`basicauth.restore`), and a service that no longer exists has no
+        # record, so nothing is restored for it.
         basicauth.drop_policy()
         sys.stdout.write(f"removed the basic auth policy from {basicauth.POLICY}\n")
     remaining = config_mod.load()

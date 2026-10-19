@@ -126,8 +126,10 @@ def write_policy() -> str:
 def drop_policy() -> None:
     """Remove the policy marker and its htpasswd entries: `weedr module remove
     gate-traefik`. Existing records keep their flag — a removed module leaves
-    no edge to serve them, and re-adding the module must not resurrect logins
-    for services that no longer exist."""
+    no edge to serve them — and `restore` puts a flagged service's entry back
+    from its own blob when the module is re-added, so a login an operator holds
+    keeps working and a service that no longer exists has no record to restore
+    it for."""
     POLICY.unlink(missing_ok=True)
     if HTPASSWD_DIR.is_dir():
         for path in HTPASSWD_DIR.glob("*.htpasswd"):
@@ -170,6 +172,29 @@ def mint(record, when: str) -> None:
     write_entry(record.service, password)
     record.basicauth = True
     record.generated[KEY] = when
+
+
+def restore(record) -> bool:
+    """Rewrite a flagged service's htpasswd entry from its own minted blob.
+
+    `weedr module remove gate-traefik` drops every entry with the policy
+    (`drop_policy`) while each service's registry keeps its flag, and `roots`
+    attaches the `usersFile` middleware to a flagged service whether or not the
+    file is there — so re-adding the module has to put the entries back, or
+    every flagged service is a login nobody can use with nothing reporting it.
+    The password is the one already minted: the blob was never dropped, so an
+    operator's stored credential keeps working and nothing is re-minted.
+    True when an entry was written; a service that is not flagged, or whose
+    entry is already in place, is not this function's business and answers
+    False.
+    """
+    if not record.basicauth or host_file(record.service).is_file():
+        return False
+    password = credentials.value(record.service, KEY)
+    if password is None:
+        return False
+    write_entry(record.service, password)
+    return True
 
 
 def drop(service: str) -> None:
