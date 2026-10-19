@@ -22,22 +22,26 @@
 #     **HOW IT FAILS WHEN THE PROTECTION IS GONE:** the volume's mode is
 #     `chmod 0777`ed in the test, the same write is retried, and it now
 #     succeeds — so the assertion "the write was refused" goes red, and the
-#     file's owner is the container's own uid rather than the service's.
+#     file's owner is the container's own uid, ALIASED into the service's own
+#     subuid band rather than being the service's (which is the shape ticket
+#     277 opened ADR-0019 to stop).
 #   * **A container cannot write OUTSIDE its own tree.** The mechanism is the
-#     same `0700`, on the OTHER service's tree, plus the fact that a bind of
-#     another service's `0700` directory is refused at mount time
-#     (`Error: statfs <path>: permission denied`, measured) because the caller
-#     cannot even `statfs` it.
-#     **HOW IT FAILS WHEN THE PROTECTION IS GONE:** the other service's tree is
-#     `chmod 0777`ed, and the same bind-and-write now succeeds with the
+#     same `0700`, on the OTHER service's tree: the container cannot even
+#     `statfs` it, so the bind is refused at mount time (`Error: statfs
+#     <path>: permission denied`, measured), and the other service's own HOME
+#     is `0700` to it besides. The home is the target rather than the other
+#     service's volume because a volume is `0700` in its own right (spec 2.1)
+#     and so cannot tell the tree's mode from its own.
+#     **HOW IT FAILS WHEN THE PROTECTION IS GONE:** the other service's tree
+#     is `chmod 0777`ed, and the same bind-and-write now succeeds with the
 #     container's uid as the owner of the file it left behind.
 #   * **A container cannot write the host's own state.** `/var/lib/guarden/soil`
 #     is `0750 root:guarden` (spec 2.1) and `/etc/guarden` is `0751 root:guarden`
 #     with its files `0640 root:guarden`; a container's uid is in neither group
-#     and is not the owner, so a bind of either is refused and a write into it
-#     is denied. **HOW IT FAILS WHEN THE PROTECTION IS GONE:** the same
-#     bind-and-write is retried after the directory's mode is opened to the
-#     world, and the write then succeeds.
+#     and is not the owner, so a bind of either mounts an EMPTY directory and a
+#     write into it is denied. **HOW IT FAILS WHEN THE PROTECTION IS GONE:** the
+#     same bind-and-write is retried after the directory's mode is opened to
+#     the world, and the write then succeeds.
 #
 # **What this file does NOT claim, and says so in its own words:** the
 # container's uid is not the service's, but the container's uid 0 IS the
@@ -178,9 +182,11 @@ restore_modes() {
     chmod 0700 "/var/lib/guarden/services/$OTHER/state" 2>/dev/null || true
     chmod 0700 "/var/lib/guarden/services/$OTHER" 2>/dev/null || true
     chmod 0750 /var/lib/guarden/soil 2>/dev/null || true
+    chmod 0751 /etc/guarden 2>/dev/null || true
+    chown root:guarden /etc/guarden 2>/dev/null || true
     rm -f "$own_volume/stranger" "$other_volume/intruder" 2>/dev/null || true
     rm -f "$own_home/intruder" "$other_home/intruder" 2>/dev/null || true
-    rm -f /var/lib/guarden/soil/intruder 2>/dev/null || true
+    rm -f /var/lib/guarden/soil/intruder /etc/guarden/intruder 2>/dev/null || true
 }
 trap restore_modes EXIT
 
@@ -349,16 +355,31 @@ echo "MEASURE: the other tree's modes are restored"
 # `/var/lib/guarden/soil` is the host converger's own state (`0750 root:guarden`,
 # spec 2.1) and `/etc/guarden` is the configuration (`0751 root:guarden`, files
 # `0640 root:guarden`). A service uid is in neither group — `id shelf-staging`
-# names only its own group — so a container of that service cannot reach either.
-# The bind is not even refused here: it succeeds and mounts an EMPTY directory,
+# names only its own group — so a container of that service cannot reach
+# either.
+#
+# **The bind is not refused: it succeeds and mounts an EMPTY directory**,
 # because the container's uid cannot read the one behind it. **That is the
 # distinction this block exists for**: an empty mount and a refused mount are
-# different facts, and only the second is a refusal.
+# different facts, and only the second is a refusal — so the assertion is on
+# the write and on the message, and the count of what is visible behind the
+# mount is printed rather than asserted (it is zero, and it is zero for the
+# reason above, not for the reason a broken probe would be zero).
 podman_as "$OWNER" run --rm --user 10001 -v /var/lib/guarden/soil:/x \
     docker.io/library/alpine:3.20 sh -c "ls -A /x | wc -l; echo x > /x/intruder && echo WROTE"
 assert_exit 1
-assert_stderr_has "Permission denied"
+assert_stderr_has "ermission denied"
 echo "MEASURE: the soil state is unreachable from a container of a service that is in neither group"
+
+# **And the configuration tree, which is the same claim about a different
+# directory.** `/etc/guarden` is `0751 root:guarden`: the `x` bit lets a
+# container pass through it and the `r` bit does not let it list it, so the
+# bind mounts an empty directory and the write into it is denied.
+podman_as "$OWNER" run --rm --user 10001 -v /etc/guarden:/x \
+    docker.io/library/alpine:3.20 sh -c "ls -A /x | wc -l; echo x > /x/intruder && echo WROTE"
+assert_exit 1
+assert_stderr_has "ermission denied"
+echo "MEASURE: the configuration tree is unreachable from a container of a service that is in neither group"
 
 # --- the RED: the host's own state opened -----------------------------------
 #
@@ -377,6 +398,23 @@ chmod 0750 /var/lib/guarden/soil
 assert_mode /var/lib/guarden/soil 750
 assert_owner /var/lib/guarden/soil root:guarden
 echo "MEASURE: the soil state's mode is restored"
+
+# And the configuration tree's own RED: the same minimal removal, on the other
+# directory.
+chmod 0777 /etc/guarden
+podman_as "$OWNER" run --rm --user 10001 -v /etc/guarden:/x \
+    docker.io/library/alpine:3.20 sh -c "echo x > /x/intruder && echo WROTE"
+if [ "$GUARDEN_EXIT" = 0 ]; then
+    echo "MEASURE: RED — with the configuration tree at 0777 the very same bind-and-write SUCCEEDED"
+else
+    _fail "the RED demonstration did not go red: with the configuration tree at 0777 the same write was still refused"
+fi
+rm -f /etc/guarden/intruder
+chmod 0751 /etc/guarden
+chown root:guarden /etc/guarden
+assert_mode /etc/guarden 751
+assert_owner /etc/guarden root:guarden
+echo "MEASURE: the configuration tree's mode is restored"
 
 # --- and the control: a container of the service CAN write its own files -----
 #
