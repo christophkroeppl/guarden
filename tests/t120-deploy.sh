@@ -254,6 +254,34 @@ assert_stdout_has "on /run type tmpfs"
 # form: a raw one may contain a `/`, and a file named after one is a path that
 # does not exist.
 run furrow deploy qapp-preview/feature/login --from poke qapp@9f2c1ab
+# The assertion ticket 302 asks for, and the one that would have caught ticket
+# 295: before its fix every preview deploy died on this step with
+# "has no unit to start", because the mutator never passed the instance's ref to
+# `units.install`. That phrase in stderr is what fails here without the fix —
+# `assert_exit 1` alone could not have told the two apart, because the deploy
+# still exits 1.
+#
+# So the failure is pinned rather than accepted: the deploy must reach the start
+# step and fail on THIS blocker, measured verbatim in the run that set this
+# assertion — `warning: qapp-preview: missing required key: LOG_LEVEL, and the
+# track is not gated`, then `systemctl start of the unit web-feature\x2flogin
+# exited 1: Job for web-feature\x2flogin.service failed ...`. The key is
+# required by the schema (`@defaultRequired=infer`), nothing plants it (spec
+# 5.3 step 9 mints only `@sensitive` keys on an ungated track), and the start
+# that would run it cannot. A different failure that still exits 1 no longer
+# passes.
+#
+# **Coordination note (review Q4, for 313/314/315 on develop):** this block
+# asserts the current failure. The change that lands those tickets — minting or
+# gating LOG_LEVEL, starting `guarden-creds.path`, the env-file path — must
+# rework it in the same commit (restore `assert_exit 0`, or pin the new
+# blocker): a still-`assert_exit 1` turns this suite red for a good change, and
+# `assert_stderr_has "missing required key: LOG_LEVEL"` fails once the key is
+# planted. The start path itself is asserted green end to end in
+# `tests/t440-instance-start.sh`, where the credentials exist.
+assert_exit 1
+assert_stderr_lacks "has no unit to start"
+assert_stderr_has "missing required key: LOG_LEVEL"
 assert_file_has "$registry/qapp-preview.toml" '[instances."feature\\x2flogin"]'
 assert_file_has "$registry/qapp-preview.toml" 'ref = "feature/login"'
 assert_file_exists "/run/guarden/locks/deploy-qapp-preview-feature\\x2flogin.lock"

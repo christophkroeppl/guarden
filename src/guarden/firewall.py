@@ -470,9 +470,22 @@ def installed() -> str:
     return "\n".join(out)
 
 
+def unit_installed() -> bool:
+    """Whether this host has guarden's firewall to load a render into.
+
+    `load_set` reads this, and so does the mutator before it renders on a
+    service's behalf: `soil firewall --apply` is what installs the unit, and a
+    host that has never run it has no `50-services.conf` loaded — so its loopback
+    deny is not in force and no service uid is missing from a ruleset. Once the
+    unit is there, every render has to carry every uid in the registry (spec 7.6)
+    and a creation has to reach it (ticket 296).
+    """
+    return paths.PREFIX.joinpath(*UNIT_PATH).is_file()
+
+
 def load_set() -> None:
     """Put the rendered set in force, or say that it is not in force yet."""
-    if not paths.PREFIX.joinpath(*UNIT_PATH).is_file():
+    if not unit_installed():
         sys.stderr.write(
             errors.warn(
                 f"{SERVICES_CONF} is written and is what guarden intends, but {UNIT} is not "

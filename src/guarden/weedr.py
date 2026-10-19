@@ -405,18 +405,44 @@ def _edge_units(name: str) -> None:
 
 
 def _filter_set(name: str) -> None:
-    """Re-render the uid-matched filter set when the service gained a publication
-    or an edge.
+    """Re-render the uid-matched filter set for a service the registry holds.
 
-    A service with neither contributes no line to it, so a service that asks for
-    neither — a database, a queue — leaves the set alone and no firewall write
-    happens on its account. An edge counts even though the publication it dials
-    belongs to the provider: the consumer's **uid** joins that publication's
-    accept set, so a consumer with no publication of its own still changes the
-    rendered set and still has to cause it to be re-rendered.
+    The set is not only publications and edges: every registry uid also carries
+    the two owner-matched `127.0.0.53:53` accepts for the host's stub resolver,
+    above the loopback deny (spec 7.6) — without them that uid's first
+    `podman pull` meets the deny and no first deploy of a new workload can
+    complete. So a service with neither a publication nor an edge still
+    changes the set, and creation has to reach this render: a service created
+    from a template asks for nothing at all, and before ticket 296 its uid
+    had no accept.
+
+    An edge counts on its own account as well: the publication it dials belongs
+    to the provider, but the consumer's **uid** joins that publication's accept
+    set, so a consumer with no publication of its own still changes the set.
+
+    A service that brings only its uid renders whenever the host holds a
+    rendered set — the firewall installed **or** `50-services.conf` already
+    written by another verb — because that is when there is a set to be
+    missing from: the deny and every accept are files, and whatever exists is
+    what the first `soil firewall --apply` loads, so a uid absent from an
+    existing file meets the deny from the moment it does (spec 7.6).
     """
     record = registry.load(name)
-    if record is None or not (record.publication or record.edges):
+    if record is None:
+        return
+    if (
+        not (record.publication or record.edges)
+        and not firewall.unit_installed()
+        and not firewall.SERVICES_CONF.exists()
+    ):
+        # Nothing to be missing from: this host holds no rendered set — no
+        # file, so no `soil firewall --apply` that could later load one without
+        # this uid — and no ruleset loaded, so no deny is refusing this uid's
+        # resolver. The FILE counts as much as the unit because other verbs
+        # write it unconditionally (`weedr port open`, a granted rule): a set
+        # that exists while the unit does not is a set the first apply loads
+        # whole, and a uid absent from it meets the deny the moment it does
+        # (spec 7.6, review finding 4).
         return
     firewall.print_diff(firewall.install(config_mod.load()))
 
@@ -559,6 +585,10 @@ def _create_service(args) -> int:
     service.refuse_existing([entry.name for entry in resolved])
     for entry in resolved:
         outcome = service.create_service(entry, config, now, template)
+        # The same render `_create` reaches after `ingest` and `add`: the new
+        # uid's stub-resolver accepts have to be in force before anything of
+        # this service is started, and nothing else renders them (ticket 296).
+        _filter_set(entry.name)
         sys.stdout.write(f"created {entry.name} uid {outcome.uid} from {template}\n")
     return 0
 
@@ -609,6 +639,12 @@ def _remove(args) -> int:
     resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
     for line in service.remove(resolved, config, _now()):
         sys.stdout.write(f"{line}\n")
+    # Spec 5.3: a removal releases every grant the service held and the
+    # firewall is re-rendered (§7.7) — the record is out of the registry by
+    # now, so this render drops the removed uid's accepts and any forwarded
+    # port (and, for one instance, its released publication's accepts) instead
+    # of leaving them for a recycled uid to inherit (review finding 6).
+    firewall.print_diff(firewall.install(config))
     _sync_dashboard()
     return 0
 

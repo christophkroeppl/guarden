@@ -5,8 +5,9 @@ workload rather than about a repository, and four of those facts are the whole
 of this module.
 
 **A ref is raw on the way in and escaped on the way to disk.** `names.systemd_escape`
-turns `/` into `-` and a literal `-` into `\\x2d`, so `feature/x` and `feature-x`
-are `feature-x` and `feature\\x2dx` and never collide. No verb ever shows the
+maps every byte outside its safe set to a `\\xNN` escape — `/` becomes `\\x2f` and a
+literal `-` becomes `\\x2d` — so `feature/x` and `feature-x` are `feature\\x2fx` and
+`feature\\x2dx` and never collide. No verb ever shows the
 escaped form: every caller in this package passes the raw `resolved.ref` and gets
 the raw ref back in every line it prints.
 
@@ -41,6 +42,7 @@ from guarden import (
     registry,
     snapper,
     tool,
+    units,
     users,
     volumes,
 )
@@ -206,6 +208,13 @@ def forget(resolved, record) -> list[str]:
         if snapper.configuration_exists(config):
             tool.run(["snapper", "--config", config, "delete-config"])
     _drop(paths.instance_tree(resolved.name, key))
+    # The search-path entries the instance's units were given in the service's
+    # own quadlet directory go with them, derived from the instance's own unit
+    # directory (spec 5.2) — so this runs BEFORE that directory is dropped —
+    # and the instance's rendered slices go too: a routes.toml left behind
+    # would keep being rendered into the edge for a preview that is gone.
+    units.drop_instance_entries(resolved.name, key)
+    _drop(paths.SHARED / resolved.name / "instances" / key)
     _drop(paths.instance_home(resolved.name, key))
     del record.instances[key]
 

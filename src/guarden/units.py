@@ -139,9 +139,16 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
     written: list[str] = []
 
     for path in sorted(_files(out / "units")):
-        target = unit_dir(service, escaped_ref) / path.relative_to(out / "units")
-        conf.write_file(target, path.read_text(encoding="utf-8"), UNIT_MODE, owner)
+        relative = path.relative_to(out / "units")
+        body = path.read_text(encoding="utf-8")
+        target = unit_dir(service, escaped_ref) / relative
+        conf.write_file(target, body, UNIT_MODE, owner)
         written.append(str(target))
+        entry = search_entry(relative, escaped_ref)
+        if entry is not None:
+            mirror = unit_dir(service) / entry
+            conf.write_file(mirror, body, UNIT_MODE, owner)
+            written.append(str(mirror))
 
     for path in sorted(_files(out / "system")):
         target = paths.PREFIX / "etc" / "systemd" / "system" / path.name
@@ -151,10 +158,21 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
     shared = out / "shared"
     if shared.is_dir():
         gid = users.group_id(GUARDEN_GROUP)
-        target_dir = paths.SHARED / service
-        target_dir.mkdir(parents=True, exist_ok=True)
-        conf.set_owner(target_dir, (0, gid))
-        os.chmod(target_dir, SHARED_MODE)
+        # The slice target carries the instance: an instance's render installs
+        # under `shared/<service>/instances/<escaped-ref>/` and the service's
+        # own files stay the slot's (spec 2), so two instances of one service
+        # neither clobber each other's routes nor overwrite the slot's slice —
+        # which is ticket 295's folded-in wrong-path finding (264:87).
+        service_dir = paths.SHARED / service
+        directories = [service_dir]
+        if escaped_ref:
+            directories.append(service_dir / "instances")
+            directories.append(service_dir / "instances" / escaped_ref)
+        for directory in directories:
+            directory.mkdir(parents=True, exist_ok=True)
+            conf.set_owner(directory, (0, gid))
+            os.chmod(directory, SHARED_MODE)
+        target_dir = directories[-1]
         for path in sorted(_files(shared)):
             target = target_dir / path.relative_to(shared)
             conf.write_file(target, path.read_text(encoding="utf-8"), SHARED_FILE_MODE,
@@ -163,6 +181,86 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
 
     reload_system()
     return written
+
+
+QUADLET_KINDS = (".container.d", ".container")
+
+
+def entry_stem(unit: str, escaped_ref: str | None) -> str:
+    """The unit name podman's generator makes from an instance's unit — the
+    ONE statement of that rule.
+
+    An instance's units live in the instance's own quadlet directory (spec 2),
+    which is a subdirectory of the service's home — and the generator reads
+    `$XDG_CONFIG_HOME/containers/systemd` and the uid-scoped system paths and
+    nothing below them (podman-systemd.unit(5)), so a declaration only there is
+    a declaration systemd never makes: `systemctl start` answers
+    "Unit <name> not found" (measured, ticket 295). So the instance's units are
+    ALSO given an entry in the service's own quadlet directory, named after the
+    unit and the instance's escaped ref — the same escaped form that names the
+    instance's directory, its registry key and its deploy lock (spec 5.2) — and
+    every reader and writer of that name goes through THIS function: install
+    writes it, `weedr service start`/`stop` translate to it, and
+    `drop_instance_entries` derives what to delete from it. Three expressions
+    of one rule would be three things to keep agreeing, and the disagreement
+    would surface as a start that fails silently in one direction.
+
+    The unit itself when there is no instance: nothing is suffixed, and
+    `search_entry` (which decides whether there is a second file to write at
+    all) is the one caller that asks that separately.
+    """
+    if not escaped_ref:
+        return unit
+    return f"{unit}-{escaped_ref}"
+
+
+def search_entry(relative: Path, escaped_ref: str | None) -> Path | None:
+    """The same unit where podman's generator reads it, for an instance —
+    built on `entry_stem`, the rule's one home.
+
+    `None` for anything that is not a quadlet source: `guarden.env` is read by
+    the path the unit carries, not found by search, and a ref is always present
+    here or there is no instance at all.
+    """
+    if not escaped_ref:
+        return None
+    head = relative.parts[0]
+    for kind in QUADLET_KINDS:
+        if head.endswith(kind):
+            stem = entry_stem(head[: -len(kind)], escaped_ref)
+            return Path(f"{stem}{kind}", *relative.parts[1:])
+    return None
+
+
+def drop_instance_entries(service: str, escaped_ref: str) -> None:
+    """Every search-path entry one instance's units were given, gone with it.
+
+    Called from the one path that forgets an instance (spec 5.3), so a dropped
+    preview does not leave a declaration behind for a container whose volumes,
+    publications and registry entry are all gone — the generator would keep
+    making a unit out of it.
+
+    The entries are **derived from the instance's own quadlet directory**
+    through `entry_stem` rather than matched by suffix in the shared directory:
+    a suffix match is a second expression of the naming rule, and two
+    expressions are two things that can drift (review finding 5). The caller
+    therefore runs this while the instance's directory still exists.
+    """
+    own = unit_dir(service, escaped_ref)
+    directory = unit_dir(service)
+    if not own.is_dir() or not directory.is_dir():
+        return
+    for path in sorted(own.iterdir()):
+        for kind in QUADLET_KINDS:
+            if not path.name.endswith(kind):
+                continue
+            stem = entry_stem(path.name[: -len(kind)], escaped_ref)
+            target = directory / f"{stem}{kind}"
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+            break
 
 
 def _files(directory: Path) -> list[Path]:

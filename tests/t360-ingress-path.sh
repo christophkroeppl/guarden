@@ -12,13 +12,15 @@
 # tunnel ingress, parsed back as the YAML `cloudflared` will parse it — and
 # never a record of what a program said it was about to do.
 #
-# The ref-bearing route slice is written into `shared/<service>/routes.toml`,
-# the one directory `roots.slices()` reads, because that is the input
-# `roots.render_tunnel` codes against: spec 5.2 says the ref arrives raw and
-# the escaping is internal. Reaching an instance's own slice from there is the
-# ticket's follow-on — a walk and an ADR — and this suite's subject is how the
-# path renders, not the walk, so the input is stated directly rather than
-# depending on it.
+# The ref-bearing route slice is where the ticket 295 fix put it: an instance's
+# render installs at `shared/<service>/instances/<escaped-ref>/routes.toml` and
+# the service's own `shared/<service>/routes.toml` is the slot's file — both are
+# read by `roots.slices()` (spec 2 and §6.4). This suite seeds its previews'
+# inputs directly rather than deploying them, because its subject is how the
+# path renders from the ref, not how an instance gets created; two of the three
+# are seeded at the slot path and one at its instance's own, so the walk
+# `roots` takes to an instance's slice is exercised by the route count below —
+# that route is read from nowhere else.
 #
 # machine: fresh
 
@@ -96,11 +98,14 @@ assert_exit 0
 run weedr module add gate-traefik
 assert_exit 0
 
-# Three previews of one service in the slice `roots` reads, each ref chosen for
-# the hole it exercises: `.` is the bare metacharacter, `abc` is the prefix an
-# unanchored path would match `/abcd` with, `feature-x` carries `\x2d` through
-# `systemd_escape` and is the byte a double-quoted YAML scalar decodes back to
-# `-`. The routes are tunnel routes, which is what puts them on the tunnel.
+# Three previews of one service, each ref chosen for the hole it exercises: `.` is
+# the bare metacharacter, `abc` is the prefix an unanchored path would match
+# `/abcd` with, `feature-x` carries `\x2d` through `systemd_escape` and is the
+# byte a double-quoted YAML scalar decodes back to `-`. The routes are tunnel
+# routes, which is what puts them on the tunnel. Two are seeded in the service's
+# own slice and the third in its instance's own directory — the path an
+# instance's render installs to (spec 2) — so `roots sync` has to walk to it,
+# and the route count below is where a walk that does not read it shows.
 slice=$GUARDEN_PREFIX/var/lib/guarden/shared/routed-preview/routes.toml
 seed "$slice" \
     'service = "routed-preview"' \
@@ -127,7 +132,12 @@ seed "$slice" \
     'auth = false' \
     'target = "routed-preview:32002"' \
     'destination = "tunnel"' \
-    'ref = "abc"' \
+    'ref = "abc"'
+
+seed "$GUARDEN_PREFIX/var/lib/guarden/shared/routed-preview/instances/feature\\x2dx/routes.toml" \
+    'service = "routed-preview"' \
+    'project = "routed"' \
+    'track = "preview"' \
     '' \
     '[[routes]]' \
     'container = "web"' \

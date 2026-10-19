@@ -1,5 +1,13 @@
 # 295 — instances never receive their render: units.install is never given --instance
 
+**Status:** implemented on `fix/instance-start-path` and green in the VM
+(`ok t440-instance-start.sh` — two instances of one service, each with its own
+route slice, its own quadlet entries and both containers running; `ok
+t360-ingress-path.sh` — `roots` walks to an instance's slice; `ok
+t120-deploy.sh` — the preview deploy reaches the start step and fails only on
+the blocker it pins). The folded-in wrong-path finding (264:87) is fixed by
+`b91dfd3` (slice target per instance) with its spec delta in `f14bea1`.
+
 Blockers: none. Found 2026-10-19 by an adversarial review of develop 10f7457 (verified
 in-tree before filing: service.py:328).
 

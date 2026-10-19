@@ -1,5 +1,13 @@
 # 302 — no suite ever runs `weedr service start` on a created or instanced service
 
+**Status:** implemented on `fix/instance-start-path` and green in the VM:
+`ok t440-instance-start.sh` (`weedr service start <name>/<ref>` for two
+instances, both containers active), `ok t441-template-dns.sh` (a
+template-created service's start), `ok t120-deploy.sh` (the preview deploy's
+start step asserted — exit 1, 295's phrase absent, and the blocker pinned:
+`missing required key: LOG_LEVEL`, with the coordination note for 313/314/315
+in the suite comment).
+
 Blockers: none. Found 2026-10-19 by an adversarial review of develop 10f7457.
 
 ## What happens

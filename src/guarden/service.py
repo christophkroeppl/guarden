@@ -331,8 +331,14 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
         # tree is the invocation's own and is taken away with it, so a second
         # run staging from the same source has nothing to delete out from under
         # this render (ticket 301).
+        #
+        # `resolved.escaped_ref` is the other half of the same call: without it
+        # `loom` is never given `--instance`, so the render has no instance
+        # context and lands in the service's shared quadlet directory instead of
+        # the instance's own (spec 5.2) — `units_of(<name>, <ref>)` then finds
+        # nothing and `weedr service start <name>/<ref>` answers 1 (ticket 295).
         with _render_source(directory) as staged:
-            outcome.notes += units.install(staged, resolved.name)
+            outcome.notes += units.install(staged, resolved.name, resolved.escaped_ref)
     return outcome
 
 
@@ -939,8 +945,12 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
 
 
 def stop_units(name: str, escaped_ref: str | None = None) -> None:
+    # `units_of` reports what the instance's own directory holds — `web` — while
+    # the entry podman's generator turned into a unit is `web-<escaped-ref>`, so
+    # every start and stop translates the one into the other through
+    # `units.entry_stem`, the rule's one home, and nowhere else.
     for unit in units_of(name, escaped_ref):
-        _unit(name, "stop", unit)
+        _unit(name, "stop", units.entry_stem(unit, escaped_ref))
 
 
 def start_units(name: str, escaped_ref: str | None = None) -> None:
@@ -960,7 +970,7 @@ def start_units(name: str, escaped_ref: str | None = None) -> None:
     # _unit's own docstring names and says is the host, not the program.
     tool.call(["systemctl", "--user", "--machine", f"{name}@", "daemon-reload"])
     for unit in units_of(name, escaped_ref):
-        _unit(name, "start", unit)
+        _unit(name, "start", units.entry_stem(unit, escaped_ref))
 
 
 def _unit(name: str, verb: str, unit: str) -> None:

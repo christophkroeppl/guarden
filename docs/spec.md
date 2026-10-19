@@ -181,7 +181,13 @@ to it.
   Its `state/<vol>` has a snapper configuration named
   <service>-<escaped-ref>-<vol>; its `bulk/<vol>` none
   shared/<name>/  root-owned installed renderings: routes.toml, widgets/,
-  schema.toml. Read by roots and twig
+  schema.toml — the SERVICE's own render. Read by roots and twig
+  shared/<name>/instances/<escaped-ref>/  one INSTANCE's rendered slices, installed
+  instead of the service's own files whenever the
+  render carries an instance: two instances of one
+  service write here, so neither clobbers the
+  other's routes nor the slot's file. `roots` reads
+  both (§6.4); mode as the row above (§2.1)
   shared/dashboard/  the merged widget output, written by twig. This is the
   one place `twig` may write (§6.5)
   registry/<name>.toml  the service record
@@ -212,6 +218,15 @@ one**: they live in `/etc/guarden/services/<name>/units.d/` until the mutator in
 into `/etc/containers/systemd/users/<uid>/`. Generated units live in the home's quadlet
 directory and are rewritten on regeneration.
 
+**An instance's units are installed in two places.** The declaration itself lives in the
+instance's own quadlet directory (§5.2), and one entry named `<unit>-<escaped-ref>` — plus
+its drop-in directory — is written into the **service's own** quadlet directory, because
+podman's generator searches `$XDG_CONFIG_HOME/containers/systemd` and the uid-scoped system
+paths and nothing below them (podman-systemd.unit(5)): a declaration only in the instance's
+directory is a declaration systemd never makes, and `systemctl start` answers "Unit not
+found" for it. Start and stop translate the name between the two, and both entries go away
+with the instance they name.
+
 A service's home is **not** snapshotted and carries no snapper configuration. It holds the container image
 store, the per-user podman secret database, and build staging — none of it precious, and the
 secret database large and cleartext. Only declared state volumes are snapshotted.
@@ -237,7 +252,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/var/lib/guarden/render/` | `0770` | `guarden:guarden` | `soil install` |
 | `/var/lib/guarden/render/<service>[/<ref>]/` | `0700` | `guarden` | `loom` |
 | `/var/lib/guarden/shared/` | `0751` | `root:guarden` | `soil storage`. The dashboard reads `shared/dashboard` through a bind mount whose source resolves through this directory, and its user is in neither group — the same traverse grant as the row above, for the same measured reason |
-| `/var/lib/guarden/shared/<name>/` | `0750` | `root:guarden` | the mutator, installing the render |
+| `/var/lib/guarden/shared/<name>/` | `0750` | `root:guarden` | the mutator, installing the render — and at `instances/<escaped-ref>/` beneath it, an instance's own slices |
 | `/var/lib/guarden/shared/dashboard/` | `0755` | `guarden:guarden` | `weedr module add homepage`. **World-readable, and that is the point** — the dashboard is an ordinary service in neither group, and the design keeps two groups, so `2750 guarden:<reader-group>` is not available. The content is merged widget output: UI configuration, no secret, and it is the public face of the box anyway |
 | `/var/lib/guarden/edge/dynamic/` | `2750` | `guarden:edge` | `weedr module add gate-traefik` — **not** `roots`, which cannot set a group it is not in |
 | `/var/lib/guarden/stakes/` | `0770` | `root:guarden` | `soil storage` |
@@ -1114,8 +1129,21 @@ receives is `<name>:<publication>`.
 An instance is a preview of one service, named by the ref it tracks. **Every verb takes the
 ref raw**, and escaping is internal: `weedr service ingest myapp-preview/feature-login --from poke <project>@<sha>`
 and `furrow preview drop myapp-preview feature-login` both take `feature-login`, and the directory,
-the unit name and the registry key are all `systemd-escape` of it, so `feature/x` and
-`feature-x` can never collide.
+the registry key and the deploy lock are all `systemd-escape` of it, so `feature/x` and
+`feature-x` can never collide. A name `[/<ref>]` whose ref is **empty** is exit `2`: a
+trailing slash names no instance, and the empty string would otherwise be read as "no
+instance" and render into the slot.
+
+An instance's unit is `<unit>.container` inside the instance's own directory, and the name
+systemd knows it by is the entry `<unit>-<escaped-ref>` in the service's own quadlet
+directory (§2) — podman's generator reads only that directory — with start and stop
+translating between the two, so two instances of one service never answer to one unit name.
+**The container's own name is `<name>-<container>-<escaped-ref in hex>`**: podman accepts
+`[a-zA-Z0-9][a-zA-Z0-9_.-]*` in a container name and nothing else, where systemd's `\xNN`
+carries a backslash podman refuses and any dashed encoding is ambiguous at the component
+container/ref boundary, while hex of the instance key is injective and always valid.
+Container names, like publications (§7.4), are therefore distinct per instance, and two
+previews of one service run at once.
 
 Instances exist only for a track whose `kind` is `instance`; asking for one otherwise is exit
 `2`. They live under the service's home and share its user, its image store, its publication
@@ -1258,8 +1286,10 @@ granting this verb cannot tell that argument from any other.
 
 `weedr service remove <name>/<ref>` removes **one instance** of an instance track, and is the
 verb the preview cap's eviction and `furrow preview drop` both call. It stops that instance's
-units, deletes its directory, releases its `seed`, and releases its publication, and leaves the
-service and its siblings alone. Refused if the ref names an instance that does not exist.
+units, deletes its directory, releases its `seed`, and releases its publication — and the
+firewall is re-rendered (§7.7), so the released publication's accepts go with it — and it
+leaves the service and its siblings alone. Refused if the ref names an instance that does not
+exist.
 
 **`weedr service purge <name>` is the only path in guarden that destroys data, and it is a
 verb of its own rather than a flag.** It deletes the volumes instead of moving them, names every
@@ -1730,8 +1760,9 @@ changes the output on the next run.
 roots sync
 ```
 
-Reads the rendered route slice of every service from `/var/lib/guarden/shared/<name>/` and
-renders the edge's file-provider configuration into `/var/lib/guarden/edge/dynamic/`, which is
+Reads the rendered route slices of every service from `/var/lib/guarden/shared/<name>/` — the
+service's own `routes.toml` plus every instance's at `instances/<escaped-ref>/routes.toml`
+(§2) — and renders the edge's file-provider configuration into `/var/lib/guarden/edge/dynamic/`, which is
 `guarden:edge 2750`. The edge's user is in `edge` and is not in `guarden`. `roots` **must not**
 write outside that directory.
 
@@ -2290,6 +2321,9 @@ filter OUTPUT
   -A guarden-svc -d 127.0.0.53 -p udp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
   -A guarden-svc -d 127.0.0.53 -p tcp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
   ... one per service uid, the host's stub resolver and nothing else ...
+  -A guarden-svc -s 127.0.0.53 -p udp --sport 53 -j ACCEPT
+  -A guarden-svc -s 127.0.0.53 -p tcp --sport 53 -j ACCEPT
+  ... the reply to those queries, source-address matched with NO owner match ...
   -A guarden-svc -d 127.0.0.0/8 -j DROP
 
 **There is no interface match, and `-o lo` was removed from this example as
@@ -2326,6 +2360,24 @@ manifest, an `overrides.toml`, a module or a poke, and there is no key that adds
 drawn from guarden's knowledge of what the host runs rather than from configuration, so it is
 not the `[loopback] allow` table the firewall rules removed — see §7.7 for that distinction,
 which is the whole of what makes this rule safe to render unconditionally.
+
+**The reply carries no owner match, and that is not a widening.** The query leaves as the
+service uid and is owner-matched; the answer is generated by systemd-resolved itself, so no
+owner rule can fire on it — and because both endpoints are local the reply is locally
+generated and crosses `OUTPUT` before delivery, where the same deny would drop it. So two
+accepts with **no owner match**: source `127.0.0.53`, source port 53, both protocols, and
+nothing else. Only the resolver holds that address and port, a loopback source is not
+forgeable from a service uid, and neither accept names a uid, a port range, or a destination
+beyond the resolver's own — the same closed shape the uid-matched accepts have.
+
+**A creation reaches this render whenever the host holds a set at all.** The set is one
+file, so a service that brings only its uid still has to be in it before anything of it
+starts: `weedr service create` renders when `50-services.conf` exists even if the firewall
+unit is not installed, because other verbs (`weedr port open`, a granted rule) write that
+file unconditionally and the `soil firewall --apply` which first installs the unit loads
+whatever the file holds — a uid absent from it would meet the deny from the moment it does.
+While the host holds neither the file nor the unit there is no set to be missing from, and
+the first render reads the whole registry anyway.
 
 **This is what the deny must not be confused with.** The drop is on `-d 127.0.0.0/8`, and
 it does not touch outbound traffic: a package update, a git fetch and a call to the outside
