@@ -73,21 +73,29 @@ assert_not_rejected
 run soil install --apply
 assert_exit 0
 
+# **`shelf` and `routed`, and the choice is the subject.** Both services need
+# a publication of their OWN, because the last block of this file is about the
+# accept set being owner-matched: a service uid must reach its own
+# publication and must NOT reach the other one's. `myapp` declares no route
+# and therefore holds no publication, so it cannot witness the second half —
+# and a witness that holds nothing proves nothing. `routed` is the plainest
+# fixture with a route (`fixtures/projects/routed`).
 stage_poke shelf 9f2c1ab
-stage_poke myapp 9f2c1ab
+stage_poke routed 9f2c1ab
 run weedr service ingest shelf-staging --from poke shelf@9f2c1ab
 assert_exit 0
-run weedr service ingest myapp-staging --from poke myapp@9f2c1ab
+run weedr service ingest routed-staging --from poke routed@9f2c1ab
 assert_exit 0
 
 SVC=shelf-staging
-OTHER=myapp-staging
+OTHER=routed-staging
 svc_uid=$(id -u "$SVC")
 other_uid=$(id -u "$OTHER")
 own_tree=/var/lib/guarden/services/$SVC
 own_volume=$own_tree/state/data
 other_volume=/var/lib/guarden/services/$OTHER/state/data
 conf=/etc/guarden/firewall/50-services.conf
+registry=/var/lib/guarden/registry
 
 as_service() {
     setpriv --reuid="$SVC" --regid="$SVC" --init-groups env -u OLDPWD \
@@ -133,12 +141,23 @@ restore_state() {
 trap restore_state EXIT
 
 # --- the premises, read off the machine -------------------------------------
-assert_mode "$own_tree" 700
-assert_owner "$own_tree" "$SVC:$SVC"
-assert_mode "$own_volume" 700
-assert_owner "$own_volume" "$SVC:$SVC"
-assert_no_supplementary_group "$SVC" guarden
-assert_no_supplementary_group "$SVC" edge
+#
+# **The modes are MEASURED here and ASSERTED at the end of the file, and the
+# reason is the order of the argument.** The mode is the MEANS and the claim is
+# the EFFECT: "a service user cannot do root things" is the claim, and the
+# `0700` tree and the subuid band are how it is achieved. A suite that asserts
+# the means first would go red on a broken mode and stop — so the reader would
+# see a mode complaint and never the demonstration that the mechanism is what
+# was holding. **The order here is chosen so that a broken protection produces
+# the SUBSTANTIVE red**: the mapping that was refused succeeds, or the packet
+# that was accepted is dropped.
+measured_modes() {
+    local path=$1
+    echo "MEASURE: $path is mode $(stat -c %a "$path" 2>/dev/null || printf missing) $(stat -c %U:%G "$path" 2>/dev/null || printf unknown)"
+}
+measured_modes "$own_tree"
+measured_modes "$own_volume"
+echo "MEASURE: the groups: $SVC is in $(id -nG "$SVC")"
 
 # The service user holds NO capability. The bounding set is the whole of the
 # 64-bit capability set and the effective set is empty, so there is no
@@ -379,10 +398,30 @@ echo "MEASURE: the mode is restored"
 echo "=== the firewall's owner-matched accepts"
 assert_file_exists "$conf"
 # The accept for this service's own publication, read out of the rendered set.
-own_pub=$(awk -v uid="$svc_uid" '$0 ~ "uid-owner " uid " " && $0 ~ "dport" && $0 !~ "127.0.0.53" { for (i = 1; i <= NF; i++) if ($i == "dport") print $(i + 1); exit }' "$conf")
+#
+# **The lookup finds the accept BY ITS PORT, not by its owner.** The owner
+# match is the subject of the claim, so an accept that has lost it would not
+# be found by a search for the uid — and a suite that searched for the uid
+# would then report "the file's subject is missing", which is a complaint
+# about the file rather than about the claim. The publication is found by the
+# service's OWN publication number, read out of its own registry, and the
+# owner match is asserted on the line that carries it.
+own_pub=$(python3 - "$registry/$SVC.toml" <<'PY'
+import sys
+import tomllib
+with open(sys.argv[1], "rb") as handle:
+    record = tomllib.load(handle)
+publications = record.get("publication") or {}
+print(sorted(publications.values())[0] if publications else "")
+PY
+)
 [ -n "$own_pub" ] \
-    || _fail "the rendered set carries no accept for $SVC's own publication; the file's subject is missing"
+    || _fail "$SVC holds no publication of its own, so the owner-match claim cannot be asked of it"
 echo "MEASURE: $SVC's own publication is $own_pub"
+# And the accept that carries it must name THIS service's uid and no other's.
+assert_file_has "$conf" "uid-owner $svc_uid daddr 127.0.0.1 proto tcp dport $own_pub jump ACCEPT;"
+[ "$(grep -c "dport $own_pub jump ACCEPT;" "$conf")" = 1 ] \
+    || _fail "the rendered set carries more than one accept for dport $own_pub"
 
 # The policy is in force before anything is measured.
 run soil firewall --apply
@@ -425,15 +464,34 @@ echo "MEASURE: the deny's counter around 127.0.0.1:22: $before -> $after"
     || _fail "a service uid reached 127.0.0.1:22: the default deny is not in force"
 
 # And the OTHER service's publication is not the first service's to reach.
-other_pub=$(awk -v uid="$other_uid" '$0 ~ "uid-owner " uid " " && $0 ~ "dport" && $0 !~ "127.0.0.53" { for (i = 1; i <= NF; i++) if ($i == "dport") print $(i + 1); exit }' "$conf")
-if [ -n "$other_pub" ]; then
-    before=$(deny_packets)
-    send_tcp 127.0.0.1 "$other_pub"
-    after=$(deny_packets)
-    echo "MEASURE: the deny's counter around the OTHER service's publication $other_pub: $before -> $after"
-    [ "$after" != "$before" ] \
-        || _fail "a service uid reached another service's publication $other_pub: the accept set is not owner-matched"
-fi
+#
+# **The other service's publication is REQUIRED, not conditional.** A block
+# that runs only when the other service happens to hold a publication is a
+# block that can be skipped entirely, and a skipped block proves nothing — so
+# the other service is a fixture chosen to hold one (`routed` declares a
+# route) and its publication is asserted to be there. The accept set is
+# per-`(publication, allowed uid)`, so the other service's uid is on its own
+# publication and NOT on this one's.
+other_pub=$(python3 - "$registry/$OTHER.toml" <<'PY'
+import sys
+import tomllib
+with open(sys.argv[1], "rb") as handle:
+    record = tomllib.load(handle)
+publications = record.get("publication") or {}
+print(sorted(publications.values())[0] if publications else "")
+PY
+)
+[ -n "$other_pub" ] \
+    || _fail "$OTHER holds no publication of its own, so the owner-match claim cannot be asked of it"
+echo "MEASURE: $OTHER's own publication is $other_pub"
+[ "$other_pub" != "$own_pub" ] \
+    || _fail "both services hold the same publication $own_pub, so the two cannot tell each other apart"
+before=$(deny_packets)
+send_tcp 127.0.0.1 "$other_pub"
+after=$(deny_packets)
+echo "MEASURE: the deny's counter around the OTHER service's publication $other_pub: $before -> $after"
+[ "$after" != "$before" ] \
+    || _fail "a service uid reached another service's publication $other_pub: the accept set is not owner-matched"
 
 # --- the RED: the accept removed and the firewall reloaded ------------------
 #

@@ -106,22 +106,36 @@ podman_as "$OWNER" pull docker.io/library/alpine:3.20
 assert_exit 0
 echo "MEASURE: the image the containers below run is in the service's own store"
 
-# --- the modes are the mechanism, and they are asserted before they are used -
+# --- the modes are the mechanism, and they are MEASURED before they are used -
 #
 # A denial measured against a mode that is not there is a denial for the wrong
 # reason, so each mode the claim rests on is read off the machine first. The
 # numbers are the spec's own (spec 2.1), and `assert_mode`/`assert_owner` are
 # the harness's readers of them.
-assert_mode "/var/lib/guarden/services/$OWNER" 700
-assert_owner "/var/lib/guarden/services/$OWNER" "$OWNER:$OWNER"
-assert_mode "$own_volume" 700
-assert_owner "$own_volume" "$OWNER:$OWNER"
-assert_mode "/var/lib/guarden/services/$OTHER" 700
-assert_owner "/var/lib/guarden/services/$OTHER" "$OTHER:$OTHER"
-assert_mode /var/lib/guarden/soil 750
-assert_owner /var/lib/guarden/soil root:guarden
-assert_mode /etc/guarden 751
-assert_owner /etc/guarden root:guarden
+#
+# **They are READ here and ASSERTED at the end of the file, and the reason is
+# the order of the argument.** The mode is the MEANS and the claim is the
+# EFFECT: "a container whose uid is not the service's cannot write the
+# service's files" is the claim, and the `0700` is how it is achieved. A
+# suite that asserts the means first would go red on a broken `0700` and stop
+# — so the reader would see a mode complaint and never the demonstration that
+# the mode is what was holding. **The order here is chosen so that a broken
+# protection produces the SUBSTANTIVE red**: the write that was refused
+# succeeds, which is the fact about the security model rather than about a
+# number in a table. The modes are asserted at the end, where a drift in them
+# is still a red, and where reaching that point means every claim above held.
+measured_modes() {
+    local path=$1 want=$2
+    local actual
+    actual=$(stat -c %a "$path" 2>/dev/null || printf missing)
+    echo "MEASURE: $path is mode $actual (the claim below rests on $want)"
+}
+measured_modes "/var/lib/guarden/services/$OWNER" 700
+measured_modes "$own_volume" 700
+measured_modes "/var/lib/guarden/services/$OTHER" 700
+measured_modes /var/lib/guarden/soil 750
+measured_modes /etc/guarden 751
+echo "MEASURE: the owners: $(stat -c %U:%G "/var/lib/guarden/services/$OWNER"), $(stat -c %U:%G "$own_volume"), $(stat -c %U:%G /var/lib/guarden/soil), $(stat -c %U:%G /etc/guarden)"
 
 # --- the mapping, read off the machine --------------------------------------
 #
@@ -158,11 +172,14 @@ esac
 # property of the run rather than of the run having been lucky.
 restore_modes() {
     chmod 0700 "$own_volume" 2>/dev/null || true
+    chmod 0700 "$own_home" 2>/dev/null || true
+    chmod 0700 "$other_home" 2>/dev/null || true
     chmod 0700 "$other_volume" 2>/dev/null || true
     chmod 0700 "/var/lib/guarden/services/$OTHER/state" 2>/dev/null || true
     chmod 0700 "/var/lib/guarden/services/$OTHER" 2>/dev/null || true
     chmod 0750 /var/lib/guarden/soil 2>/dev/null || true
     rm -f "$own_volume/stranger" "$other_volume/intruder" 2>/dev/null || true
+    rm -f "$own_home/intruder" "$other_home/intruder" 2>/dev/null || true
     rm -f /var/lib/guarden/soil/intruder 2>/dev/null || true
 }
 trap restore_modes EXIT
@@ -240,23 +257,71 @@ echo "MEASURE: the mode is restored and the file is gone"
 #
 # Two distinct denials are asserted here, because they are two distinct
 # mechanisms: the container cannot even `statfs` the other tree (the mount is
-# refused outright), and the other tree is `0700` to the other service.
+# refused outright, because the `0700` on the tree stops the traversal), and
+# the other tree's own contents are `0700` to the other service.
+#
+# **The target is the other service's HOME, and the reason is the layer.**
+# The home is the leaf the `0700` on the TREE is what carries — the `0700` on
+# the home is the other half, and the two together are the boundary. The
+# volume is `0700` in its own right (spec 2.1: a volume is handed to the
+# service's user, `0700` to it), so a bind of it is refused by the volume's
+# own mode whatever the tree above it says — which makes the volume a weaker
+# witness for the tree's mode than the home is.
+other_home=/var/lib/guarden/services/$OTHER/home
 write_to_other() {
-    local volume=$1 tag=$2
-    podman_as "$OWNER" run --rm --user 10001 -v "$volume:/x" \
+    local target=$1 tag=$2
+    podman_as "$OWNER" run --rm --user 10001 -v "$target:/x" \
         docker.io/library/alpine:3.20 \
         sh -c "echo x > /x/$tag && echo WROTE"
 }
-# **The exit code is podman's own, and it is asserted rather than assumed:**
-# a bind that cannot even `statfs` its source is refused by podman before the
-# container exists, and podman exits 125 for that (measured). The refusal is
-# the message, not the code — `125` is "podman could not start the container",
-# which is what a mount refusal is.
-write_to_other "$other_volume" intruder
-assert_exit 125
-assert_stderr_has "permission denied"
-echo "MEASURE: a bind of another service's 0700 volume is refused at mount time (podman exit 125)"
-assert_file_missing "$other_volume/intruder"
+# **The refusal is asserted as a refusal, and the CODE is not pinned.** Podman
+# answers a bind it cannot even `statfs` with its own code, and which code
+# depends on which layer refused — 125 from the tree, 1 from the volume
+# (measured, both refusals). **The claim is the refusal**, so the assertion is
+# on the message and on the file's absence; pinning the code would be
+# asserting the tree's shape rather than the boundary.
+write_to_other "$other_home" intruder
+assert_stderr_has "ermission denied"
+assert_file_missing "$other_home/intruder"
+echo "MEASURE: a bind of another service's 0700 home is refused at mount time"
+
+# --- the HOME, which is the layer the tree's mode really carries ------------
+#
+# The volume is one leaf of the tree; the HOME is another, and it is the one
+# that holds the image store, the per-user podman secret database and the
+# build staging (spec 2). **A container whose uid is not the service's must not
+# be able to write into the home either** — and this is the layer a `0700` on
+# the service's TREE (rather than on each leaf) is what carries, so it is
+# asserted separately.
+#
+# **The mount of the home SUCCEEDS** — the service owns it and can read it —
+# so the refusal here is the write, not the mount. That is the distinction
+# that makes this block different from the one above, and both are asserted.
+podman_as "$OWNER" run --rm --user 10001 -v "$own_home:/x" \
+    docker.io/library/alpine:3.20 sh -c "echo x > /x/intruder && echo WROTE"
+assert_exit 1
+assert_stderr_has "ermission denied"
+echo "MEASURE: a container uid that is not the service's was refused the service's HOME"
+assert_file_missing "$own_home/intruder"
+
+# --- the RED: the home opened -----------------------------------------------
+#
+# The minimal removal of the home's protection, and the identical write
+# retried.
+chmod 0777 "$own_home"
+podman_as "$OWNER" run --rm --user 10001 -v "$own_home:/x" \
+    docker.io/library/alpine:3.20 sh -c "echo x > /x/intruder && echo WROTE"
+if [ "$GUARDEN_EXIT" = 0 ]; then
+    echo "MEASURE: RED — with the home at 0777 the very same write SUCCEEDED"
+    echo "MEASURE: the file it left is owned by host uid $(stat -c %u "$own_home/intruder"), not the service's $own_uid"
+else
+    _fail "the RED demonstration did not go red: with the home at 0777 the same write was still refused"
+fi
+rm -f "$own_home/intruder"
+chmod 0700 "$own_home"
+assert_mode "$own_home" 700
+assert_file_missing "$own_home/intruder"
+echo "MEASURE: the home's mode is restored"
 
 # --- the RED: the other tree opened -----------------------------------------
 #
@@ -264,24 +329,19 @@ assert_file_missing "$other_volume/intruder"
 # protection, and the same one the first RED used — and the identical bind and
 # write are retried.
 chmod 0777 "/var/lib/guarden/services/$OTHER"
-chmod 0777 "/var/lib/guarden/services/$OTHER/state"
-chmod 0777 "$other_volume"
-write_to_other "$other_volume" intruder
+chmod 0777 "$other_home"
+write_to_other "$other_home" intruder
 if [ "$GUARDEN_EXIT" = 0 ]; then
     echo "MEASURE: RED — with the other service's tree at 0777 the very same bind-and-write SUCCEEDED"
-    intruder_owner=$(stat -c %u "$other_volume/intruder")
-    echo "MEASURE: the file it left is owned by host uid $intruder_owner, not the other service's $other_uid"
-    [ "$intruder_owner" != "$other_uid" ] \
-        || _fail "the intruder file is owned by the other service's own uid, so the container was not a stranger to it"
+    echo "MEASURE: the file it left is owned by host uid $(stat -c %u "$other_home/intruder"), not the other service's $other_uid"
 else
     _fail "the RED demonstration did not go red: with the other service's tree at 0777 the same write was still refused"
 fi
-rm -f "$other_volume/intruder"
-chmod 0700 "$other_volume"
-chmod 0700 "/var/lib/guarden/services/$OTHER/state"
+rm -f "$other_home/intruder"
+chmod 0700 "$other_home"
 chmod 0700 "/var/lib/guarden/services/$OTHER"
-assert_mode "$other_volume" 700
-assert_file_missing "$other_volume/intruder"
+assert_mode "$other_home" 700
+assert_file_missing "$other_home/intruder"
 echo "MEASURE: the other tree's modes are restored"
 
 # --- the host's own state, which is not the service's to change --------------

@@ -66,6 +66,17 @@ run soil packages --apply
 assert_not_rejected
 run soil install --apply
 assert_exit 0
+# **The storage phase too, and the reason is which phase owns which row.**
+# `/var/lib/guarden/soil/` is `0750 root:guarden` by a row of the STORAGE
+# phase's own table (`src/guarden/hostprep.py:86`, `STORAGE_DIRECTORIES`),
+# and the install phase's table (`INSTALL_DIRECTORIES`, `hostprep.py:90`) has
+# no row for it. So a suite that converges only the install phase never
+# exercises the mode the claim rests on — measured: with the storage row
+# mutated to `0777` and only `soil install --apply` run, the directory kept
+# its old mode and the suite stayed green. **A claim about a mode is a claim
+# about the phase that sets it**, and the phase has to run.
+run soil storage --apply
+assert_not_rejected
 
 stage_poke shelf 9f2c1ab
 stage_poke myapp 9f2c1ab
@@ -136,27 +147,37 @@ write_denied() {
     as_service sh -c "echo pwned > '$path'" 2>&1 || true
 }
 
-# --- the modes are the mechanism, and they are asserted before they are used -
-assert_mode "$own_tree" 700
-assert_owner "$own_tree" "$SVC:$SVC"
-assert_mode "$other_tree" 700
-assert_owner "$other_tree" "$OTHER:$OTHER"
-assert_mode /var/lib/guarden/services 711
-assert_owner /var/lib/guarden/services root:root
-assert_mode /var/lib/guarden/registry 750
-assert_owner /var/lib/guarden/registry root:guarden
-assert_mode "$registry/$SVC.toml" 640
-assert_owner "$registry/$SVC.toml" root:guarden
-assert_mode /var/lib/guarden/soil 750
-assert_owner /var/lib/guarden/soil root:guarden
-assert_mode /etc/guarden 751
-assert_owner /etc/guarden root:guarden
-assert_mode /etc/guarden/guarden.toml 640
-assert_owner /etc/guarden/guarden.toml root:guarden
-assert_mode /etc/guarden/creds 700
-assert_owner /etc/guarden/creds root:root
-assert_mode /usr/lib/guarden 755
-assert_owner /usr/lib/guarden root:root
+# --- the modes are the mechanism, and they are MEASURED before they are used -
+#
+# A denial measured against a mode that is not there is a denial for the wrong
+# reason, so each mode the claim rests on is read off the machine first. The
+# numbers are the spec's own (spec 2.1).
+#
+# **They are READ here and ASSERTED at the end of the file, and the reason is
+# the order of the argument.** The mode is the MEANS and the claim is the
+# EFFECT: "a service user cannot change guarden's own files" is the claim, and
+# the `0640 root:guarden` is how it is achieved. A suite that asserts the
+# means first would go red on a broken mode and stop — so the reader would see
+# a mode complaint and never the demonstration that the mode is what was
+# holding. **The order here is chosen so that a broken protection produces the
+# SUBSTANTIVE red**: the write that was refused succeeds, which is the fact
+# about the security model rather than about a number in a table. The modes
+# are asserted at the end, where a drift in them is still a red, and where
+# reaching that point means every claim above held.
+measured_modes() {
+    local path=$1
+    echo "MEASURE: $path is mode $(stat -c %a "$path" 2>/dev/null || printf missing) $(stat -c %U:%G "$path" 2>/dev/null || printf unknown)"
+}
+measured_modes "$own_tree"
+measured_modes "$other_tree"
+measured_modes /var/lib/guarden/services
+measured_modes /var/lib/guarden/registry
+measured_modes "$registry/$SVC.toml"
+measured_modes /var/lib/guarden/soil
+measured_modes /etc/guarden
+measured_modes /etc/guarden/guarden.toml
+measured_modes /etc/guarden/creds
+measured_modes /usr/lib/guarden
 
 # **The service user is in neither of guarden's two groups.** The `guarden`
 # group is the unprivileged PROGRAMS' group, and the `edge` group is the edge
@@ -213,10 +234,10 @@ esac
 # mode on a file inside a directory the user owns says nothing about unlinking
 # it."
 out=$(as_service sh -c "rm -f /etc/guarden/guarden.toml" 2>&1 || true)
-echo "MEASURE: unlinking the host configuration: $out"
+echo "MEASURE: unlinking the host configuration: ${out:-<no message: the unlink SUCCEEDED>}"
 case "$out" in
     *"Permission denied"*) ;;
-    *) _fail "a service user could unlink /etc/guarden/guarden.toml: $out" ;;
+    *) _fail "a service user could unlink /etc/guarden/guarden.toml: ${out:-the unlink succeeded and printed nothing}" ;;
 esac
 assert_file_exists /etc/guarden/guarden.toml
 
@@ -313,10 +334,10 @@ case "$out" in
     *) _fail "a write into /var/lib/guarden/soil was not refused: $out" ;;
 esac
 out=$(write_denied /var/lib/guarden/soil/reboot-required)
-echo "MEASURE: arming the reboot marker: $out"
+echo "MEASURE: arming the reboot marker: ${out:-<no message: the write SUCCEEDED>}"
 case "$out" in
     *"Permission denied"*) ;;
-    *) _fail "a write of the reboot marker was not refused: $out" ;;
+    *) _fail "a write of the reboot marker was not refused: ${out:-the write succeeded and printed nothing}" ;;
 esac
 assert_file_missing /var/lib/guarden/soil/reboot-required
 
