@@ -72,6 +72,10 @@ run weedr service ingest publicapp-staging --from poke publicapp@9f2c1ab
 assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "exposure"
+# The refusal is "by name" — the message says where the decision IS recorded,
+# not merely that a key was unknown. The generic closed-key-set line names the
+# key too, so only the verb's own name tells the two messages apart.
+assert_stderr_has "weedr expose set"
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/registry/publicapp-staging.toml"
 assert_no_passwd publicapp-staging
 
@@ -87,6 +91,10 @@ run weedr service ingest publicapp2-staging --from poke publicapp2@9f2c1ab
 assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "exposure"
+# Inside a block the key is refused with the SAME message as at the top level:
+# the block's generic unknown-key line would satisfy "exposure" alone, and
+# ticket 294 asks for the refusal-by-name in both places.
+assert_stderr_has "weedr expose set"
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/registry/publicapp2-staging.toml"
 
 # Staging can never go public: the refusal is exit 2, it names the track, and
@@ -167,12 +175,21 @@ assert_file_lacks "$reg" "exposure"
     || _fail "the staging service's destination moved without an act"
 
 # `list` reports the record and the default state, per service, so an operator
-# can see which services are held off their default.
+# can see which services are held off their default. The row is asserted in
+# full — a name on one line and the word `public` on another would pass a
+# substring pair even if the two were different services' rows.
 run weedr expose list
 assert_exit 0
-assert_stdout_has "routed-production"
+assert_stdout_has "routed-production default"
 run weedr expose set routed-production public
 assert_exit 0
 run weedr expose list
 assert_exit 0
-assert_stdout_has "public"
+assert_stdout_has "routed-production public edge"
+# `--json` is the same answer in the one-line form spec 1.2 requires.
+run weedr expose list --json
+assert_exit 0
+assert_stdout_lines 1
+assert_stdout_has '"service": "routed-production"'
+assert_stdout_has '"exposure": "public"'
+assert_stdout_has '"destination": "edge"'
