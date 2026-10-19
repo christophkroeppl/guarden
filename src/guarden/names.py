@@ -104,6 +104,18 @@ def resolve(name_argument: str, tracks: list[Track], allow_default: bool) -> Res
         )
     known = ", ".join(track.name for track in tracks)
     service, ref = split(name_argument)
+    if ref == "":
+        # `<name>/` names no instance: the empty string is falsy everywhere the
+        # code asks whether there is an instance (spec 5.2), so without this
+        # refusal a trailing slash rendered into the SHARED slot and answered 0
+        # — review finding 7. A trailing slash is not a name; the ref after the
+        # first `/` either exists or the argument does not say what it means.
+        raise errors.GuardenError(
+            f"{name_argument!r} names an empty ref: in <name>[/<ref>] the ref is "
+            f"the part after the first '/', and an empty one names no instance — "
+            f"give the ref, or no '/' at all",
+            errors.REJECTED_INPUT,
+        )
     validate(service)
 
     segment = environment_segment(service)

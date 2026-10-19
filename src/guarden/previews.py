@@ -5,8 +5,9 @@ workload rather than about a repository, and four of those facts are the whole
 of this module.
 
 **A ref is raw on the way in and escaped on the way to disk.** `names.systemd_escape`
-turns `/` into `-` and a literal `-` into `\\x2d`, so `feature/x` and `feature-x`
-are `feature-x` and `feature\\x2dx` and never collide. No verb ever shows the
+maps every byte outside its safe set to a `\\xNN` escape — `/` becomes `\\x2f` and a
+literal `-` becomes `\\x2d` — so `feature/x` and `feature-x` are `feature\\x2fx` and
+`feature\\x2dx` and never collide. No verb ever shows the
 escaped form: every caller in this package passes the raw `resolved.ref` and gets
 the raw ref back in every line it prints.
 
