@@ -115,18 +115,25 @@ assert_exit 0
 rendered=/var/lib/guarden/edge/dynamic/protected-staging.yml
 assert_file_exists "$rendered"
 assert_file_has "$rendered" "guarden-forward-auth"
-# The middleware is attached to the protected router and **not** to the open
-# one. Counted in the file, not on the word anywhere: a router carrying it twice
-# and an open router carrying it once would both satisfy "the file has one".
+# The **forward-auth** middleware is attached to the protected router and
+# **not** to the open one. Counted in the file, not on the word anywhere: a
+# router carrying it twice and an open router carrying it once would both
+# satisfy "the file has one".
 [ "$(grep -c -- '- guarden-forward-auth' "$rendered" || true)" = 1 ] \
     || _fail "$rendered does not carry the middleware exactly once"
 # Which router carries it is a structural question, so it is asked structurally:
 # the open router's block is read out of the parsed document, where a substring
 # can pass on the wrong rule or fail on a correct one.
+#
+# The second gate in those blocks is ticket 292's default basic auth, which is
+# a *service's* property rather than a route's: every route of a flagged
+# service carries it, ahead of forward-auth where the route asked for that
+# too, and a route's own `auth:` key reaches only the forward-auth half — a
+# manifest cannot switch the default off.
 run python3 -c "import sys,yaml; r=yaml.safe_load(open(sys.argv[1]))['http']['routers']; \
 p=r['protected-staging-web']; o=r['protected-staging-open']; \
-assert p.get('middlewares')==['guarden-forward-auth'], p; \
-assert 'middlewares' not in o, o" "$rendered"
+assert p.get('middlewares')==['protected-staging-basicauth','guarden-forward-auth'], p; \
+assert o.get('middlewares')==['protected-staging-basicauth'], o" "$rendered"
 assert_exit 0
 # The definition is aimed at the provider's own name and publication, so the
 # edge resolves it through its AddHost entry rather than dialling the host's own
@@ -160,10 +167,13 @@ assert_file_missing "$auth_file"
 # Read the warnings NOW. `run diff` below overwrites both capture files, so a
 # check placed after it would read diff's empty stderr and see nothing.
 cp "$GUARDEN_STDERR" "$GUARDEN_FIXTURES/roots-warning.txt"
-# The whole of the difference, and nothing else: exactly two lines gone, both of
-# them the protected router's middleware, and not one line added. The line
-# numbers are not asserted — they move with the template's own comment block —
-# but the CONTENT of the diff is, and it is small enough to state exactly.
+# The whole of the difference, and nothing else: exactly one line gone — the
+# protected router's forward-auth entry — and not one line added. The
+# `middlewares:` key itself stays because ticket 292's default gate is still
+# under it, so what the module's removal takes away is its own middleware and
+# not the block. The line numbers are not asserted — they move with the
+# template's own comment block — but the CONTENT of the diff is, and it is
+# small enough to state exactly.
 run diff "$GUARDEN_FIXTURES/with-auth.yml" "$rendered"
 assert_exit 1
 [ "$(grep -c '^> ' "$GUARDEN_STDOUT" || true)" = 0 ] \
@@ -172,8 +182,7 @@ $GUARDEN_STDOUT"
 [ "$(grep -vE '^(<|[0-9])' "$GUARDEN_STDOUT" || true)" = "" ] \
     || _fail "the diff carries output that is neither a deletion nor a line number:
 $GUARDEN_STDOUT"
-[ "$(grep '^< ' "$GUARDEN_STDOUT" || true)" = "<       middlewares:
-<         - guarden-forward-auth" ] \
+[ "$(grep '^< ' "$GUARDEN_STDOUT" || true)" = "<         - guarden-forward-auth" ] \
     || _fail "the two renders differ by more than the protected router's middleware:
 $GUARDEN_STDOUT"
 # ... and one warning per route that asked for it, on this sync. TWO, not one:
@@ -294,8 +303,14 @@ own=/var/lib/guarden/edge/dynamic/authelia-production.yml
 assert_file_exists "$own"
 [ "$(grep -c -- '- guarden-forward-auth' "$own" || true)" = 0 ] \
     || _fail "the auth service's own route carries the middleware, and the operator cannot sign in"
+# The default basic-auth gate (ticket 292) is on this service like any other
+# created while the policy is in force — what must never be here is the
+# forward-auth rule, because a sign-in page behind its own redirect is the
+# lockout this claim exists to keep out.
 run python3 -c "import sys,yaml; r=yaml.safe_load(open(sys.argv[1]))['http']['routers']; \
-assert 'middlewares' not in r['authelia-production-authelia'], r" "$own"
+m=r['authelia-production-authelia'].get('middlewares', []); \
+assert 'guarden-forward-auth' not in m, r; \
+assert m==['authelia-production-basicauth'], r" "$own"
 assert_exit 0
 # The middleware is still defined and still aimed at the provider: the rule is
 # absent from one router, not from the edge.
@@ -333,7 +348,8 @@ assert_stderr_empty
 # it. `python3 -c` over the rendered file reads the program's output; it imports
 # no guarden module and executes no repo code.
 run python3 -c "import sys,yaml; d=yaml.safe_load(open(sys.argv[1])); \
-r=d['http']['routers']; assert r['protected-staging-web']['middlewares']==['guarden-forward-auth'], r" \
+r=d['http']['routers']; \
+assert r['protected-staging-web']['middlewares']==['protected-staging-basicauth','guarden-forward-auth'], r" \
     "$rendered"
 assert_exit 0
 run python3 -c "import sys,yaml; m=yaml.safe_load(open(sys.argv[1]))['http']['middlewares'] \

@@ -296,12 +296,14 @@ assert_exit 0
 assert_stdout_has "planted SESSION_SIGNING_KEY of qapp-staging"
 run weedr secret list qapp-staging --json
 assert_exit 0
-# **Index 2, and the index is the claim.** `_secret_list` iterates `sorted(wanted)`,
-# so for qapp-staging the order is DB_PASSWORD (0), LOG_LEVEL (1),
-# SESSION_SIGNING_KEY (2). This block plants SESSION_SIGNING_KEY, so the
-# assertion has to read that entry: `secrets.0` is DB_PASSWORD, a different key
-# that is also in `[generated]` and that this block never touches, so reading it
-# proved nothing -- the assertion passed even if the plant had wrongly flipped
-# SESSION_SIGNING_KEY's origin to `planted`. Caught by adversarial review.
-assert_json secrets.2.name '"SESSION_SIGNING_KEY"'
-assert_json secrets.2.source '"generated"'
+# **Index 3, and the index is the claim.** `_secret_list` iterates `sorted(wanted)`,
+# so for qapp-staging the order is DB_PASSWORD (0), GUARDEN_BASICAUTH (1) —
+# ticket 292's default credential, minted when this service was created —
+# LOG_LEVEL (2), SESSION_SIGNING_KEY (3). This block plants
+# SESSION_SIGNING_KEY, so the assertion has to read that entry: `secrets.0` is
+# DB_PASSWORD, a different key that is also in `[generated]` and that this
+# block never touches, so reading it proved nothing -- the assertion passed
+# even if the plant had wrongly flipped SESSION_SIGNING_KEY's origin to
+# `planted`. Caught by adversarial review.
+assert_json secrets.3.name '"SESSION_SIGNING_KEY"'
+assert_json secrets.3.source '"generated"' 

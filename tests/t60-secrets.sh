@@ -275,8 +275,16 @@ assert_json secrets.0.name '"DB_PASSWORD"'
 assert_json secrets.0.set true
 assert_json secrets.0.source '"planted"'
 assert_json secrets.0.example false
-assert_json secrets.1.name '"LOG_LEVEL"'
-assert_json secrets.1.set false
+# Index 1 is ticket 292's default basic-auth credential: `_secret_list`
+# iterates `sorted(wanted)`, the blob it planted for this service is in the
+# store, and GUARDEN_BASICAUTH sorts between DB_PASSWORD and LOG_LEVEL. It is
+# a generated value like any other — `[generated]` in the registry is what
+# says so — and LOG_LEVEL, a schema key nothing planted, follows it.
+assert_json secrets.1.name '"GUARDEN_BASICAUTH"'
+assert_json secrets.1.set true
+assert_json secrets.1.source '"generated"'
+assert_json secrets.2.name '"LOG_LEVEL"'
+assert_json secrets.2.set false
 
 # Rotation: a value that is still the schema's example is reported as such, and
 # it is still only a boolean. The second plant replaces the blob rather than
