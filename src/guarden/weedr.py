@@ -802,10 +802,14 @@ def _start(args) -> int:
     # 1.2), the same code a blocked gate's start answers with.
     if verdict.unsatisfied:
         keys = ", ".join(verdict.unsatisfied)
+        # One command per key, because `weedr secret set` takes ONE key and a
+        # comma-joined list would be a command that does not parse.
+        plants = " then ".join(
+            f"`weedr secret set {resolved.name} {key}`" for key in verdict.unsatisfied
+        )
         raise errors.GuardenError(
             f"{resolved.name} cannot start: the unit asks for {keys} and no value is "
-            f"planted for it; `weedr secret set {resolved.name} {keys}` plants it, and "
-            "the start re-checks",
+            f"planted for it; {plants} plants it, and the start re-checks",
             errors.HOST_NOT_AS_ASSUMED,
         )
     # `started <name>` is a claim about the host, so it needs a unit to be true of.

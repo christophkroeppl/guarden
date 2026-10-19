@@ -272,16 +272,29 @@ run furrow deploy qapp-preview/feature/login --from poke qapp@9f2c1ab
 # passes.
 #
 # **Coordination note (review Q4, for 313/314/315 on develop):** this block
-# asserts the current failure. The change that lands those tickets — minting or
-# gating LOG_LEVEL, starting `guarden-creds.path`, the env-file path — must
-# rework it in the same commit (restore `assert_exit 0`, or pin the new
-# blocker): a still-`assert_exit 1` turns this suite red for a good change, and
-# `assert_stderr_has "missing required key: LOG_LEVEL"` fails once the key is
-# planted. The start path itself is asserted green end to end in
-# `tests/t440-instance-start.sh`, where the credentials exist.
+# asserted the current failure, and the change that landed 313 reworked it in
+# the same commit, as the note asks. The blocker is still LOG_LEVEL and the
+# deploy still exits 1, but the failure is now **guarden's own** rather than
+# podman's: the start refuses with one line naming the key and the command
+# that plants it, instead of handing the container to podman and letting
+# podman answer `125 no such secret`.
+#
+# **The gate's own warning is NOT in the deploy's stderr**, and that is worth
+# saying because the phrase used to be there. The deploy's gate step runs
+# `weedr service gate` as a subprocess and reads the verdict it recorded back
+# (spec 6.6), so the gate's `warning:` line is captured with the subprocess's
+# output rather than passed through — and on an ungated track the gate exits
+# `0`, so nothing is raised and nothing is written. What the deploy's stderr
+# carries is the START's refusal, which is guarden's own line and names the
+# key.
+#
+# The gate's verdict is still `not-required` on this ungated track — that is
+# the track's difference and it did not change — and the registry carries it.
 assert_exit 1
 assert_stderr_lacks "has no unit to start"
-assert_stderr_has "missing required key: LOG_LEVEL"
+assert_stderr_has "LOG_LEVEL"
+assert_stderr_has "no value is planted for it"
+assert_file_has "$registry/qapp-preview.toml" 'state = "not-required"'
 assert_file_has "$registry/qapp-preview.toml" '[instances."feature\\x2flogin"]'
 assert_file_has "$registry/qapp-preview.toml" 'ref = "feature/login"'
 assert_file_exists "/run/guarden/locks/deploy-qapp-preview-feature\\x2flogin.lock"
