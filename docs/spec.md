@@ -2045,16 +2045,6 @@ The steps, in this order, and the order is the point :
    and the schema does not declare is a request nobody can satisfy, and it is reported the way
    a schema's own missing required key is reported — one answer for one condition.
 
-   **A blocked gate does not fail the deploy.** The deploy has done what it was asked: the
-   service exists, the image is built, the units are installed, and the container is not started.
-   So `furrow` reports `warning: deployed, waiting for the credential gate — reason: …` and
-   **exits `0`**. A red X on every push until the operator plants credentials is noise, and noise
-   teaches people to want the gate gone. The operator then plants the credentials and runs
-   `weedr service start <name>`, which re-evaluates the gate, probes the image's declared
-   user once when the registry holds no probed owner — rendering guarden's `UserNS=keep-id`
-   line into the units from it (§6.3) — and starts if the gate now passes. **No
-   second push is needed**, and the gate's verdict — which until now existed only in the journal
-   — is a field in the registry.
 
    For a track with `gated = false`, a missing or example value produces a `warning:` line naming
    the key, the gate records `not-required`, and the start proceeds. That is the whole difference
