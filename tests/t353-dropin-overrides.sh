@@ -285,3 +285,54 @@ assert_exit 0
 assert_file_exists "$admin_dropin"
 assert_file_missing "$guarden_dropin"
 echo "MEASURE: after the removal, the admin's file: $(cat "$admin_dropin" | tr '\n' '|')"
+
+# --- an instance OWNS its drop-in directory ---------------------------------
+#
+# An instance's units are given an entry in the service's own quadlet
+# directory named `<unit>-<escaped-ref>`, and the generator reads THAT name —
+# so the instance's drop-in is in `<unit>-<escaped-ref>.container.d/`, which
+# is a directory of its own and not the service's `<unit>.container.d/`. Two
+# instances of one service have two pins, and neither lands in the other's.
+#
+# The fixture is a preview track, so the service here is `dropin-preview` and
+# the ref is the escaped form the registry keys it by.
+
+preview_staged=/var/lib/guarden/staging/dropinprev/0000001
+mkdir -p "$preview_staged/.guarden/quadlet"
+seed "$preview_staged/.guarden/service.yml" \
+    "project: dropinprev" \
+    "units: .guarden/quadlet/"
+seed "$preview_staged/.guarden/quadlet/app.container" \
+    "[Unit]" \
+    "Description=the instance's drop-in subject" \
+    "" \
+    "[Container]" \
+    "Image=localhost/dropin-staging:latest"
+
+run weedr service ingest dropin-preview/feature/x --from poke dropinprev@0000001
+assert_exit 0
+
+# The escaped ref is what the registry and the directory are keyed by.
+escaped='feature\x2fx'
+preview_uid=$(id -u dropin-preview)
+preview_dir=/etc/containers/systemd/users/"$preview_uid"
+instance_dir=$preview_dir/app-"$escaped".container.d
+instance_dropin=$instance_dir/50-guarden-keepid.conf
+
+run weedr service start dropin-preview/feature/x
+assert_exit 0
+assert_file_exists "$instance_dropin"
+assert_file_has "$instance_dropin" "UserNS=keep-id:uid=10001,gid=$drop_gid"
+# The instance's drop-in is in its OWN directory: the service's own directory
+# is a different one, and the instance's pin does not land in it.
+assert_file_missing "$preview_dir/app.container.d/50-guarden-keepid.conf"
+echo "MEASURE: the instance's drop-in: $(cat "$instance_dropin" | tr '\n' '|')"
+
+# The instance that goes takes its own drop-in with it — a drop-in left behind
+# is a declaration the generator would keep making a unit out of, for a
+# container whose volumes and publications are gone.
+run weedr service remove dropin-preview/feature/x
+assert_exit 0
+assert_file_missing "$instance_dropin"
+assert_file_missing "$instance_dir"
+echo "MEASURE: after the instance's removal, its drop-in directory is gone"
