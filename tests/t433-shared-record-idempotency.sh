@@ -116,7 +116,7 @@ assert service_hash != instance_hash, "one hash is shared by both deploys"
 assert volumes and all(entry.get("config") for entry in volumes.values()), \
     f"the state volumes carry no snapper configuration: {volumes}"
 assert all("-feature\\x2da-" not in entry["config"] for entry in volumes.values()), \
-    f"an instance's configuration landed on the service's volumes: {volumes}"
+    f"an instance configuration landed on the service volumes: {volumes}"
 ' "$preview_registry"
 assert_exit 0
 
