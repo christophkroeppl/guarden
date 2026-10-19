@@ -20,7 +20,8 @@
 #   * `USER root` with a gosu handoff — the row that was read differently from
 #     `USER 0` (which took the handoff) and from no `USER` at all (which is the
 #     ADR's own case). One table now: root, `0` and empty are one declaration —
-#     and this is the fixture whose pid 1 settles what a pin decides (below).
+#     and the two fixtures below read pid 1 to say what each spelling RUNS as,
+#     which is where they turn out to differ (asserted in t351 too).
 #   * `USER 0` with the same handoff — the row no suite covered before this
 #     file, and the one that must not move.
 #   * no `USER` and no handoff — the row the ADR promises a NO line for: the
@@ -233,11 +234,16 @@ done
 # What podman is actually running here, read off the container's own pid 1.
 #
 # This is the fixture that can tell the two sides of ADR-0019's amendment
-# apart, so the reading is ASSERTED rather than echoed: the image's `USER` is
-# `root` and the pin is `keep-id:uid=3000,gid=3000`, so pid 1 answering `0`
-# settles that a pin decides where a uid LANDS and does not decide who starts,
-# while pid 1 answering `3000` would settle that keep-id with an explicit
-# `uid=` forces init. The forcing claim is what the refusal of a repository's
+# apart for an image that NAMES its user, so the reading is ASSERTED rather
+# than echoed: the image's `USER` is `root` and the pin is
+# `keep-id:uid=3000,gid=3000`, so pid 1 answering `0` settles that an
+# explicit `USER` is what init runs as and the pin decides where that uid
+# LANDS, while pid 1 answering `3000` would settle that the pin decides who
+# starts. The other spelling measures the other way and is asserted in t351:
+# an image with NO `USER` line runs the pinned pair (pid 1 = 2000 under
+# `keep-id:uid=2000`) — so the root row's spellings are one answer to the
+# PROBE and not one behaviour at run time, and each is asserted where it
+# stands. The forcing claim is what the refusal of a repository's
 # own `User=` used to rest on; it now rests on the mapping (a `User=` that is
 # not the pinned pair runs where the line maps nothing), which both readings
 # leave standing. `podman exec`'s own `id -u` cannot
@@ -259,6 +265,36 @@ record_zero=$registry/kidzero-staging.toml
 [ "$(unit_line "$unit_zero")" = "UserNS=keep-id:uid=3000,gid=3000" ] \
     || _fail "a USER 0 image whose entrypoint hands off to app renders $(unit_line "$unit_zero"), and that handoff user is keep-id:uid=3000,gid=3000"
 assert_file_has "$record_zero" "owner_uid = 3000"
+
+# The third spelling of the root row, read off pid 1: `USER 0` names uid 0
+# explicitly, so the rule the other two measurements give is that it runs as 0
+# just as `USER root` does — the pin decides where the uid LANDS — and the
+# row that has no `USER` line at all is the only one podman starts as the
+# pinned pair (t351). Asserted, not echoed, because the probe's table calls
+# all three one declaration and this is where the runtime disagrees with that
+# for one of them.
+zero_runtime=/run/user/"$(id -u kidzero-staging)"
+for _ in $(seq 1 30); do
+    [ -d "$zero_runtime" ] && break
+    sleep 1
+done
+assert_file_exists "$zero_runtime"
+zero_ready=0
+for _ in $(seq 1 60); do
+    podman_as kidzero-staging exec kidzero-staging-app true
+    if [ "$GUARDEN_EXIT" = 0 ]; then
+        zero_ready=1
+        break
+    fi
+    sleep 2
+done
+[ "$zero_ready" = 1 ] || _fail "the kidzero container never became exec-able, so nothing can read its pid 1"
+podman_as kidzero-staging exec kidzero-staging-app sh -c 'grep ^Uid: /proc/1/status'
+assert_exit 0
+echo "MEASURE: pid 1 of the USER 0 container under its pin: $(cat "$GUARDEN_STDOUT")"
+pid1_zero=$(awk '/^Uid:/ { print $2 }' "$GUARDEN_STDOUT")
+[ "$pid1_zero" = 0 ] \
+    || _fail "pid 1 of the USER 0 image under keep-id:uid=3000 answers uid $pid1_zero, and an image that names uid 0 runs as uid 0 — t352's own root spelling says the same"
 
 # No `USER` at all and no handoff anywhere: the record says root (0) and the
 # unit carries no line, because the default map already moves container root

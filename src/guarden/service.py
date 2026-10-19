@@ -1013,12 +1013,13 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
         # this row. The answer is the handoff the entrypoint names (the app
         # user a gosu or su-exec would switch to) and never a passwd row picked
         # by itself: every row of a base image is a system account, and a pin
-        # on one would map a uid the container never runs as — init is the
-        # image's own `USER`, which on this row is root (t352 measures pid 1
-        # answering 0 under `keep-id:uid=3000`), so the line would move the map
-        # for a number the entrypoint drops away from and leave the writes
-        # where the default map already puts them. Nothing defensible falls
-        # out, and this is the record for it:
+        # on one would put init on a uid the application never asked for — on
+        # an image with no `USER` line the pin IS what pid 1 runs as (measured,
+        # t351: 2000 under `keep-id:uid=2000`), and on `USER root` the line
+        # would map a number the entrypoint drops away from while init stays
+        # root (measured, t352: pid 1 = 0 under `keep-id:uid=3000`). Either
+        # way the application never asked for that account. Nothing defensible
+        # falls out, and this is the record for it:
         # container root, which the default map already moves onto the service
         # identity, so no line is rendered and the service runs exactly as it
         # did before ADR-0019 (the keep-id map for uid=0 was measured to carry

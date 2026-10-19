@@ -157,13 +157,14 @@ assert_file_has "$record_b" "owner_gid = $daemon_gid"
 # image's passwd only resolves them, and a passwd row on its own would never
 # have found `appuser` here.
 #
-# What runs in it, read off pid 1 below: a pin decides where a uid LANDS and
-# does not override the image's `USER` — the entrypoint starts as container
-# root on this row too, so the script's `id -u = 0` branch is the branch it
-# takes. It is guarded by gosu's own absence for the same reason t352's root
-# fixture guards it: alpine ships no gosu, and the fixture exists for the pin
-# the probe renders and for the pid 1 that says which doctrine is true — not
-# for a handoff it cannot complete.
+# What runs in it, read off pid 1 below: with no `USER` line for podman to
+# honour, the pinned pair is what pid 1 runs as (measured: 2000 under
+# `keep-id:uid=2000`), so `id -u` is never 0 here and the gosu line — which
+# alpine does not even ship — never runs: the pin delivers the handoff the
+# entrypoint would have made. The script guards gosu's existence as well, the
+# way t352's root fixture guards it, so the container stays readable
+# whichever way that measurement lands; the claim is the pid 1, not the
+# guard.
 stage_kid kidgosu localhost/kidgosu-staging:latest \
     "FROM docker.io/library/alpine:3.20" \
     "RUN adduser -D -u 2000 appuser" \
@@ -189,11 +190,14 @@ assert_file_has "$record_g" "owner_gid = 2000"
 
 # The empty-USER row, read off pid 1: the measurement the two sides of
 # ADR-0019's amendment disagree about, taken on the spelling that carries no
-# `USER` line at all (t352 asserts the same for `USER root`, which is one
-# table with it). pid 1 answering 0 says the entrypoint starts as the image's
-# own user and the pin decides where a uid LANDS; pid 1 answering 2000 would
-# say keep-id with an explicit `uid=` forces init to the pinned pair — which
-# is what the refusal of a repository's own `User=` was argued from.
+# `USER` line at all. Answer: **2000 — the pinned pair.** With no `USER` to
+# honour, podman's keep-id `uid=` is what pid 1 runs as, so on this row the
+# pin DOES decide who starts and this script's `id -u = 0` branch is never
+# taken (which is what this section's own comment said before the round-2
+# review called it untested). The other spelling measured the other way:
+# t352 asserts pid 1 = 0 for `USER root` under `keep-id:uid=3000` — an image
+# that names its USER is not overridden. Both are asserted; what never changes
+# either way is where each uid LANDS on the host.
 runtime_g=/run/user/"$(id -u kidgosu-staging)"
 for _ in $(seq 1 30); do
     [ -d "$runtime_g" ] && break
@@ -214,8 +218,8 @@ podman_as kidgosu-staging exec kidgosu-staging-app sh -c 'grep ^Uid: /proc/1/sta
 assert_exit 0
 echo "MEASURE: pid 1 of the empty-USER container under its pin: $(cat "$GUARDEN_STDOUT")"
 pid1_g=$(awk '/^Uid:/ { print $2 }' "$GUARDEN_STDOUT")
-[ "$pid1_g" = 0 ] \
-    || _fail "pid 1 under keep-id:uid=2000 answers uid $pid1_g, and ADR-0019 says a pin does not override the image's USER — the empty-USER row must say what the root row in t352 says"
+[ "$pid1_g" = 2000 ] \
+    || _fail "pid 1 of the image with no USER under keep-id:uid=2000 answers uid $pid1_g, and the measurement this fixture exists for says the pinned pair is what runs on this row"
 
 # --- a repository's own `User=`, which would silently outrun the pin ---------
 #
@@ -223,13 +227,14 @@ pid1_g=$(awk '/^Uid:/ { print $2 }' "$GUARDEN_STDOUT")
 # and `User=` names the uid the container actually runs as: anything but the
 # pinned pair runs where the line maps nothing, so its writes land in the
 # subuid band (ticket 277) with nothing in the run saying the line named a uid
-# the container never ran as. It is not about forcing init — a pin does not
-# override the image's `USER` (measured above: pid 1 is the image's own user)
-# — it is two owners of one container's user, and the repo is not one of them.
-# Refused where the start would apply the pin: exit 2, one line, naming the
-# service, the key and the value, and no start at all. With no pin this field
-# passes through as it always has; this service's image declares a non-root
-# user, which is what puts a pin in force.
+# the container never ran as. That rationale does not rest on who pid 1 is,
+# which is measured two ways and differs by spelling — the empty image above
+# starts as the pinned pair, t352's `USER root` image starts as root — and
+# rests only on what never differs: the line maps the pinned pair and nothing
+# else. Refused where the start would apply the pin: exit 2, one line, naming
+# the service, the key and the value, and no start at all. With no pin this
+# field passes through as it always has; this service's image declares a
+# non-root user, which is what puts a pin in force.
 stage_kid kiduser localhost/kiduser-staging:latest \
     "FROM docker.io/library/alpine:3.20" \
     "USER daemon"

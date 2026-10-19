@@ -175,10 +175,13 @@ def refuse_pinned_user(unit: Unit, pinned: str, origin: str) -> None:
     other uid runs where the line maps nothing, so its writes land in the
     service's subuid band (ticket 277), with nothing about the run saying the
     line named a uid the container never ran as. That is the whole rationale,
-    and it is not about forcing init: a pin does NOT override the image's
-    `USER` (pid 1 of a root-spelled image under a pin is 0 — measured, t352),
-    so this is two owners of one container's user and the repository is not
-    one of them. Refused only when a pin is being rendered: with no pin,
+    and it does not rest on who pid 1 is, which is measured two ways and
+    differs by spelling: an image that names a `USER` runs it (t352 asserts
+    `USER root` under a pin has pid 1 = 0) and an image with no `USER` line
+    runs the pinned pair (t351 asserts 2000). What never differs is where
+    each uid LANDS, and two owners of one container's user is one too many —
+    the repository is not one of them. Refused only when a pin is being
+    rendered: with no pin,
     `User=` is the repository's own field and passes through as it always has,
     which is what keeps this off every deployment that has no non-root image
     user to map. Called from the render and from the start path, so the

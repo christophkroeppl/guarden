@@ -26,11 +26,12 @@
 #     the generated line and run as root answers `/proc/self/uid_map`, the
 #     running service container answers its init uid/gid and both maps, and the
 #     init uid is asserted to BE the probed uid — which here it is by
-#     construction: init is the image's own `USER`, this image's `USER` is the
-#     pinned pair, and what the pin decides is where that uid LANDS (a pin does
-#     not override `USER`: pid 1 of a root-spelled image under a pin is
-#     asserted to be 0 in t352, so ADR-0019's root-start phase is real and that
-#     ADR, not this file, owns it).
+#     construction: this image's `USER` and the pinned pair are the same
+#     number. Who runs is the image's business either way and is asserted
+#     where the two differ: an image that names a `USER` runs it (t352:
+#     `USER root` under a pin has pid 1 = 0; below, this image pinned at 4242
+#     has pid 1 = 10001), an image with no `USER` runs the pinned pair (t351:
+#     2000) — and what the pin decides everywhere is where that uid LANDS.
 #   * **the machine's own answers first**: the default map and the podman
 #     version are echoed before anything is asserted about guarden, so a run
 #     that stops below still carries them.
@@ -347,9 +348,44 @@ run weedr service start kid-staging
 echo "MEASURE: stderr of a quoted owner_uid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
 assert_exit 0
 assert_file_has "$unit" "UserNS=keep-id:uid=4242,gid=$kid_gid"
-assert_file_has "$record" 'owner_uid = "4242"'
+# The value comes back as the NUMBER it was read as: the start writes its own
+# record (the gate verdict) from the loaded one, so the conversion is durable
+# and what must NOT be here is 10001 — that would be the probe answering again.
+assert_file_has "$record" "owner_uid = 4242"
+assert_file_lacks "$record" "owner_uid = 10001"
 
-sed -i 's/^owner_uid = "4242"$/owner_uid = "not-a-number"/' "$record"
+# The read the claim in this file's header needed: this image DECLARES its
+# user (10001) while the record pins another pair (4242), so pid 1 says which
+# of the two the container runs as. The rule both readings of the measurement
+# agree on, and what ADR-0019 now states: an image's explicit `USER` is what
+# init runs as under a pin — t352 measures the root spelling the same way
+# (pid 1 = 0 under `keep-id:uid=3000`) — while an image with no `USER` line
+# runs the pinned pair (t351 measures 2000 under `keep-id:uid=2000`). What is
+# true either way is where each uid LANDS.
+runtime_pin=/run/user/"$(id -u kid-staging)"
+for _ in $(seq 1 30); do
+    [ -d "$runtime_pin" ] && break
+    sleep 1
+done
+assert_file_exists "$runtime_pin"
+pin_ready=0
+for _ in $(seq 1 60); do
+    podman_as kid-staging exec "$container" true
+    if [ "$GUARDEN_EXIT" = 0 ]; then
+        pin_ready=1
+        break
+    fi
+    sleep 2
+done
+[ "$pin_ready" = 1 ] || _fail "the kid-staging container never became exec-able under the 4242 pin"
+podman_as kid-staging exec "$container" sh -c 'grep ^Uid: /proc/1/status'
+assert_exit 0
+echo "MEASURE: pid 1 of the image-USER-10001 container pinned at 4242: $(cat "$GUARDEN_STDOUT")"
+pid1_pin=$(awk '/^Uid:/ { print $2 }' "$GUARDEN_STDOUT")
+[ "$pid1_pin" = 10001 ] \
+    || _fail "pid 1 under keep-id:uid=4242 answers uid $pid1_pin, and this image declares USER 10001 — an explicit USER is what init runs as and the pin decides where that uid lands; 4242 here would mean the pin decides who starts"
+
+sed -i 's/^owner_uid = 4242$/owner_uid = "not-a-number"/' "$record"
 run weedr service start kid-staging
 echo "MEASURE: stderr of an unnumbered owner_uid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
 assert_exit 1

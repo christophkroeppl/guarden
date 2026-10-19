@@ -13,7 +13,9 @@ guarden-generated lines (repository-supplied `Userns` stays refused).
 
 accepted (2026-10-18, operator) — implemented on branch `feat/keep-id-uid` (this file's
 commit ba6c114 plus six commits: 3c52158, 00decc3, ee40e14, 20ebc73, 7bc9715 and the
-206ff58 scaffold), tests t350-keepid / t351-keepid-diagnostics, pending review and merge.
+206ff58 scaffold), tests t350-keepid / t351-keepid-diagnostics / t352-keepid-boundaries —
+the pid-1 readings that settle what a pin decides are asserted in the last two and in t350 —
+pending review and merge.
 
 ## Considered Options
 
@@ -78,7 +80,9 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   image's gosu/su-exec handoff target when the entrypoint names one, and by nothing — **no
   line**, the default mapping — when it does not; a non-root number or name is resolved
   against the image's own `/etc/passwd` and `/etc/group`, where a field that is not a number
-  is refused the way a user the image does not carry is (spec 1.2: one line, exit `2`). An
+  is refused the way a user the image does not carry is (spec 1.2: one line, exit `2`). The
+  table decides the RECORD; what each of the three root spellings then RUNS as under the line
+  is measured per spelling below, and they do not all run the same way. An
   image that reaches no user at all is the no-self-heal class, a documented gap left to the
   A3 fallback or a future manifest runtime-uid field — not invented here.
 - The registry records `owner_uid`/`owner_gid` (ticket 277's drift anchor) plus `owner_image`,
@@ -87,33 +91,43 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   keeps the shape it always had: the scalar pair and no table. Only units that disagree about
   their user grow one, and the renderer answers **each unit from its own entry**, so each unit
   maps its own image's user onto the same service identity and no image's uid is ever taken up
-  by another container (init is the image's own `USER`, and the pin decides where that uid
-  lands — measured, t350 and t352). A unit the
+  by another container (each unit runs what its own image puts on pid 1 — or, where the image
+  names no user, its own pin — and either way the pin decides where that uid
+  lands — measured, t350/t351/t352). A unit the
   record does not answer renders no line and is the probe's condition again at the next start,
   never another unit's pin. Re-ingest can no longer break ownership because nothing chowns.
 - While a pin renders, a repository-supplied `User=` is refused (it would run the container
   outside the mapping the line exists to create: the line puts exactly the pinned pair on the
   service identity, and a `User=` that names anything else runs where it maps nothing — spec
-  §6.3's own words, and the refusal's whole rationale now that the init-forcing reading is
-  measured false, t351/t352); `UserNS=`/`Userns=` from repositories stay refused. Spec
+  §6.3's own words, and the refusal's whole rationale, which stands whether or not the pin
+  also picks pid 1: it does where the image names no `USER` (t351) and it does not where the
+  image names one (t352)); `UserNS=`/`Userns=` from repositories stay refused. Spec
   §6.3/§6.6 amended
   (7bc9715). AGENTS.md is a protected file and was left untouched — its refusal statements
   remain true for repository input.
-- The root-then-drop class is now MEASURED, not open — with one measured boundary: a pin does
-  not override the image's `USER` (podman 5.7.0: a `USER root` image's pid 1 is uid 0 under
-  `keep-id:uid=3000,gid=3000`, read off `/proc/1/status`), so what a pin decides is
-  where the container's uid LANDS, not who it starts as. That reading is **asserted** now and
-  on both spellings of the root row: t352 asserts pid 1 = 0 for `USER root` under a pin, and
-  t351 asserts pid 1 = 0 for an image carrying no `USER` line at all under
-  `keep-id:uid=2000` — the discriminating measurement, since every other fixture's image
-  user and pinned pair are the same number by construction and cannot tell the two doctrines
-  apart. For an image whose declared user is
-  the pair the probe pins (t350's shape), init is on that pair and there is no root-start
-  phase: container uid 0 sits on the service's first-subuid band, and a second process
-  appending after stop/start writes files owned by the service uid (t350). For the root row
-  of the table the entrypoint starts as container root and the HANDOFF is what the pinned pair
-  moves onto the service identity; anything written before that handoff is the root-start
-  phase, and A3 remains the fallback for it.
+- The root-then-drop class is now MEASURED **per spelling**, not open, and the spellings do not
+  all behave the same at run time. Who pid 1 is, read off `/proc/1/status` under the rendered
+  line on podman 5.7.0, and every row of this list asserted:
+  an image that names a `USER` runs it — `USER root` → pid 1 = 0 under
+  `keep-id:uid=3000,gid=3000` (t352), `USER 0` → pid 1 = 0 under the same pin (t352), and
+  `USER 10001` → pid 1 = 10001 while the record pins 4242 (t350) — and an image with **no**
+  `USER` line runs the **pinned pair**: pid 1 = 2000 under `keep-id:uid=2000` (t351), the
+  discriminating measurement the round-2 review asked for, because every other fixture's image
+  user and pinned pair are the same number by construction and cannot tell the two readings
+  apart. So the blanket "a pin decides where a uid lands, not who starts" holds for an image
+  that names its user and does not hold for one that does not; what holds either way is the
+  landing — each uid's host mapping is the pin's, and an image's `USER` is never rewritten.
+  The probe's table is untouched: all three spellings still answer the same RECORD question
+  (container root, asked of the entrypoint's handoff) — what they do not do is all run the
+  same way. Consequences by row: for an image whose declared user is the pair the probe pins
+  (t350's shape), init is on that pair and there is no root-start phase: container uid 0 sits
+  on the service's first-subuid band, and a second process appending after stop/start writes
+  files owned by the service uid (t350). For `USER root` and `USER 0` the entrypoint starts as
+  container root and the HANDOFF is what the pinned pair moves onto the service identity;
+  anything written before that handoff is the root-start phase, and A3 remains the fallback
+  for it. For the empty spelling the pinned pair — which the probe took from that very
+  handoff — IS pid 1, so the entrypoint begins after the handoff would have happened, and the
+  root-start phase does not exist there.
 - Fallback stack: A3 subdir chown with `.snapshots/` skipped, plus a per-service owner
   override for volumes shared by two images — both deferred to the A3 follow-up (the
   overrides contract deliberately has no `[volumes] owner` key: "five tables and nothing
