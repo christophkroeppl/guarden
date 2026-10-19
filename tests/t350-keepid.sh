@@ -760,7 +760,10 @@ assert_file_has "$record_pair" "owner_gid = $web_gid"
 # The record is read back through the same reader on every start, so a
 # hand-edited table is read by the very next `weedr service start`.
 
-# The container's own shape: not a table at all.
+# The container's own shape: not a table at all. The document is BUILT, not
+# patched: a key written after a table header belongs to THAT table, and a
+# header whose body was removed leaves bare keys behind — so the whole
+# per-unit section goes and one top-level scalar takes its place.
 cp "$record_pair" "$GUARDEN_FIXTURES/record-pair-backup"
 python3 - "$record_pair" <<'PY'
 import sys
@@ -768,11 +771,24 @@ import sys
 path = sys.argv[1]
 lines = open(path).read().splitlines()
 out = []
+in_table = False
 for line in lines:
-    if line.startswith("[owner_units."):
+    if line.startswith("["):
+        # A table header ends the top-level section; the per-unit one is the
+        # section this fixture replaces, and every later one goes with it
+        # because the file is written with the per-unit table LAST.
+        in_table = line.startswith("[owner_units.")
+        if in_table:
+            continue
+        out.append(line)
+        continue
+    if in_table:
+        continue
+    if line.startswith("owner_units ="):
         continue
     out.append(line)
-out.append("owner_units = 5")
+    if line.startswith("owner_image ="):
+        out.append("owner_units = 5")
 open(path, "w").write("\n".join(out) + "\n")
 PY
 run weedr service start kidpair-staging
