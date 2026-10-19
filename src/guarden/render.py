@@ -1054,6 +1054,23 @@ def _container_unit(
 
     if not unit.one("Container", "ContainerName"):
         unit.put("Container", "ContainerName", [f"{service}-{container}".lstrip("-")])
+    if context is not None and context.instance:
+        # One instance, one container name: the computed
+        # `<service>-<container>` (and a repository-declared ContainerName
+        # alike) is the same for every instance of the service, so the second
+        # `podman run` is refused with the name already in use — two previews
+        # of one service could never run at once (spec 5.2). The suffix is the
+        # instance's registry key in hex: podman's container-name grammar takes
+        # `[A-Za-z0-9][A-Za-z0-9_.-]*` only, where systemd's `\xNN` key carries
+        # a backslash podman refuses and no dashed encoding is unambiguous at
+        # the component boundary, while hex of the key is injective and always
+        # valid (spec 5.2).
+        named = unit.one("Container", "ContainerName")
+        unit.put(
+            "Container",
+            "ContainerName",
+            [f"{named}-{context.instance.encode().hex()}"],
+        )
     if context is not None:
         unit.put("Container", "Network", [context.config.network])
         # Every name this unit may have to resolve: the providers it declared an
