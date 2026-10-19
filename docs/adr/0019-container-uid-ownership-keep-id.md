@@ -161,9 +161,23 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   this, a rebuilt Containerfile that changed `USER` kept the old pin: the container ran the
   new image user, the line mapped the old pair, and those writes landed in the subuid band
   with the record and this ADR's "an image that changed is the probe's condition again" both
-  claiming otherwise. What this does NOT cover is an image replaced outside that verb — a
-  hand `podman pull` under the same tag — which a reference anchor cannot see and an
-  image-ID anchor would: the deliberate trade, recorded here rather than in a comment.
+  claiming otherwise. **The invalidation is one-sided: it clears the RECORD, not the
+  installed unit.** The unit keeps the line it was rendered with until something re-renders
+  it, and what re-renders it is `weedr service start` — the start path re-renders whenever
+  the installed unit does not carry exactly what the record renders for it. A unit started
+  by anything else — a systemd `Restart=`, an operator's own `systemctl --user start` —
+  comes up under the OLD pin with the NEW image, and nothing says so, because the record
+  holds no answer and nothing contradicts the unit. `weedr service start` is the supported
+  way to start a service and it re-renders first; the gap is between a rebuild and a start
+  through any other door, and it is stated here rather than closed, because closing it
+  means the build verb writing into the installed unit, which is the mutator's own
+  directory and would need the renderer's lock the build does not hold. What this does NOT
+  cover is an image replaced outside that verb — a hand `podman pull` under the same tag,
+  a hand `podman build --tag` under it, or a per-container `Containerfile` layout the build
+  verb does not read at all (it looks only at the home's own `Containerfile`/`Dockerfile`,
+  so a tree with `.guarden/images/<container>/Containerfile` is never built and its image
+  is never invalidated) — which a reference anchor cannot see and an image-ID anchor would:
+  the deliberate trade, recorded here rather than in a comment.
 - While a pin renders, a repository-supplied `User=` is refused (it would run the container
   outside the mapping the line exists to create: the line puts exactly the pinned pair on the
   service identity, and a `User=` that names anything else runs where it maps nothing — spec
