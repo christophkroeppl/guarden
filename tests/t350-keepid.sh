@@ -505,7 +505,7 @@ assert_file_has "$record" "owner_gid = 9997"
 assert_file_has "$unit" "UserNS=keep-id:uid=10001,gid=9997"
 assert_file_lacks "$record" "owner_gid = \"9997\""
 
-sed -i 's/^owner_gid = .*/owner_gid = not-a-number/' "$record"
+sed -i 's/^owner_gid = .*/owner_gid = "not-a-number"/' "$record"
 run weedr service start kid-staging
 echo "MEASURE: stderr of an unnumbered owner_gid: $(tr '\n' '|' <"$GUARDEN_STDERR")"
 assert_exit 1
