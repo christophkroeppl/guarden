@@ -105,11 +105,38 @@ list of verbs in the spec's §6.6 is a policy written in the wrong language**:
 sudoers cannot express "these verbs, with any arguments", and the mutator
 can.
 
+**What B looks like, concretely.** The rule becomes one line:
+
+    guarden ALL=(root) NOPASSWD: /usr/lib/guarden/bin/weedr
+
+— a bare program, which matches ANY arguments, and therefore grants the
+`guarden` account the whole mutator. That is a much bigger grant than the
+spec's list, and it is the mutator that narrows it: the mutator reads
+`SUDO_USER` (which sudo sets to the account the rule ran as) and refuses any
+verb that is not on the list when the caller is `guarden`. The list is
+therefore enforced in the place that can enforce it, and the rule's own
+granularity is the only thing sudoers can offer.
+
+**The shape of the refusal matters**: the mutator's refusal must be the same
+one-line refusal every other refusal is, and it must name the verb and the
+caller, so an operator who reaches the mutator the wrong way learns why. The
+existing `errors.GardenError` with `REJECTED_INPUT` is that shape.
+
+**The rule that B does NOT need:** the `hose` rule from ticket 329 stays as
+it is, because it grants a *different* identity (`hose`) a *different* target
+(`furrow`, running as `guarden`) and its verbs are whole — `furrow deploy` is
+a program and a verb, and the rule names both. It is the `furrow` → `weedr`
+hop that needs the argument-less form, and the reason is that the arguments
+there are data (a service name, a sha) rather than a verb.
+
 **Whatever is chosen, the suite that proves it must run the chain as the
 unprivileged user.** Every VM suite runs as root, which is why this class of
 defect is invisible to the harness. A suite that runs `hose` → `furrow` →
 `weedr` as `hose` would have caught it, and the harness has no way to do
-that today.
+that today. **That is a second, separate gap** — the harness cannot exercise
+the unprivileged path at all — and it is worth closing whatever is decided
+here, because until it is closed, every claim about the poke path is a claim
+about a root-only path that happens to resemble it.
 
 ## Notes
 
