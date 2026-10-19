@@ -17,6 +17,9 @@
 #     (ticket 309);
 #   * every helper under `tests/` is in every key because it exists, so a new
 #     helper moves the key and no suite is inherited against the old one;
+#   * a file's execute bit is in the key, because a tool is run and not read;
+#   * the developer's `.venv` is not a suite input, so it is neither in the key
+#     nor on the machine;
 #   * a cached suite's line cannot be read as a pass;
 #   * `--no-cache` consults nothing;
 #   * the cache is outside the repository, and nothing expires.
@@ -372,6 +375,69 @@ if [ "$(cat "$GUARDEN_FIXTURES/helper-tree-one")" = "$(cat "$GUARDEN_FIXTURES/he
     _fail "two suites produced one tree digest over a tree that has a new helper"
 fi
 
+# --- the execute bit is in the key ------------------------------------------
+
+# The tools under `tools/` are exec'd rather than read — `tool` runs them by
+# path — so the same bytes without the execute bit is a different result:
+# "Permission denied" where the suite expected an answer. A committed
+# `100755` to `100644` would move no key at all, and every suite that calls
+# the tool would inherit a green observed against a working tool.
+TOOLS_COPY=$GUARDEN_FIXTURES/tools-copy
+mkdir -p "$TOOLS_COPY/tools" "$TOOLS_COPY/tests"
+cp "$GUARDEN_ROOT/tools/golden-vm" "$TOOLS_COPY/tools/golden-vm"
+cp "$GUARDEN_ROOT/tests/$SUITE_NAME" "$TOOLS_COPY/tests/$SUITE_NAME"
+chmod +x "$TOOLS_COPY/tools/golden-vm"
+
+tools_tree_key() {
+    GUARDEN_LXC_ROOT="$TOOLS_COPY" python3 "$CACHE_TOOL" key "$GOLDEN" \
+        "$TOOLS_COPY/tests/$SUITE_NAME" "$1" "$2"
+}
+
+EXECUTABLE=$(tools_tree_key declared runner-1)
+chmod -x "$TOOLS_COPY/tools/golden-vm"
+NOT_EXECUTABLE=$(tools_tree_key declared runner-1)
+[ "$EXECUTABLE" != "$NOT_EXECUTABLE" ] \
+    || _fail "the execute bit of a tool is not in the key"
+
+# The bytes are the same in both, so the difference is the mode and nothing
+# else: restoring the bit restores the key exactly.
+chmod +x "$TOOLS_COPY/tools/golden-vm"
+[ "$EXECUTABLE" = "$(tools_tree_key declared runner-1)" ] \
+    || _fail "restoring the execute bit did not restore the key"
+
+# --- the developer's .venv is not a suite input ----------------------------
+
+# A developer's `.venv` supplies the interpreter and the two libraries, and
+# the runner's push tars the whole checkout, so it travels into the guest and
+# `lib.sh` puts it on PATH. A `pip install` inside it changes what a suite
+# runs against without moving any key.
+#
+# It is not in the key, and the reason is that it is not a suite input: the
+# push leaves it behind, so the machine ran against the guest's own
+# `python3-yaml` and `python3-jinja2`, not against the developer's.
+VENV_COPY=$GUARDEN_FIXTURES/venv-copy
+mkdir -p "$VENV_COPY/.venv/bin" "$VENV_COPY/tests"
+cp "$GUARDEN_ROOT/tests/$SUITE_NAME" "$VENV_COPY/tests/$SUITE_NAME"
+printf '#!/bin/sh\nexit 0\n' >"$VENV_COPY/.venv/bin/python3"
+
+venv_tree_key() {
+    GUARDEN_LXC_ROOT="$VENV_COPY" python3 "$CACHE_TOOL" key "$GOLDEN" \
+        "$VENV_COPY/tests/$SUITE_NAME" "$1" "$2"
+}
+
+NO_VENV=$(venv_tree_key declared runner-1)
+printf '# a different library in the venv\n' >>"$VENV_COPY/.venv/bin/python3"
+WITH_VENV=$(venv_tree_key declared runner-1)
+[ "$NO_VENV" = "$WITH_VENV" ] \
+    || _fail "a change in the developer's .venv moved the key, so a pip install invalidates every cached green"
+
+# And the venv is not in the read set either, which is the same claim.
+GUARDEN_LXC_ROOT="$VENV_COPY" python3 "$CACHE_TOOL" readset \
+    "$VENV_COPY/tests/$SUITE_NAME" >"$GUARDEN_FIXTURES/venv-readset.list"
+if grep -qF '.venv' "$GUARDEN_FIXTURES/venv-readset.list"; then
+    _fail "the developer's .venv is in the read set, so a pip install invalidates every cached green"
+fi
+
 # --- one changed file invalidates what read it ------------------------------
 
 # The digest is a function of the bytes, so a change to a file in the read set
@@ -484,10 +550,28 @@ printf '\n# the suite changed\n' >>"$TREE_COPY/tests/$SUITE_NAME"
 [ "$BEFORE" != "$(tree_key declared runner-1)" ] \
     || _fail "a change to the suite itself did not move the key"
 
+# **Relocation does not change the key, and that is asserted here rather than
+# claimed in a comment.** The copy above holds only part of the read set, so
+# its key is a DIFFERENT key from the harness's — the copy is a subset, and a
+# subset hashes differently. What must not depend on the root is the answer
+# for the same bytes, so the whole read set is copied into a second root and
+# the two keys are compared.
+#
 # The copy names the same suite file, so the key is a function of the suite's
-# name and the bytes rather than of where the tree was found. That is what lets
-# the harness key against its own checkout and this suite against a scratch one
-# and get the same answer, which is the whole reason the override exists.
+# name and the bytes rather than of where the tree was found. That is what
+# lets the harness key against its own checkout and this suite against a
+# scratch one and get the same answer, which is the whole reason the override
+# exists.
+RELOCATED=$GUARDEN_FIXTURES/relocated
+mkdir -p "$RELOCATED"
+while read -r name; do
+    mkdir -p "$RELOCATED/$(dirname "$name")"
+    cp --preserve=mode "$GUARDEN_ROOT/$name" "$RELOCATED/$name"
+done <"$GUARDEN_FIXTURES/readset.list"
+RELOCATED_KEY=$(GUARDEN_LXC_ROOT="$RELOCATED" python3 "$CACHE_TOOL" key "$GOLDEN" \
+    "$RELOCATED/tests/$SUITE_NAME" declared runner-1)
+[ "$RELOCATED_KEY" = "$(key "$GOLDEN" "$SUITE" declared runner-1)" ] \
+    || _fail "the same bytes in a second root answered a different key, so the key depends on where the tree was found"
 
 # --- what the key covers, and what it costs ---------------------------------
 
@@ -495,10 +579,11 @@ printf '\n# the suite changed\n' >>"$TREE_COPY/tests/$SUITE_NAME"
 # rather than inferred from a digest: the package as a whole (ticket 309), the
 # module definitions whose templates render the units, the runner's own shell
 # helpers — a suite runs `tests/aptlock.sh` and `tests/failure_messages.sh`
-# beside `lib.sh`, so both are named like `lib.sh` and `lxc.sh` rather than
-# globbed (a glob of `tests/*.sh` would put every other suite in every key) —
-# the example services a suite installs as they are, and the tracked
-# `.env.schema` a suite resolves.
+# beside `lib.sh`, and every other file under `tests/` is a helper too, so
+# they are carried by the negated glob rather than named one by one (a plain
+# glob of `tests/*.sh` would put every other suite in every key) — the
+# example services a suite installs as they are, and the tracked
+# `.env.schema`.
 cache readset "$SUITE"
 assert_exit 0
 assert_stdout_has "src/guarden/loom.py"
