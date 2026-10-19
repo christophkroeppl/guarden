@@ -171,8 +171,11 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   also picks pid 1: it does where the image names no `USER` (t351) and it does not where the
   image names one (t352)); `UserNS=`/`Userns=` from repositories stay refused. Spec
   §6.3/§6.6 amended
-  (7bc9715). AGENTS.md is a protected file and was left untouched — its refusal statements
-  remain true for repository input.
+  (7bc9715). AGENTS.md's copy of the refusal list is brought up to the spec's — it had
+  gained `Userns=`/`UserNS=` in the spec and not here, and AGENTS.md's own rule ("one
+  canonical statement per rule … grep for it") is the rule that applies; there is no rule in
+  this repository that protects AGENTS.md from an edit, and the file has been edited on this
+  lineage (130db5f).
 - The root-then-drop class is now MEASURED **per spelling**, not open, and the spellings do not
   all behave the same at run time. Who pid 1 is, read off `/proc/1/status` under the rendered
   line on podman 5.7.0, and every row of this list asserted:
