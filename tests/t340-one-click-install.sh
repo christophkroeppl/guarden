@@ -195,6 +195,7 @@ pass "the install state lives under /var, so it survives the conversion"
 # phases need a real host, so the run is given a repository whose tree makes
 # every phase report "already converged". That is a claim about the *run*,
 # and the run is what this asserts.
+mkdir -p /tmp/t340-install/tools
 cat >/tmp/t340-install/tools/install.sh <<'FAKE'
 #!/usr/bin/env bash
 # A stand-in for the installer's own body, in the machine only.

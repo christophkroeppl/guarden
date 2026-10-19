@@ -32,112 +32,105 @@ login session. `runuser -l <service> -c 'systemctl --user status web'` works too
 
 ## Installing a fresh host
 
-The canonical way to install a host is one command, and it is the one the
-installer prints for itself when it needs a second run:
+**One command, and the host converges by itself.**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/main/tools/install.sh | sudo bash
+``` (feat(install): the one-click install — a temporary service carries the run across the reboots)
 ```
 
-It clones the repository to `/usr/local/src/guarden` and converges every phase.
-You need nothing on the box but a network and a root shell: the installer
-installs the Python dependencies, the packages and the pinned `podlet` release
-itself.
+It clones the repository to `/usr/local/src/guarden`, converges every phase, and **reboots the
+machine itself** when the btrfs root conversion needs it. Nothing else is asked of you: the
+command returns when the host has converged, and the box reboots under it twice on the way there.
 
-**The run order is 75, 75, 0, and the two 75s are the design.** The btrfs
-root conversion is a staged offline operation that crosses two reboots — the
-first converts the root filesystem, the second boots into the migrated
-`@`/`@var`/`@tmp` layout — and the installer stops at each of them with **exit 75**,
-which means *a reboot is required, then run me again*. The command to re-run
-is printed in the banner before the script exits, so you never have to
-remember it:
+### what actually happens
+
+The installer does not run the phases itself. It writes a **temporary systemd service**,
+`guarden-install.service`, and starts it:
 
 ```
-[install]  btrfs root conversion staged.
-[install]  REBOOT now, then re-run:
-[install]    curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+/etc/systemd/system/guarden-install.service   the unit, enabled, and removed when the install converges
+/var/lib/guarden/install/install.sh             the copy the service runs
+/var/lib/guarden/install/runs                   how many times it has run
 ```
 
-So the whole thing is three runs:
+The service runs the installer again after every boot, and the installer — when it is the
+service talking — **reboots the machine instead of stopping and waiting for an admin**. The
+btrfs conversion is a staged offline operation that crosses two reboots, and this is what carries
+the run across them:
 
 | run | what it does | what you do |
 |---|---|---|
-| 1 | converges `install` and `packages`, stages the conversion | reboot |
-| 2 | runs the conversion in the initramfs, stages the `@`/`@var`/`@tmp` migration | reboot |
+| 1 | converges `install` and `packages`, stages the conversion | nothing — the box reboots |
+| 2 | runs the conversion in the initramfs, stages the `@`/`@var` migration | nothing — the box reboots |
 | 3 | finishes the migration and converges the rest | nothing — it prints `guarden host converged` |
 
-Re-running is safe and is the expected recovery, not a workaround: every phase
-is check-then-apply, so a phase that already converged is skipped and only the
-ones that have not are applied. **A run that ends in 75 has not failed** — it
-has staged a reboot and told you so.
+**The service is taken away when the install has finished.** The last thing the service's run
+does is ask every phase whether it has converged; a clean answer is what makes it disable the
+unit, delete the unit file and delete the state beside it. A host that has converged has no
+installer left to re-run, and a unit left behind would re-run it at every boot for ever.
+
+**The branch is set once.** The installer asks the repository for its own default branch, or
+takes the one you name with `--branch`:
+
+```sh
+curl -fsSL …/tools/install.sh | sudo bash -s -- --branch develop
+```
+
+Whatever it resolves to is written into the unit's environment, so the run after the first
+reboot uses **the same branch** as the run that staged the reboot. You never name it twice.
+
+**The state is under `/var` on purpose.** The conversion rsyncs `/var` into the `@var` subvolume,
+so the persisted script and the run counter come back after the reboot. A state directory under
+`/tmp` would not survive at all.
+
+**If the conversion does not progress, the install stops rather than looping.** The run counter
+is the bound: past six runs the service stops and names the marker and the state file to look
+at. A host that rebooted for ever would need a human to break the loop.
+
+Watch it with `journalctl -fu guarden-install.service`.
 
 ### the same thing through cloud-init
 
 If the host boots from a cloud-init document — the `vps` profile, which
-`tools/render-user-data --profile vps` renders — then cloud-init runs the
-installer **once**, and the host's first boot ends in the same staged reboot
-the scripts path stages. So:
+`tools/render-user-data --profile vps` renders — the document installs the substrate, clones the
+repository and calls the same installer, so the same service carries the same reboots. The
+document names the branch it renders from, and the installer uses that one.
 
-**Expect `cloud-init status: error` on the first boot, and re-run the installer
-by hand after each reboot.**
+**A boot's `cloud-init status` is not the host's convergence.** cloud-init's `runcmd` runs once
+per instance, so the document is read on the first boot and never again; the status it writes
+says whether *the document* ran, not whether the host converged. The service carries the rest,
+and the host's own answer is `soil --check`.
 
-```sh
-cloud-init status                       # status: error  <- expected, boot 1
-reboot
-curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
-reboot
-curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
-```
+### the phases, by hand
 
-The red is not a defect and it is not the document's fault: the installer's
-exit 75 is a *reboot required*, and cloud-init reads any non-zero exit as a
-failed module. The banner the installer prints before it exits names the
-command to re-run.
-
-**The re-run is yours to make — cloud-init will not make it, and `cloud-init
-status` will not tell you that it is missing.** The document's `runcmd` runs
-`once-per-instance`, and cloud-init writes that marker *before* the module
-runs, so the failed boot still counts as the instance's one. The next boot
-therefore reports the step as *previously ran* and does not run it again —
-which is why **`cloud-init status` reads `done` on the second boot while the
-host is still unconverged**. A green cloud-init status is not a converged host.
-
-The host is converged when the installer says so, and the way to ask is the
-host's own check:
+The installer is a convenience, not a requirement. The phases run by hand, in the order a fresh
+host needs them — `install` first, because it is what seeds the file `packages` resolves its
+fetch against and puts the programs on `PATH`:
 
 ```sh
-soil --check                            # silent, exit 0 -> converged
+soil install  --apply   # the programs, the groups, the files every phase reads
+soil packages --apply   # the distribution packages and the pinned podlet release
+soil storage  --apply   # schedules the btrfs conversion; run it again after each reboot
+soil sysctl   --apply
+soil firewall --apply
+soil units    --apply
+soil --check            # nothing drifted
 ```
 
-That is the answer to the question `cloud-init status` cannot answer. The
-installer is what resumes, and it resumes because every phase asks whether it
-has converged before it applies.
-
-If you would rather drive the phases by hand, the order and the reason for it
-are in [README.md](../README.md) under **Install**. The two paths converge on
-the same host and the same exit codes.
-
-### what the installer put where
-
-| path | what it is |
-|---|---|
-| `/usr/local/src/guarden` | the checkout — a git repository, and the only one on the host |
-| `/usr/lib/guarden` | guarden's own files, installed root-owned by `soil install`; **not** a checkout |
-| `/etc/guarden` | the configuration, root-owned |
-
-The two are different places and the distinction is the one the next section
-depends on: the checkout is where the code comes from, and the installed tree
-is where the programs live once they are on the host.
-
----
+Two reboots, and the second pair of commands is the whole of the recovery: `soil storage
+--apply` says so, and names the marker it wrote under `/var/lib/guarden/soil/`.
 
 ## Updating an installed host
 
 ```sh
-git -C /usr/local/src/guarden pull     # the checkout the installer cloned
-soil install --apply                   # re-copy the programs, reinstall the units
-weedr service list                     # confirm nothing changed underneath you
+git -C /usr/local/src/guarden pull   # the checkout the installer made
+soil install --apply                 # re-copy the programs, reinstall the units
+weedr service list                   # confirm nothing changed underneath you
 ```
+
+`/usr/lib/guarden` is where the **programs** live, root-owned; it is not a checkout and there
+is no `.git` in it. The checkout is `/usr/local/src/guarden`.
 
 `soil install` is the only phase that writes outside the host's own storage. It never stops a
 running service.

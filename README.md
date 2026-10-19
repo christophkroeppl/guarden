@@ -43,28 +43,37 @@ You can install `soil`, `weedr`, `loom`, `roots`, `stakes` and `furrow` and stop
 
 ## Install
 
+**One command, and the host converges by itself:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/main/tools/install.sh | sudo bash
+```
+
+It clones the repository, converges every phase, and **reboots the machine itself** when the
+btrfs root conversion needs it — twice, without anything asked of you. The installer hands the
+work to a temporary systemd service that carries the run across the reboots, and that service is
+taken away again the moment the host has converged.
+
+The **branch is set once**: the repository's own default branch, or the one you name with
+`--branch`, and the same branch is used for the run after the first reboot.
+
+`docs/sysadmin.md` has the whole contract, including what the service leaves behind and what
+happens if the conversion does not progress.
+
 There are two paths to the same state, and they converge on the same host. The command line, the
 exit codes and the word `drift` do not change with the path taken.
 
-**From cloud-init** — for a machine that boots a user-data document. The document is
-rendered from [`packages/packages.toml`](packages/packages.toml) and handed to the instance.
-There are two of them, and which one you want decides what the boot does:
+**From cloud-init** — for a machine that boots a user-data document. `tools/render-user-data
+--profile vps` renders one from [`packages/packages.toml`](packages/packages.toml) and hands it to
+the instance; the document installs the substrate, clones the repository and calls the same
+installer, so the same service carries the same reboots. **A boot's `cloud-init status` is not
+the host's convergence** — cloud-init's `runcmd` runs once per instance, so the status says
+whether the document ran; `soil --check` says whether the host converged.
 
-* the **`golden-vm`** document, which `tools/golden-vm` renders, installs the substrate and
-  then converges every phase and checks every phase itself — that is the throwaway harness
-  machine's document, and it is what `just golden-vm` boots;
-* the **`vps`** document, which `tools/render-user-data --profile vps` renders, installs the
-  substrate, clones the repository and hands convergence to `tools/install.sh` — that is the
-  fresh-host document, and it is the one a real VPS boots.
-
-**The `vps` path ends red on the first boot, and that is correct.** The btrfs
-conversion is a staged offline operation that crosses two reboots, and the
-installer stops at each of them with **exit 75** — *a reboot is required, then
-run me again*. cloud-init reads any non-zero exit as a failed module, so a
-**correct** run ends with `cloud-init status: error`. That is the design, not a
-broken document.
-
-The recovery is the same command, run again by hand after each reboot:
+**Manual fallback (no one-click service).** If you are not using the temporary service, the
+installer stops at each of the two staged reboots with **exit 75** and you re-run it by hand.
+cloud-init reads any non-zero exit as a failed module, so a correct run ends with
+`cloud-init status: error`:
 
 ```sh
 cloud-init status                        # status: error   <- expected, boot 1
@@ -75,34 +84,15 @@ curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/to
 soil --check                             # silent, exit 0   <- converged
 ```
 
-**The re-run is yours to make, and `cloud-init status` will not tell you it is
-missing.** The document's `runcmd` is `once-per-instance`, and cloud-init
-writes that marker *before* the module runs — so the failed boot still counts
-as the instance's one, the next boot reports the step as *previously ran*, and
-**`cloud-init status` reads `done` while the host is still unconverged**. A
-green cloud-init status is not a converged host; `soil --check` is the answer
-to that question.
+**The re-run is yours to make, and `cloud-init status` will not tell you it is missing.** The
+document's `runcmd` is `once-per-instance`, and cloud-init writes that marker *before* the module
+runs — so the failed boot still counts as the instance's one, the next boot reports the step as
+*previously ran*, and **`cloud-init status` reads `done` while the host is still unconverged**. A
+green cloud-init status is not a converged host; `soil --check` is the answer to that question.
 
-The installer is what resumes, and it resumes because every phase asks whether
-it has converged before it applies. The runbook says the same thing with the
-commands in full: [`docs/sysadmin.md`](docs/sysadmin.md) under **Installing a
-fresh host**.
-
-**From the scripts** — for a host without cloud-init, which is most of them. One command, and
-the same two reboots:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
-```
-
-It clones the repository to `/usr/local/src/guarden` and converges every phase.
-It exits **75** at each of the two staged reboots, printing the command to
-re-run before it exits, and exits **0** on the third run — so the whole thing
-is three runs, two reboots, and one `guarden host converged`.
-
-**Or drive the phases by hand** — same phases, run by hand, with `install`
-first, because it is what seeds the file `packages` resolves its fetch
-against and puts the programs on `PATH`:
+**From the scripts** — for a host without cloud-init, which is most of them. The one-shot
+installer above, or the same phases run by hand — with `install` first, because it is what seeds
+the file `packages` resolves its fetch against and puts the programs on `PATH`: (feat(install): the one-click install — a temporary service carries the run across the reboots)
 
 ```sh
 # 1. Install. `storage` reboots the machine twice to convert the root filesystem to btrfs.
