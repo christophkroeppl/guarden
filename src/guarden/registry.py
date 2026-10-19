@@ -124,6 +124,13 @@ class Instance:
     created: str
     publication: dict[str, int] = field(default_factory=dict)
     seed: dict[str, Seed] = field(default_factory=dict)
+    # The tree THIS ref last deployed from. The registry is one file per
+    # service and an instance's create() saves the service's record, so a
+    # hash kept only at the top was one value the service's deploys and every
+    # instance's took turns writing — and the next `add` of an unchanged
+    # service then compared the service's tree against an instance's and
+    # re-deployed, which spec 5.3's idempotency forbids.
+    source_hash: str | None = None
 
     def to_document(self) -> dict[str, Any]:
         # `ref` is stored alongside the escaped key, because the escaping is
@@ -137,6 +144,8 @@ class Instance:
             document["publication"] = dict(self.publication)
         if self.seed:
             document["seed"] = {name: seed.to_document() for name, seed in self.seed.items()}
+        if self.source_hash:
+            document["source_hash"] = self.source_hash
         return document
 
     @classmethod
@@ -147,6 +156,7 @@ class Instance:
             created=document.get("created", ""),
             publication=dict(document.get("publication", {})),
             seed=_seeds(document.get("seed")),
+            source_hash=document.get("source_hash"),
         )
 
 

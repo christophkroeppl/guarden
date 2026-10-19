@@ -226,7 +226,11 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # visible to the convergence check is computed for `add` as well as for a
     # poke (ticket 297): without it an edited source still answered `converged`
     # and installed nothing. A module's source is guarden's own shipped tree and
-    # no caller edits it, so it stays unhashed.
+    # no caller edits it, so it stays unhashed. Where the hash is RECORDED is
+    # the deploy's own: the service's at the top of the record, an instance's
+    # under its ref — the registry is one file per service, and one shared
+    # field was a value an instance's ingest wrote over the service's own
+    # (review finding 1).
     source_hash = _source_hash(directory) if source.kind in ("poke", "service") else ""
     if existing is not None and _converged(existing, resolved, manifest, project, source_hash):
         outcome.converged = True
@@ -268,7 +272,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # is the only copy a consumer can read: the provider's own tree is 0700 to
     # the provider and loom runs as guarden.
     record.provides = list(manifest.provides)
-    if source_hash:
+    if source_hash and not resolved.escaped_ref:
         record.source_hash = source_hash
     # spec 3.4: what the manifest asked for, in manifest order. A grant is matched
     # against this and against nothing else, so `weedr port open` can refuse a port
@@ -290,6 +294,14 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
         # stays empty here — no fork has taken yet — and the instance's
         # publications are allocated below, once it exists.
         previews.register(resolved, record, now)
+    if source_hash and resolved.escaped_ref:
+        # The instance's own tree, under its own ref, once the entry exists
+        # (register, above, creates it on the first deploy): the service's top-
+        # level hash stays the tree the SERVICE's deploys recorded, so the next
+        # `add` of an unchanged service still converges instead of re-deploying
+        # against a hash an instance's poke left behind (review finding 1,
+        # spec 5.3's idempotency).
+        record.instances[resolved.escaped_ref].source_hash = source_hash
 
     _allocate(resolved, record, manifest, config, source)
 
@@ -581,6 +593,22 @@ def _project_from(source: Source) -> str:
     return record.project
 
 
+def _deployed_hash(record, escaped_ref: str | None) -> str:
+    """What THIS ref last deployed from: the instance's own tree under its
+    ref, the service's own tree otherwise.
+
+    The registry is one file per service and an instance's `create()` saves
+    the service's record, so the hash has to be read where the deploy that
+    wrote it recorded it — a single top-level field was answered by whichever
+    deploy ran last, service or instance, and the loser re-deployed a tree
+    nothing had changed (review finding 1, spec 5.3's idempotency).
+    """
+    if escaped_ref:
+        instance = record.instances.get(escaped_ref)
+        return (instance.source_hash if instance is not None else "") or ""
+    return record.source_hash or ""
+
+
 def _converged(
     record,
     resolved,
@@ -590,7 +618,7 @@ def _converged(
 ) -> bool:
     if record.project != project or record.environment != resolved.track.name:
         return False
-    if source_hash and record.source_hash != source_hash:
+    if source_hash and _deployed_hash(record, resolved.escaped_ref) != source_hash:
         return False
     if resolved.escaped_ref and resolved.escaped_ref not in record.instances:
         return False
