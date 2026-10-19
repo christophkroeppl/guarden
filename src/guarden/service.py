@@ -315,12 +315,22 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     retention = volumes.retention_from(resolved.track, granted)
     for vol in manifest.state:
         volumes.create_state(resolved.name, vol, retention, owner, resolved.escaped_ref)
-        _record(
-            record,
-            vol,
-            "state",
-            None if resolved.escaped_ref else paths.snapper_config(resolved.name, vol),
-        )
+        # The volume table is the SERVICE's: an instance's snapper
+        # configuration is `<service>-<ref>-<vol>` and is derived from the ref
+        # wherever it is needed (`paths.snapper_config`), so an instance's
+        # deploy records nothing over the name the service's own deploys
+        # wrote. Recording `None` here overwrote it, and the next
+        # service-level `add` compared the service's volumes against an
+        # instance's configuration — never equal — so a converged service
+        # re-deployed in full (review finding 1, spec 5.3's idempotency:
+        # observed red with only the per-ref hash fix in place).
+        if not resolved.escaped_ref or vol not in record.volumes:
+            _record(
+                record,
+                vol,
+                "state",
+                None if resolved.escaped_ref else paths.snapper_config(resolved.name, vol),
+            )
     for vol in manifest.bulk:
         volumes.create_bulk(resolved.name, vol, owner, resolved.escaped_ref)
         _record(record, vol, "bulk", None)
