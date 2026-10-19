@@ -794,12 +794,12 @@ def _start(args) -> int:
 
     # **A credential the units ask for and nothing planted stops the start on
     # an ungated track too.** The gate's state on that track is `not-required`
-    # and the start proceeds — that is the whole difference between the two
-    # tracks (spec 6.6 step 3) and it is not what changes here. What changes is
-    # that the container would ask podman for a secret that is not in the
-    # service's store, and podman answers `125 no such secret`: a raw runtime
+    # and the gate's own phase does not block — but the START refuses, because
+    # a container whose unit carries `Secret=<KEY>` and whose store has no
+    # `<KEY>` is refused by podman with a raw `125 no such secret`: a runtime
     # error, naming a podman message, where the operator needs the key (tickets
-    # 305 and 313).
+    # 305 and 313). The difference between the tracks is what the *deploy* does
+    # with the gate's state (spec 6.6 step 3), and it is not what changes here.
     #
     # **The refusal is one line and it names the keys**, so the operator knows
     # what to plant. It is the host not being in the state the request assumed

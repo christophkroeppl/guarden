@@ -185,29 +185,49 @@ def text_item(what: str, path: Path, content: str, mode: int = MODE_CONFIG) -> I
 
 
 def sudoers_item(what: str, path: Path, content: str) -> Item:
-    """A file sudo reads, compared as text AND as mode.
+    """A file sudo reads, compared as text, as mode AND as owner.
 
-    **The mode is part of the fact, and for this file it is not a detail.** sudo
-    refuses a sudoers file that is world-writable, and a file under
-    `/etc/sudoers.d/` that is not readable by root alone is a grant the
-    grantee could edit. `0440` says: root owns it, root alone reads it, and
-    everyone can execute it (which is meaningless for a text file, and is what
-    the `o` bit costs nothing).
+    **The mode and the owner are part of the fact, and for this file they are
+    not details.** sudo refuses a sudoers file that is world-writable, and a
+    file under `/etc/sudoers.d/` that is not owned by root and not readable by
+    root alone is a grant the grantee could edit. `0440 root:root` says: root
+    owns it, root alone reads it, and everyone can execute it (which is
+    meaningless for a text file, and is what the `o` bit costs nothing).
 
     A plain `text_item` would compare the CONTENT only, so a file whose content
     is right and whose mode is `0644` — readable by every account on the host —
     would pass `--check` and keep passing, and the grant would be readable by
-    the very accounts it binds.
+    the very accounts it binds. And a file owned by a service user with the
+    right content and the right mode is a grant that account can rewrite, which
+    is the same boundary from the other side.
+
+    **The owner is compared the way `directory_item` compares it** — through
+    `stat`, so it costs no privilege, and a uid or gid that does not exist
+    resolves to "does not hold" rather than to an exception.
     """
-    return Item(
-        what,
-        lambda: (
-            path.is_file()
-            and path.read_text(encoding="utf-8") == content
-            and stat.S_IMODE(path.stat().st_mode) == MODE_SUDOERS
-        ),
-        lambda: write_file(path, content, MODE_SUDOERS),
-    )
+
+    def ids() -> tuple[int, int] | None:
+        try:
+            return pwd.getpwnam("root").pw_uid, grp.getgrnam("root").gr_gid
+        except KeyError:
+            return None
+
+    def holds() -> bool:
+        wanted = ids()
+        if wanted is None or not path.is_file():
+            return False
+        info = path.stat()
+        return (
+            path.read_text(encoding="utf-8") == content
+            and stat.S_IMODE(info.st_mode) == MODE_SUDOERS
+            and (info.st_uid, info.st_gid) == wanted
+        )
+
+    def converge() -> None:
+        write_file(path, content, MODE_SUDOERS)
+        os.chown(path, pwd.getpwnam("root").pw_uid, grp.getgrnam("root").gr_gid)
+
+    return Item(what, holds, converge)
 
 
 def directory_item(

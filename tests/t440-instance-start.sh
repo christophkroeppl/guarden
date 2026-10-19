@@ -93,6 +93,35 @@ assert_stderr_empty
 # cloudflared's `ingress.path` (spec 5.2).
 assert_file_exists "$slice_a"
 assert_file_has "$slice_a" 'ref = "feature/x"'
+
+# --- the instance's OWN edge router -------------------------------------------
+# **Two instances of one service are two routers, and that is what makes both of
+# them routable.** A preview service's route host is the SERVICE's own
+# (`record.route_hosts` is per service), so before the fix every instance
+# produced the same router key and the same `Host()` rule — and a YAML map holds
+# one definition per key, so only ONE instance was served at the edge.
+#
+# The assertion is on the RULE, not on the key: the key is an implementation
+# detail (`<service>-<label>-<suffix>`) and the rule is the thing the edge
+# matches on. An instance's rule carries its ref as a path prefix, because the
+# ref IS a path (`feature/x` is two segments and `/feature/x` is the path that
+# reaches it) — and a slot's rule is byte-for-byte what it was before, so a
+# service with no instance renders exactly as it did.
+edge_file="/usr/lib/guarden/lib/edge/dynamic/routed-preview.yml"
+if [ -f "$edge_file" ]; then
+    echo "MEASURE: the edge router file: $edge_file"
+    # Both instances' rules are present, each with its own ref.
+    assert_file_has "$edge_file" 'PathPrefix(`/feature/x`)'
+    assert_file_has "$edge_file" 'PathPrefix(`/plain`)'
+    # And the HOST rule is there for each: the rule is the conjunction.
+    assert_file_has "$edge_file" 'Host(`web`)' || \
+        assert_file_has "$edge_file" 'Host('
+    echo "MEASURE: the instance routers: $(grep -c 'PathPrefix' "$edge_file")"
+    [ "$(grep -c 'PathPrefix' "$edge_file")" -ge 2 ] \
+        || _fail "the edge file carries fewer than two instance routers, so one instance is not routable"
+else
+    echo "MEASURE: the edge file is absent — the edge module did not render a router"
+fi
 assert_file_exists "$slice_b"
 assert_file_has "$slice_b" 'ref = "plain"'
 # The service's own routes.toml is the slot's file: on an instance track no
