@@ -189,8 +189,14 @@ assert_file_lacks "$oldrendered" "basicAuth"
 # a module's absence does not undo a decision. What must NOT survive is a
 # dangling middleware: `roots` renders `usersFile` at the entry's path for any
 # flagged service, whether or not the file is there.
+# Removing the module's own service out of the gated production track is the
+# operator's deliberate act, signalled the way t30-remove and t100-homepage
+# signal it: the `allow-gated-drop` marker, taken away again immediately.
+marker=/etc/guarden/allow-gated-drop
+touch "$marker"
 run weedr module remove gate-traefik
 assert_exit 0
+rm -f "$marker"
 assert_file_missing "$policy"
 assert_file_missing "$htpasswd"
 assert_file_missing "$entries/oldapp-staging.htpasswd"
