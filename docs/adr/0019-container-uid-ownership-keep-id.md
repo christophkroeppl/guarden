@@ -112,26 +112,36 @@ delivered WRITE_OK into a 994-owned 0700 dir with files landing owned by the ser
   it: empty, `0` and `root` are one declaration (container root) and are answered by the
   image's gosu/su-exec handoff target when the entrypoint names one (asked of every word of
   `Entrypoint`/`Cmd` — a bare `gosu`/`su-exec` element takes the word after it, exec form
-  included — and of the script any of those words names, at whatever position it sits), and
+  included, and the word may carry a `user:group` spec, which is the spelling the stock
+  postgres image uses — and of every `.sh` script any of those words names, at whatever
+  position it sits; a word naming a script that does not end in `.sh` is not read), and
   by nothing — **no line**, the default mapping — when it does not; a non-root number or
   name is resolved
-  against the image's own `/etc/passwd` and `/etc/group`, where a field that is not a number
-  is refused the way a user the image does not carry is (spec 1.2: one line, exit `2`). The
+  against the image's own `/etc/passwd` and `/etc/group`, where a field that is not a
+  decimal number — or a field the row does not carry at all — is refused the way a user
+  the image does not carry is (spec 1.2: one line, exit `2`). The
   table decides the RECORD; what each of the three root spellings then RUNS as under the line
   is measured per spelling below, and they do not all run the same way. An
   image that reaches no user at all is the no-self-heal class, a documented gap left to the
-  A3 fallback or a future manifest runtime-uid field — not invented here.
+  A3 fallback or a future manifest runtime-uid field — not invented here. The table names
+  `gosu` and `su-exec` and no other privilege-dropping tool: a wrapper that drops
+  privileges with `setpriv`, `runuser` or `chroot --userspec` reaches no user here, and
+  is the same no-self-heal class.
 - The registry records `owner_uid`/`owner_gid` (ticket 277's drift anchor) plus `owner_image`,
   the image that pair was read from — and, **for a service whose units name more than one
   image, a per-unit `owner_units` map** of image/uid/gid. A single-image service's document
-  keeps the shape it always had: the scalar pair and no table. Only units that disagree about
-  their user grow one, and the renderer answers **each unit from its own entry**, so each unit
+  keeps the shape it always had: the scalar pair and no table. **The table grows when the
+  units name more than one image** — two units on one image never grow it, and two units on
+  two images grow it whether or not the two images declare the same user — and the renderer
+  answers **each unit from its own entry**, so each unit
   maps its own image's user onto the same service identity and no image's uid is ever taken up
   by another container (each unit runs what its own image puts on pid 1 — or, where the image
   names no user, its own pin — and either way the pin decides where that uid
   lands — measured, t350/t351/t352). A unit the
   record does not answer renders no line and is the probe's condition again at the next start,
-  never another unit's pin — and the renderer asks that per unit AND per image, the
+  never another unit's pin — except for a record that carries no `owner_image` at all, the
+  shape written before that field existed, which answers every unit with its one pair, because
+  there is no image to disagree with — and the renderer asks that per unit AND per image, the
   reference the unit names resolved the way the probe resolves it, so a deploy that renders
   a unit whose `Image=` changed writes no line rather than the pair read from another image
   (round 3, measured t350). Re-ingest can no longer break ownership because nothing chowns.

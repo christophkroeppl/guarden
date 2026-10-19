@@ -1551,11 +1551,16 @@ def _entrypoint_user(name: str, record, reference: str, argv: list[str]) -> str 
     Asked of the words of `Entrypoint`/`Cmd` first — `sh -c 'exec gosu app …'`
     carries the name inside one element, and the exec form
     `["su-exec", "app", …]` carries it as the word after a bare handoff
-    command — and then of the script ANY of those words names, at whatever
-    position it sits: the stock supervisor shape
+    command, with or without a `user:group` spec — and then of every `.sh`
+    script ANY of those words names, at whatever position it sits: the stock
+    supervisor shape
     `["/sbin/tini", "--", "/docker-entrypoint.sh"]` names its script second,
     and a read gated on `argv[0].endswith(".sh")` never opened it, so the
-    probe answered "no handoff" from having looked at nothing. A passwd row
+    probe answered "no handoff" from having looked at nothing. **Only a `.sh`
+    name is read**: a word naming a script that does not end in `.sh` is not
+    opened, because reading every argv element as a script would refuse every
+    image — the gate is the code's narrowing, and it is the narrowing this
+    docstring states. A passwd row
     alone is never the answer: an entrypoint that is the application itself
     declares nothing to hand off to, and choosing a row would pin the line
     onto a uid nobody asked for. None means "no defensible user", which the
