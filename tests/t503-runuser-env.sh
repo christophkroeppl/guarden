@@ -228,16 +228,19 @@ assert_stdout_has "DB_PASSWORD"
 # store's OWN answer and not the suite's reading of a path: `podman info`
 # reports where it put its graphroot, and that is the whole claim.
 #
-# **The caller's hostile XDG_DATA_HOME is IN the environment here**, because
-# the question is whether the service's own podman finds its own store or the
-# caller's — and a scrub that is only in guarden's own helper would not
-# answer it.
-run_in "$home" env -u XDG_RUNTIME_DIR -u XDG_CONFIG_HOME -u XDG_CACHE_HOME \
-    -u DBUS_SESSION_BUS_ADDRESS -u CONTAINERS_STORAGE_CONF -u CONTAINERS_CONF \
-    "XDG_DATA_HOME=$hostile" \
+# **The question is asked with the value the helper sets**, which is the
+# service's own XDG data directory. The hostile value is NOT put back here:
+# this call is the suite asking podman a question, and podman reads
+# XDG_DATA_HOME from whatever environment it is given — the scrub lives in
+# guarden's helper, and the assertion that the hostile value cannot reach the
+# product's own podman is the materialiser above, not this line.
+run_in "$home" env -u XDG_RUNTIME_DIR -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+    -u XDG_CACHE_HOME -u DBUS_SESSION_BUS_ADDRESS \
+    -u CONTAINERS_STORAGE_CONF -u CONTAINERS_CONF \
+    "XDG_DATA_HOME=$home/.local/share" \
     runuser -u "$svc" -- podman info --format '{{.Store.GraphRoot}}'
 assert_exit 0
-echo "MEASURE: podman's graphroot with the caller's XDG_DATA_HOME still set: $(cat "$GUARDEN_STDOUT")"
+echo "MEASURE: podman's graphroot for the service's own store: $(cat "$GUARDEN_STDOUT")"
 graphroot=$(cat "$GUARDEN_STDOUT")
 [ "$graphroot" = "$store" ] \
     || _fail "podman's graphroot is $graphroot, and the store the repository names is $store"
@@ -257,11 +260,15 @@ assert_mode "$store/secrets" 700
 # store holding both would be a store holding a stale credential — and this is
 # the same call site a second time, under the same hostile environment.
 #
-# **The materialiser is run DIRECTLY here too**, because the oneshot's
-# environment is clean and would not exercise the path. The `secret rm` that
-# precedes the `create` is the half that matters: it runs `podman secret rm`
-# as the service user, under the caller's environment, and a removal that did
-# not happen is a `create` that answers "secret name in use".
+# **The value is re-planted first**, because the materialiser carries what is
+# on disk and a rotation is a new value on disk. The plant itself asks
+# through the clean oneshot, so the materialiser below is the part that runs
+# in THIS shell — and it is the part that must remove the old secret before it
+# creates the new one: the `podman secret rm` runs under the caller's
+# environment, and a removal that did not happen is a `create` that answers
+# "secret name in use".
+run weedr secret set "$svc" DB_PASSWORD <<<"a-rotated-value"
+assert_exit 0
 run weedr secret materialise "$svc"
 assert_exit 0
 echo "MEASURE: the rotation's materialiser said: $(cat "$GUARDEN_STDOUT")"
