@@ -188,10 +188,42 @@ assert_exit 0
 assert_stdout_has "127.0.0.0/8"
 assert_stdout_has "DROP"
 
-# `iptables -nvx -L` prints `pkts bytes target prot opt in out source destination`,
-# so the DROP rule's counter is the FIRST field and its destination is
-# `127.0.0.0/8`. One function, so the two readings cannot differ in how they were
-# taken.
+# **THE COUNTER OF THE DROP RULE IS HOST-WIDE, AND THIS IS THE RED STEP.**
+#
+# The rule guarden renders is `daddr 127.0.0.0/8 jump DROP;` with no owner
+# match — that is what makes it a default deny — so every uid's loopback
+# traffic that falls past the accepts above it lands on this one rule and
+# moves its count. A count on this rule is a property of THE HOST'S LOOPBACK
+# TRAFFIC, not of the packet a test sent.
+#
+# **The two destinations below do not make the count private.** The stub is
+# read at 127.0.0.53 and the discard port at 127.0.0.1:9, and both readings
+# come off the SAME rule and therefore the SAME count. A destination chooses
+# which rule absorbs a packet; it does not make a counter private to the
+# sender.
+#
+# **So the traffic that would move it is started here, on purpose.** `guarden`
+# is the account guarden's own programs run as, and it is NOT a service uid:
+# nothing above the deny accepts its packets, so they fall through to the drop
+# and move the shared count. The destination is the discard port and the
+# protocol is UDP — no accept above the deny names them.
+flood_pid=""
+flood_start() {
+    env -C /tmp setpriv --reuid=guarden --regid=guarden --clear-groups \
+        env -u OLDPWD HOME=/tmp PWD=/tmp \
+        sh -c 'while :; do printf "\x00\x00" | nc -u -w1 127.0.0.1 9; sleep 0.1; done' \
+        >/dev/null 2>&1 &
+    flood_pid=$!
+}
+flood_stop() {
+    if [ -n "$flood_pid" ]; then
+        kill "$flood_pid" 2>/dev/null || true
+        wait "$flood_pid" 2>/dev/null || true
+        flood_pid=""
+    fi
+}
+trap flood_stop EXIT
+
 deny_packets() {
     iptables-legacy -nvx -L guarden-svc 2>/dev/null \
         | awk '$3 == "DROP" && $9 == "127.0.0.0/8" {print $1; exit}'
@@ -207,6 +239,7 @@ stub_packets() {
 # **Half one: the stub is reachable, and the accept above the deny is what lets it.**
 # The stub counter is the sum over both protocols because the render carries an accept
 # each, and one UDP send must move the UDP one.
+flood_start
 stub_before=$(stub_packets)
 deny_before=$(deny_packets)
 run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.53 53' || true
@@ -228,6 +261,7 @@ other_after=$(deny_packets)
 echo "MEASURE: OTHER_DENY=$other_before->$other_after"
 [ "$other_after" -gt "$other_before" ] \
     || _fail "a loopback destination other than the stub was not denied, so the accept is too wide"
+flood_stop
 
 # The unit is generated, loaded and found, so whatever happens next is podman's and
 # not systemd's.
