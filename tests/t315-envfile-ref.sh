@@ -179,13 +179,19 @@ echo "MEASURE: the env file podman is handed: ${env_arg:-<none>}"
 # the instance's own tree -- must reach podman with its ONE backslash.
 # Escaping it too would point the mount at a directory that is not there, and
 # the container would come up with an empty `/data`.
+#
+# **The backslash is counted, not pattern-matched.** A `case` pattern with
+# `\\x2fx` in it is two literal backslashes in bash, and the value carries
+# one — so the pattern would match a volume that had been escaped a second
+# time and would NOT match one that had not, which is the exact opposite of
+# what the assertion is for. The count is what the question is about.
 vol_arg=$(printf '%s' "$argv" | tr ' ' '\n' | grep -A1 -x -- '-v' | tail -n 1)
 echo "MEASURE: the volume podman is handed: ${vol_arg:-<none>}"
 [ -n "$vol_arg" ] || _fail "the generated command carries no -v, so the declared volume is not mounted at all"
-case "$vol_arg" in
-    *'\\x2fx'*) ;;
-    *) _fail "the volume path '$vol_arg' does not carry the escaped ref's own backslash, so it was escaped a second time" ;;
-esac
+vol_backslashes=$(printf '%s' "$vol_arg" | tr -cd '\\' | wc -c)
+echo "MEASURE: the backslashes in the volume path: $vol_backslashes"
+[ "$vol_backslashes" = 1 ] \
+    || _fail "the volume path '$vol_arg' carries $vol_backslashes backslashes and must carry exactly one: the escaped ref's own, and a second one would point the mount at a directory that is not there"
 
 # --- the start, and the container -------------------------------------------
 #
