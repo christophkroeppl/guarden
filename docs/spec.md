@@ -2040,6 +2040,21 @@ The steps, in this order, and the order is the point :
   `podman build` **as the service user** on the service's own tree, tagged with the image
   reference the manifest names.
 
+  **The build context is the service's own tree, and the tree is the whole staged source.**
+  `podman build` reads the service's home directory as its context, and the home holds the
+  staged source tree the service was created from — the unit source, the compose file, the
+  Containerfile, the `.dockerignore`, and the application's own files. A Containerfile that
+  copies its source (`COPY Cargo.toml Cargo.lock ./`) needs those files **in the context**, and
+  a context of four files cannot satisfy it: the build dies with `125` and a `COPY` of a
+  file that is not there. So the staged tree is copied whole into the home, the source's own
+  `.dockerignore` decides what the build does not see, and the home is unchanged for runtime.
+  **What is never in the context** is the same two things that are never in the home: the
+  rootless podman image store and the per-user secret database, because they are large, they
+  are not the build's, and a context carrying the credential material is a context that
+  leaks it into an image layer. The home is the build's only tree, which is why the verb
+  takes no `--from`; that confinement is the reason the verb has no argument, and it is not
+  affected by what the context contains.
+
   **`weedr service build` takes no `--from`, and that is the fix rather than a restriction.** It
   takes no `--from` because the staging confinement written for `weedr service add --from` was
   never copied to it — a separate verb on the same sudoers rule, simply not mentioned, and

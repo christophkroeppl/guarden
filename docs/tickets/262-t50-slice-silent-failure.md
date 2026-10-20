@@ -3,9 +3,16 @@
 **Blocked by:** nothing. **Blocks:** nothing today; it makes `just test` red, so it blocks
 any release gate that runs the whole suite.
 
-**What to build:** Nothing. This ticket records a defect found while three parallel agents
-were working tickets 220, 240 and 261, and could not be diagnosed inside any of them
-because it is not any of their bugs.
+**What to build:** The three things in `## Acceptance` below, in `tests/t50-slice.sh` and
+`tests/lib.sh`: the suite must name the command that failed, the deny assertion must prove
+the packet it sent is the one counted, and the suite must be green on `develop` with no
+branch applied. Read the `## Acceptance` section — it is the work, and it is already
+written down.
+
+**What this ticket records:** a defect found while three parallel agents were working
+tickets 220, 240 and 261, which could not be diagnosed inside any of them because it is
+not any of their bugs. The history is in `## What was found` below; the work is the
+`## Acceptance` section, and the two are not the same thing.
 
 ## What was found
 
