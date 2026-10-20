@@ -3,6 +3,28 @@
 **Blocked by:** nothing. **Blocks:** nothing today; it makes `just test` red, so it blocks
 any release gate that runs the whole suite.
 
+**Status: DONE (2026-10-20).** All three acceptance criteria are met on `develop`
+with no branch applied, and each one is verified in the VM:
+
+- *The suite names the command that failed.* `tests/lib.sh` carries an `ERR` trap
+  that prints `error: failed at line <n>: <command> (exit <rc>)`, and
+  `tests/t10-failure-messages.sh` asserts the runner's failure text every way a
+  gate can read it — `t10-failure-messages.sh: green`.
+- *The deny assertion cannot be moved by concurrent traffic.* `tests/t50-slice.sh`
+  measures the stub's accept and the deny's drop at **two different
+  destinations** (127.0.0.53 and 127.0.0.1:9), so a packet counted by one cannot
+  be confused with the other. Measured in the VM on `develop`:
+  `STUB_ACCEPT=14->15 DENY_DROP=0->0` and `OTHER_DENY=0->1`.
+- *`t50-slice.sh` is green on `develop` with no branch applied.*
+  `t50-slice.sh: ok`, one machine cut.
+
+The third criterion is the one that was false when this ticket was written: the
+suite was red on `develop` itself. It is green now, and the two faults below are
+fixed in the tree.
+
+**This ticket is a RECORD now, not a work list** — the work it describes is done.
+The history is kept because it is why the criteria are shaped the way they are.
+
 **What to build:** The three things in `## Acceptance` below, in `tests/t50-slice.sh` and
 `tests/lib.sh`: the suite must name the command that failed, the deny assertion must prove
 the packet it sent is the one counted, and the suite must be green on `develop` with no
