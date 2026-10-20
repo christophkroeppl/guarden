@@ -320,19 +320,58 @@ def read(path: Path) -> Manifest:
             f"the manifest {path} lists {both[0]!r} as both a state and a bulk volume"
         )
 
+    provides = _provides(document.get("provides", []), path)
+    _check_provider_volume(provides, state, bulk, path)
+
     return Manifest(
         source=path,
         project=_project(document.get("project"), path),
         units=_units(document.get("units"), path),
         state=state,
         bulk=bulk,
-        provides=_provides(document.get("provides", []), path),
+        provides=provides,
         needs=_needs(document.get("needs", []), path),
         ports=_publications(document.get("ports", []), path),
         routes=_routes(document.get("routes", []), path),
         widgets=_widgets(document.get("widgets", []), path),
         firewall=_firewall(document.get("firewall", []), path),
         schema=_schema(document.get("schema"), path),
+    )
+
+
+def _check_provider_volume(
+    provides: list[str], state: list[str], bulk: list[str], path: Path
+) -> None:
+    """A `db` provider that declares no volume is refused (spec 4).
+
+    The rule, its reasons and its limits are in the spec, and this is the
+    check that carries it: **a manifest that provides the `db` kind declares
+    a volume or it is refused.** The `db` kind is the one guarden writes into
+    itself — the role and the database a consumer's edge asks for are created
+    in the provider's own engine — and a container with no declared volume
+    keeps its data in podman's anonymous volume, which podman's garbage
+    collector removes when the container is recreated.
+
+    The check is on the **declaration** and not on the path, because the path
+    is often the image's own `VOLUME` and guarden cannot read an image: the
+    renderer is unprivileged and pure, and the image is not pulled until a
+    start. A repository that names no path at all is refused by this same
+    line as one that names a path it did not declare.
+
+    `state:` and `bulk:` both satisfy it: a `bulk` volume is a subvolume the
+    collector never touches, and `state:` adds the rollback on top.
+    """
+    if "db" not in provides:
+        return
+    if state or bulk:
+        return
+    raise errors.GuardenError(
+        f"the manifest {path} provides the kind 'db' and declares no volume: a container with no "
+        f"volume keeps its data in an anonymous volume in the service's image store, which podman "
+        f"removes when the container is recreated, so the data is gone after a re-ingest and "
+        f"nothing says so. Declare a `state:` volume (snapshotted, and what `weedr service "
+        f"rollback` restores from) or a `bulk:` volume (not snapshotted) and mount that name in "
+        f"the unit source. The new volume starts EMPTY: move the data across yourself"
     )
 
 

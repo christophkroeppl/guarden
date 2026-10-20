@@ -43,6 +43,7 @@ filesystem, the installed services and the remote are the host. So:
 | an unknown or malformed key, a name that breaks a rule, a port out of range, an ambiguous unit source, a `service:` where a `container:` belongs | `2` |
 | a container named in `routes:`, `ports:` or `widgets:` that the unit source does not define | `2` — both are input |
 | a volume named in `state:` or `bulk:` that the unit source does not mount, or a name in both | `2` — both are input |
+| a manifest that provides the `db` kind and declares no volume at all | `2` — both are input, and the data would be ephemeral (§8.1) |
 | a `needs:` entry whose provider does not exist, or exists and does not offer the `as:` kind | `1` — the answer came from the host, read from the provider's registry |
 | a requested port already held by another service | `1` |
 | `weedr firewall open` for a rule the manifest did not request, or a `firewall:` entry outside the closed rule shape of §7.7 | `2` |
@@ -972,6 +973,33 @@ Validation rules:
   **resulting service name** must not exceed 31 characters, and that is what is checked.
 - `state` and `bulk` entries must match `^[a-z0-9][a-z0-9._-]*$`, must name a volume the unit
   source mounts, and a name may not appear in both.
+- **A manifest that provides the `db` kind must declare a volume.** It is refused, exit `2`,
+  when it declares neither `state:` nor `bulk:`. The rule and its limits, stated once, because
+  the failure it prevents is silent and the data is gone with nothing saying so:
+  - **Why `db` and not every kind.** Guarden writes into a `db` provider itself: §5.3 step 10
+    creates the role and the database in the provider's own engine, and that is a write to a data
+    directory. It happens when a consumer's `database` edge is provisioned, so a `db` provider
+    nobody edges to has had no role created in it — but the kind is the one that means a
+    database, and a database holds data. The other kinds (`bitcoin`, `nbxplorer`, `btcpay`,
+    `nostr`) are reachability — an endpoint with no data of its own that guarden made — so a
+    service that keeps files declares a volume for them whatever it provides.
+  - **Why the data would be ephemeral without one.** A container that mounts no declared volume
+    keeps its data in **podman's anonymous volume** for whatever path the image declares, and
+    podman's garbage collector removes that volume when the container is recreated. The data
+    does not survive a re-ingest, a restart or an image rebuild. A declared volume is a btrfs
+    subvolume under the service's own tree (§8.1), which the collector never touches.
+  - **What the rule cannot see, and says so.** The data path is often the **image's** own
+    `VOLUME` and not anything the repository states — a compose that names no path at all is
+    exactly the case that loses the data. Guarden cannot read it: the renderer is unprivileged
+    and pure (§6.3) and the image is not pulled until a start. So this rule is on the
+    **declaration** and not on the path, and a repository that names no path is refused by
+    exactly the same one line as one that names a path it did not declare.
+  - **What the rule does not cover.** A service whose data lives on a **host path** permitted by
+    `[mounts] allow` in the root-owned `overrides.toml` is durable already, and this rule does
+    not reach it — the mount is a host fact, not a manifest declaration.
+  - **A `state:` volume and a `bulk:` volume both satisfy it.** What the rule protects is the
+    data being *gone*; `state:` adds the rollback on top, and a provider that wants that
+    declares `state:`.
 - `needs` entries must name a service that exists **or will exist**, carry an `as:` kind, and a
   port in range. A service that does not exist *yet* is not an error: a poke creates services in
   dependency order and a manifest may name a service a later deploy brings into being.
@@ -2785,6 +2813,24 @@ Every declared volume, `state` or `bulk`, is a btrfs subvolume owned by the serv
 track, `<service>-<escaped-ref>-<volume>`. A `bulk` volume
 has none, is never snapshotted, is never a fork or rollback source, and is created empty by a
 fork.
+
+**A volume is what makes a service's data durable, and a service that keeps data declares
+one.** A container that mounts no declared volume keeps its data in **podman's anonymous
+volume** for whatever path the image declares, and podman's garbage collector removes that
+volume when the container is recreated — so the data does not survive a re-ingest, a restart
+or an image rebuild, and nothing on the box says so, because the volume was never a thing
+anybody named. A declared volume is a subvolume under the service's own tree, and the
+collector never touches it. The rule that follows from this is in §4: **a manifest that
+provides the `db` kind declares a volume or is refused**, because guarden writes into a `db`
+provider itself (§5.3 step 10) and that write is to a data directory.
+
+**A declared volume is a NEW, EMPTY subvolume, and a service that already had its data
+somewhere else does not get that data moved.** The re-ingest that adds the declaration creates
+the subvolume and mounts it; whatever was in the anonymous volume stays in the anonymous
+volume, and podman's collector still takes it. So the operator moves the data across
+deliberately — a dump and a restore, or a copy — and the declaration only makes the *next*
+write durable. A refusal that names the declaration and says nothing about that is a
+refusal that leaves the operator believing the data followed the change.
 
 **A configuration's name is opaque, and nothing parses it.** Workload names and volume names may
 both contain `-`, so `<service>-<volume>` cannot be decomposed back into its parts, and code
