@@ -3,6 +3,14 @@
 Blockers: none (the workaround exists; this records the finding). Found
 2026-10-13 deploying the first real service on a converged host.
 
+**Status: DECIDED (2026-10-20, operator) — ADR-0020. The guarden-side answer is
+the CONTENTS mount: the container never sees snapper's `.snapshots` subtree at
+all. The "make `.snapshots` ownable" answer is REFUSED, and the reason is the
+isolation boundary — it would hand the service write access to the marks that
+protect its own snapshots. The implementation is the work below; the decision
+is ADR-0020, and the fallback if the contents mount is not expressible is the
+service-side answer, not the ownable `.snapshots`.**
+
 ## What happens
 
 `postgres-production` was created, its state volume made, its snapper

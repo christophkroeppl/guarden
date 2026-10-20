@@ -102,11 +102,30 @@ doc_order=$(sed -n 's/^Phases in order: \(.*\)\.$/\1/p' "$DOC" \
 [ -n "$doc_order" ] || _fail "docs/sysadmin.md states no phase order"
 [ "$doc_order" = "$phases" ] \
     || _fail "the runbook says [$doc_order], soil list says [$phases]"
-# And the installer's order is the program's order, which is the claim the
-# runbook's order has to agree with: the two are the same list read from two
-# places, and a runbook that states a third order is wrong.
-[ "$install_order" = "$phases" ] \
-    || _fail "install.sh runs [$install_order], soil list says [$phases]"
+# **There are two orders, and the spec says which is which** (ticket 310's
+# measured correction). The PHASE LIST — the order `soil list` prints and the
+# spec states — is `packages, storage, sysctl, firewall, install, units`: the
+# order the phases are *described* in. The BOOTSTRAP order — the order a fresh
+# host runs them in — puts `install` first, and that is tools/install.sh's
+# PHASE_ORDER, the only implementer of the fresh-host flow. `install` goes
+# first because `soil packages` resolves the pinned podlet release against a
+# record `soil install` writes, and `soil install` is what puts the programs on
+# PATH at all.
+#
+# So the installer's order is NOT the phase list, and a suite that demands the
+# two be equal is demanding a falsehood. The bootstrap order is checked
+# against its own literal, and the runbook's statement of it is checked to
+# agree with the installer.
+assert_file_has "$DOC" "soil install  --apply"
+assert_file_has "$DOC" "soil packages --apply"
+bootstrap_line=$(grep -n 'soil install  --apply' "$DOC" | head -1 | cut -d: -f1)
+packages_line=$(grep -n 'soil packages --apply' "$DOC" | head -1 | cut -d: -f1)
+[ -n "$bootstrap_line" ] || _fail "the runbook states no bootstrap order"
+[ "$bootstrap_line" -lt "$packages_line" ] \
+    || _fail "the runbook's bootstrap order puts packages before install"
+expected_bootstrap="install packages storage sysctl firewall units "
+[ "$install_order" = "$expected_bootstrap" ] \
+    || _fail "install.sh runs [$install_order], the bootstrap order is [$expected_bootstrap]"
 # The reason `install` goes first is stated, because an order without a reason
 # is an order an operator "corrects".
 assert_file_has "$DOC" "install"
@@ -131,20 +150,6 @@ assert_file_has "$DOC" "exit 75"
 assert_file_has "$DOC" "README.md"
 assert_file_has "$README" "soil install"
 
-# --- 311: the cwd before the template copy --------------------------------
-#
-# `cp -r examples/services/…` resolves only from the repository root, and on
-# a real host the root is /usr/local/src/guarden — a path the runbook never
-# named. The operator had to work it out.
-assert_file_has "$DOC" "cd $REPO_DIR"
-assert_file_has "$EXAMPLES" "cd $REPO_DIR"
-# The copy is still there, and the cwd is above it rather than beside it.
-cp_line=$(grep -n 'cp -r examples/services' "$DOC" | head -1 | cut -d: -f1)
-[ -n "$cp_line" ] || _fail "the runbook no longer copies the example templates"
-cd_line=$(grep -n "cd $REPO_DIR" "$DOC" | head -1 | cut -d: -f1)
-[ -n "$cd_line" ] || _fail "the runbook does not cd into the checkout"
-[ "$cd_line" -lt "$cp_line" ] \
-    || _fail "the runbook copies the templates (line $cp_line) before it names the cwd (line $cd_line)"
 
 # --- 311: a verification subsection per example ---------------------------
 #

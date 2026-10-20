@@ -3,6 +3,16 @@
 Blockers: none (landed as deliberate deferrals during the keep-id implementation).
 Carried 2026-10-19 from ADR-0019's Consequences and the fix-round reports.
 
+**Status: item 2 DECIDED (2026-10-20, operator) — ADR-0021. `overrides.toml`
+gains a sixth table, `[ownership] volumes = { "<vol>" = <uid> }`, and it is a
+grant in exactly the sense the other five are: the manifest names the volume,
+the admin names the uid, a uid the host does not already have is refused, and
+the owner is applied by guarden's own walk — never by a chown the container
+performs. The "five tables" this ticket deferred on was already six
+(`[expose]` is the sixth), so the spec's count is amended to the real one.
+Items 1 and 3 are NOT decided here; item 3 deserves its own ADR when a live
+image needs it.**
+
 ## What is missing (all three deferred on purpose, none invented early)
 1. **A3 subdir-chown fallback**: sanctioned for images whose entrypoint misbehaves
    under keep-id — especially the root-start phase the ADR's measurement kept

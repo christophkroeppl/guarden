@@ -16,8 +16,11 @@ A gitops app that BUILDS its image (rather than pulling one) needs its source in
 build context — today the staged tree has it and the home does not.
 
 ## What to build
-Define the build context as the full staged tree (honouring the source's
-.dockerignore, which is already copied), or add a schema/manifest way for the source
-to name what the build needs — read spec's build section first and pick the side the
-spec intends. The home stays as-is for runtime; only the build context changes.
+**The build context is the full staged tree**, honouring the source's `.dockerignore`,
+which is already copied. The home stays as-is for runtime; only the build context changes.
+The spec now says this — see §6.6, "The build context is the service's own tree, and the
+tree is the whole staged source" — so there is no second reading to choose between and no
+reason to re-derive it. Do not add a schema/manifest way for the source to name what the
+build needs: the whole tree is the context, and a manifest that narrows it is a second
+answer to a question the spec has answered.
 Red-first: a Containerfile with a COPY outside the four-file set builds green.

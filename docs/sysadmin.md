@@ -30,16 +30,124 @@ login session. `runuser -l <service> -c 'systemctl --user status web'` works too
 
 ---
 
-## Installing and updating guarden
+## Installing a fresh host
+
+The canonical way to install a host is one command, and it is the one the
+installer prints for itself when it needs a second run:
 
 ```sh
-git -C /usr/lib/guarden pull          # the programs live root-owned under /usr/lib/guarden
-soil install --apply                  # re-copy them, reinstall units
-weedr service list                    # confirm nothing changed underneath you
+curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+```
+
+It clones the repository to `/usr/local/src/guarden` and converges every phase.
+You need nothing on the box but a network and a root shell: the installer
+installs the Python dependencies, the packages and the pinned `podlet` release
+itself.
+
+**The run order is 75, 75, 0, and the two 75s are the design.** The btrfs
+root conversion is a staged offline operation that crosses two reboots — the
+first converts the root filesystem, the second boots into the migrated
+`@`/`@var` layout — and the installer stops at each of them with **exit 75**,
+which means *a reboot is required, then run me again*. The command to re-run
+is printed in the banner before the script exits, so you never have to
+remember it:
+
+```
+[install]  btrfs root conversion staged.
+[install]  REBOOT now, then re-run:
+[install]    curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+```
+
+So the whole thing is three runs:
+
+| run | what it does | what you do |
+|---|---|---|
+| 1 | converges `install` and `packages`, stages the conversion | reboot |
+| 2 | runs the conversion in the initramfs, stages the `@`/`@var` migration | reboot |
+| 3 | finishes the migration and converges the rest | nothing — it prints `guarden host converged` |
+
+Re-running is safe and is the expected recovery, not a workaround: every phase
+is check-then-apply, so a phase that already converged is skipped and only the
+ones that have not are applied. **A run that ends in 75 has not failed** — it
+has staged a reboot and told you so.
+
+### the same thing through cloud-init
+
+If the host boots from a cloud-init document — the `vps` profile, which
+`tools/render-user-data --profile vps` renders — then cloud-init runs the
+installer **once**, and the host's first boot ends in the same staged reboot
+the scripts path stages. So:
+
+**Expect `cloud-init status: error` on the first boot, and re-run the installer
+by hand after each reboot.**
+
+```sh
+cloud-init status                       # status: error  <- expected, boot 1
+reboot
+curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+reboot
+curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+```
+
+The red is not a defect and it is not the document's fault: the installer's
+exit 75 is a *reboot required*, and cloud-init reads any non-zero exit as a
+failed module. The banner the installer prints before it exits names the
+command to re-run.
+
+**The re-run is yours to make — cloud-init will not make it, and `cloud-init
+status` will not tell you that it is missing.** The document's `runcmd` runs
+`once-per-instance`, and cloud-init writes that marker *before* the module
+runs, so the failed boot still counts as the instance's one. The next boot
+therefore reports the step as *previously ran* and does not run it again —
+which is why **`cloud-init status` reads `done` on the second boot while the
+host is still unconverged**. A green cloud-init status is not a converged host.
+
+The host is converged when the installer says so, and the way to ask is the
+host's own check:
+
+```sh
+soil --check                            # silent, exit 0 -> converged
+```
+
+That is the answer to the question `cloud-init status` cannot answer. The
+installer is what resumes, and it resumes because every phase asks whether it
+has converged before it applies.
+
+If you would rather drive the phases by hand, the order and the reason for it
+are in [README.md](../README.md) under **Install**. The two paths converge on
+the same host and the same exit codes.
+
+### what the installer put where
+
+| path | what it is |
+|---|---|
+| `/usr/local/src/guarden` | the checkout — a git repository, and the only one on the host |
+| `/usr/lib/guarden` | guarden's own files, installed root-owned by `soil install`; **not** a checkout |
+| `/etc/guarden` | the configuration, root-owned |
+
+The two are different places and the distinction is the one the next section
+depends on: the checkout is where the code comes from, and the installed tree
+is where the programs live once they are on the host.
+
+---
+
+## Updating an installed host
+
+```sh
+git -C /usr/local/src/guarden pull     # the checkout the installer cloned
+soil install --apply                   # re-copy the programs, reinstall the units
+weedr service list                     # confirm nothing changed underneath you
 ```
 
 `soil install` is the only phase that writes outside the host's own storage. It never stops a
 running service.
+
+**The checkout is `/usr/local/src/guarden`, and `/usr/lib/guarden` is not one.**
+`/usr/lib/guarden` holds guarden's own files — the programs, the templates, the
+modules, the package list — installed there root-owned by `soil install` and
+never written by a deploy. There is no `.git` in it, so `git -C
+/usr/lib/guarden pull` answers `fatal: not a git repository`. The clone the
+installer made is the git repository, and it is the one to pull.
 
 ---
 
@@ -53,6 +161,30 @@ soil list                 # what each phase owns
 ```
 
 Phases in order: `packages`, `storage`, `sysctl`, `firewall`, `install`, `units`.
+
+**`soil list` prints that order, and it is the order the phases are
+described in — not the order a fresh host runs them.** On a host that is
+already installed the order does not matter: every phase is check-then-apply,
+so each one is skipped when it has already converged. On a **fresh** host the
+bootstrap order is different, and it is `install` first:
+
+```sh
+soil install  --apply   # the programs, the groups, the files every phase reads
+soil packages --apply   # the distribution packages and the pinned podlet release
+soil storage  --apply
+soil sysctl   --apply
+soil firewall --apply
+soil units    --apply
+```
+
+`install` goes first because `packages` needs what it seeds: `soil packages`
+resolves the pinned `podlet` release against a record that `soil install`
+writes, and `soil install` is what puts the programs on `PATH` at all. Run
+`packages` first on a bare host and it refuses with *the pinned podlet record
+is absent* — by design, and the fix is to run `install` first. The installer
+runs the phases in exactly this order, and
+[README.md](../README.md) under **Install** has the same list with each
+command's effect annotated.
 
 ### btrfs conversion (once, on a fresh box)
 
@@ -285,20 +417,7 @@ and when stdin is not a terminal says so rather than reading an answer from it:
 error: create needs a terminal to answer its prompts; run it interactively
 ```
 
-The two service templates ship with the program and `soil install` installs them: `postgres`, a
-third-party database, and `vaultwarden`, a self-hosted web service. They land in
-`/usr/lib/guarden/templates/services/`, and `weedr service create --template postgres` finds
-them there.
 
-```
-$ ls /usr/lib/guarden/templates/services/
-postgres  vaultwarden
-```
-
-**An operator's own template is not overwritten.** `soil install` copies the checkout's own
-template tree over that directory without deleting what the checkout does not carry, and
-`soil install --check` compares the other way — the installed tree against the checkout — so a
-template installed by hand is neither overwritten nor reported as drift.
 
 A template declares nothing guarden reads: no `state:` and no `bulk:`, no `ports:`, no
 `schema:`. The consequences are the bullets below — no volume, no publication, no firewall
@@ -339,12 +458,11 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   `/etc/guarden/creds/<svc>/<KEY>.cred` and asks the credential materialiser to run, which is
   only possible while the service user's manager is alive. If the service has never started, or
   its user manager died, `systemctl start guarden-creds-boot.service` fills podman's store from
-  what is planted. A **template-created service** has no `.guarden/.env.schema` for the gate to
-  read, so the gate answers for the **unit** instead: it reads the `Secret=` lines the service's
-  own quadlet files carry, and a key nobody planted is reported by name — `blocked` with a
-  `[gate] reason` on a gated track, a `warning:` naming the key on an ungated one. Either way
-  `weedr service start` refuses with the key in the line rather than letting podman answer
-  `125 no such secret`, and planting it opens the gate with no re-push.
+  what is planted. This is the one that bites hardest on a template-created service, which has
+  no `.guarden/.env.schema` for the gate to read: `weedr service start` evaluates an empty
+  schema and answers `not-required` on an ungated track and `ready` on a gated one, so a
+  `Secret=` naming a key nobody planted is refused by podman when the container starts and not
+  by `[gate] reason`. There is no blocked state to look at — plant first, then start.
 * **Give the volume an owner the image accepts.** A volume is created `0700` under the service
   uid, and an image that runs as its own uid cannot write it:
   `mkdir: can't create directory '/var/lib/postgresql/data/pgdata': Permission denied`. The
@@ -358,6 +476,95 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   no `rm /var/lib/guarden/registry/<svc>.toml`, and no second ingest after it. The note below
   about `weedr service add` being the reconcile command holds for this case exactly as it
   holds for a poke.
+
+### verifying a service answers
+
+`weedr service start` returning `started <name>` is the mutator's word for it: the
+units are installed and the start was requested. It is **not** the service
+answering, and nothing on the host prints the difference. A container that
+crashed on its first instruction, or an image that refused to start for want of
+a credential, leaves a started service and no container. So ask the service.
+
+Two things first, and both are about the box rather than about guarden:
+
+```sh
+systemctl --user -M postgres-staging@ is-active postgres.service   # active
+weedr service list                                                  # the service is there
+```
+
+`active` means the unit is up; it does not mean the application inside it is
+serving. For that, ask the application.
+
+**postgres.** The publication is on loopback — a template declares no `ports:`,
+so no publication is allocated and no firewall rule is written, and the
+`PublishPort=` in the template binds `127.0.0.1` — so you ask it on
+`127.0.0.1`, not on the public name. The client is **not** on the host by
+default; it is a distribution package:
+
+```sh
+apt-get install -y postgresql-client      # pg_isready and psql
+pg_isready -h 127.0.0.1 -p 5432            # 127.0.0.1:5432 - accepting connections
+```
+
+`pg_isready` needs no password and no database: it says whether the server is
+answering, and it exits `0` when it is. **A healthy answer is
+`accepting connections`** and exit `0`; `no response` means the container is
+not serving and the journal is where the reason is.
+
+To ask the server a question as well, you need the password you planted:
+
+```sh
+PGPASSWORD='<the value you planted>' psql -h 127.0.0.1 -U postgres -d postgres -tAc 'select version()'
+# PostgreSQL 17.11 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+```
+
+`psql` without the password answers `fe_sendauth: no password supplied` and
+exits `2` — that is the **client** refusing, not the server, and it is what a
+planted-but-unmaterialised credential looks like from the host. The `select
+version()` line is the proof that the database itself answers.
+
+The same two answers are available from inside the container, which needs no
+client package on the host at all:
+
+```sh
+cd /tmp                                  # a service user's podman cannot chdir into /root
+runuser -u postgres-staging -- podman exec systemd-postgres pg_isready -U postgres
+# /var/run/postgresql:5432 - accepting connections
+```
+
+The container's name is the unit's name, so it is `systemd-postgres` for the
+`postgres` example — not `postgres`.
+
+**vaultwarden.** The web port is `127.0.0.1:8082` (the template's
+`PublishPort=127.0.0.1:8082:80`), and `curl` is on every host:
+
+```sh
+curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/alive
+# 200
+```
+
+**`200` is the healthy answer.** `/alive` is the vendor's own health endpoint
+and it answers `200` as soon as the server is serving. The root path answers
+`200` too, and is the weaker check: it tells you the server is up, not that
+it is well.
+
+The one thing that bites here is the volume. vaultwarden refuses to start
+without one and says so in its log:
+
+```
+[ERROR] No persistent volume!
+```
+
+The template mounts a named podman volume (`Volume=vaultwarden-data:/data`),
+which is what the example expects, so this is what you see when the volume is
+missing or was removed underneath the service.
+
+**What a healthy answer is not.** A `200` or an `accepting connections` from
+the box proves the service is serving **on the box**. It does not prove that
+anything outside the box can reach it: locally generated traffic never
+traverses `PREROUTING`, so a loopback check passes on a host whose forwarding
+is broken. See **there is no masquerade, and there never was** below for the
+one check that tells the two apart.
 
 Names carry the environment: `myapp-production`, `other-app-staging`, `postgres-production`,
 `traefik-production`. The name is the service name everywhere — no suffix, no alias. A consumer
@@ -393,62 +600,11 @@ else moves data aside.
 /var/lib/guarden/registry/<name>.toml           the record
 /etc/guarden/services/<name>/overrides.toml     admin grants
 /etc/containers/systemd/users/<uid>/            admin units and drop-ins, uid-scoped
-/etc/containers/systemd/users/<uid>/<unit>.container.d/
-    the drop-ins merged into that unit: guarden's `50-guarden-keepid.conf`
-    and your own `90-admin.conf`
 /var/lib/guarden/removed/<service>/<time>/<vol>/   moved, not deleted, by service remove
 ```
 
 Nothing root-owned lives under `home`. If a file you expected to be protected is inside `home`,
 it is not — that is the rule, and the fix is to move it.
-
-### the drop-in directory, and the one file in it that is yours
-
-`/etc/containers/systemd/users/<uid>/<unit>.container.d/` is podman's rootless quadlet
-search path for that service's units, and it is where your own drop-ins go. Guarden reads
-the files in it and puts them back into the rendered unit — that is what makes a cap survive
-a regeneration — and it writes **exactly one** file there itself:
-
-```
-50-guarden-keepid.conf    the keep-id pin, root:root 0644, written by the mutator
-```
-
-**`90-admin.conf` is yours, and it wins.** Drop-ins merge in alphabetical order by
-filename — not by mtime, not by which directory they are in — and the last value of a
-scalar key is the one that runs. So a file named `90-` overrides guarden's `50-`:
-
-```sh
-# /etc/containers/systemd/users/<uid>/web.container.d/90-admin.conf
-[Container]
-UserNS=keep-id:uid=2002,gid=2002
-```
-
-What that line does, and what it costs:
-
-- **It overrides the pin guarden probed and recorded.** The container then runs under your
-  mapping and not the one the image's own user asked for. The registry still holds
-  guarden's pair — your file is not the record and does not become one, so `weedr service
-  list` will not show your value.
-- **It bypasses the refusal of a repository's own `Userns=`.** That refusal is about
-  repository input. This file is root-owned and no repository can reach it.
-- **It takes effect only after a daemon-reload.** A drop-in is read by the generator, and
-  the generator runs at reload. Edit the file, reload the service user's manager, restart
-  the unit:
-
-  ```sh
-  systemctl --user --machine <service>@ daemon-reload
-  weedr service stop <service>
-  weedr service start <service>
-  ```
-
-- **Guarden never writes that file and never deletes it.** Not on a re-render, and not when
-  the service is removed: the removal takes guarden's own `50-guarden-keepid.conf` and
-  leaves yours where it is. If you want the override gone, delete it yourself.
-
-**The file must be readable by the service user.** The generator reads this path as the
-service's own uid, and a root-owned `0600` file there yields no generated unit at all — the
-unit simply does not exist. `0644` is what guarden's own file carries, and it is the mode to
-use.
 
 ### what an override can grant
 
@@ -570,9 +726,7 @@ The rest of the host, and where to look when a path is not what you expected:
 | `/var/lib/systemd/credential.secret` | the encryption key, when the host is set up with `systemd-creds --with-key=host`. Absent on a `--with-key=tpm2` host, where the key is sealed to the TPM |
 | `/etc/ssh/authorized_keys.d/hose` | the poke keys, one forced command per project |
 | `guarden-firewall.service` | the unit `soil firewall` installs to load the set |
-| `/etc/containers/systemd/users/<uid>/` | where admin units and drop-ins go, and the only place. `0755 root:root` on the way down — the generator walks it as the service user |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | the keep-id pin, `0644 root:root`, written by the mutator. **The one file guarden writes in the admin path** |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | **the admin's own file.** Guarden never writes it and never deletes it; alphabetically last, so its `UserNS=` overrides the pin |
+| `/etc/containers/systemd/users/<uid>/` | where admin units and drop-ins go, and the only place |
 | `/var/lib/guarden/removed/<service>/<time>/<vol>/` | volumes a removal moved aside |
 
 There are two groups and no per-object groups. **`soil install` creates the `guarden` group**, and
@@ -1032,17 +1186,9 @@ restart.
 To materialise everything by hand after touching the blobs:
 
 ```sh
-systemctl start guarden-creds-boot.service   # materialise everything, once
+systemctl enable guarden-creds.path      # watch /etc/guarden/creds/ and materialise what changed
+systemctl start guarden-creds-boot.service   # or materialise everything, once
 ```
-
-**`weedr secret set` asks for that itself**, so a plant on a converged box needs no hand-run of
-anything: the verb writes the blob and starts the oneshot, and the value is in the service's own
-podman store when the verb returns. The `.path` unit is the other half — it watches
-`/etc/guarden/creds/` and triggers the same oneshot when a blob changes underneath it, which is
-what a blob written by something other than the verb (a restored backup, an operator's own `cp`)
-needs. **`soil install` starts that unit, and starting it is not the same as enabling it:** an
-enabled `.path` unit watches nothing until it runs, so an install that only enabled it left the
-watch dormant until the next boot and the first plant of a fresh box materialised nothing.
 
 Those two units are the only place a blob is decrypted, and they are root because the key is.
 There is no `guarden-creds.service`; a runbook that named one would send an operator to start a
@@ -1053,14 +1199,6 @@ manifest's schema marks `@required` or `@sensitive`, the generated unit carries
 `<KEY>` from that service's own secret store and presents it at `/run/secrets/<KEY>`. A key
 whose application needs a variable gets `type=env` instead, and it is the application that
 decides, not the repository.
-
-**A key the schema marks `@required` but NOT `@sensitive` is planted by nobody.** It is not a
-credential, so there is no random value to generate for it (spec 5.3 step 9 mints `@sensitive`
-keys, and only those), and it is not a value the repository ships, so there is no default to
-take. It is **yours to plant**: `weedr secret set <svc> <KEY>` and then start. The gate says so
-by name — a `warning:` on an ungated track, a `blocked` gate with a `[gate] reason` on a gated
-one — and `weedr service start` refuses with the key in the line rather than letting podman
-answer `125 no such secret` for a secret that was never there.
 
 ### if the encryption key is lost
 
@@ -1441,18 +1579,11 @@ Both rules are written out in full, once, in `docs/spec.md` §6.6 and §6.7 with
 targets. They are not repeated here, because a rule duplicated across documents is a rule that
 drifts and this one has changed four times. What an operator needs from them:
 
-- **`guarden ALL=(root)`** — the mutator, run as root. `furrow` runs as `guarden` and
-  reaches root through exactly that line: `guarden ALL=(root) NOPASSWD:
-  /usr/lib/guarden/bin/weedr`. **It names the PROGRAM and not the verbs**, because a
-  sudoers rule matches a command's arguments as written and the real invocation
-  carries a service name and a sha — so a rule naming `weedr service ingest`
-  admits the bare command and refuses the call that matters. The verbs are
-  enforced by the mutator, which reads `SUDO_USER` and refuses everything
-  outside the spec's §6.6 list when the caller is `guarden`. So it does **not**
-  reach `weedr port open`, `weedr port close`, `weedr service purge`,
-  `weedr service rollback`, `weedr service fork`, `weedr service add`,
-  `weedr module add`, or any `weedr project` verb, so a workflow can create a
-  service and nothing else — and the refusal says which verbs it may run.
+- **`guarden ALL=(root)`** — the mutator verbs, run as root. `furrow` runs as `guarden` and
+  reaches root through exactly that list. It does **not** name `weedr port open`,
+  `weedr port close`, `weedr service purge`, `weedr service rollback`, `weedr service fork`,
+  `weedr service add`, `weedr module add`, or any `weedr project` verb, so a workflow can create
+  a service and nothing else.
 - **`hose ALL=(guarden)`** — the deploy queue, run as `guarden`. A poke reaches the mutator only
   through `furrow deploy` and `furrow preview drop`, and its only `weedr` verb is
   `weedr project list`.

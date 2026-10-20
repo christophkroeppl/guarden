@@ -137,6 +137,17 @@ packages = [
     "python3-yaml",
     "python3-jinja2",
     "python3-pip",
+    # `git` is here because the cloud-init document clones the repository with
+    # it: `guarden-provision.sh` runs `git clone`, and the document's
+    # `packages:` block is the only thing that installs anything before that
+    # clone. Ubuntu 26.04 ships git, so the dependency was invisible here; on
+    # an image that does not, the whole cloud-init path stopped at the clone
+    # with no diagnostic from guarden at all -- the document's own error, on a
+    # machine that was doing exactly what it was told. A distribution package
+    # is the fix and not a guard in the script: the package list is where a
+    # host's dependencies are stated, and a script that refused to run
+    # because the host lacked a tool would be a second list of the same thing.
+    "git",
     # The conversion machinery's initramfs hook runs under dracut; `soil
     # storage` refuses explicitly on a host without it (other initramfs
     # generators convert offline from a rescue environment instead), and
@@ -222,12 +233,6 @@ harness = [
     "nginx",
     "postgresql-client",
     "libpq-dev",
-    # `fuser` (from psmisc) is how the harness proves the apt locks are free
-    # before it calls `soil packages` — without it the wait cannot run at all,
-    # and the harness refuses to cut a box rather than lose the race silently
-    # (tests/lxc.sh's guard names this package). It is a harness tool, not a
-    # host dependency: the golden VM needs it, a real host does not.
-    "psmisc",
 ]
 
 [harness.fedora]
@@ -246,9 +251,6 @@ harness = [
     "nginx",
     "postgresql",
     "libpq-devel",
-    # `fuser` (from psmisc) proves the apt/dnf locks are free before the
-    # harness calls `soil packages` — the same harness tool as on debian.
-    "psmisc",
 ]
 
 [harness.arch]
@@ -266,7 +268,4 @@ harness = [
     "nginx",
     "postgresql",
     "libpq",
-    # `fuser` (from psmisc) proves the package-manager locks are free before
-    # the harness calls `soil packages` — the same harness tool as on debian.
-    "psmisc",
 ]
