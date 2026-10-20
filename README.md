@@ -46,12 +46,62 @@ You can install `soil`, `weedr`, `loom`, `roots`, `stakes` and `furrow` and stop
 There are two paths to the same state, and they converge on the same host. The command line, the
 exit codes and the word `drift` do not change with the path taken.
 
-**From cloud-init** — for a machine that boots a user-data document. `tools/golden-vm` renders one
-from [`packages/packages.toml`](packages/packages.toml) and hands it to the instance; the document
-installs the substrate and then converges every phase and checks every phase.
+**From cloud-init** — for a machine that boots a user-data document. The document is
+rendered from [`packages/packages.toml`](packages/packages.toml) and handed to the instance.
+There are two of them, and which one you want decides what the boot does:
 
-**From the scripts** — for a host without cloud-init, which is most of them. Same phases, run by
-hand — with `install` first, because it is what seeds the file `packages` resolves its fetch
+* the **`golden-vm`** document, which `tools/golden-vm` renders, installs the substrate and
+  then converges every phase and checks every phase itself — that is the throwaway harness
+  machine's document, and it is what `just golden-vm` boots;
+* the **`vps`** document, which `tools/render-user-data --profile vps` renders, installs the
+  substrate, clones the repository and hands convergence to `tools/install.sh` — that is the
+  fresh-host document, and it is the one a real VPS boots.
+
+**The `vps` path ends red on the first boot, and that is correct.** The btrfs
+conversion is a staged offline operation that crosses two reboots, and the
+installer stops at each of them with **exit 75** — *a reboot is required, then
+run me again*. cloud-init reads any non-zero exit as a failed module, so a
+**correct** run ends with `cloud-init status: error`. That is the design, not a
+broken document.
+
+The recovery is the same command, run again by hand after each reboot:
+
+```sh
+cloud-init status                        # status: error   <- expected, boot 1
+reboot
+curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+reboot
+curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+soil --check                             # silent, exit 0   <- converged
+```
+
+**The re-run is yours to make, and `cloud-init status` will not tell you it is
+missing.** The document's `runcmd` is `once-per-instance`, and cloud-init
+writes that marker *before* the module runs — so the failed boot still counts
+as the instance's one, the next boot reports the step as *previously ran*, and
+**`cloud-init status` reads `done` while the host is still unconverged**. A
+green cloud-init status is not a converged host; `soil --check` is the answer
+to that question.
+
+The installer is what resumes, and it resumes because every phase asks whether
+it has converged before it applies. The runbook says the same thing with the
+commands in full: [`docs/sysadmin.md`](docs/sysadmin.md) under **Installing a
+fresh host**.
+
+**From the scripts** — for a host without cloud-init, which is most of them. One command, and
+the same two reboots:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+```
+
+It clones the repository to `/usr/local/src/guarden` and converges every phase.
+It exits **75** at each of the two staged reboots, printing the command to
+re-run before it exits, and exits **0** on the third run — so the whole thing
+is three runs, two reboots, and one `guarden host converged`.
+
+**Or drive the phases by hand** — same phases, run by hand, with `install`
+first, because it is what seeds the file `packages` resolves its fetch
 against and puts the programs on `PATH`:
 
 ```sh
@@ -572,33 +622,9 @@ TasksMax=512
 ```
 
 That directory is podman's rootless quadlet search path and is scoped by uid, so only that
-service's units pick the drop-in up. It is root-owned, and **guarden reads the drop-ins in it
-and puts them back into the rendered unit** — that is what makes a cap survive a regeneration
-— but it writes exactly one file there itself: `50-guarden-keepid.conf`, the keep-id pin
-ADR-0019 renders for a container whose image declares a non-root user. A manifest cannot
-state a weight or a cap; both come from the host.
-
-**Your own file beside it is yours, and it wins.** Drop-ins merge in alphabetical order by
-filename, and the last value of a scalar key is the one that runs, so a file named after
-`90-` overrides guarden's `50-`:
-
-```sh
-# /etc/containers/systemd/users/<uid>/web.container.d/90-admin.conf   root-owned, yours
-[Container]
-UserNS=keep-id:uid=2002,gid=2002
-```
-
-That line **overrides the pin guarden probed and recorded**: the container runs under your
-mapping and not the one the image's own user asked for. It also bypasses the refusal of a
-repository's own `Userns=` — that refusal is about repository input, and this file is
-root-owned and outside any repository's reach. It is not the record: the registry still holds
-guarden's pair, and the admin's file does not become one.
-
-**Guarden never writes that file and never deletes it.** Not on a re-render, and not when the
-service is removed — the removal takes guarden's own `50-guarden-keepid.conf` and leaves
-yours where it is. **A change takes effect only after a daemon-reload**, because a drop-in is
-read by the generator and the generator runs at reload: edit the file, reload the service
-user's manager, and restart the unit.
+service's units pick the drop-in up. It is root-owned and nothing in guarden reads or rewrites
+it, which is what makes a cap survive a regeneration. A manifest cannot state a weight or a
+cap; both come from the host.
 
 ---
 

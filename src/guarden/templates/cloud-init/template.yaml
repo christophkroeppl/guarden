@@ -81,6 +81,30 @@ package_upgrade: false
 # run after a reboot — or after this document — converges the remainder rather
 # than starting again.
 #
+# **THIS DOCUMENT ENDS RED ON THE FIRST BOOT, AND THAT IS CORRECT.** The btrfs
+# conversion is a staged offline operation that crosses two reboots, and
+# `install.sh` exits **75** at each of them — *a reboot is required, then
+# re-run me*. cloud-init reads any non-zero exit as a failed module, so a
+# correct run ends with `cloud-init status: error`. The operator's recovery is
+# the same command again, by hand, after each reboot:
+#
+#   cloud-init status                      # status: error  <- expected, boot 1
+#   reboot
+#   curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+#   reboot
+#   curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
+#   soil --check                           # silent, exit 0  <- converged
+#
+# **The re-run is the operator's to make, and `cloud-init status` will not
+# report it as missing.** This document's `runcmd` is `once-per-instance`, and
+# cloud-init writes that marker BEFORE the module runs — so the failed boot
+# still counts as the instance's one, the next boot reports the step as
+# "previously ran" and does not run it again, and `cloud-init status` reads
+# `done` while the host is still unconverged. A green cloud-init status is not
+# a converged host; `soil --check` is the answer to that question.
+# `install.sh` is what resumes, and it resumes because every phase checks
+# before it applies.
+#
 # Nothing here is fetched from PyPI. Every package comes from the distribution's
 # own repository; the one artefact from outside is the pinned `podlet` release,
 # which `soil packages` verifies against the SHA256 recorded in the repository.
