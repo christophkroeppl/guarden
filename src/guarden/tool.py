@@ -223,15 +223,30 @@ def _home_for(account: str) -> Path:
     **The `guarden` account is not a service** and has no home under
     `/var/lib/guarden/services`: it is one of the two program users `soil
     install` creates, and `useradd --system --no-create-home` gives it the
-    passwd home `/home/guarden` — which `useradd` does NOT create, because
-    `--no-create-home` says so. So the `guarden` commands run in the passwd
-    home, read out of the machine's own `/etc/passwd`, and that is what this
-    returns for it. It is the honest answer rather than a made-up one: the
-    account's home is where the account's own files are, and nothing in
-    guarden's own tree is that account's home.
+    passwd home `/home/guarden` — **which is never created** (measured on the
+    golden VM: `ls -ld /home/guarden` answers "No such file or directory",
+    and `tests/t20-install.sh:92` asserts the absence).
+
+    **So the passwd home is NOT used here, and the reason is measured rather
+    than tidy.** A `HOME` naming a directory that is not there is a `HOME`
+    that a program can create: Python's `os.makedirs(os.path.expanduser("~/x"))`
+    under `HOME=/home/guarden` answers "makedirs ok" — it CREATES the
+    directory the install phase deliberately does not have, and the absence
+    `t20-install.sh` asserts stops being true. A `HOME` that exists is
+    therefore the honest answer, and the one that exists and belongs to the
+    account is **`/var/lib/guarden/render`** (`0770 guarden:guarden`, spec
+    2.1's table, created by the install phase) — the tree the mutator hands
+    the renderer and the one the `guarden` programs' own output is written
+    through.
+
+    `loom render`, `roots sync` and `twig sync` write only into
+    `/var/lib/guarden`, and none of them reads `HOME` — so this is not a
+    change in where their output lands. It is the choice of a directory that
+    exists and is the account's own, over one that does not exist and that
+    something might create.
     """
     if account == "guarden":
-        return Path(_passwd_home(account))
+        return paths.LIB / "render"
     return paths.service_home(account)
 
 
@@ -266,21 +281,6 @@ def _data_home(account: str) -> Path:
     The files stay `0600` to the service uid; the DIRECTORY is what leaves.
     """
     return _home_for(account) / ".local" / "share"
-
-
-def _passwd_home(account: str) -> str:
-    """The home directory the machine's passwd database gives an account.
-
-    Read from `pwd` rather than from a file guarden stages: `GUARDEN_PREFIX`
-    relocates guarden's own tree and not the host's identity databases, and
-    `useradd` writes the machine's `/etc/passwd` — so a staged copy would be
-    reading a different database than the one the account was created in.
-    """
-    try:
-        entry = pwd.getpwnam(account)
-    except KeyError:
-        return "/"
-    return entry.pw_dir
 
 
 def _runtime_dir(account: str) -> Path:
