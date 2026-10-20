@@ -330,6 +330,49 @@ run ss -ltn
 assert_exit 0
 assert_stdout_has "127.0.0.1:$web_publication"
 
+# --- the edge is READY, not merely started ----------------------------------
+# **`is-active` is not readiness, and this is the one wait the file needs.**
+# Measured on the machine: `traefik.service` reports `active` while the
+# container is still coming up, and pasta binds the HOST port before traefik
+# has bound `:80` inside the container — so the first request answers with an
+# empty reply (curl 52) or a connection reset (56), and the request after it
+# answers. Measured: the edge answered at 1.53s after the start; the attempts
+# at 1.03s and 1.29s both failed.
+#
+# This is a race in the CALLER, not a fault in the edge — the same shape as
+# `wait_settled` in lib.sh, for the same reason: the unit is up before the
+# thing it fronts is. It is waited for ONCE here, at the one place the edge
+# becomes reachable, and every request below is then made against an edge
+# that is up. A per-request retry would hide the same race in three places
+# and would still leave the first of them unguarded.
+#
+# The probe is the edge's own API: the API answers as soon as traefik is
+# serving, and it is the instrument the router table is read with below. The
+# wait is bounded (thirty attempts, two seconds apart) and the failure names
+# the last answer, so a genuinely dead edge is red and not slow.
+#
+# **The signal is the status code and not the body.** Traefik's router table is
+# a JSON array of router objects, and nothing in it is the string `routers` —
+# so a body that "contains routers" is a signal that never becomes true, and a
+# wait on it times out on a perfectly healthy edge. The status code is
+# unambiguous: `200` is the edge answering, and `000` is curl's own word for
+# "no answer at all", which is exactly what the race produces.
+api_publication=$(sed -n 's/^api = \([0-9]*\)$/\1/p' "$edge_registry")
+[ -n "$api_publication" ] \
+    || _fail "the edge holds no api publication, so its router table cannot be read"
+code=''
+for _ in $(seq 1 30); do
+    run curl -s -o /dev/null -w '%{http_code}' \
+        "http://127.0.0.1:$api_publication/api/http/routers" || true
+    code=$(cat "$GUARDEN_STDOUT")
+    if [ "$code" = 200 ]; then
+        break
+    fi
+    sleep 2
+done
+[ "$code" = 200 ] \
+    || _fail "the edge's API answered '$code' after 30 attempts, not 200"
+
 # --- the edge's OWN router table names both instances ------------------------
 # The edge's API is the edge's own answer about what it loaded, and t50-slice
 # established the pattern: `curl http://127.0.0.1:$api_publication/api/http/routers`
@@ -339,9 +382,11 @@ assert_stdout_has "127.0.0.1:$web_publication"
 #
 # **And this is where the router match is measured, not guessed.** The file
 # above says the router is in the configuration; this says the EDGE has it.
-api_publication=$(sed -n 's/^api = \([0-9]*\)$/\1/p' "$edge_registry")
-[ -n "$api_publication" ] \
-    || _fail "the edge holds no api publication, so its router table cannot be read"
+#
+# The table is FETCHED again here, because the readiness wait above asked for
+# the status code and not the body: one `run` leaves one answer in
+# `$GUARDEN_STDOUT`, and an assertion about a body it did not ask for would be
+# an assertion about the previous command's output.
 run curl -s "http://127.0.0.1:$api_publication/api/http/routers"
 assert_exit 0
 assert_stdout_has "routed-preview-web-"
