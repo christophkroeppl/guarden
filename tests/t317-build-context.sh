@@ -68,7 +68,7 @@ purge() {
 }
 
 cleanup() {
-    purge ctxapp-staging ctxignore-staging ctxstore-staging
+    purge ctxapp-staging ctxignore-staging ctxboth-staging ctxstore-staging
 }
 trap cleanup EXIT
 
@@ -183,6 +183,35 @@ assert_stdout_has "localhost/ctxignore-staging:latest"
 
 # the source's own exclusion holds: the file it names is not in the image
 image_lists ctxignore-staging
+assert_stdout_lacks "copied"
+
+# --- Case 2b: the source's narrowing survives guarden's own file -------------
+#
+# **This is the case that caught a real bug.** Podman reads `.containerignore`
+# in preference to `.dockerignore` and never consults the second when the
+# first is present (measured on podman 5.7.0). Guarden writes BOTH names so
+# that its exclusion is always read -- but a first version wrote only
+# guarden's block into the `.containerignore` and kept the source's patterns
+# in the `.dockerignore`, and the source's narrowing was then silently DROPPED:
+# the build saw the `.containerignore` alone, and the file the source excluded
+# went into the image.
+#
+# So the source's patterns must reach BOTH names. The case is here because it
+# is the one that can pass while case 2 passes: case 2's source ships no
+# `.containerignore`, so the two are indistinguishable until a source's own
+# file is dropped by guarden's.
+
+stage_ctx ctxboth ctxboth-staging 9f2c1ab Cargo.toml '[package]' 'name = "ctxboth"'
+seed /var/lib/guarden/staging/ctxboth/9f2c1ab/.dockerignore "Cargo.toml"
+run weedr service ingest ctxboth-staging --from poke ctxboth@9f2c1ab
+assert_exit 0
+
+run weedr service build ctxboth-staging
+assert_exit 0
+
+# the source's own exclusion holds even though guarden wrote a
+# `.containerignore` beside it
+image_lists ctxboth-staging
 assert_stdout_lacks "copied"
 
 # --- Case 3: the podman store is never in the context ----------------------

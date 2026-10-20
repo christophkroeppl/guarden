@@ -1065,10 +1065,24 @@ def write_build_exclusions(home: Path, owner: tuple[int, int]) -> None:
     podman 5.7.0: `*.txt` then `!plain.txt` re-includes the file), so guarden's
     lines last means a source-side `!` negation cannot re-include the store.
 
-    **Both names are written, because podman reads `.containerignore` in
-    preference to `.dockerignore`** (measured) and a source that ships only
-    `.containerignore` would otherwise have guarden's exclusion ignored
-    entirely — and the store would go into the image.
+    **Both names carry BOTH halves, and that is the whole subtlety.** Podman
+    reads `.containerignore` in preference to `.dockerignore` and never
+    consults the second when the first is present (measured). So:
+
+    - guarden writes **both** names, because a source that ships only
+      `.containerignore` would otherwise have guarden's `.dockerignore`
+      ignored entirely, and the store would go into the image;
+    - and **the source's patterns go into BOTH**, because writing guarden's
+      block alone into `.containerignore` would silently DROP the source's
+      narrowing — the `.dockerignore` would never be read at all, and the
+      source's own exclusion would stop holding. Measured: a context whose
+      `.dockerignore` excluded `Cargo.toml` and whose `.containerignore` held
+      only guarden's block built the image WITH `Cargo.toml` in it.
+
+    So each name is written with the source's patterns of BOTH names first and
+    guarden's block last. A source that ships one of them therefore keeps its
+    narrowing under either name, and the union of the two is what the build
+    sees.
 
     **The merge is idempotent.** A build that runs twice, or a home that was
     copied from another service's home, must not accumulate guarden's block
@@ -1080,17 +1094,23 @@ def write_build_exclusions(home: Path, owner: tuple[int, int]) -> None:
     the mode that matters is the file's own.
     """
     guarden_lines = [BUILD_MARKER, *BUILD_EXCLUSIONS]
+    source_lines: list[str] = []
+    seen: set[str] = set()
     for name in BUILD_IGNORE_NAMES:
         path = home / name
-        existing = ""
-        if path.is_file():
-            try:
-                existing = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                existing = ""
-        source_lines = _source_ignore_lines(existing)
+        if not path.is_file():
+            continue
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in _source_ignore_lines(body):
+            if line not in seen:
+                seen.add(line)
+                source_lines.append(line)
+    for name in BUILD_IGNORE_NAMES:
         body = "\n".join([*source_lines, *guarden_lines]) + "\n"
-        conf.write_file(path, body, IGNORE_MODE, owner)
+        conf.write_file(home / name, body, IGNORE_MODE, owner)
 
 
 def _source_ignore_lines(body: str) -> list[str]:
