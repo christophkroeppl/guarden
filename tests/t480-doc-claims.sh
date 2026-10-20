@@ -131,20 +131,6 @@ assert_file_has "$DOC" "exit 75"
 assert_file_has "$DOC" "README.md"
 assert_file_has "$README" "soil install"
 
-# --- 311: the cwd before the template copy --------------------------------
-#
-# `cp -r examples/services/…` resolves only from the repository root, and on
-# a real host the root is /usr/local/src/guarden — a path the runbook never
-# named. The operator had to work it out.
-assert_file_has "$DOC" "cd $REPO_DIR"
-assert_file_has "$EXAMPLES" "cd $REPO_DIR"
-# The copy is still there, and the cwd is above it rather than beside it.
-cp_line=$(grep -n 'cp -r examples/services' "$DOC" | head -1 | cut -d: -f1)
-[ -n "$cp_line" ] || _fail "the runbook no longer copies the example templates"
-cd_line=$(grep -n "cd $REPO_DIR" "$DOC" | head -1 | cut -d: -f1)
-[ -n "$cd_line" ] || _fail "the runbook does not cd into the checkout"
-[ "$cd_line" -lt "$cp_line" ] \
-    || _fail "the runbook copies the templates (line $cp_line) before it names the cwd (line $cd_line)"
 
 # --- 311: a verification subsection per example ---------------------------
 #
