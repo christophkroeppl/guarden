@@ -50,7 +50,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from guarden import credentials, errors, names, paths, tool
+from guarden import credentials, errors, names, paths, service, tool
 from guarden import manifest as manifest_mod
 
 # --- the vocabulary ----------------------------------------------------------
@@ -743,14 +743,36 @@ def unit_active(name: str, unit: str) -> Check:
     )
 
 
-def container_running(name: str, container: str) -> Check:
-    """Check two: the container is running.
+def container_running(name: str, container: str, record=None) -> Check:
+    """Check two: the container is running **in the service's own store**.
 
-    `podman ps --filter name=<container>` — the service user's own store, so
-    the row that answers is the container the service actually runs.
+    `podman ps --filter name=<container>` — and it runs **as the service**,
+    with the service's `USER` and `LOGNAME`, because the container lives in
+    the service's podman store and root's store is a different one.
+
+    **This was the check that could not see what it checked.** It ran
+    `podman ps` as root, and root's podman has root's own store, so the row
+    that answers was never the service's — and the check reported "the
+    container is not running" for a perfectly healthy service. That is how an
+    operator learns to ignore a verification.
+
+    The pattern is the one the mutator uses (`service._podman`): `runuser -u
+    <service>` with `USER` and `LOGNAME` named for the service, because
+    `runuser` swaps the uid but keeps the caller's environment, and podman's
+    keep-id mapping reads the subid files keyed by `USER`.
     """
-    result = tool.call(["podman", "ps", "--filter", f"name={container}", "--format", "{{.Names}}"])
-    rows = [line for line in result.stdout.splitlines() if line.strip()]
+    argv = ["ps", "--filter", f"name={container}", "--format", "{{.Names}}"]
+    if record is not None:
+        result = service._podman(name, record, *argv)
+    else:
+        # No record (the unit was never written): there is no service to ask,
+        # and the honest answer is that the check could not be made.
+        return Check(
+            what=f"the container {container} is running",
+            ok=False,
+            detail="the service has no registry record, so its podman store is unknown",
+        )
+    rows = [line for line in (result.stdout or "").splitlines() if line.strip()]
     ok = bool(rows)
     return Check(
         what=f"the container {container} is running",
@@ -760,35 +782,49 @@ def container_running(name: str, container: str) -> Check:
 
 
 def publication_listening(port: int) -> Check:
-    """Check three: the publication is listening on the loopback.
+    """Check three: the publication is listening **on the loopback**.
 
-    `ss -tln` shows the allocated loopback port in LISTEN. **A loopback
-    publication is not a public one**: this check says the port is bound on
-    `127.0.0.1`, and it says nothing about the world — a grant is a separate
-    act, and the creator never performs it.
+    `ss -tln` shows the allocated loopback port in LISTEN, and the check
+    looks for `127.0.0.1:<port>` — **not merely for the port number**.
+
+    **This was the check that could not see what it checked.** It matched any
+    listener on ANY address with that port number, so `0.0.0.0:<port>` — a
+    PUBLIC binding, which is the one thing a loopback publication is not —
+    satisfied it, and so did another service's container or a host daemon on
+    the same number. A false PASS is the one failure mode the verification
+    exists to prevent, and this is what it was doing.
+
+    A loopback publication is not a public one: this check says the port is
+    bound on `127.0.0.1`, and it says nothing about the world — a grant is a
+    separate act, and the creator never performs it.
     """
     result = tool.call(["ss", "-tln"])
-    needle = f":{port} "
-    for line in result.stdout.splitlines():
-        if needle not in line:
-            continue
+    for line in (result.stdout or "").splitlines():
         fields = line.split()
         if len(fields) < 4:
             continue
-        if fields[3] == "LISTEN" or "LISTEN" in fields:
-            return Check(
-                what=f"the publication {port} is listening",
-                ok=True,
-                detail=line.strip(),
-            )
+        local = fields[3]
+        if not local.startswith("127.0.0.1:"):
+            continue
+        if local.split(":", 1)[1] != str(port):
+            continue
+        if "LISTEN" not in fields:
+            continue
+        return Check(
+            what=f"the publication {port} is listening on the loopback",
+            ok=True,
+            detail=line.strip(),
+        )
     return Check(
-        what=f"the publication {port} is listening",
+        what=f"the publication {port} is listening on the loopback",
         ok=False,
-        detail=f"ss -tln shows no listener on {port}",
+        detail=f"ss -tln shows no loopback listener on {port}",
     )
 
 
-def verify(name: str, unit: str, container: str, port: int | None = None) -> list[Check]:
+def verify(
+    name: str, unit: str, container: str, port: int | None = None, record=None
+) -> list[Check]:
     """The verification, and it is EXACTLY three checks.
 
     1. the unit is active;
@@ -801,10 +837,13 @@ def verify(name: str, unit: str, container: str, port: int | None = None) -> lis
     protocol handshake. Without a per-service probe specification the check is
     either unimplementable or a false positive — and a false positive here is
     the exact failure the verification exists to catch.
+
+    `record` is the service's registry record, and it is what lets the
+    container check ask the SERVICE's podman store rather than root's.
     """
     checks = [
         unit_active(name, unit),
-        container_running(name, container),
+        container_running(name, container, record),
     ]
     if port is not None:
         checks.append(publication_listening(port))

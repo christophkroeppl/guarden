@@ -901,7 +901,7 @@ def _start_guided(name: str) -> None:
     container = f"{name}-{units_of[0]}"
     port = sorted(record.publication.values())
     checks = creator.verify(
-        name, unit, container, port[0] if port else None
+        name, unit, container, port[0] if port else None, record
     )
     creator.report_checks(checks)
 

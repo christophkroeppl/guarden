@@ -396,15 +396,29 @@ class VerifyTest(unittest.TestCase):
         )
         self.assertTrue(check.ok)
 
-    def test_the_container_check_asks_podman(self) -> None:
-        with mock.patch.object(creator.tool, "call") as call:
-            call.return_value = mock.Mock(
+    def test_the_container_check_asks_the_SERVICES_podman(self) -> None:
+        """**As the service, not as root.** The container lives in the service's
+        podman store and root's store is a different one, so a check that
+        asked root's podman could never see the service's container — and it
+        reported "not running" for a perfectly healthy service.
+        """
+        record = mock.Mock(uid=994)
+        with mock.patch.object(creator.service, "_podman") as podman:
+            podman.return_value = mock.Mock(
                 ok=True, stdout="myapp-web\n", stderr="", returncode=0
             )
-            check = creator.container_running("myapp", "myapp-web")
+            check = creator.container_running("myapp", "myapp-web", record)
+        podman.assert_called_once()
+        argv = podman.call_args[0]
+        self.assertEqual(argv[0], "myapp")
+        self.assertIn("ps", argv)
         self.assertTrue(check.ok)
-        self.assertIn("podman", call.call_args[0][0])
-        self.assertIn("ps", call.call_args[0][0])
+
+    def test_the_container_check_without_a_record_says_it_could_not_ask(self) -> None:
+        """No record means no service to ask, and the answer says so."""
+        check = creator.container_running("myapp", "myapp-web", None)
+        self.assertFalse(check.ok)
+        self.assertIn("no registry record", check.detail)
 
     def test_the_publication_check_looks_for_a_listener(self) -> None:
         with mock.patch.object(creator.tool, "call") as call:
@@ -420,6 +434,36 @@ class VerifyTest(unittest.TestCase):
     def test_a_publication_that_is_not_listening_fails(self) -> None:
         with mock.patch.object(creator.tool, "call") as call:
             call.return_value = mock.Mock(ok=True, stdout="", stderr="", returncode=0)
+            check = creator.publication_listening(20001)
+        self.assertFalse(check.ok)
+
+    def test_a_PUBLIC_publication_fails_the_loopback_check(self) -> None:
+        """**The check that could not see what it checked.**
+
+        A listener on `0.0.0.0:<port>` is a PUBLIC binding — the one thing a
+        loopback publication is not — and the old check matched any listener
+        on any address with that port number. A false PASS is the one failure
+        mode the verification exists to prevent.
+        """
+        with mock.patch.object(creator.tool, "call") as call:
+            call.return_value = mock.Mock(
+                ok=True,
+                stdout="LISTEN 0 128 0.0.0.0:20001 0.0.0.0:*\n",
+                stderr="",
+                returncode=0,
+            )
+            check = creator.publication_listening(20001)
+        self.assertFalse(check.ok)
+
+    def test_another_services_listener_on_the_same_port_fails(self) -> None:
+        """The port number alone is not the publication."""
+        with mock.patch.object(creator.tool, "call") as call:
+            call.return_value = mock.Mock(
+                ok=True,
+                stdout="LISTEN 0 128 127.0.0.1:20002 0.0.0.0:*\n",
+                stderr="",
+                returncode=0,
+            )
             check = creator.publication_listening(20001)
         self.assertFalse(check.ok)
 
