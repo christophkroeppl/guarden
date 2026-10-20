@@ -907,14 +907,20 @@ def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
     """
     home = paths.service_home(name)
     if (directory / ".guarden").is_dir():
-        shutil.copytree(directory / ".guarden", home / ".guarden", dirs_exist_ok=True)
+        # **A link is not dereferenced.** The source is a tree a POKE brought
+        # in, so it is untrusted, and `copytree` follows links by default —
+        # which would copy a target's bytes into the service's home. The copy
+        # carries the link instead.
+        shutil.copytree(
+            directory / ".guarden", home / ".guarden", dirs_exist_ok=True, symlinks=True
+        )
     for relative in ("compose.yaml", *BUILD_INPUTS):
         source = directory / relative
         target = home / relative
         if source.is_dir():
-            shutil.copytree(source, target, dirs_exist_ok=True)
+            shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
         elif source.is_file():
-            shutil.copy2(source, target)
+            shutil.copy2(source, target, follow_symlinks=False)
     for path in [home, *sorted(home.rglob("*"))]:
         if paths.SNAPSHOTS in path.parts:
             # The same snapper subtree the service walk skips: read-only, and
@@ -1051,10 +1057,16 @@ def _render_source(directory: Path) -> Iterator[Path]:
             source = directory / relative_input
             target = stage / relative_input
             if source.is_dir():
-                shutil.copytree(source, target)
+                # **A link is not dereferenced, and one is refused.** The source
+                # is the SERVICE's own home, so the service can plant a link in
+                # it — and `copytree` follows links by default, so root would
+                # have copied the TARGET's bytes into a `0755` directory every
+                # local uid can traverse, which is how one service's credential
+                # blob reaches another. The copy carries the link instead.
+                shutil.copytree(source, target, symlinks=True)
             elif source.is_file():
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, target)
+                shutil.copy2(source, target, follow_symlinks=False)
         # The copies carry the home's modes — `0700` all the way down, because
         # `_make_tree` modes every file and not only every directory — so the
         # staged tree is re-moded as it is written: directories traversable,
