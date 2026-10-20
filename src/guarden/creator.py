@@ -688,7 +688,16 @@ def stage_tree(tree: Path) -> Path:
 
     The copy holds only the render inputs — `.guarden/` and the build
     context — and it is the invocation's own: the caller removes it.
+
+    **A link inside the tree is refused, and the copy does not dereference
+    one.** `shutil.copytree` follows symlinks by default, so a tree holding
+    `.guarden/leak -> /etc/guarden/creds` would have the root half COPY the
+    target's bytes into a `0755` directory every uid on the box can read — and
+    the tree is a path the CALLER named, in a directory any service may write.
+    So: a link is refused by name, and the copy is made with `symlinks=True`
+    so that nothing is dereferenced even if one appears.
     """
+    _refuse_links(tree)
     staging = paths.LIB / "render-source" / "guided"
     staging.mkdir(parents=True, exist_ok=True)
     os.chmod(staging.parent, 0o755)
@@ -698,13 +707,35 @@ def stage_tree(tree: Path) -> Path:
         source = tree / relative
         target = stage / relative
         if source.is_dir():
-            shutil.copytree(source, target, dirs_exist_ok=True)
+            shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
         elif source.is_file():
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            shutil.copy2(source, target, follow_symlinks=False)
     for path in [stage, *sorted(stage.rglob("*"))]:
         os.chmod(path, 0o755 if path.is_dir() else 0o644)
     return stage
+
+
+def _refuse_links(tree: Path) -> None:
+    """A tree with a link in it is refused, and the link is named.
+
+    **The tree is a path the caller named**, and between the unprivileged
+    half's write and the root half's read, an unprivileged local user — which
+    in this threat model is any *service* — can replace a file in it with a
+    symlink. The root half would then copy the target's bytes into a
+    world-readable staging directory.
+
+    So the tree is walked BEFORE anything is copied, and a link is refused by
+    name. A tree with no link in it is the ordinary case and is not affected.
+    """
+    for path in [tree, *sorted(tree.rglob("*"))]:
+        if path.is_symlink():
+            raise errors.GuardenError(
+                f"the tree {tree} holds a link at {path.relative_to(tree)}, and a link "
+                f"is refused: the tree is copied for another account to read, and a "
+                f"link would carry something outside it in",
+                errors.REJECTED_INPUT,
+            )
 
 
 def drop_tree(stage: Path) -> None:
