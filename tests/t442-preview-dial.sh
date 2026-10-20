@@ -152,10 +152,18 @@ assert_file_has "$edge_file" "http://routed-preview:$pub_b"
 # collision itself, measured: the file must carry two router keys, and they
 # must differ. A file with one key carrying one Host() rule is the old
 # behaviour and serves one instance.
-router_count=$(grep -cE '^    [A-Za-z0-9._-]+:$' "$edge_file")
+#
+# **Counted in the ROUTERS section and not over the whole file.** The file has
+# three sections at the same indent — `routers:`, `services:` and
+# `middlewares:` — and each carries one key per router under it. A count over
+# the whole file therefore counted the routers twice and the basic-auth
+# middleware once, and read a file with two routers as a file with five. The
+# section is cut out first, so the count is of routers.
+routers_section=$(sed -n '/^  routers:$/,/^  [a-z]/p' "$edge_file")
+router_count=$(printf '%s\n' "$routers_section" | grep -cE '^    [A-Za-z0-9._-]+:$')
 [ "$router_count" = 2 ] \
     || _fail "the edge file names $router_count routers, expected 2 (one per instance)"
-distinct=$(grep -E '^    [A-Za-z0-9._-]+:$' "$edge_file" | sort -u | wc -l)
+distinct=$(printf '%s\n' "$routers_section" | grep -E '^    [A-Za-z0-9._-]+:$' | sort -u | wc -l)
 [ "$distinct" = 2 ] \
     || _fail "the edge file names $distinct distinct routers, expected 2"
 
