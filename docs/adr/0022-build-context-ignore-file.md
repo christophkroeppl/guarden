@@ -47,6 +47,19 @@ with the source's patterns first and guarden's last, at build time.**
   `.containerignore` and never consults `.dockerignore` when both are present. A
   repository that ships `.containerignore` and nothing else would otherwise have
   guarden's `.dockerignore` ignored entirely, and the store would go into the image.
+- **Both names carry BOTH halves — the source's patterns AND guarden's block.**
+  This is the part that is easy to get wrong, and a first version got it wrong:
+  guarden's block went into the `.containerignore` and the source's patterns
+  stayed in the `.dockerignore`. Since podman reads the `.containerignore` and
+  never the `.dockerignore`, **the source's own narrowing was silently dropped**
+  — and a source that shipped its own `.containerignore` had it overwritten
+  outright. Measured: a context whose `.dockerignore` excluded `Cargo.toml`,
+  with a `.containerignore` holding only guarden's block, built the image
+  **with** `Cargo.toml` in it.
+
+  So guarden collects the source's patterns from **both** names and writes
+  **both** names with the union: the source's patterns first, guarden's block
+  last. A source that ships either name keeps its narrowing under either name.
 - **The source's patterns first, guarden's last.** The last matching pattern wins, so
   guarden's lines last means a source-side `!` negation cannot re-include the store.
 - **At build time, not at copy time.** The home's podman store grows after the copy —

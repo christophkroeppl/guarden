@@ -2074,6 +2074,12 @@ The steps, in this order, and the order is the point :
   - guarden writes the exclusion under **both** names, because a source that ships
     `.containerignore` would otherwise have guarden's `.dockerignore` ignored entirely and
     the store would go into the image;
+  - **both names carry both halves** — the source's own patterns AND guarden's exclusion.
+    A first implementation put guarden's block in the `.containerignore` and left the
+    source's patterns in the `.dockerignore`, and the source's narrowing was then silently
+    dropped, because podman never consults the second file. The source's patterns are
+    therefore collected from both names and written to both, so a source that ships either
+    one keeps its narrowing;
   - the exclusion is written **into the context's own ignore file** and not passed with
     `--ignorefile`, because that flag would silently drop the source's own narrowing —
     the thing this section says the source owns;
