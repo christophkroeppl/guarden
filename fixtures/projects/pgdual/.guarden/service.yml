@@ -8,6 +8,11 @@ units: .guarden/quadlet/
 provides:
   - db
   - secret
+# A `db` provider declares a volume (spec 4): without one the data lives in
+# podman's anonymous volume, which the collector removes on the next
+# re-ingest (ticket 326). Declared here and mounted by the container below.
+state:
+  - pgdata
 ports:
   - container: db
     port: 5432
