@@ -188,25 +188,142 @@ assert_exit 0
 assert_stdout_has "127.0.0.0/8"
 assert_stdout_has "DROP"
 
-# **THE COUNTER OF THE DROP RULE IS HOST-WIDE, AND THIS IS THE RED STEP.**
+# **THE DENY IS STILL CLOSED, AND THE STUB RESOLVER IS THE ONE HOLE IN IT.**
+#
+# **THE MEASUREMENT BELOW IS ABOUT THE RULES, NOT ABOUT A COUNTER, AND THAT IS
+# THE WHOLE OF THE FIX.**
 #
 # The rule guarden renders is `daddr 127.0.0.0/8 jump DROP;` with no owner
 # match — that is what makes it a default deny — so every uid's loopback
 # traffic that falls past the accepts above it lands on this one rule and
-# moves its count. A count on this rule is a property of THE HOST'S LOOPBACK
+# moves its count. A count on that rule is a property of THE HOST'S LOOPBACK
 # TRAFFIC, not of the packet a test sent.
 #
-# **The two destinations below do not make the count private.** The stub is
-# read at 127.0.0.53 and the discard port at 127.0.0.1:9, and both readings
-# come off the SAME rule and therefore the SAME count. A destination chooses
-# which rule absorbs a packet; it does not make a counter private to the
-# sender.
+# **The previous version of this file read that count, and it was racy in both
+# directions.** It used TWO different destinations — the stub at 127.0.0.53 and
+# the discard port at 127.0.0.1:9 — and read the count on both. That does not
+# close the race: both halves read the SAME rule and therefore the SAME count.
+# A destination chooses which rule absorbs a packet; it does not make a count
+# private to the sender. Measured on the RED step of this commit, with a
+# stranger's loopback traffic running: `DENY_DROP=0->1`, and the suite said
+# "the stub was dropped, so the accept is not above the deny" — when the stub
+# accept had taken its packet (`STUB_ACCEPT=14->15`) and the count had moved
+# by the stranger's one packet.
 #
-# **So the traffic that would move it is started here, on purpose.** `guarden`
-# is the account guarden's own programs run as, and it is NOT a service uid:
-# nothing above the deny accepts its packets, so they fall through to the drop
-# and move the shared count. The destination is the discard port and the
-# protocol is UDP — no accept above the deny names them.
+# **What replaces it is a fact about the RULES, and traffic cannot move a
+# rule.** The properties below are read from ONE snapshot of the LIVE
+# ruleset — the rules the kernel is actually enforcing — and each is about a
+# rule's text or its position, never about a count:
+#
+#   1. the single deny on 127.0.0.0/8 exists and is the chain's LAST rule;
+#   2. the stub's accept for THIS service's uid is rendered ABOVE that deny,
+#      so the stub is reachable and everything else on loopback is not;
+#   3. no accept anywhere in the chain matches the whole of 127.0.0.0/8 — the
+#      over-wide accept, which would pass every positive assertion above and
+#      turn the default deny into decoration.
+#
+# **The live ruleset is the authority, and it is read ONCE.** The rendered
+# file `/etc/guarden/firewall/50-services.conf` is what guarden INTENDS and
+# the kernel's chain is what is ENFORCED; reading both, at two different
+# moments, would compare two rulesets and could answer about neither — so the
+# file is not read for these properties at all. One `iptables-legacy -S
+# guarden-svc` is a consistent view: the rules come out in chain-traversal
+# order, so their line numbers ARE their positions.
+#
+# **The unit is settled before the read, because the apply restarts it.** The
+# firewall reaches the kernel through `systemctl reload-or-restart`
+# (`firewall.load_set`), and the unit's ExecStop runs `ferm -F`, which blocks
+# while it flushes the chains — so a restart spends real time deactivating and
+# an immediate read sees the intermediate state rather than the outcome.
+wait_settled guarden-firewall.service
+assert_active guarden-firewall.service
+
+run iptables-legacy -S guarden-svc
+assert_exit 0
+assert_stdout_has "127.0.0.0/8"
+assert_stdout_has "DROP"
+
+# **ONE snapshot, and every property is read out of it.** `GUARDEN_STDOUT`
+# holds what the `run` above captured, so the ruleset is read once and the
+# three assertions below cannot disagree about which ruleset they describe.
+ruleset=$(cat "$GUARDEN_STDOUT")
+[ -n "$ruleset" ] || _fail "the guarden-svc chain is empty, so there is no ruleset to read"
+
+# The deny, as the kernel holds it: `iptables -S` prints the address as
+# `127.0.0.0/8` and the target as `-j DROP`.
+deny_line=$(printf '%s\n' "$ruleset" | grep -n -- '-A guarden-svc -d 127.0.0.0/8 -j DROP' | head -1 | cut -d: -f1)
+[ -n "$deny_line" ] || _fail "the guarden-svc chain has no DROP on 127.0.0.0/8 to measure"
+[ "$(printf '%s\n' "$ruleset" | grep -c -- '-A guarden-svc -d 127.0.0.0/8 -j DROP')" = 1 ] \
+    || _fail "the loopback deny is not the single rule on 127.0.0.0/8, so the chain denies in two places"
+
+# The stub's accept, for THIS service's uid, in the kernel's own spelling:
+# `-d 127.0.0.53/32 -p udp -m owner --uid-owner <uid> -m udp --dport 53 -j ACCEPT`.
+svc_uid=$(id -u routed-staging)
+stub_line=$(printf '%s\n' "$ruleset" \
+    | grep -n -- "-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner $svc_uid -m udp --dport 53 -j ACCEPT" \
+    | head -1 | cut -d: -f1)
+[ -n "$stub_line" ] \
+    || _fail "the stub accept for uid $svc_uid is not in the enforced chain, so a service cannot resolve"
+
+# **Property 2: the accept is ABOVE the deny.** Position is guarden's, and an
+# accept below the single deny matches no packet while still appearing in the
+# chain — so this is the property that makes the stub reachable and the rest
+# of loopback not, and it is a fact about two lines of text.
+[ "$stub_line" -lt "$deny_line" ] \
+    || _fail "the stub accept is at line $stub_line and the deny at $deny_line, so the stub is dropped"
+
+# **Property 3: NO accept matches the whole loopback network.** This is the
+# over-wide accept — the one that would turn the default deny into decoration
+# — and it is the negative every positive assertion above cannot see. An
+# accept naming 127.0.0.0/8 admits every loopback address, so the deny below
+# it would never be reached.
+[ "$(printf '%s\n' "$ruleset" | grep -- '-j ACCEPT' | grep -c -- '127.0.0.0/8')" = 0 ] \
+    || _fail "an accept matches the whole loopback network, so the deny is unreachable"
+
+# **And the deny is the LAST rule of the chain**, which is what "a default
+# deny" means: a rule after it would have the last word, not the deny.
+#
+# **Both sides of that comparison are LINE NUMBERS, not counts.** `iptables -S`
+# prints the chain's own declaration (`-N guarden-svc`) as its first line, so
+# a rule's line number in that output is one more than its position among the
+# rules — comparing a line number against a count of rules is off by one and
+# would fail on a correct ruleset. Measured: the deny at line 9 and eight
+# rules in the chain, which is the same ruleset.
+last_line=$(printf '%s\n' "$ruleset" | grep -n -- '-A guarden-svc ' | tail -1 | cut -d: -f1)
+[ "$deny_line" = "$last_line" ] \
+    || _fail "the deny is at line $deny_line and the chain's last rule is at line $last_line"
+
+echo "MEASURE: RULES deny=$deny_line stub_accept=$stub_line last=$last_line"
+
+# **The reachability of the stub is still MEASURED, and it is sound** because
+# this counter is private to the property it measures: the accept names ONE
+# address and ONE port and is owner-matched to service uids, so the only
+# packets that can move it are stub queries from a service uid — the test's
+# own datagram and any other service's resolver traffic. No other traffic can
+# reach it, so its movement is attributable even under load.
+stub_packets() {
+    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
+        | awk '$3 == "ACCEPT" && $9 == "127.0.0.53" {n += $1} END {print n + 0}'
+}
+stub_before=$(stub_packets)
+run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.53 53' || true
+stub_after=$(stub_packets)
+echo "MEASURE: STUB_ACCEPT=$stub_before->$stub_after"
+[ "$stub_after" -gt "$stub_before" ] \
+    || _fail "the stub accept did not take the packet, so a service still cannot resolve"
+
+# **AND THE IMMUNITY IS MEASURED, NOT ASSUMED.** The properties above are
+# about a ruleset, and a ruleset cannot be moved by traffic — but a claim of
+# immunity that was never exercised against traffic is a claim about a machine
+# nobody disturbed. So the traffic that broke the OLD assertions is started
+# here, on purpose, and the properties are read again with the shared count
+# in motion. That is the difference between the two shapes, measured on the
+# same machine in the same run.
+#
+# `guarden` is the account guarden's own programs run as, and it is NOT a
+# service uid: nothing above the deny accepts its packets, so they fall
+# through to the drop and move the shared count. The destination is the
+# discard port and the protocol is UDP — no accept above the deny names them.
 flood_pid=""
 flood_start() {
     env -C /tmp setpriv --reuid=guarden --regid=guarden --clear-groups \
@@ -224,43 +341,49 @@ flood_stop() {
 }
 trap flood_stop EXIT
 
-deny_packets() {
+shared_count() {
     iptables-legacy -nvx -L guarden-svc 2>/dev/null \
         | awk '$3 == "DROP" && $9 == "127.0.0.0/8" {print $1; exit}'
 }
 
-stub_packets() {
-    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
-        | awk '$3 == "ACCEPT" && $9 == "127.0.0.53" {n += $1} END {print n + 0}'
-}
-
-[ -n "$(deny_packets)" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"
-
-# **Half one: the stub is reachable, and the accept above the deny is what lets it.**
-# The stub counter is the sum over both protocols because the render carries an accept
-# each, and one UDP send must move the UDP one.
 flood_start
-stub_before=$(stub_packets)
-deny_before=$(deny_packets)
-run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.53 53' || true
-stub_after=$(stub_packets)
-deny_after=$(deny_packets)
-echo "MEASURE: STUB_ACCEPT=$stub_before->$stub_after DENY_DROP=$deny_before->$deny_after"
-[ "$stub_after" -gt "$stub_before" ] \
-    || _fail "the stub accept did not take the packet, so a service still cannot resolve"
-[ "$deny_after" = "$deny_before" ] \
-    || _fail "the stub was dropped, so the accept is not above the deny"
+# **The witness: the shared count must actually MOVE.** An immunity claim
+# measured over a quiet machine proves nothing at all, so the flood is not
+# accepted until the count is seen to move.
+shared_before=$(shared_count)
+[ -n "$shared_before" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to count"
+moved=""
+for _ in $(seq 1 50); do
+    sleep 0.2
+    if [ "$(shared_count)" != "$shared_before" ]; then
+        moved=yes
+        break
+    fi
+done
+[ -n "$moved" ] \
+    || _fail "the concurrent loopback traffic moved nothing, so the immunity measured below proves nothing"
+echo "MEASURE: CONCURRENT_LOOPBACK_TRAFFIC=movable SHARED_DENY=$shared_before->$(shared_count)"
 
-# **Half two, and the one that never existed before: the deny still refuses loopback.**
-# 127.0.0.53 is the single hole, so a DIFFERENT loopback destination must still be
-# dropped. An accept rendered too wide — say on all of 127.0.0.0/8 — passes half one
-# and fails here, which is why both are asserted.
-other_before=$(deny_packets)
-run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.1 9' || true
-other_after=$(deny_packets)
-echo "MEASURE: OTHER_DENY=$other_before->$other_after"
-[ "$other_after" -gt "$other_before" ] \
-    || _fail "a loopback destination other than the stub was not denied, so the accept is too wide"
+# **THE SAME PROPERTIES, READ AGAIN, WITH THE SHARED COUNT IN MOTION.** This
+# is what the ticket asks for: the properties must hold under concurrent
+# loopback traffic. They are read from a fresh snapshot, because a re-read is
+# the honest way to say "the ruleset still says this".
+ruleset_after=$(iptables-legacy -S guarden-svc 2>/dev/null)
+deny_after_line=$(printf '%s\n' "$ruleset_after" | grep -n -- '-A guarden-svc -d 127.0.0.0/8 -j DROP' | head -1 | cut -d: -f1)
+stub_after_line=$(printf '%s\n' "$ruleset_after" \
+    | grep -n -- "-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner $svc_uid -m udp --dport 53 -j ACCEPT" \
+    | head -1 | cut -d: -f1)
+[ -n "$deny_after_line" ] && [ -n "$stub_after_line" ] \
+    || _fail "the enforced chain changed under the concurrent traffic, so the measurement is not of one ruleset"
+[ "$stub_after_line" -lt "$deny_after_line" ] \
+    || _fail "the stub accept moved below the deny under concurrent traffic"
+[ "$(printf '%s\n' "$ruleset_after" | grep -- '-j ACCEPT' | grep -c -- '127.0.0.0/8')" = 0 ] \
+    || _fail "an accept matching the whole loopback network appeared under concurrent traffic"
+last_after_line=$(printf '%s\n' "$ruleset_after" | grep -n -- '-A guarden-svc ' | tail -1 | cut -d: -f1)
+[ "$deny_after_line" = "$last_after_line" ] \
+    || _fail "the deny is no longer the last rule of guarden-svc under concurrent traffic"
+echo "MEASURE: UNDER_CONCURRENT_TRAFFIC deny=$deny_after_line stub_accept=$stub_after_line last=$last_after_line"
+
 flood_stop
 
 # The unit is generated, loaded and found, so whatever happens next is podman's and

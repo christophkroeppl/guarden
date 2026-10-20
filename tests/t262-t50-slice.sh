@@ -88,9 +88,19 @@ stub_line=$(printf '%s\n' "$ruleset" \
     || _fail "the stub accept is at line $stub_line and the deny at $deny_line, so the stub is dropped"
 [ "$(printf '%s\n' "$ruleset" | grep -- '-j ACCEPT' | grep -c -- '127.0.0.0/8')" = 0 ] \
     || _fail "an accept matches the whole loopback network, so the deny is unreachable"
-last_rule=$(printf '%s\n' "$ruleset" | grep -c -- '-A guarden-svc ')
-[ "$deny_line" = "$last_rule" ] \
-    || _fail "the deny is at line $deny_line and the chain's last rule is at line $last_rule"
+# **The deny is the LAST rule of the chain**, which is what "a default deny"
+# means: a rule after it would be the last word, not the deny.
+#
+# **Both sides of that comparison are LINE NUMBERS, not counts.** `iptables -S`
+# prints the chain's own declaration (`-N guarden-svc`) as its first line, so
+# a rule's line number in that output is one more than its position among the
+# rules — comparing a line number against a count of rules is off by one and
+# would fail on a correct ruleset. Measured: the deny at line 9 and eight
+# rules in the chain, which is the same ruleset.
+last_line=$(printf '%s\n' "$ruleset" | grep -n -- '-A guarden-svc ' | tail -1 | cut -d: -f1)
+[ "$deny_line" = "$last_line" ] \
+    || _fail "the deny is at line $deny_line and the chain's last rule is at line $last_line"
+last_rule=$last_line
 
 echo "MEASURE: RULES deny=$deny_line stub_accept=$stub_line last=$last_rule"
 
@@ -172,7 +182,7 @@ stub_after_line=$(printf '%s\n' "$ruleset_after" \
     || _fail "the stub accept moved below the deny under concurrent traffic"
 [ "$(printf '%s\n' "$ruleset_after" | grep -- '-j ACCEPT' | grep -c -- '127.0.0.0/8')" = 0 ] \
     || _fail "an accept matching the whole loopback network appeared under concurrent traffic"
-last_after=$(printf '%s\n' "$ruleset_after" | grep -c -- '-A guarden-svc ')
+last_after=$(printf '%s\n' "$ruleset_after" | grep -n -- '-A guarden-svc ' | tail -1 | cut -d: -f1)
 [ "$deny_after" = "$last_after" ] \
     || _fail "the deny is no longer the last rule of guarden-svc under concurrent traffic"
 echo "MEASURE: UNDER_CONCURRENT_TRAFFIC deny=$deny_after stub_accept=$stub_after_line last=$last_after"
