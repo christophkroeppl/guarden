@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+# The build context is the whole staged tree, not four files (ticket 317).
+#
+# **What was false.** `weedr service build` ran `podman build` with the
+# service's home as its context, and the home held only `.guarden/`,
+# `compose.yaml`, `Containerfile` and `.dockerignore` — so a Containerfile
+# whose `COPY` names a source file (`COPY Cargo.toml Cargo.lock ./`) died with
+# `error: podman build exited 125: ... no such file or directory`, even though
+# the poke's staged tree held the very files it named.
+#
+# **What this asserts, on the machine and not in the source.** A staged tree
+# that carries a source file beside its Containerfile, a Containerfile that
+# COPYs that file, and a build that finishes with the file INSIDE the image.
+# The assertion reads the image's own contents, because a suite that grepped
+# the program for a string would be asserting that the source reads like the
+# fix rather than that the fix works.
+#
+# Three cases, each a different way the tree reaches the context:
+#
+#   1. a source file OUTSIDE the four-file set (`Cargo.toml`) is COPYed by the
+#      Containerfile: the build succeeds and the image carries the file. This
+#      is the ticket's own case and it is the one that was red.
+#   2. a file the SOURCE's own `.dockerignore` excludes is NOT in the image:
+#      the source owns what the build does not see (spec 6.6).
+#   3. the podman image store — which holds the per-user secret database —
+#      is NOT in the image, even though the repository shipped no ignore file
+#      at all: guarden writes the exclusion itself, because the repository's
+#      `.dockerignore` may be absent, and a context carrying the credential
+#      material leaks it into an image layer.
+#
+# Real host, real useradd, real subuid, real linger, real podman: the verb
+# runs `podman build` as the service user, and a stand-in would be asserting
+# its own fake. `GUARDEN_PREFIX=/`, as `t230-build` does.
+#
+# The Containerfile is `FROM scratch`: no base image is pulled, so the build
+# measures the context and not the network.
+
+# machine: fresh
+
+. "$(dirname "$0")/lib.sh"
+
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export GUARDEN_PREFIX=/
+
+registry=/var/lib/guarden/registry
+creds=/etc/guarden/creds
+
+ensure_accounts
+stage_config guarden-measured.toml
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_exit 0
+
+# podman is the machine the build runs on: its absence is the name of a
+# failure, not a failure mode of the verb.
+run podman --version
+assert_exit 0
+assert_stdout_has "podman version"
+
+purge() {
+    for service in "$@"; do
+        rm -rf "/var/lib/guarden/services/$service" "/etc/guarden/services/$service" \
+            "$creds/$service" "$registry/$service.toml"
+        userdel "$service" >/dev/null 2>&1 || :
+    done
+}
+
+cleanup() {
+    purge ctxapp-staging ctxignore-staging ctxstore-staging
+}
+trap cleanup EXIT
+
+cleanup
+
+# stage_ctx <project> <sha> <file> <line>...: a staged tree with a unit that
+# declares the local image, a Containerfile, and one source file beside them.
+#
+# The staged tree is where a poke's source lands (`/var/lib/guarden/staging`),
+# and it is the tree `weedr service ingest` copies into the service's home —
+# so a file planted here is a file the repository shipped.
+stage_ctx() {
+    local project=$1 sha=$2 file=$3
+    shift 3
+    local staged=/var/lib/guarden/staging/$project/$sha
+    rm -rf "$staged"
+    mkdir -p "$staged/.guarden/quadlet"
+    seed "$staged/.guarden/service.yml" \
+        "project: $project" \
+        "units: .guarden/quadlet/"
+    seed "$staged/.guarden/quadlet/app.container" \
+        "[Unit]" \
+        "Description=the build context subject" \
+        "" \
+        "[Container]" \
+        "Image=localhost/$project:latest"
+    seed "$staged/Containerfile" "FROM scratch" "COPY $file /copied"
+    seed "$staged/$file" "$@"
+}
+
+# podman_as <service> <podman args...>: podman as the service user.
+#
+# The shape `t350-keepid.sh` established and measured: `setpriv` with the
+# service's own uid and gid, `HOME` named for the service's home, and `USER`
+# and `LOGNAME` named for the service — `runuser`/`setpriv` keep the CALLER's
+# environment and the caller is root, and with USER=root podman's keep-id
+# mapping reads the subid files keyed by that name, finds none, and produces a
+# map crun refuses to init.
+podman_as() {
+    local service=$1 home uid
+    shift
+    home=/var/lib/guarden/services/$service/home
+    uid=$(id -u "$service")
+    run_in "$home" setpriv --reuid="$service" --regid="$service" --clear-groups \
+        env -u OLDPWD HOME="$home" PWD="$home" USER="$service" LOGNAME="$service" \
+        XDG_RUNTIME_DIR="/run/user/$uid" podman "$@"
+}
+
+# image_lists <service>: the image's own contents, one path per line, in
+# GUARDEN_STDOUT.
+#
+# The image is exported and the tarball listed, which is the image's contents
+# and not a rendering of them. `podman export` needs a container, so one is
+# created from the image and removed again.
+image_lists() {
+    local service=$1
+    podman_as "$service" create --name "t317-$service" "localhost/$service:latest"
+    assert_exit 0
+    podman_as "$service" export --output "/tmp/t317-$service.tar" "t317-$service"
+    assert_exit 0
+    run_in /tmp tar -tf "/tmp/t317-$service.tar"
+    assert_exit 0
+    podman_as "$service" rm -f "t317-$service"
+}
+
+# --- Case 1: a source file outside the four-file set reaches the context ----
+#
+# This is the ticket's own case. The Containerfile COPYs `Cargo.toml`, which
+# is not `.guarden/`, not `compose.yaml`, not `Containerfile` and not
+# `.dockerignore` — so under the old four-file copy the build died with 125
+# and the service never had an image.
+
+stage_ctx ctxapp 9f2c1ab Cargo.toml '[package]' 'name = "ctxapp"'
+run weedr service ingest ctxapp-staging --from poke ctxapp@9f2c1ab
+assert_exit 0
+
+# the premise: the file is in the staged tree and the Containerfile names it
+assert_file_has "/var/lib/guarden/staging/ctxapp/9f2c1ab/Cargo.toml" 'name = "ctxapp"'
+assert_file_has "/var/lib/guarden/staging/ctxapp/9f2c1ab/Containerfile" "COPY Cargo.toml /copied"
+
+run weedr service build ctxapp-staging
+assert_exit 0
+assert_stdout_has "localhost/ctxapp-staging:latest"
+
+# the outcome: the image exists, and the COPY landed — the file is IN the
+# image, which is the fact the old build could not produce
+image_lists ctxapp-staging
+assert_stdout_has "copied"
+
+# --- Case 2: the source's own .dockerignore narrows what the build sees ----
+#
+# The spec says the source's own `.dockerignore` decides what the build does
+# not see. A file the source excludes is not in the image — and the source's
+# exclusion is honoured even though guarden adds its own lines to the same
+# file.
+
+stage_ctx ctxignore 9f2c1ab Cargo.toml '[package]' 'name = "ctxignore"'
+seed /var/lib/guarden/staging/ctxignore/9f2c1ab/.dockerignore "Cargo.toml"
+run weedr service ingest ctxignore-staging --from poke ctxignore@9f2c1ab
+assert_exit 0
+
+run weedr service build ctxignore-staging
+assert_exit 0
+assert_stdout_has "localhost/ctxignore-staging:latest"
+
+# the source's own exclusion holds: the file it names is not in the image
+image_lists ctxignore-staging
+assert_stdout_lacks "copied"
+
+# --- Case 3: the podman store is never in the context ----------------------
+#
+# Guarden writes the exclusion itself, because the repository's `.dockerignore`
+# may be absent — and this tree ships NONE. The home's podman store holds the
+# per-user secret database in cleartext, and a context carrying it leaks the
+# credential material into an image layer.
+#
+# The assertion is on the IMAGE, not on the home: the store is in the home
+# either way, and only the image says whether the build saw it. And the
+# Containerfile here COPYs the whole tree, because a store that only a named
+# file's COPY would have missed is not in the context at all — `COPY .` is
+# what puts the store in the image, and it is what the exclusion has to stop.
+
+stage_ctx ctxstore 9f2c1ab Cargo.toml '[package]' 'name = "ctxstore"'
+# the Containerfile copies the whole tree, so the store is a candidate
+seed /var/lib/guarden/staging/ctxstore/9f2c1ab/Containerfile \
+    "FROM scratch" "COPY . /all"
+run weedr service ingest ctxstore-staging --from poke ctxstore@9f2c1ab
+assert_exit 0
+
+# the premise: the store IS in the home, so the case is not vacuous — a
+# store that were never there would make the assertion below true for the
+# wrong reason
+assert_file_exists "/var/lib/guarden/services/ctxstore-staging/home/.local/share/containers"
+
+run weedr service build ctxstore-staging
+assert_exit 0
+assert_stdout_has "localhost/ctxstore-staging:latest"
+
+# the store is not in the image
+image_lists ctxstore-staging
+assert_stdout_lacks "all/.local/share/containers"
+
+# and the source file the Containerfile named IS in the image, so the
+# exclusion did not exclude everything
+assert_stdout_has "all/Cargo.toml"
