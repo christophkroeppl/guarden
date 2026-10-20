@@ -68,7 +68,8 @@ purge() {
 }
 
 cleanup() {
-    purge ctxapp-staging ctxignore-staging ctxboth-staging ctxstore-staging
+    purge ctxapp-staging ctxignore-staging ctxboth-staging ctxstore-staging \
+        ctxsrc-production ctxdst-staging
 }
 trap cleanup EXIT
 
@@ -274,3 +275,41 @@ assert_stdout_lacks "all/.local/share/containers"
 # and the source file the Containerfile named IS in the image, so the
 # exclusion did not exclude everything
 assert_stdout_has "all/Cargo.toml"
+
+# --- Case 4: a whole-tree copy carries no other service's credentials ------
+#
+# **The copy's exclusions are not the ignore file's.** The ignore file keeps
+# the store out of the BUILD; the copy keeps it out of the HOME, and the two
+# are different questions. The copy's case is `weedr service add --from
+# <service>`: the source is ANOTHER SERVICE'S HOME, so it carries that
+# service's podman store — and the store holds the per-user secret database
+# in cleartext. A whole-tree copy without the exclusion would write another
+# service's credential material into the new home.
+#
+# The premise is planted rather than hoped for: the source service's store
+# and its secret database are written by hand, because a service that has
+# never built anything has no store and the case would be vacuous.
+
+stage_poke myapp 9f2c1ab
+run weedr service ingest ctxsrc-production --from poke myapp@9f2c1ab
+assert_exit 0
+
+seed "/var/lib/guarden/services/ctxsrc-production/home/.local/share/containers/storage/secrets/secrets.json" \
+    "THE-SECRET-VALUE"
+run chown -R ctxsrc-production:ctxsrc-production \
+    /var/lib/guarden/services/ctxsrc-production/home/.local/share
+assert_file_has \
+    "/var/lib/guarden/services/ctxsrc-production/home/.local/share/containers/storage/secrets/secrets.json" \
+    "THE-SECRET-VALUE"
+
+run weedr service add ctxdst-staging --from ctxsrc-production
+assert_exit 0
+
+# the destination holds no secret database of the source's
+assert_file_missing \
+    "/var/lib/guarden/services/ctxdst-staging/home/.local/share/containers/storage/secrets/secrets.json"
+
+# and the source's own is untouched
+assert_file_has \
+    "/var/lib/guarden/services/ctxsrc-production/home/.local/share/containers/storage/secrets/secrets.json" \
+    "THE-SECRET-VALUE"
