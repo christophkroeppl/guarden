@@ -2219,6 +2219,19 @@ def _user_exists(name: str) -> bool:
     return h.run("getent", "passwd", name).ok
 
 
+def _user_primary_group(name: str) -> str:
+    """The account's PRIMARY group, which is what `useradd --gid` set.
+
+    **It is checked, because a group membership that is wrong is a fact that
+    does not hold.** `_user_exists` only asks whether the account is there, so
+    a host where `hose` was created in the `guarden` group — which is what the
+    install phase used to do — would converge to "the user exists" and keep the
+    membership that gives the poke's account the host's configuration.
+    """
+    result = h.run("id", "-gn", name)
+    return result.out.strip() if result.ok else ""
+
+
 def _group_exists(name: str) -> bool:
     return h.run("getent", "group", name).ok
 
@@ -2400,17 +2413,60 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             lambda: _group_exists(PROGRAM_GROUP),
             lambda: h.run_or_die("groupadd", "--system", PROGRAM_GROUP),
         ),
+        # **`hose` gets its own group.** It is the poke's account, and the
+        # `guarden` group is the mutator's — a group that reaches the host's
+        # configuration, every service's grant surface, and two directories a
+        # root unit watches. `hose` needs none of that (its key file is `0644`
+        # and the project config `0444`), and the four places in `hose.py`
+        # that read the host's configuration all rely on it not being a member.
+        Item(
+            "the hose group exists, so the poke's account has one of its own",
+            lambda: _group_exists("hose"),
+            lambda: h.run_or_die("groupadd", "--system", "hose"),
+        ),
         *[
             Item(
                 f"the {user} user exists, and it is a program user rather than a service",
                 lambda user=user: _user_exists(user),
                 lambda user=user: h.run_or_die(
                     "useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin",
-                    "--gid", PROGRAM_GROUP, user,
+                    # **`hose` gets its OWN group, and not `guarden`.** The four
+                    # places in `hose.py` that read the host's configuration
+                    # (hose.py:162, 354, 382, 430) all say "`hose` is
+                    # deliberately not in the `guarden` group, so on a
+                    # conforming host the registry is unreadable here" — and
+                    # the install phase made it a member anyway.
+                    #
+                    # MEASURED on a live host: `id -nG hose` was `guarden`, and
+                    # `runuser -u hose -- cat /etc/guarden/guarden.toml` SUCCEEDED.
+                    # So the poke's account could read the host's configuration,
+                    # every service's `overrides.toml` (the operator's whole
+                    # grant surface), every registry record, and the share
+                    # issuance record — and could WRITE `/var/lib/guarden/queue`
+                    # and `/var/lib/guarden/stakes`, which are `0770
+                    # root:guarden`, and the second of those is watched by
+                    # `guarden-pins.path`, so a write there makes a ROOT unit
+                    # run.
+                    #
+                    # `hose` needs none of it: its own key file is `0644` and
+                    # the project config `0444` (projects.py:41-42), and
+                    # `/var/lib/guarden` is `0751` so traverse is free.
+                    "--gid", user if user != "guarden" else PROGRAM_GROUP,
+                    user,
                 ),
             )
             for user in PROGRAM_USERS
         ],
+        # **The group membership itself is a fact the phase checks**, so a host
+        # that already has `hose` in the `guarden` group is CORRECTED rather
+        # than left as it is. `_user_exists` only asks whether the account is
+        # there, so without this item the old membership would survive every
+        # install and every `--check` would call the host converged.
+        Item(
+            "the hose account's primary group is its own, and not the mutator's",
+            lambda: _user_primary_group("hose") == "hose",
+            lambda: h.run_or_die("usermod", "--gid", "hose", "hose"),
+        ),
         *[
             h.directory_item(
                 f"/{'/'.join(parts)} is {mode:04o} {owner}:{group}",
