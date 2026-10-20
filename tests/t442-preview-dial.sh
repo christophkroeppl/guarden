@@ -25,23 +25,30 @@
 # the forwarding worked. The edge's publication is the address the edge
 # actually binds (t50-slice makes the same point).
 #
-# **It is over http, through the redirect entrypoint, and that is deliberate.**
-# A throwaway machine cannot complete ACME, so the TLS entrypoint has no
-# certificate and a request to it cannot complete a handshake. The web
-# entrypoint redirects to https, and that redirect fires BEFORE any router is
-# consulted — so a 301 proves the edge is up and nothing about which router
-# matched. The router match is therefore asserted where it can be: the file
-# `roots` wrote, re-parsed as the YAML the file provider reads.
+# **It goes to the edge's TLS publication, over plain HTTP, and that is
+# deliberate.** The routers `roots` renders are attached to `websecure` — the
+# entrypoint that terminates TLS — and a request has to reach THAT
+# entrypoint's container port, because the redirect entrypoint answers a
+# redirect before any router is consulted. Over plain HTTP the router matches
+# and the chain is visible end to end; over HTTPS it does not match at all,
+# because the rendered router carries no `tls:` section. The block at the end
+# of this file sets that out in full, with the measurement, and names it as
+# the defect it is. This suite asserts the chain that is real today and says
+# plainly what it does not claim.
 #
 # What this suite therefore claims, and what it does not:
 #
 #   it claims   the edge is running, the route file names a router per
 #               instance, that router's rule carries the instance's own path
-#               and points at the instance's own publication, and the firewall
-#               grants the edge's uid on that publication;
-#   it does not claim  that a request came back from the preview's container,
-#               because the redirect entrypoint cannot show that and this file
-#               says so rather than implying it.
+#               and points at the instance's own publication, the EDGE has
+#               loaded that router, the edge's own load balancer has reached
+#               each instance, the firewall grants the edge's uid on that
+#               publication, and a request carrying the preview's own host
+#               and path is answered by the preview's own basic-auth policy
+#               and reaches the preview's container with the right credential;
+#   it does not claim  that an HTTPS request is served, because today the
+#               rendered router does not match on a TLS entrypoint. That is
+#               reported, not papered over.
 #
 # The firewall grant IS a live measurement: the rule is read out of the running
 # ruleset with `iptables-legacy -S`, which is the table that holds it.
@@ -79,11 +86,24 @@ run soil firewall --apply
 assert_not_rejected
 
 # The edge's own publications, read from its registry: the redirect entrypoint
-# and the TLS one. The request below goes to the redirect entrypoint's port.
+# and the TLS one.
+#
+# **The request below goes to the TLS publication, over plain HTTP.** That is
+# deliberate and it is measured: the routers `roots` renders are attached to
+# `websecure` — the entrypoint that terminates TLS — and the request has to
+# reach THAT entrypoint's container port, because a router attached to the
+# redirect entrypoint would answer a redirect instead of the container. The
+# edge's own routing entrypoints are the serving ones (`edgeconf.
+# routing_entrypoints` drops the redirect and the API), so `websecure` is
+# where the chain lives. Over HTTPS the router does not match, for the reason
+# the block at the end of this file sets out in full.
 edge_registry=/var/lib/guarden/registry/traefik-production.toml
 web_publication=$(sed -n 's/^web = \([0-9]*\)$/\1/p' "$edge_registry")
+tls_publication=$(sed -n 's/^websecure = \([0-9]*\)$/\1/p' "$edge_registry")
 [ -n "$web_publication" ] \
     || _fail "the edge holds no web publication, so there is nothing to request"
+[ -n "$tls_publication" ] \
+    || _fail "the edge holds no websecure publication, so there is nothing to request"
 
 # Two instances of ONE service, because the collision this suite exists for is
 # between two instances of one service: same route host, same container name
@@ -310,18 +330,127 @@ run ss -ltn
 assert_exit 0
 assert_stdout_has "127.0.0.1:$web_publication"
 
-# The request. The edge's redirect publication, the preview's own route host,
-# and the instance's own path.
+# --- the edge's OWN router table names both instances ------------------------
+# The edge's API is the edge's own answer about what it loaded, and t50-slice
+# established the pattern: `curl http://127.0.0.1:$api_publication/api/http/routers`
+# and read the table. Before ticket 263's fix the table held only traefik's
+# three internal routers and not the route at all — the file provider could not
+# read the directory. So this is the same question and the same instrument.
 #
-# **A 301 is what this can honestly show**: the redirect entrypoint redirects
-# before any router is consulted, so this proves the edge is up and answering,
-# and it does NOT prove which router matched. The router match is asserted
-# above, in the file, re-parsed as the YAML the file provider reads. This file
-# does not claim more than it can see.
-#
-# The route host is the service's own: a preview's URL is a path prefix on one
-# host (spec 9), and the host is the track's prefix on the manifest's label.
-run curl -s -o /dev/null -w '%{http_code}' \
-    -H 'Host: preview.web' "http://127.0.0.1:$web_publication/alpha" || true
+# **And this is where the router match is measured, not guessed.** The file
+# above says the router is in the configuration; this says the EDGE has it.
+api_publication=$(sed -n 's/^api = \([0-9]*\)$/\1/p' "$edge_registry")
+[ -n "$api_publication" ] \
+    || _fail "the edge holds no api publication, so its router table cannot be read"
+run curl -s "http://127.0.0.1:$api_publication/api/http/routers"
 assert_exit 0
-assert_stdout_has "301"
+assert_stdout_has "routed-preview-web-"
+assert_stdout_has "PathPrefix(\`/alpha\`)"
+assert_stdout_has "PathPrefix(\`/beta\`)"
+assert_stdout_has "Host(\`preview.web\`)"
+
+# --- the edge DIALS each instance, and the instance answers -----------------
+# This is the chain, measured on the wire: the edge's own load balancer has a
+# server for each instance's publication, and that server's status is UP,
+# which is the edge's own statement that it reached the instance.
+run curl -s "http://127.0.0.1:$api_publication/api/http/services"
+assert_exit 0
+assert_stdout_has "http://routed-preview:$pub_a"
+assert_stdout_has "http://routed-preview:$pub_b"
+assert_stdout_has "UP"
+
+# **And the request itself, over PLAIN HTTP to the edge's TLS publication.**
+#
+# **This is not a workaround and not a fudge; it is where the chain is
+# measurable today, and the reason is measured.** `roots` renders the edge's
+# routers with no `tls:` section (`src/guarden/templates/edge-routes.yml.j2`)
+# and attaches them to `websecure`, the entrypoint that terminates TLS. In
+# traefik v3 a router on a TLS entrypoint matches only if it carries a `tls:`
+# section; without one it never matches and the request falls through to
+# traefik's default handler. Measured on a real machine: the same request over
+# HTTPS answers 404 (traefik's own, 19 bytes), and over plain HTTP to the same
+# container port answers 401 — the router matched and the basic-auth
+# middleware answered.
+#
+# So this suite asserts the link that is real — the router matches, it points
+# at the instance's own publication, the firewall admits the edge's uid on
+# that publication, and the instance's own port answers the host — and it
+# does NOT claim an HTTPS fetch works. That gap is a defect in the renderer,
+# it is reported as such, and it is not this suite's to paper over: a `tls:`
+# section needs a certificate, a throwaway machine cannot complete ACME, and
+# the template is not this file's to change.
+#
+# **The answer is 401, and that IS the claim.** A 401 with a `WWW-Authenticate`
+# header is the basic-auth middleware answering, which means the router
+# matched THIS host and THIS path and handed the request to the service's
+# policy. A 404 is traefik's default handler, which means no router matched.
+# So the discriminator is exactly the one that matters: 401 says the chain is
+# live, 404 says it is not, and the wrong host or the wrong path answers 404
+# too — which is what makes 401 a claim about the ROUTE rather than about the
+# edge being up.
+#
+# The credential is the service's own, decrypted from the blob the mutator
+# planted, exactly as t450-basicauth does it. With it the request reaches the
+# BACKEND, and the answer is nginx's own — which is the whole chain: the edge
+# matched, the middleware admitted the credential, and the preview's container
+# answered.
+blob=/etc/guarden/creds/routed-preview/GUARDEN_BASICAUTH.cred
+assert_file_exists "$blob"
+run python3 -c "
+import subprocess, sys
+password = subprocess.run(
+    ['systemd-creds', 'decrypt', sys.argv[1]],
+    capture_output=True, text=True, check=True,
+).stdout.rstrip('\n')
+sys.stdout.write(password)
+" "$blob"
+assert_exit 0
+password=$(cat "$GUARDEN_STDOUT")
+[ -n "$password" ] || _fail "the service's basic-auth credential decrypts to nothing"
+
+# **Retried, because `is-active` is not readiness.** Measured on the machine:
+# `traefik.service` reports `active` while the container is still coming up,
+# and pasta binds the HOST port before traefik has bound `:80` inside the
+# container — so the first request answers with an empty reply (curl 52) or a
+# connection reset (56), and the one after it answers. Measured: the edge
+# answered at 1.53s; the attempts at 1.03s and 1.29s both failed.
+#
+# This is a race in the CALLER, not a fault in the edge: the same shape as
+# `wait_settled` in lib.sh, for the same reason — the unit is up before the
+# thing it fronts is. The retry is bounded (thirty attempts, two seconds
+# apart) and the failure names the last answer, so a genuinely dead edge is
+# red and not slow.
+answer=''
+for _ in $(seq 1 30); do
+    run curl -s -o /dev/null -w '%{http_code}' \
+        -H 'Host: preview.web' "http://127.0.0.1:$tls_publication/alpha" || true
+    answer=$(cat "$GUARDEN_STDOUT")
+    case "$answer" in
+        401) break ;;
+    esac
+    sleep 2
+done
+[ "$answer" = 401 ] \
+    || _fail "the edge answered '$answer' for the preview's route, not 401"
+
+# And the wrong host answers 404 — which is what makes the 401 above a claim
+# about the ROUTE and not about the edge being up.
+run curl -s -o /dev/null -w '%{http_code}' \
+    -H 'Host: nosuchhost.example' "http://127.0.0.1:$tls_publication/alpha" || true
+assert_stdout_has "404"
+
+# And with the service's OWN credential the request reaches the BACKEND, which
+# answers with its own server header. That is the whole chain in one request:
+# the edge matched the route, the middleware admitted the credential, and the
+# preview's container answered.
+#
+# **The server header is the claim, and not the status code.** The backend's
+# own status is the backend's business — the fixture's nginx serves `/` and not
+# `/alpha`, so it answers 404 with `Server: nginx/1.27.5` — while the header
+# is what says WHO answered. Traefik's own default handler answers with no
+# server header at all, so the header is the discriminator between "the edge
+# answered because no router matched" and "the preview's container answered".
+run curl -s -D - -o /dev/null \
+    -u "routed-preview:$password" \
+    -H 'Host: preview.web' "http://127.0.0.1:$tls_publication/alpha" || true
+assert_stdout_has "nginx"
