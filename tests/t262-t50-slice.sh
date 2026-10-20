@@ -42,6 +42,43 @@ assert_not_rejected
 run soil install --apply
 assert_not_rejected
 
+# ---------------------------------------------------------------------------
+# THE FIRST CRITERION: A SUITE THAT DIES NAMES THE COMMAND THAT DIED
+# ---------------------------------------------------------------------------
+#
+# **This half of the ticket was already satisfied by the tree, and NOTHING
+# ASSERTED IT.** `tests/lib.sh` carries an ERR trap that prints
+# `error: failed at line <n>: <command> (exit <rc>)`, which is what turns a
+# bare nonzero under `set -e` into a diagnosable failure — but no suite
+# asserted that the trap exists, so a later edit that dropped it would have
+# removed the whole criterion SILENTLY, and the ticket would still read "MET"
+# on the strength of a green `t10-failure-messages.sh` — which asserts the
+# RUNNER's lines, not the trap.
+#
+# **So the trap is exercised here, on this machine, rather than asserted from
+# its source.** A script is run as a child process with `lib.sh` sourced, it
+# dies on a bare nonzero, and the trap's line is read back. The child's stderr
+# is captured rather than inherited, so the assertion reads what the trap
+# actually printed.
+trap_probe="$GUARDEN_FIXTURES/trap-probe.sh"
+printf '%s\n' '. "$1"' 'echo "before"' 'false' 'echo "after"' > "$trap_probe"
+run bash "$trap_probe" "$GUARDEN_ROOT/tests/lib.sh"
+[ "$GUARDEN_EXIT" != 0 ] \
+    || _fail "a suite that died on a bare nonzero exited 0, so the trap changed the exit status"
+# **The line and the command are named**, which is what the criterion asks for:
+# a bare nonzero under `set -e` is given a diagnostic rather than ending the
+# file with nothing said.
+assert_stderr_has "error: failed at line"
+assert_stderr_has "false"
+# **And the exit status is named.** A diagnostic that says what failed but not
+# how it failed leaves the reader to guess between a rejection and a crash.
+assert_stderr_has "exit 1"
+# **And the failure is NOT silent**, which is the whole of this criterion: the
+# empty stderr is the state the ticket was written about.
+[ -s "$GUARDEN_STDERR" ] \
+    || _fail "a suite that died on a bare nonzero printed nothing to stderr, so the failure is silent"
+echo "MEASURE: TRAP_NAMED_FAILURE=$(cat "$GUARDEN_STDERR")"
+
 # One service, so there is one service uid and one stub accept to look for.
 # The poke is the same shape `t50-slice.sh` uses: a manifest, a route and a
 # publication.
