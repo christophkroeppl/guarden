@@ -560,6 +560,28 @@ def _gate(resolved: names.Resolved) -> tuple[str, str]:
     return state, str(verdict.get("reason") or "the gate recorded no reason")
 
 
+def _is_root_call() -> bool:
+    """Whether this call is ROOT'S OWN.
+
+    **The two facts the caller cannot forge:** the real uid the process runs
+    as, and the uid sudo says ran it (`SUDO_UID`). A call is root's own when
+    the real uid is 0 AND sudo did not name another user.
+
+    This is the same shape `weedr._guarden_may` uses, and it is INVERTED on
+    purpose: the question is not "is the caller `guarden`?" — the environment
+    carries no proof of who called, and `weedr` is `0755 root:root` so any
+    account can run a verb with `SUDO_USER` unset — but "is this root's own
+    call?", which the uid answers and the environment cannot.
+
+    So an operator's own `furrow deploy` (root, no sudo) is root's own, and a
+    call that arrived through the poke's account (`sudo -u guarden`) is not.
+    """
+    if os.geteuid() != 0:
+        return False
+    sudo_uid = os.environ.get("SUDO_UID")
+    return sudo_uid is None or sudo_uid == "0"
+
+
 def _require_granted_project(project: str) -> None:
     """The project named in the request is one the KEY FILE grants.
 
@@ -576,13 +598,18 @@ def _require_granted_project(project: str) -> None:
     `0644` and world-readable — so the privileged program can read the binding
     and check the request against it.
 
-    **So the project in the request is not taken on faith.** The key file says
-    which project a key is bound to; a request naming a project that no key
-    grants is refused, and the refusal names the projects that ARE granted.
+    **And the check applies to a NARROWED caller only.** An operator's own
+    `furrow deploy` — root's own call, with no SSH and no key — is not
+    narrowed by anything, and the operator may deploy any project they have
+    registered. What is narrowed is the call that arrives THROUGH the poke's
+    account, because that is the one whose project comes from a key.
 
-    A deploy of a project no key holds is refused rather than queued, and
-    nothing is written.
+    So: a call that is root's own is unrestricted; a call that came through
+    the poke's account is held to the key file's binding, and a project no
+    key holds is refused with the granted projects named.
     """
+    if _is_root_call():
+        return
     try:
         granted = projects.key_projects()
     except OSError as exc:  # pragma: no cover - the key file is readable
