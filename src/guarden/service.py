@@ -564,11 +564,19 @@ def create_service(
     # service's own podman generator, which is the process that has to read it
     # (AGENTS.md: nothing root-owned inside a service's home). This copy is what
     # `weedr service start` finds.
+    #
+    # **The directory each file lands in is owned too.** A template that ships
+    # `<unit>.container.d/<file>` has a directory in it, and `conf.write_file`
+    # would create that directory with the mutator's umask and root's
+    # ownership — the same defect the install path closes, in the one place
+    # that writes a template's tree. The shipped templates are flat today, so
+    # this is latent, and a latent hole in the same class is still the hole.
     quadlet_dir = units_dir(resolved.name, resolved.escaped_ref)
     quadlet_dir.mkdir(parents=True, exist_ok=True)
     for path in sorted(template_dir.rglob("*")):
         if path.is_file():
             target = quadlet_dir / path.relative_to(template_dir)
+            units.own_directory(target.parent, owner)
             conf.write_file(target, path.read_text(encoding="utf-8"), units.UNIT_MODE, owner)
 
     record = registry.Registry(
@@ -797,8 +805,18 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
         # An instance's unit directory lives under the service's home and its
         # volumes under `instances/`, a sibling of the service's own and never a
         # child of them (spec 2 and 5.2).
+        #
+        # **The instance's own quadlet directory is created here, and it is
+        # the service's own user who owns it.** Without this the directory was
+        # created by the first `units.install` — by `conf.write_file`'s
+        # `path.parent.mkdir` — so it was root-owned with the mutator's umask
+        # (0755, typically) inside a `0700` home, and the spec's "nothing
+        # root-owned lives inside a service's home" was false for it. The
+        # service could not write its own unit directory, and the mode depended
+        # on who invoked the mutator.
         directories += [
             paths.instance_home(name, escaped_ref),
+            paths.instance_home(name, escaped_ref) / paths.QUADLET,
             paths.instance_tree(name, escaped_ref) / volumes.SUBVOLUME,
             paths.instance_tree(name, escaped_ref) / volumes.BULK,
         ]
