@@ -3,9 +3,63 @@
 **Blocked by:** nothing. **Blocks:** nothing today; it makes `just test` red, so it blocks
 any release gate that runs the whole suite.
 
-**What to build:** Nothing. This ticket records a defect found while three parallel agents
-were working tickets 220, 240 and 261, and could not be diagnosed inside any of them
-because it is not any of their bugs.
+**Status: OPEN (2026-10-20) — criterion 1 and criterion 3 are met; criterion 2 is
+NOT.** An earlier version of this ticket said DONE. It was wrong, and the
+correction is recorded here rather than in the git history alone, because the
+mistake is the ticket's subject.
+
+- *Criterion 1 — the suite names the command that failed.* **MET.**
+  `tests/lib.sh` carries an `ERR` trap that prints
+  `error: failed at line <n>: <command> (exit <rc>)`, and
+  `tests/t10-failure-messages.sh` asserts the runner's failure text every way a
+  gate can read it — `t10-failure-messages.sh: green`.
+- *Criterion 2 — the deny assertion cannot be moved by concurrent traffic.*
+  **NOT MET.** `src/guarden/firewall.py:488` renders
+  `daddr 127.0.0.0/8 jump DROP;` as **one rule with no owner match**, in the
+  `guarden-svc` chain. It is a **host-wide counter**: any service uid's loopback
+  traffic moves it. So neither of the suite's two deny assertions satisfies
+  either half of the criterion — `deny_after == deny_before` does not prove the
+  packet it sent is the one counted and is not immune to traffic, and
+  `other_after > other_before` is unattributable in the other direction, since a
+  concurrent drop makes it pass spuriously.
+
+  The measurement that was taken to close this criterion,
+  `STUB_ACCEPT=14->15 DENY_DROP=0->0` and `OTHER_DENY=0->1`, is a **true
+  reading of a quiet machine** and is not evidence of soundness. The ticket's
+  own history records the same assertion failing under load on the ticket-240
+  branch (`0->4` → "the stub was dropped, so the accept is not above the deny"),
+  which is the same race in the same place.
+
+  **The fix is to assert on the rendered RULES, not on a counter**: that the
+  DROP on `127.0.0.0/8` exists, that the stub accept for the service uid
+  renders above it, and that no accept matches all of `127.0.0.0/8`. Those are
+  facts about the file and traffic cannot move them. The behavioural check is
+  sound only where the counter is attributable — the stub accept's counter can
+  only be moved by a stub query.
+- *Criterion 3 — `t50-slice.sh` is green on `develop` with no branch applied.*
+  **MET.** `t50-slice.sh: ok`, one machine cut.
+
+The third criterion is the one that was false when this ticket was written: the
+suite was red on `develop` itself. It is green now, and the two faults below are
+fixed in the tree.
+
+**This ticket is a work list again.** It was closed as DONE on the strength of a
+measurement taken on a quiet machine, and the closure was wrong: criterion 2 is
+still open, and the fix is to assert on the rendered rules rather than on a
+shared host-wide counter. The history is kept because it is why the criteria are
+shaped the way they are, and because a closure that was wrong on a quiet
+machine is worth recording.
+
+**What to build:** The three things in `## Acceptance` below, in `tests/t50-slice.sh` and
+`tests/lib.sh`: the suite must name the command that failed, the deny assertion must prove
+the packet it sent is the one counted, and the suite must be green on `develop` with no
+branch applied. Read the `## Acceptance` section — it is the work, and it is already
+written down.
+
+**What this ticket records:** a defect found while three parallel agents were working
+tickets 220, 240 and 261, which could not be diagnosed inside any of them because it is
+not any of their bugs. The history is in `## What was found` below; the work is the
+`## Acceptance` section, and the two are not the same thing.
 
 ## What was found
 
