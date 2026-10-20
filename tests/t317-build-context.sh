@@ -130,15 +130,20 @@ podman_as() {
 # The image is exported and the tarball listed, which is the image's contents
 # and not a rendering of them. `podman export` needs a container, so one is
 # created from the image and removed again.
+#
+# **The listing is the LAST thing written to stdout.** Every `run` and
+# `run_in` captures into the same two files and OVERWRITES them, so a helper
+# that cleaned up after itself left the cleanup's (empty) stdout in place and
+# the caller's assertion read that instead of the listing.
 image_lists() {
     local service=$1
     podman_as "$service" create --name "t317-$service" "localhost/$service:latest"
     assert_exit 0
     podman_as "$service" export --output "/tmp/t317-$service.tar" "t317-$service"
     assert_exit 0
+    podman_as "$service" rm -f "t317-$service"
     run_in /tmp tar -tf "/tmp/t317-$service.tar"
     assert_exit 0
-    podman_as "$service" rm -f "t317-$service"
 }
 
 # --- Case 1: a source file outside the four-file set reaches the context ----
@@ -165,15 +170,22 @@ assert_stdout_has "localhost/ctxapp-staging:latest"
 image_lists ctxapp-staging
 assert_stdout_has "copied"
 
-# --- Case 2: the source's own .dockerignore narrows what the build sees ----
+# --- Case 2: the source's own ignore file narrows what the build sees ------
 #
-# The spec says the source's own `.dockerignore` decides what the build does
-# not see. A file the source excludes is not in the image — and the source's
-# exclusion is honoured even though guarden adds its own lines to the same
-# file.
+# The spec says the source's own ignore file decides what the build does not
+# see. A file the source excludes is not in the image.
+#
+# **The Containerfile copies the whole tree**, so the build SUCCEEDS and the
+# assertion is on the image's contents. A Containerfile that copied the
+# excluded file would fail the build instead, which shows the exclusion
+# holding but says nothing about the image — and the question here is what the
+# image carries.
 
 stage_ctx ctxignore ctxignore-staging 9f2c1ab Cargo.toml '[package]' 'name = "ctxignore"'
 seed /var/lib/guarden/staging/ctxignore/9f2c1ab/.dockerignore "Cargo.toml"
+# the whole tree is copied, so the build succeeds and the image is readable
+seed /var/lib/guarden/staging/ctxignore/9f2c1ab/Containerfile \
+    "FROM scratch" "COPY . /all"
 run weedr service ingest ctxignore-staging --from poke ctxignore@9f2c1ab
 assert_exit 0
 
@@ -181,9 +193,11 @@ run weedr service build ctxignore-staging
 assert_exit 0
 assert_stdout_has "localhost/ctxignore-staging:latest"
 
-# the source's own exclusion holds: the file it names is not in the image
+# the source's own exclusion holds: the file it names is not in the image,
+# and the rest of the tree is
 image_lists ctxignore-staging
-assert_stdout_lacks "copied"
+assert_stdout_lacks "all/Cargo.toml"
+assert_stdout_has "all/Containerfile"
 
 # --- Case 2b: the source's narrowing survives guarden's own file -------------
 #
@@ -192,17 +206,20 @@ assert_stdout_lacks "copied"
 # first is present (measured on podman 5.7.0). Guarden writes BOTH names so
 # that its exclusion is always read -- but a first version wrote only
 # guarden's block into the `.containerignore` and kept the source's patterns
-# in the `.dockerignore`, and the source's narrowing was then silently DROPPED:
-# the build saw the `.containerignore` alone, and the file the source excluded
+# in the `.dockerignore`, and a source's own `.containerignore` was then
+# OVERWRITTEN: its narrowing was silently dropped and the file it excluded
 # went into the image.
 #
 # So the source's patterns must reach BOTH names. The case is here because it
-# is the one that can pass while case 2 passes: case 2's source ships no
-# `.containerignore`, so the two are indistinguishable until a source's own
-# file is dropped by guarden's.
+# is the one that can pass while case 2 passes: case 2's source ships a
+# `.dockerignore`, and podman reads the `.containerignore` guarden wrote
+# beside it — so the two are indistinguishable until the source ships the
+# name podman prefers.
 
 stage_ctx ctxboth ctxboth-staging 9f2c1ab Cargo.toml '[package]' 'name = "ctxboth"'
-seed /var/lib/guarden/staging/ctxboth/9f2c1ab/.dockerignore "Cargo.toml"
+seed /var/lib/guarden/staging/ctxboth/9f2c1ab/.containerignore "Cargo.toml"
+seed /var/lib/guarden/staging/ctxboth/9f2c1ab/Containerfile \
+    "FROM scratch" "COPY . /all"
 run weedr service ingest ctxboth-staging --from poke ctxboth@9f2c1ab
 assert_exit 0
 
@@ -210,13 +227,15 @@ run weedr service build ctxboth-staging
 assert_exit 0
 
 # the source's own exclusion holds even though guarden wrote a
-# `.containerignore` beside it
+# `.dockerignore` beside it — and the file podman prefers, the one the source
+# shipped, is the one that decides
 image_lists ctxboth-staging
-assert_stdout_lacks "copied"
+assert_stdout_lacks "all/Cargo.toml"
+assert_stdout_has "all/Containerfile"
 
 # --- Case 3: the podman store is never in the context ----------------------
 #
-# Guarden writes the exclusion itself, because the repository's `.dockerignore`
+# Guarden writes the exclusion itself, because the repository's ignore file
 # may be absent — and this tree ships NONE. The home's podman store holds the
 # per-user secret database in cleartext, and a context carrying it leaks the
 # credential material into an image layer.
@@ -226,6 +245,12 @@ assert_stdout_lacks "copied"
 # Containerfile here COPYs the whole tree, because a store that only a named
 # file's COPY would have missed is not in the context at all — `COPY .` is
 # what puts the store in the image, and it is what the exclusion has to stop.
+#
+# **The store is created BY the build**, so the premise is asserted after it:
+# podman writes its image store into the home as it builds, and the store is
+# therefore in the home the build read — which is the whole of what makes the
+# exclusion load-bearing. A store that were never there would make the
+# assertion below true for the wrong reason.
 
 stage_ctx ctxstore ctxstore-staging 9f2c1ab Cargo.toml '[package]' 'name = "ctxstore"'
 # the Containerfile copies the whole tree, so the store is a candidate
@@ -234,16 +259,15 @@ seed /var/lib/guarden/staging/ctxstore/9f2c1ab/Containerfile \
 run weedr service ingest ctxstore-staging --from poke ctxstore@9f2c1ab
 assert_exit 0
 
-# the premise: the store IS in the home, so the case is not vacuous — a
-# store that were never there would make the assertion below true for the
-# wrong reason
-assert_file_exists "/var/lib/guarden/services/ctxstore-staging/home/.local/share/containers"
-
 run weedr service build ctxstore-staging
 assert_exit 0
 assert_stdout_has "localhost/ctxstore-staging:latest"
 
-# the store is not in the image
+# the premise: the build put podman's store in the home, so the store WAS in
+# the context the build read
+assert_file_exists "/var/lib/guarden/services/ctxstore-staging/home/.local/share/containers"
+
+# and it is not in the image
 image_lists ctxstore-staging
 assert_stdout_lacks "all/.local/share/containers"
 
