@@ -262,11 +262,28 @@ run curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$pub_b/" || true
 assert_exit 0
 assert_stdout_has "200"
 
-# The service's own publication is a third, separate port, and it is not one
-# of the instances': a slot service and an instance of it are three addresses.
+# **The service's own publication is a third number, and nothing binds it.**
+#
+# The orphan's version of this file asserted that the slot's publication was
+# BOUND (`assert_stdout_has "127.0.0.1:$pub_slot"`), and that assertion is
+# wrong on develop's tree. On a `kind = "instance"` track the slot is never
+# rendered: `t440` holds the fact with `assert_file_missing
+# "$slot_quadlet/web.container"` — every render on that track is an instance's
+# render, and the slot's own quadlet directory holds only the search-path
+# entries the generator reads. So the slot's publication is ALLOCATED (the
+# registry carries it, and the two instances hold two others) and nothing
+# listens on it, because there is no slot container to listen.
+#
+# The claim that is worth making is therefore the one that is true and that
+# would catch a real defect: the three numbers are three numbers, the slot's
+# unit is NOT there, and the slot's port is NOT bound. A slot that DID bind
+# would be a service publishing an address the edge's route file never points
+# at — a preview served on a third port that nothing asked for.
+slot_quadlet="/var/lib/guarden/services/routed-preview/home/.config/containers/systemd"
+assert_file_missing "$slot_quadlet/web.container"
 run ss -ltn
 assert_exit 0
-assert_stdout_has "127.0.0.1:$pub_slot"
+assert_stdout_lacks "127.0.0.1:$pub_slot"
 
 # --- the edge is asked, and it answers ---------------------------------------
 # The edge has to be running for its publication to be bound, and the route
