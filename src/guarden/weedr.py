@@ -2230,19 +2230,36 @@ def _guarden_may(call: str) -> None:
     `port open` publishes a port; a list of program names cannot say that, and a
     program can.
 
-    **The caller is read from `SUDO_USER`**, which sudo sets to the account the
-    rule ran as. A call that did not come through sudo has no `SUDO_USER` and
-    is root's own call, which is unrestricted — that is the case the VM harness
-    exercises, and the case the operator's own `sudo weedr …` is not.
+    **The caller is read from `SUDO_USER` AND from the real uid**, and the
+    check is INVERTED: a call is unrestricted when it is ROOT'S OWN, and
+    narrowed when it is anything else.
 
-    The list is the spec's §6.6 list, which is the best statement of the
-    intended policy that exists. `purge`, `rollback`, `port open` and
-    `firewall open` are NOT in it, and that is the point: a push may deploy and
-    may not destroy, publish or grant.
+    The earlier shape asked "is the caller `guarden`?" and returned
+    unrestricted when the answer was no. **That is fail-open**, and a review
+    named it: `weedr` is `0755 root:root`, so ANY account can run a verb with
+    `SUDO_USER` unset — the environment carries no proof of who called, and a
+    program that runs as root because its CALLER had root is not the same as a
+    program whose caller is root.
+
+    So the narrowness is decided by the two facts that cannot be forged by
+    the caller: **the real uid the process runs as**, and **the uid sudo
+    says ran it** (`SUDO_UID`). A call is root's own when the real uid is 0
+    AND sudo did not name another user; anything else is a narrowed caller
+    and is held to the list.
+
+    What that changes: `sudo -u guarden weedr …` (the mutator's own rule) is
+    narrowed, and `sudo weedr …` by the operator is root's own and is
+    unrestricted. And a service user running `weedr` directly — which is
+    already refused by the filesystem's modes — is narrowed rather than
+    waved through.
     """
-    caller = os.environ.get("SUDO_USER")
-    if caller != sudoers.GUARDEN_USER:
+    real_uid = os.geteuid()
+    sudo_uid = os.environ.get("SUDO_UID")
+    # Root's own call: the process IS root and sudo did not name another
+    # user. `SUDO_UID` absent means sudo was not in the picture.
+    if real_uid == 0 and (sudo_uid is None or sudo_uid == "0"):
         return
+    # A narrowed caller: it runs as somebody, and somebody is not root.
     if call in sudoers.GUARDEN_MAY:
         return
     raise errors.GuardenError(

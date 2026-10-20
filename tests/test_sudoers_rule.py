@@ -200,16 +200,42 @@ class MutatorPolicyTest(unittest.TestCase):
         """A call that did not come through sudo is root's own call.
 
         That is the case the VM harness exercises, and the case the operator's
-        own `sudo weedr …` is not: sudo sets SUDO_USER to the account the rule
-        ran as, and root's own call has none.
+        own `sudo weedr …` is not: sudo sets SUDO_UID to the account the rule
+        ran as.
         """
         with mock.patch.dict(os.environ, {}, clear=True):
-            weedr._guarden_may("weedr service purge")
+            with mock.patch.object(os, "geteuid", return_value=0):
+                weedr._guarden_may("weedr service purge")
 
     def test_another_account_is_unrestricted(self) -> None:
         """Only the mutator's own identity is narrowed."""
-        with mock.patch.dict(os.environ, {"SUDO_USER": "somebody-else"}):
-            weedr._guarden_may("weedr service purge")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=0):
+                weedr._guarden_may("weedr service purge")
+
+    def test_a_narrowed_caller_is_refused_a_verb_outside_the_list(self) -> None:
+        """**The check is INVERTED: a call is unrestricted when it is ROOT'S
+        OWN, and narrowed when it is anything else.**
+
+        The earlier shape asked "is the caller `guarden`?" and returned
+        unrestricted when the answer was no — which is fail-open, because
+        `weedr` is `0755 root:root` and ANY account can run a verb with
+        `SUDO_USER` unset. The environment carries no proof of who called.
+
+        So a caller that is not root is held to the list, whatever it says
+        about itself.
+        """
+        with mock.patch.dict(os.environ, {"SUDO_UID": "994"}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=0):
+                with self.assertRaises(Exception) as caught:
+                    weedr._guarden_may("weedr service purge")
+        self.assertIn("may not run", str(caught.exception))
+
+    def test_a_narrowed_caller_may_run_a_verb_inside_the_list(self) -> None:
+        """The permitted half, for a narrowed caller."""
+        with mock.patch.dict(os.environ, {"SUDO_UID": "994"}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=0):
+                weedr._guarden_may("weedr service ingest")
 
 
 if __name__ == "__main__":
