@@ -15,11 +15,13 @@ import os
 import shutil
 import sys
 import time
+from pathlib import Path
 
 from guarden import (
     basicauth,
     cli,
     conf,
+    creator,
     credentials,
     edgeconf,
     errors,
@@ -223,6 +225,33 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TEMPLATE",
         default=None,
         help="the template to create from; asked for at a terminal when omitted",
+    )
+    create.add_argument(
+        "--guided",
+        dest="guided",
+        action="store_true",
+        help="ask the operator the questions and build the tree (ticket 328)",
+    )
+    create.add_argument(
+        "--tree",
+        dest="tree",
+        metavar="TREE",
+        default=None,
+        help="the tree the guided mode writes; a directory of the operator's own",
+    )
+    create.add_argument(
+        "--plant",
+        dest="plant",
+        metavar="KEY",
+        nargs="*",
+        default=None,
+        help="the credential keys to plant; the values are read at the terminal",
+    )
+    create.add_argument(
+        "--start",
+        dest="start",
+        action="store_true",
+        help="start the service after it is created, and verify it",
     )
 
     for verb, help_text in (
@@ -539,6 +568,14 @@ def _create_service(args) -> int:
     this terminal is the one applied — the chosen template travels with the
     re-exec rather than being asked a second time.
 
+    **The guided mode is a mode of this verb, and it is the same shape.**
+    `--guided` asks the operator the questions HERE — at this terminal, by this
+    unprivileged process — and the answers travel with the re-exec as
+    arguments, so the root half receives a request that is already
+    well-formed. `create` is root-only and off the sudoers rule, so a mode of
+    it is too, and the platform's doctrine — "a flag on a granted verb would
+    grant the capability with it" — does not apply: it is not a granted verb.
+
     What it creates is the identity, the service tree, a copy of the template's
     quadlet files and the registry record. It creates **no manifest and no
     volume**: a template ships neither, and the volumes a manifest declares are
@@ -574,6 +611,29 @@ def _create_service(args) -> int:
             f"create takes a plain service name, so {args.name!r} takes no /<ref>",
             errors.REJECTED_INPUT,
         )
+    if getattr(args, "guided", False):
+        # The guided mode has two halves, and the split is by ROLE and not by
+        # privilege: this half asks the questions and writes the tree, the root
+        # half creates the service from it.
+        #
+        # **The questions are asked BEFORE root is asked for**, which is the
+        # whole of the security argument — and it holds whether the operator
+        # was already root or not. `create` is root-only and off the sudoers
+        # rule, so a mode of it is too, and the platform's doctrine ("a flag on
+        # a granted verb would grant the capability with it") does not apply
+        # to it because it is not a granted verb.
+        #
+        # **The root half is recognised by `--plant` or `--start`, and not by
+        # the tree's existing.** A tree directory that exists says nothing
+        # about whether the questions were asked — the creator makes the
+        # directory itself — so keying the dispatch on it would skip the
+        # questions entirely and read an empty tree. The two flags are the
+        # root half's own: they carry the answers that the re-exec brought.
+        if os.geteuid() == 0 and (
+            getattr(args, "plant", None) is not None or getattr(args, "start", False)
+        ):
+            return _create_guided_root(args)
+        return _create_guided(args)
     envs = [env.strip() for env in args.environments.split(",") if env.strip()] or ["production"]
     config = config_mod.load()
     resolved = [
@@ -619,6 +679,231 @@ def _create_service(args) -> int:
         _filter_set(entry.name)
         sys.stdout.write(f"created {entry.name} uid {outcome.uid} from {template}\n")
     return 0
+
+
+def _create_guided(args) -> int:
+    """`weedr service create --guided`: ask the operator, then build the tree.
+
+    **The questions are asked by the UNPRIVILEGED process, before root is
+    asked for.** That is the whole of the security argument: the answers are
+    gathered and validated here, at the operator's terminal, and the root half
+    receives an already-well-formed request. The flow is the same one
+    `create` already keeps — gather, then `_become_root`, then apply — and the
+    design's earlier draft inverted it, so the order here is deliberate.
+
+    **What the creator RECORDS is what the service ASKS for.** A manifest asks
+    for a public port and for a firewall rule; it does not grant either. The
+    creator prints the commands the operator has to run and never runs them:
+    `weedr port open` and `weedr firewall open` are root and on no sudoers
+    rule, so nothing that answers a push can reach them, and a creator that
+    granted in the same breath would collapse the request/grant split.
+
+    **A secret is read at a terminal, with the echo off, through the existing
+    `credentials.prompt()`** — never from a command line, a flag or a file, and
+    never written into the tree. The value is planted with the existing
+    `credentials.plant()` into the root-owned blob, and the tree carries the
+    credential's NAME and nothing else.
+
+    **The network is not asked.** The renderer owns `Network=` and refuses
+    anything that is not `pasta:`, so there is exactly one legal answer and a
+    question would offer a choice that does not exist. The creator states it.
+
+    The tree the creator writes is a tree like any other: `.guarden/service.yml`
+    and `.guarden/quadlet/*.container`, which is what `weedr service add
+    --from <tree>` consumes. The quadlet is a STARTING POINT — the renderer
+    owns `PublishPort=`, `Network=` and `Volume=` and overwrites them.
+    """
+    if "/" in args.name:
+        raise errors.GuardenError(
+            f"create takes a plain service name, so {args.name!r} takes no /<ref>",
+            errors.REJECTED_INPUT,
+        )
+    creator.require_terminal("the guided creator")
+    tree = Path(args.tree).expanduser() if args.tree else Path.cwd() / args.name
+    if tree.exists() and any(tree.iterdir()):
+        raise errors.GuardenError(
+            f"the tree {tree} is not empty, and the creator writes into it; a tree that holds "
+            "something already is not a tree the creator may take over",
+            errors.REJECTED_INPUT,
+        )
+
+    # The name first: it is the value every other answer is filed under, and a
+    # name that does not fit is refused before anything is asked after it. The
+    # environment is the verb's own `--env` flag rather than a second question
+    # about the same thing.
+    name = creator.validate_name(args.name)
+    environment = args.environments.split(",")[0].strip() or "production"
+    creator.validate_name(environment, "environment")
+
+    # The image and the tag, and then the pull starts — as soon as those two
+    # are known, not at the end, so the image is downloading while the operator
+    # answers the rest.
+    image = creator.ask_validated("image", creator.validate_image, "", "the image")
+    tag = creator.ask_validated("tag", creator.validate_tag, "latest", "the tag")
+    pull = creator.pull_background(f"{image}:{tag}")
+    sys.stdout.write(f"pulling {image}:{tag} in the background\n")
+    try:
+        answers = creator.Answers(
+            name=name,
+            environment=environment,
+            image=image,
+            tag=tag,
+        )
+        answers.provides = creator.ask_provides()
+        answers.ports = creator.ask_ports()
+        answers.volumes = creator.ask_volumes()
+        answers.firewall = creator.ask_firewall()
+        answers.secrets = creator.ask_secrets()
+        answers.start = creator.ask_start()
+        creator.write_tree(tree, answers)
+    except BaseException:
+        # The pull is aborted on the way out, whatever ended the run: an
+        # exception, a refusal, or a Ctrl-C. The abort cannot be guaranteed
+        # against a SIGKILL, and the cost of an uncleaned pull is DISK.
+        creator.abort_pull(pull)
+        raise
+    creator.abort_pull(pull)
+
+    # The requests the service ASKS for, and the commands the operator runs to
+    # grant them. Printed, never run.
+    creator.report_grants(name, answers)
+
+    # The re-exec. The answers travel as arguments, so the root half receives
+    # a request that is already well-formed — this is the same shape every
+    # other verb keeps, and the flow the design's earlier draft had inverted.
+    words = [
+        "service",
+        "create",
+        args.name,
+        "--env",
+        args.environments,
+        "--guided",
+        "--tree",
+        str(tree),
+    ]
+    if answers.start:
+        words.append("--start")
+    # `--plant` is carried even when there is no key to plant, because it is
+    # what tells the root half that the questions have ALREADY been asked. A
+    # re-exec without it would ask them again — and the second round would
+    # happen after the re-exec, at a terminal that may not be one.
+    words.append("--plant")
+    words.extend(secret.key for secret in answers.secrets)
+    if os.geteuid() == 0:
+        # Already root: there is no re-exec to do and no second round of
+        # questions to ask. The tree is written, so the root half runs here —
+        # and it is recognised by the same flags the re-exec would have
+        # carried, so the two paths are the same code.
+        args.tree = str(tree)
+        args.start = answers.start
+        args.plant = [secret.key for secret in answers.secrets]
+        return _create_guided_root(args)
+    _become_root("create", words)
+    return 0
+
+
+def _create_guided_root(args) -> int:
+    """The ROOT half of the guided mode: the tree is built, the service is made.
+
+    **This half receives an already-validated request.** The questions were
+    asked by the unprivileged process before `_become_root` was called, and the
+    answers travel with the re-exec. Nothing is asked here except the SECRET
+    VALUES, which are read at this terminal with the echo off, through the
+    existing `credentials.prompt()` — never from an argument, a flag or a
+    file.
+
+    **The creator does not grant a port and does not grant a firewall rule.**
+    The manifest RECORDS the request; the operator's `weedr port open` and
+    `weedr firewall open` are the grant, and they are a separate act that this
+    verb does not perform.
+    """
+    tree = Path(args.tree)
+    if not tree.is_dir():
+        raise errors.GuardenError(
+            f"the tree {tree} does not exist, so there is nothing to create the service from",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    manifest_path = tree / manifest_mod.MANIFEST_REL
+    if not manifest_path.is_file():
+        raise errors.GuardenError(
+            f"the tree {tree} carries no {manifest_mod.MANIFEST_REL}, so there is nothing to "
+            "create the service from",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    # The manifest is READ, and the read is the validation: a manifest that does
+    # not parse, names a volume that is not a name, or carries a `provides:`
+    # that is not a kind is refused here, before the service exists.
+    manifest_mod.read(manifest_path)
+
+    envs = [env.strip() for env in args.environments.split(",") if env.strip()] or ["production"]
+    config = config_mod.load()
+    resolved = [
+        names.resolve(
+            f"{args.name}-{env}" if not args.name.endswith(f"-{env}") else args.name,
+            list(config.tracks),
+            allow_default=False,
+        )
+        for env in envs
+    ]
+    service.refuse_existing([entry.name for entry in resolved])
+    now = _now()
+    # The tree is the operator's own, and the RENDERER runs as `guarden` — so
+    # the tree is staged where the renderer can read it, and the staged copy
+    # is this invocation's own and goes away with it.
+    stage = creator.stage_tree(tree)
+    try:
+        source = service.Source(kind="tree", tree=stage)
+        for entry in resolved:
+            outcome = service.create(entry, source, config, now)
+            sys.stdout.write(f"created {entry.name} uid {outcome.uid} from {tree}\n")
+            _filter_set(entry.name)
+
+            # The secrets are planted HERE, at this terminal, with the echo
+            # off, through the existing `credentials.prompt()` and the existing
+            # `credentials.plant()`. The value never reaches the tree, an
+            # argument or a file: it goes straight into the root-owned
+            # encrypted blob.
+            for key in args.plant or []:
+                creator.plant_secret(entry.name, key)
+
+            if not args.start:
+                continue
+            # The start, and then the verification: EXACTLY three checks — the
+            # unit is active, the container is running, and the publication is
+            # listening. There is no fourth check: "the service answers" is not
+            # implementable for an arbitrary image without a per-service probe,
+            # and a false positive there is the exact failure the verification
+            # exists to catch.
+            _start_guided(entry.name)
+    finally:
+        creator.drop_tree(stage)
+    return 0
+
+
+def _start_guided(name: str) -> None:
+    """Start the service and run the three checks, and report them."""
+    record = registry.load(name)
+    if record is None:
+        raise errors.GuardenError(
+            f"there is no registry entry for {name}, so there is nothing to start",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    units_of = service.units_of(name)
+    if not units_of:
+        raise errors.GuardenError(
+            f"{name} has no unit to start: its quadlet directory declares no container",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    service.ensure_owner_line(name)
+    service.start_units(name)
+    sys.stdout.write(f"started {name}\n")
+    unit = units_of[0]
+    container = f"{name}-{units_of[0]}"
+    port = sorted(record.publication.values())
+    checks = creator.verify(
+        name, unit, container, port[0] if port else None
+    )
+    creator.report_checks(checks)
 
 
 def _choose_template() -> str | None:
