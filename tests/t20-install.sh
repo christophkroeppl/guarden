@@ -86,7 +86,26 @@ assert_group guarden
 assert_passwd guarden
 assert_passwd hose
 assert_passwd_field guarden 4 "$guarden_gid"
-assert_passwd_field hose 4 "$guarden_gid"
+# **`hose`'s primary group is its OWN, and not `guarden`'s.** The install
+# phase once created it with `useradd --gid guarden`, so the poke's account
+# was a member of the group that reaches the host's configuration: it could
+# read /etc/guarden/guarden.toml, every service's overrides.toml (the
+# operator's whole grant surface), every registry record and the share
+# issuance record, and it could WRITE the two `0770 root:guarden`
+# directories — the deploy queue and the pin store, which a root unit
+# WATCHES. That was fixed in 0c21be3, which added t134-poke-account-group.sh
+# for the positive claim.
+#
+# This assertion used to demand the vulnerability back: it compared `hose`'s
+# primary gid with the `guarden` group's gid, so it asserted that the poke's
+# account was in the mutator's group. The stale form survived the fix and
+# turned t20-install red on a host that is CORRECT.
+hose_gid=$(getent group hose | cut -d: -f3)
+[ -n "$hose_gid" ] || _fail "the hose group does not exist on this host"
+assert_passwd_field hose 4 "$hose_gid"
+[ "$hose_gid" != "$guarden_gid" ] \
+    || _fail "hose's primary group is the guarden group, and that group reads the host's configuration"
+echo "MEASURE: hose's primary group is its own ($hose_gid), not the guarden group ($guarden_gid)"
 assert_passwd_field guarden 7 /usr/sbin/nologin
 assert_passwd_field hose 7 /usr/sbin/nologin
 assert_file_missing /home/guarden
