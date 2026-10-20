@@ -128,22 +128,30 @@ uid=$(id -u envconsumer-preview)
 [ -n "$uid" ] || _fail "the consumer was created and has no uid"
 runtime=/run/user/"$uid"
 
-# --- what the manager hands podman ------------------------------------------
+# --- the manager's own answer about the argv -------------------------------
 #
 # **The assertion is on the ARGV, not on the text of the unit.** The text of
-# the unit is a rendering; the argv is the thing that names the file, and it
-# is what the two unescapes (quadlet's and systemd's) are measured by.
+# the generated unit is a rendering: it carries the value QUOTED, with the
+# backslashes doubled, and a grep over that text says nothing about what
+# podman receives. The two unescapes that decide the answer are quadlet's
+# (reading `EnvironmentFile=`) and systemd's (parsing the quoted `ExecStart`
+# argument), and only the PARSED argv is downstream of both.
 #
-# `systemctl show -p ExecStart --value` prints systemd's PARSED command line —
-# the argv after systemd's own unescape — so it answers exactly the question:
-# what path does podman receive? Measured on the golden VM: for a unit whose
-# `EnvironmentFile=` carries ONE backslash, this prints
-# `--env-file /.../feature/x/guarden.env` (the slash), and for a unit that
-# carries TWO, it prints `--env-file /.../feature\x2fx/guarden.env` (the one
-# backslash the file's directory really has).
+# `systemctl show -p ExecStart --value` prints systemd's parsed command line
+# — the argv after systemd's own unescape — so it answers exactly the
+# question: what path does podman receive? Measured on the golden VM: for a
+# unit whose `EnvironmentFile=` carries ONE backslash, this prints
+# `--env-file /.../feature/x/guarden.env` (the slash — a path that names a
+# DIRECTORY), and for a unit that carries TWO, it prints
+# `--env-file /.../feature\x2fx/guarden.env` (the one backslash the
+# directory really has).
 #
-# The unit is asked for by the name systemd knows it by: the entry stem, which
-# is the unit plus the escaped ref (spec 5.2).
+# **The manager is reloaded first, because the unit is a DECLARATION until
+# the generator has run.** Without the reload the manager knows no such unit
+# and answers nothing — which is not a failure of the render but of the
+# question.
+systemctl --user --machine envconsumer-preview@ daemon-reload 2>/dev/null || true
+
 show_argv() {
     local unit_name=$1
     systemctl --user --machine envconsumer-preview@ show -p ExecStart --value \
