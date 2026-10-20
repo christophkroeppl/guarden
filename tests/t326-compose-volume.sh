@@ -49,6 +49,7 @@ stage_config guarden-measured.toml
 install_pinned_converter
 
 project=$GUARDEN_FIXTURES/project
+tree=$GUARDEN_PREFIX/var/lib/guarden/services
 
 # The operator's own shape, read from the deployment repository: a `db`
 # provider, a compose that mounts nothing, and no volume declared anywhere.
@@ -83,6 +84,30 @@ run loom check "$quadlet"
 assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "no volume"
+
+# **The acceptance boundary itself, and it is the one that matters.** `loom
+# check` validates a repository's tree; `weedr service ingest` is what actually
+# ACCEPTS a declaration and creates the service from it, and the refusal has to
+# happen there too — a service that is created and then cannot be started is
+# worse than one that was never created.
+#
+# The tree is a poke's staging tree, where guarden puts it (spec 6.6), and the
+# ingest is refused before anything is created: no system user, no home, no
+# subvolume. The exit is 2, because the input was rejected.
+poke=$GUARDEN_PREFIX/var/lib/guarden/staging/pg/9f2c1ab
+mkdir -p "$poke/.guarden/quadlet"
+seed "$poke/.guarden/service.yml" "project: pg" "units: .guarden/quadlet/" \
+    "provides:" "  - db"
+seed "$poke/.guarden/quadlet/db.container" "[Container]" \
+    "Image=docker.io/library/postgres:17"
+run weedr service ingest pg-staging --from poke pg@9f2c1ab
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "no volume"
+# Nothing was created: the refusal came before the identity, so there is no
+# user, no tree and no registry entry for a service that does not exist.
+assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/registry/pg-staging.toml"
+assert_file_missing "$tree/pg-staging"
 
 # A `state:` volume satisfies the rule, and the render carries the volume's own
 # path — the whole point of the declaration is that the data lands in a

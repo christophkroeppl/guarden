@@ -1730,7 +1730,14 @@ def load_manifest(directory: Path) -> manifest_mod.Manifest:
             f"the manifest {path} does not exist; a project's manifest is "
             f"{manifest_mod.MANIFEST_REL} at its root"
         )
-    return manifest_mod.read(path)
+    # **`accept()` and not `read()`, because this is where the render is asked
+    # whether a tree is renderable** — and the `db`-provider rule is about the
+    # DECLARATION rather than about the document (spec 4). `accept()` applies
+    # the rule for the trees that are declarations; for the staged copy of an
+    # installed service's home — the same document under another name, staged
+    # because the renderer cannot enter a `0700` home (ADR-0012) — the rule
+    # does not fire, and the re-render of an installed service keeps working.
+    return manifest_mod.accept(path)
 
 
 def resolve_context(service: str, instance: str | None) -> Context:

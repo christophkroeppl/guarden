@@ -43,7 +43,7 @@ filesystem, the installed services and the remote are the host. So:
 | an unknown or malformed key, a name that breaks a rule, a port out of range, an ambiguous unit source, a `service:` where a `container:` belongs | `2` |
 | a container named in `routes:`, `ports:` or `widgets:` that the unit source does not define | `2` — both are input |
 | a volume named in `state:` or `bulk:` that the unit source does not mount, or a name in both | `2` — both are input |
-| a manifest that provides the `db` kind and declares no volume at all | `2` — both are input, and the data would be ephemeral (§8.1) |
+| a manifest that provides the `db` kind and declares no volume at all, where the manifest is a repository's declaration | `2` — both are input, and the data would be ephemeral (§8.1) |
 | a `needs:` entry whose provider does not exist, or exists and does not offer the `as:` kind | `1` — the answer came from the host, read from the provider's registry |
 | a requested port already held by another service | `1` |
 | `weedr firewall open` for a rule the manifest did not request, or a `firewall:` entry outside the closed rule shape of §7.7 | `2` |
@@ -976,6 +976,20 @@ Validation rules:
 - **A manifest that provides the `db` kind must declare a volume.** It is refused, exit `2`,
   when it declares neither `state:` nor `bulk:`. The rule and its limits, stated once, because
   the failure it prevents is silent and the data is gone with nothing saying so:
+  - **Where the rule fires, and where it does not.** It fires where a repository's
+    **declaration** is accepted: `weedr service ingest`, `weedr service add`, and `loom check`.
+    It does **not** fire when guarden reads back a document it already holds — the copy of a
+    manifest in an installed service's home, which `weedr service start`, `gate`, `restart`,
+    `build` and `secret list` all read, and which the firewall render reads. The reason is
+    §1.2's own dividing line: §4 governs "`.guarden/service.yml` at the repository root", and
+    "the installed services" are on the **host** side of input against host. A rule that
+    refused to read back the operator's own running service would make it unstartable and
+    unmanageable — and the operator's staging postgres, the very service this rule is written
+    for, is such an installed service. **What is refused is a new declaration; what is left
+    alone is what is already installed.** The price is stated rather than hidden: an
+    installed `db` provider with no volume keeps running and keeps losing its data on the
+    next recreate, and no verb says so — the diagnostic belongs to the declaration that
+    would fix it, which is the next `ingest` or `add`.
   - **Why `db` and not every kind.** Guarden writes into a `db` provider itself: §5.3 step 10
     creates the role and the database in the provider's own engine, and that is a write to a data
     directory. It happens when a consumer's `database` edge is provisioned, so a `db` provider
@@ -2822,7 +2836,10 @@ or an image rebuild, and nothing on the box says so, because the volume was neve
 anybody named. A declared volume is a subvolume under the service's own tree, and the
 collector never touches it. The rule that follows from this is in §4: **a manifest that
 provides the `db` kind declares a volume or is refused**, because guarden writes into a `db`
-provider itself (§5.3 step 10) and that write is to a data directory.
+provider itself (§5.3 step 10) and that write is to a data directory. The refusal is on a
+repository's **declaration** (§4's scope), so a service already installed keeps running and
+keeps its data as it is until the next `ingest` or `add` declares the volume — which is the
+point: the diagnostic belongs to the declaration that would fix it.
 
 **A declared volume is a NEW, EMPTY subvolume, and a service that already had its data
 somewhere else does not get that data moved.** The re-ingest that adds the declaration creates

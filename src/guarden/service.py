@@ -270,7 +270,21 @@ def _source_label(source: Source) -> str:
 
 def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcome:
     directory = _manifest_directory(source, resolved.name)
-    manifest = manifest_mod.read(_manifest_in(directory))
+    # **The ACCEPTANCE, and it is `accept()` and not `read()`.** This is where
+    # guarden takes a manifest as the shape of a service, and the `db`-provider
+    # rule is about the declaration rather than about the document (spec 4):
+    # a `db` provider declares a volume or it is refused. `read()` alone would
+    # skip the rule here, because the directory is the source's home when the
+    # source is another service (`weedr service add --from <service>`) or when
+    # the poke's staging tree is gone — and both are acceptances, not
+    # read-backs of a document guarden holds.
+    #
+    # **`held` is that case exactly**: the document is a held one, and it is
+    # being taken as the declaration of a new service. A poke's staging tree
+    # and a tree an operator wrote are declarations by where they live, and
+    # the path says so.
+    held = source.kind == "service"
+    manifest = manifest_mod.accept(_manifest_in(directory), held=held)
     project = manifest.project or _project_from(source)
     outcome = Outcome(resolved=resolved)
 
