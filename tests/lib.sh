@@ -294,9 +294,22 @@ assert_rule_count() {
 # assert_file_lacks <path> <text>: a key that must be absent, which is how
 # "the gate table is omitted rather than written as a verdict" is checked.
 # Comments are excluded: a unit explaining why it lacks a directive names it.
+#
+# **The producer is captured, and the reason is a measurement.** The filter was
+# a pipeline into `grep -q`, and `grep -q` exits at its first match — so the
+# producer got SIGPIPE while it was still writing, `pipefail` turned that into
+# exit 141, and the pipeline's status was the SIGPIPE rather than the match.
+# The consequence was silent and total: **the assertion could not fail on a
+# file bigger than one pipe buffer.** Measured on this tree's own
+# `docs/sysadmin.md` (86,716 bytes, 1,497 filtered lines): the string was
+# present at byte 1,156 and the helper reported it absent. A negative
+# assertion that cannot fail is not a weak assertion, it is no assertion at
+# all, and it was silent about that.
 assert_file_lacks() {
     [ -e "$1" ] || return 0
-    if grep -vE '^[[:space:]]*(#|;)' "$1" | grep -qF -- "$2"; then
+    local filtered
+    filtered=$(grep -vE '^[[:space:]]*(#|;)' "$1")
+    if printf '%s\n' "$filtered" | grep -qF -- "$2"; then
         _fail "$1 names $2 and should not"
     fi
 }
