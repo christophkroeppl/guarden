@@ -797,8 +797,18 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
         # An instance's unit directory lives under the service's home and its
         # volumes under `instances/`, a sibling of the service's own and never a
         # child of them (spec 2 and 5.2).
+        #
+        # **The instance's own quadlet directory is created here, and it is
+        # the service's own user who owns it.** Without this the directory was
+        # created by the first `units.install` — by `conf.write_file`'s
+        # `path.parent.mkdir` — so it was root-owned with the mutator's umask
+        # (0755, typically) inside a `0700` home, and the spec's "nothing
+        # root-owned lives inside a service's home" was false for it. The
+        # service could not write its own unit directory, and the mode depended
+        # on who invoked the mutator.
         directories += [
             paths.instance_home(name, escaped_ref),
+            paths.instance_home(name, escaped_ref) / paths.QUADLET,
             paths.instance_tree(name, escaped_ref) / volumes.SUBVOLUME,
             paths.instance_tree(name, escaped_ref) / volumes.BULK,
         ]

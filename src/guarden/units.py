@@ -141,6 +141,32 @@ def allow_mounts(source: Path, service: str) -> list[str]:
     return missing
 
 
+def _own_directory(path: Path, owner: tuple[int, int]) -> None:
+    """A directory inside a service's home, owned by that service's user.
+
+    `conf.write_file` creates the parent with `mkdir(parents=True)` and
+    nothing else, so a directory it creates is root-owned with the mutator's
+    umask — and the mode depends on who invoked the mutator. That is wrong
+    for a directory inside a service's home: the spec says nothing root-owned
+    lives there, and the service cannot write its own quadlet tree without it.
+
+    **Only a directory this call creates is touched.** The quadlet directory
+    itself is made by `_make_tree` — `0700` to the service user, like the rest
+    of the tree — and re-moding it here would be a second statement of that
+    mode, and one that disagrees with the walk that owns it. What is created
+    here is the **drop-in directory** (`<unit>.container.d`), which nothing
+    else makes.
+
+    The mode is `0700`, the tree's own mode: the drop-in directory holds one
+    file the service owns, inside a directory only the service can enter.
+    """
+    if path.is_dir():
+        return
+    path.mkdir(parents=True, exist_ok=True)
+    conf.set_owner(path, owner)
+    os.chmod(path, 0o700)
+
+
 def install(source: Path, service: str, escaped_ref: str | None = None) -> list[str]:
     """Render, then copy into place: units, the order target, the shared slice."""
     out = render_units(source, service, escaped_ref)
@@ -160,11 +186,13 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
         relative = path.relative_to(out / "units")
         body = path.read_text(encoding="utf-8")
         target = unit_dir(service, escaped_ref) / relative
+        _own_directory(target.parent, owner)
         conf.write_file(target, body, UNIT_MODE, owner)
         written.append(str(target))
         entry = search_entry(relative, escaped_ref)
         if entry is not None:
             mirror = unit_dir(service) / entry
+            _own_directory(mirror.parent, owner)
             conf.write_file(mirror, body, UNIT_MODE, owner)
             written.append(str(mirror))
 
