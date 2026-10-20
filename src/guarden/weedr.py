@@ -1241,8 +1241,9 @@ def _build(args) -> int:
     Containerfile and the application's own files. A `COPY` resolves against
     the context directory, so a Containerfile that says
     `COPY Cargo.toml Cargo.lock ./` needs those files IN the home: the home
-    holds the whole staged tree, and the tree's own `.dockerignore` decides
-    what the build does not see (spec 6.6).
+    holds the whole staged tree, and the tree's own ignore file decides what
+    the build does not see (spec 6.6) — with guarden's own exclusion written
+    into that file below, because the repository's may be absent.
     `runuser -u <service>` runs podman with the service's uid and subuid range,
     so the container can map root. A failure exits `1` and names the verb; a
     success prints the image reference(s) built.
