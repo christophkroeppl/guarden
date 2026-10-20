@@ -299,7 +299,7 @@ def _runtime_dir(account: str) -> Path:
     return Path(f"/run/user/{uid}")
 
 
-def runuser_as(account: str, *argv: str, cwd: str | Path | None = None) -> list[str]:
+def runuser_as(account: str, *argv: str) -> list[str]:
     """The argv that runs a command as another account, in a scrubbed environment.
 
     **`runuser -u <account> --` plus an `env` that sets the account's own
@@ -331,10 +331,11 @@ def runuser_as(account: str, *argv: str, cwd: str | Path | None = None) -> list[
     what podman's keep-id mapping is keyed by, so a caller that reaches podman
     by another route must not be able to put `USER=root` into it.
 
-    **A service's own home is not a directory every account can enter**, so the
-    caller passes `cwd` and the suite's own tree is never the working
-    directory: a rootless podman enters the working directory as the service's
-    uid and is refused before it does any work.
+    **This builds the argv and nothing else.** The working directory belongs
+    to the CALL — `tool.call(argv, cwd=...)` — because a rootless podman
+    enters the working directory as the service's uid and is refused before it
+    does any work, and the suite's own `0700` root tree is not a directory any
+    service uid can enter.
     """
     home = _home_for(account)
     runtime = _runtime_dir(account)
