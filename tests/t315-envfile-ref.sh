@@ -122,51 +122,58 @@ unit=$instance_quadlet/web.container
 assert_file_exists "$env_file"
 assert_file_has "$env_file" "DB_HOST=pgprov-staging"
 assert_file_has "$env_file" "DB_PORT=$db_pub"
-
-# --- the unit's own line, and what the generator makes of it ---------------
-#
-# The unit carries the path. It has to carry it in the form that survives
-# quadlet's C-unescape, so the assertion is on the **argv podman is handed**,
-# not on the text of the line: the text is a rendering and the argv is the
-# thing that names the file.
 assert_file_exists "$unit"
 
-# The generator's own answer, read where it is falsifiable: the unit the
-# generator produced out of the installed declaration, in the service user's
-# own generator directory. The name is the instance's entry stem -- the unit
-# plus the escaped ref (spec 5.2) -- and the fallback is the plain stem, which
-# is what a slot's own unit would be named.
 uid=$(id -u envconsumer-preview)
 [ -n "$uid" ] || _fail "the consumer was created and has no uid"
-generated=/run/user/$uid/systemd/generator.normal/web-feature\x2fx.service
-if [ ! -f "$generated" ]; then
-    generated=/run/user/$uid/systemd/generator.normal/web.service
-fi
-echo "MEASURE: the generated unit: $generated"
-assert_file_exists "$generated"
+runtime=/run/user/"$uid"
 
-# The env file the generated unit hands podman must be the one that exists.
-# Read out of the generated `ExecStart` rather than retyped, so what is
-# measured is what the generator produced.
-env_arg=$(grep -a '^ExecStart=' "$generated" | tr ' ' '\n' | grep -A1 -x -- '--env-file' | tail -n 1)
+# --- what the manager hands podman ------------------------------------------
+#
+# **The assertion is on the ARGV, not on the text of the unit.** The text of
+# the unit is a rendering; the argv is the thing that names the file, and it
+# is what the two unescapes (quadlet's and systemd's) are measured by.
+#
+# `systemctl show -p ExecStart --value` prints systemd's PARSED command line —
+# the argv after systemd's own unescape — so it answers exactly the question:
+# what path does podman receive? Measured on the golden VM: for a unit whose
+# `EnvironmentFile=` carries ONE backslash, this prints
+# `--env-file /.../feature/x/guarden.env` (the slash), and for a unit that
+# carries TWO, it prints `--env-file /.../feature\x2fx/guarden.env` (the one
+# backslash the file's directory really has).
+#
+# The unit is asked for by the name systemd knows it by: the entry stem, which
+# is the unit plus the escaped ref (spec 5.2).
+show_argv() {
+    local unit_name=$1
+    systemctl --user --machine envconsumer-preview@ show -p ExecStart --value \
+        "$unit_name" 2>/dev/null
+}
+
+argv=$(show_argv "web-$escaped.service")
+echo "MEASURE: the argv systemd hands podman: ${argv:-<none>}"
+[ -n "$argv" ] || _fail "the manager knows no unit web-$escaped.service, so nothing was generated for the instance"
+
+# The env file podman is handed, read out of the argv rather than retyped.
+env_arg=$(printf '%s' "$argv" | tr ' ' '\n' | grep -A1 -x -- '--env-file' | tail -n 1)
 echo "MEASURE: the env file podman is handed: ${env_arg:-<none>}"
-[ -n "$env_arg" ] || _fail "the generated unit carries no --env-file, so the edge's environment is not in the container at all"
+[ -n "$env_arg" ] || _fail "the generated command carries no --env-file, so the edge's environment is not in the container at all"
 [ -f "$env_arg" ] \
-    || _fail "the generated unit hands podman the env file '$env_arg', which is not a file on this host"
+    || _fail "podman is handed the env file '$env_arg', which is not a file on this host"
 [ "$env_arg" = "$env_file" ] \
-    || _fail "the generated unit hands podman '$env_arg' and the file that exists is '$env_file'"
+    || _fail "podman is handed '$env_arg' and the file that exists is '$env_file'"
 
 # --- and the sibling key is NOT escaped -------------------------------------
 #
 # **The escaping is a rule about the KEY, not about the path.** Quadlet reads
 # `EnvironmentFile=` by C-unescaping its value and reads `Volume=` without
 # doing so, so the volume's path -- which carries the same escaped ref, in
-# the instance's own tree -- must reach the generator with its ONE backslash.
+# the instance's own tree -- must reach podman with its ONE backslash.
 # Escaping it too would point the mount at a directory that is not there, and
 # the container would come up with an empty `/data`.
-vol_arg=$(grep -a '^ExecStart=' "$generated" | tr ' ' '\n' | grep -A1 -x -- '-v' | tail -n 1)
+vol_arg=$(printf '%s' "$argv" | tr ' ' '\n' | grep -A1 -x -- '-v' | tail -n 1)
 echo "MEASURE: the volume podman is handed: ${vol_arg:-<none>}"
-[ -n "$vol_arg" ] || _fail "the generated unit carries no -v, so the declared volume is not mounted at all"
+[ -n "$vol_arg" ] || _fail "the generated command carries no -v, so the declared volume is not mounted at all"
 case "$vol_arg" in
     *'\\x2fx'*) ;;
     *) _fail "the volume path '$vol_arg' does not carry the escaped ref's own backslash, so it was escaped a second time" ;;
@@ -194,7 +201,9 @@ echo "MEASURE: the instance's unit is '${active:-unreadable}'"
 [ "$active" = active ] \
     || _fail "the instance's unit web-$escaped.service is '${active:-unreadable}', not active"
 
-# And the container itself, which is what the env file was for.
+# And the container itself, which is what the env file was for. The container
+# is named with the instance's registry key in hex (spec 5.2), because podman
+# accepts no backslash in a container name.
 container=envconsumer-preview-web-$(printf %s "$escaped" | od -An -tx1 | tr -d ' \n')
 ready=0
 for _ in $(seq 1 60); do
@@ -203,7 +212,7 @@ for _ in $(seq 1 60); do
         env -u OLDPWD HOME=/var/lib/guarden/services/envconsumer-preview/home \
         PWD=/var/lib/guarden/services/envconsumer-preview/home \
         USER=envconsumer-preview LOGNAME=envconsumer-preview \
-        XDG_RUNTIME_DIR=/run/user/$uid \
+        XDG_RUNTIME_DIR="$runtime" \
         podman exec "$container" true
     if [ "$GUARDEN_EXIT" = 0 ]; then
         ready=1
@@ -224,7 +233,7 @@ run_in /var/lib/guarden/services/envconsumer-preview/home setpriv \
     env -u OLDPWD HOME=/var/lib/guarden/services/envconsumer-preview/home \
     PWD=/var/lib/guarden/services/envconsumer-preview/home \
     USER=envconsumer-preview LOGNAME=envconsumer-preview \
-    XDG_RUNTIME_DIR=/run/user/$uid \
+    XDG_RUNTIME_DIR="$runtime" \
     podman exec "$container" sh -c 'echo "$DB_HOST:$DB_PORT"'
 assert_exit 0
 inside=$(cat "$GUARDEN_STDOUT")
