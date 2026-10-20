@@ -185,16 +185,27 @@ class MutatorPolicyTest(unittest.TestCase):
             self.assertNotIn(verb, sudoers.GUARDEN_MAY)
 
     def test_a_guarden_caller_is_refused_a_verb_outside_the_list(self) -> None:
-        """The refusal is the one every other refusal is."""
-        with mock.patch.dict(os.environ, {"SUDO_USER": sudoers.GUARDEN_USER}):
-            with self.assertRaises(Exception) as caught:
-                weedr._guarden_may("weedr service purge")
+        """The refusal is the one every other refusal is.
+
+        **This test mocks `SUDO_UID` and the real uid, because that is what
+        the check reads.** It used to mock `SUDO_USER` — and it passed for the
+        wrong reason: the test runner's euid is non-zero, so the check refused
+        the call regardless of what the environment said. If the code were
+        reverted to the `SUDO_USER`-based fail-open shape, the test would
+        still pass. (Found by the first security review, and it is exactly the
+        failure this file exists to prevent.)
+        """
+        with mock.patch.dict(os.environ, {"SUDO_UID": "997"}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=0):
+                with self.assertRaises(Exception) as caught:
+                    weedr._guarden_may("weedr service purge")
         self.assertIn("may not run", str(caught.exception))
 
     def test_a_guarden_caller_may_run_a_verb_inside_the_list(self) -> None:
         """The permitted half."""
-        with mock.patch.dict(os.environ, {"SUDO_USER": sudoers.GUARDEN_USER}):
-            weedr._guarden_may("weedr service ingest")
+        with mock.patch.dict(os.environ, {"SUDO_UID": "997"}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=0):
+                weedr._guarden_may("weedr service ingest")
 
     def test_a_root_call_is_unrestricted(self) -> None:
         """A call that did not come through sudo is root's own call.

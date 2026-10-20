@@ -649,12 +649,27 @@ esac
 
 # And the mutator's own verbs are not reachable as the service user: they read
 # the host's configuration, which the service uid cannot read.
+#
+# **The refusal is the MUTATOR'S, and it says which verbs it may run.** Before
+# commit 7999d41 the check was fail-open on `SUDO_USER`, so a service user
+# reached `_purge` and only failed later on a `0640 root:guarden` file read —
+# which is where the "Permission denied" this assertion used to look for came
+# from. The refusal is now the mutator's own line, and the assertion reads it.
+#
+# **Both refusals are accepted, and the distinction is the point:** a service
+# user that cannot run the verb at all is refused by the FILESYSTEM, and one
+# that can run it is refused by the MUTATOR. Either is a refusal; what must
+# not happen is the verb running.
 out=$(as_service sh -c "cd /tmp && /usr/lib/guarden/bin/weedr service purge $SVC" 2>&1 || true)
 echo "MEASURE: the service user running the mutator's purge verb: $out"
 case "$out" in
     *"Permission denied"*) echo "MEASURE: the mutator is out of the service user's reach" ;;
+    *"may not run"*) echo "MEASURE: the mutator refused the service user, and named the verbs it may run" ;;
     *) _fail "the mutator answered a service user with something other than a refusal: $out" ;;
 esac
+# And the verb did not run: a purge destroys the service's volumes, so the
+# refusal is only a refusal if the data is still there.
+assert_file_exists "/var/lib/guarden/registry/$SVC.toml"
 
 # --- the modes and the bands are still what they were -----------------------
 assert_mode "$own_tree" 700
