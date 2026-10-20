@@ -66,24 +66,32 @@ def escape_path(value: str) -> str:
     mount at a directory that is not there. The rule is about the KEY, and
     this function is only for the keys that are read the other way.
 
-    Measured on podman 5.7.0: with the value written as one backslash, the
-    generator's own `ExecStart` carries the **decoded** path
-    (`.../feature/x/...`), and podman is handed a file that does not exist —
-    `Error: parsing file "...": open ...: no such file or directory`, exit
-    125. The value is unescaped once by quadlet and once more by systemd when
-    it parses the generated `ExecStart`, so the fix has to survive both.
+    **What the chain does, measured on podman 5.7.0 and systemd 259.** The
+    file on disk is `<instance home>/feature\\x2fx/guarden.env`, and the
+    **directory** in that path holds one literal backslash — that is what
+    `systemd_escape` produces for `feature/x`, and the instance's directory is
+    named by it (spec 5.2). Two unescapes stand between the unit's value and
+    the program:
 
-    **A doubled backslash is what systemd's own convention asks for**, and it
-    is what the measurement shows surviving the whole chain: quadlet turns
-    `\\\\` into one literal backslash, the generator re-escapes it for the
-    `ExecStart` it writes, and systemd's parse hands podman the path with the
-    single backslash that is really on disk. Measured the same way, the argv
-    systemd handed the program named a file that exists.
+    - **quadlet** C-unescapes the value of the key it reads that way, and
+      writes the result into the generated `ExecStart` **quoted**;
+    - **systemd** C-unescapes a *quoted* argument of `ExecStart` when it
+      parses it (measured: an unquoted `/tmp/a\\x2fb` reaches the program with
+      its backslash intact, and a quoted `"/tmp/a\\x2fb"` reaches it as
+      `/tmp/a/b`).
 
-    So this is the value **as the unit carries it**, and the file on disk keeps
-    the name it has always had: the escaped ref is a fact about the instance's
-    directory, and the directory is not renamed to suit a value the renderer
-    writes.
+    So the value the unit carries has to survive BOTH, and the backslash it
+    carries has to arrive at podman as the ONE the file's name has. A single
+    backslash does not: quadlet turns it into `/`, systemd finds nothing left
+    to unescape, and podman is handed `.../feature/x/guarden.env` — a path
+    that names a **directory** — and refuses the container with
+    `parsing file "...": open ...: no such file or directory`, exit 125.
+
+    **A doubled backslash is what survives both.** Quadlet halves it to one,
+    systemd halves it to one, and podman is handed the path that IS on disk.
+    That is the whole of the rule, and it is why the file is not renamed: the
+    escaped ref is a fact about the instance's directory, and the directory is
+    not renamed to suit a value the renderer writes.
     """
     return value.replace("\\", "\\\\")
 
