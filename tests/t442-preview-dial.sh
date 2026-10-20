@@ -179,11 +179,17 @@ assert_file_has "$edge_file" "http://routed-preview:$pub_b"
 # the whole file therefore counted the routers twice and the basic-auth
 # middleware once, and read a file with two routers as a file with five. The
 # section is cut out first, so the count is of routers.
+#
+# **`|| true` on both counts, and it is load-bearing.** `grep -c` exits 1 when
+# it matches nothing, and a suite runs `set -Eeuo pipefail` — so a file with
+# no router at all would kill the suite at the assignment, with the shell's
+# own diagnostic, and the message that names the defect would never print.
+# The count is the claim, and the claim needs to reach the reader.
 routers_section=$(sed -n '/^  routers:$/,/^  [a-z]/p' "$edge_file")
-router_count=$(printf '%s\n' "$routers_section" | grep -cE '^    [A-Za-z0-9._-]+:$')
+router_count=$(printf '%s\n' "$routers_section" | grep -cE '^    [A-Za-z0-9._-]+:$' || true)
 [ "$router_count" = 2 ] \
     || _fail "the edge file names $router_count routers, expected 2 (one per instance)"
-distinct=$(printf '%s\n' "$routers_section" | grep -E '^    [A-Za-z0-9._-]+:$' | sort -u | wc -l)
+distinct=$(printf '%s\n' "$routers_section" | grep -E '^    [A-Za-z0-9._-]+:$' | sort -u | wc -l || true)
 [ "$distinct" = 2 ] \
     || _fail "the edge file names $distinct distinct routers, expected 2"
 
