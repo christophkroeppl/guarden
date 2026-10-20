@@ -100,9 +100,23 @@ seed "$staged/.guarden/quadlet/web.container" \
     "Image=docker.io/library/alpine:3.20" \
     "Network=pasta:--map-gw" \
     "Volume=data:/data" \
+    "Exec=sleep 3600" \
     "" \
     "[Service]" \
     "Restart=always"
+# **The container needs a command that STAYS UP.** Alpine's own CMD is
+# `/bin/sh`, which reads its standard input, finds it at end of file and
+# exits — so the container comes up and is gone before the exec probe can
+# reach it, and the suite would be asserting about a race rather than about
+# the env file. Measured on the golden VM with the unit exactly as it is
+# above minus this line: the unit went `active`, the container was not in
+# `podman ps`, and the exec probe never succeeded.
+#
+# `Exec=` is the container's command and it is in `[Container]`, which is
+# where quadlet reads it from. The suite's subject is the env file, not
+# what the container does, and `sleep` with a long argument is the shape
+# every other suite that needs a container to outlive a probe uses
+# (t350's `CMD ["sleep", "3600"]`).
 
 # The ref is taken raw and the escaping is internal (spec 5.2), so `feature/x`
 # is the canonical instance shape and `weedr service start <name>/<ref>` is the
