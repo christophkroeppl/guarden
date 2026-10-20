@@ -78,17 +78,24 @@ def _in_podman_store(path: Path, root: Path) -> bool:
 ADMIN_UNITS_MODE = 0o755
 GUARDEN_GROUP = "guarden"
 
-# The build context: the files `podman build` reads besides the unit source.
+# The files a RENDER reads besides the unit source.
 #
-# A Containerfile is the thing `weedr service build` exists to read, and it is
-# not the unit source, so a home that copies only `.guarden/` and
-# `compose.yaml` has no build context at all — `podman build .` in it answers
-# `125` (no such file or directory) on every run. The file's own name is the
-# one podman resolves when no `-f` is given, so it is the entry in this list.
-# A `.dockerignore` is listed too, because a build that copies the whole home
-# needs it to leave the rootless image store and the secret database out of the
-# context — those are the two things in the home that are large and not the
-# build's.
+# `_render_source` stages a tree the renderer (`loom`, running as `guarden`)
+# can read, and it stages only what the renderer reads: the unit source, the
+# compose file, and the two files a build needs. The Containerfile is the
+# thing `weedr service build` exists to read and it is not the unit source,
+# so a staged tree without it has no build context at all — `podman build .`
+# in it answers `125` (no such file or directory) on every run. The file's own
+# name is the one podman resolves when no `-f` is given, so it is the entry in
+# this list. A `.dockerignore` is listed too, because a build that copies the
+# whole home needs it to leave the rootless image store and the secret
+# database out of the context — those are the two things in the home that are
+# large and not the build's.
+#
+# **This is the RENDER's list and not the COPY's.** The build's context is the
+# whole staged tree (spec 6.6), and the copy carries all of it — see
+# `_copy_tree`. The two are different questions: the renderer reads a named
+# few, and the build reads everything.
 BUILD_INPUTS = (Path("Containerfile"), Path(".dockerignore"))
 
 # **The two names podman reads a context's ignore rules from, and the
