@@ -340,7 +340,7 @@ def runuser_as(account: str, *argv: str, cwd: str | Path | None = None) -> list[
     runtime = _runtime_dir(account)
     env = [
         "env",
-        *[["-u", name] for name in SCRUB_REMOVE],
+        *(item for name in SCRUB_REMOVE for item in ("-u", name)),
         "--",
         f"HOME={home}",
         f"USER={account}",
