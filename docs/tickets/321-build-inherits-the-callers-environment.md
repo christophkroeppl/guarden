@@ -13,25 +13,31 @@ podman = ["runuser", "-u", resolved.name, "--", "podman", "build", ...]
 result = tool.call(podman, cwd=home)
 ```
 
-`runuser -u` **swaps the uid and keeps the caller's environment**, and the
-caller is root. So the build's podman sees `USER=root` and whatever
-`XDG_RUNTIME_DIR` root's session had, and the build's containers are placed
-in the sandbox cgroup of the wrong session.
+`runuser -u` **inherits the caller's environment**, and the caller is root. So
+the build's podman sees root's `XDG_RUNTIME_DIR` and root's `XDG_DATA_HOME`,
+and the build's containers are placed in the sandbox cgroup of the wrong
+session.
 
-The probe path in `service.py` already knows this and says so in its own
-docstring:
+The probe path in `service.py` had a partial scrub of its own, and its
+docstring gave the reason:
 
 > `runuser -u` swaps the uid but keeps the caller's environment, and the
 > caller is root — so podman saw `USER=root`, and its keep-id mapping reads
 > the subid files keyed by that name
 
-and it therefore scrubs:
+and it therefore scrubbed:
 
 ```python
 env = ["env", f"USER={name}", f"LOGNAME={name}"]
 if runtime.is_dir():
     env.append(f"XDG_RUNTIME_DIR={runtime}")
 ```
+
+**That docstring's REASON was wrong — see the correction below — but its
+scrub was right, and it was the only one of the seven.** It is corrected in
+the same change this ticket lands in, so the copy above is what the tree said
+when this ticket was written and the correction section says what it says
+now.
 
 **The build verb was never given that scrub.** Two consequences were
 observed:
@@ -73,10 +79,76 @@ weedr.py:880        runuser -u <service> -- podman …                   ← uns
 weedr.py:1467/1487  runuser -u guarden -- …                           ← unsanitised
 ```
 
-`podman secret create/rm` under the wrong USER reads the wrong subid files;
-`podman` under the wrong XDG_RUNTIME_DIR asks the wrong session's manager for
-a cgroup. The build was the one that showed it because a build actually
-RUNS a container; the others fail more quietly.
+`podman secret create/rm` under the wrong XDG_DATA_HOME reads and writes the
+wrong store; `podman` under the wrong XDG_RUNTIME_DIR asks the wrong session's
+manager for a cgroup. The build was the one that showed it because a build
+actually RUNS a container; the others fail more quietly.
+
+## CORRECTION (2026-10-20): the premise above was MEASURED FALSE
+
+**The ticket said `runuser -u` "swaps the uid and keeps the caller's
+environment", and that podman therefore saw `USER=root`. Both halves of that
+are wrong, and the wrongness was copied into four places in the tree — this
+ticket, ticket 332, `service.py`'s docstring and `creator.py`'s.**
+
+**Measured on a cut of the repo's own golden VM** (util-linux 2.41.3,
+podman 5.7.0), caller root with `USER=root` and `HOME=/root`:
+
+```
+$ runuser -u probe-svc -- env | grep -E '^(HOME|USER|LOGNAME|XDG_RUNTIME_DIR)='
+HOME=/var/lib/guarden/services/probe-svc/home
+LOGNAME=probe-svc
+USER=probe-svc
+
+$ XDG_RUNTIME_DIR=/run/user/0 runuser -u probe-svc -- env
+HOME=/var/lib/guarden/services/probe-svc/home
+LOGNAME=probe-svc
+USER=probe-svc
+XDG_RUNTIME_DIR=/run/user/0        <-- INHERITED
+```
+
+**`runuser` SETS `HOME`, `USER`, `LOGNAME`, `SHELL` and `PATH` for a non-root
+target. It does NOT inherit the caller's `USER`. It inherits everything ELSE
+verbatim.** The measurement that produced the refuted claim was **`setpriv`,
+not `runuser`** — `tests/t350-keepid.sh:148` actually uses
+`setpriv --reuid=`, which genuinely keeps the caller's environment
+(`setpriv --reuid=nobody --regid=nogroup --clear-groups env` answers
+`HOME=/root` and `USER=root`, measured on the same machine). The comment named
+both tools; only `setpriv` behaves the way it described.
+
+**The MECHANISM claim is still right.** Podman's keep-id mapping reads the
+subid files keyed by `$USER`, and forcing `USER=root` into podman answers
+`cannot find UID/GID for user root: no subuid ranges found for user "root" in
+/etc/subuid` — measured. What was wrong is only where the wrong `USER` came
+from: it never reached podman through `runuser`.
+
+**What IS genuinely inherited, and what it costs** (all measured, same
+machine):
+
+- `XDG_RUNTIME_DIR` = the caller's → `Failed to obtain podman configuration:
+  lstat /run/user/0: no such file or directory`.
+- `XDG_DATA_HOME` = elsewhere → **the whole podman store moves, INCLUDING the
+  secret database** (`containers/storage/secrets/secrets.json` and
+  `containers/storage/secrets/filedriver/secretsdata.json`, which hold the
+  materialised credential values). The files stay `0600` to the service uid,
+  but the DIRECTORY moves out of the service's `0700` home — and
+  `credentials.py:190-195` names that `0700` home as the documented limit on
+  that secret. **This is the sharpest consequence, and it is why
+  `credentials.py:224` and `:227` are the two sites to fix first.**
+- `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` → podman reads them.
+- `CONTAINERS_STORAGE_CONF` / `CONTAINERS_CONF` → podman fails on the file.
+- `DBUS_SESSION_BUS_ADDRESS` → inherited verbatim.
+- `PWD` / `OLDPWD` → `cannot chdir to /root: Permission denied` when the
+  caller's cwd is unenterable.
+- `PATH` → **NOT** a hijack: `runuser` RESETS it to a fixed system default
+  (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`).
+
+**Reachability, measured.** `sudo -u root` RESETS the environment
+(`XDG_RUNTIME_DIR` arrives unset), and a systemd oneshot's environment is only
+`PWD=/` and `USER=root` with no `XDG_*` at all — so the credential
+materialiser (`guarden-creds-boot.service`, a `Type=oneshot`) is already
+clean. **The reachable path is an operator's ROOT SHELL**: `weedr service
+build`, and a hand-run `weedr secret materialise`.
 
 ## Independently confirmed by an adversarial security review
 
@@ -102,16 +174,18 @@ not be described as one.
 The review also checked the other three properties it was asked about and
 found **no critical exploitable vulnerability**: the per-service uid, the
 `0700` tree, the subuid band, the capability set, the firewall's default
-deny, the credential blob's `0600 root:root`, the request/grant split, and
-the `hose` path-traversal guard all hold against the threat model.
+deny, the credential blob's `0600 root:root`, the request/grant split, and the
+`hose` path-traversal guard all hold against the threat model.
 
 ## What to build
 
-Give the build the same scrub the probe has — `USER=`, `LOGNAME=` and
-`XDG_RUNTIME_DIR=` named for the service — and make it the ONE place a
-`runuser -u <service>` command is built, so a second call site cannot miss
-it. The two paths today are the same shape written twice, and one of the two
-has the fix.
+Give the build the same scrub the probe has — the service's own `HOME`,
+`USER`, `LOGNAME`, `XDG_DATA_HOME` and `XDG_RUNTIME_DIR`, and the removal of
+the variables that must not be inherited (`XDG_CONFIG_HOME`,
+`XDG_CACHE_HOME`, `DBUS_SESSION_BUS_ADDRESS`, `CONTAINERS_*`, `PWD`,
+`OLDPWD`) — and make it the ONE place a `runuser -u <service>` command is
+built, so a second call site cannot miss it. The paths today are the same
+shape written several times, and one of them had a partial fix.
 
 **The manager wait is a separate question and is NOT part of this ticket.**
 `/run/user/<uid>` comes up asynchronously after the ingest, and a build that
@@ -119,6 +193,4 @@ lands before it dies in the window above. Whether the mutator waits for it,
 retries, or names the cause in its own diagnostic is a decision this ticket
 does not make — and it is the same premise the keep-id suites already wait
 for before their probe (`t350-keepid.sh` waits for `/run/user/<uid>` before
-the first container run). What this ticket settles is the ENVIRONMENT, and
-the environment is what the sd-bus line above is about: a podman that
-inherited root's session is a podman asking the wrong bus.
+the first container run). What this ticket settles is the ENVIRONMENT.

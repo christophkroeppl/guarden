@@ -134,12 +134,29 @@ assert_file_exists "$runtime"
 
 # One shape for "podman as this service user": the suite's own 0700 tree is
 # scrubbed out of the environment the way `t50-slice` scrubs it, and USER and
-# LOGNAME are named for the service — `runuser`/`setpriv` keep the CALLER's,
-# and the caller is root. Measured: with USER=root, podman's keep-id mapping
-# reads the subid files keyed by that name, finds none, and produces a map of
-# one pair — no gid 0, no gid 5 — which crun refuses to init
-# (`ping_group_range`, then `devpts`; containers/crun#1648). A systemd user
-# manager names the service for its own units; this mirrors it.
+# LOGNAME are named for the service.
+#
+# **The comment this replaced was wrong about WHY, and the correction is
+# recorded here so it is not copied again.** It said "`runuser`/`setpriv` keep
+# the CALLER's [USER and LOGNAME], and the caller is root." That is TRUE of
+# `setpriv` — which is what this helper uses, and which is why the scrub below
+# is needed — and FALSE of `runuser`. Measured on the golden VM (util-linux
+# 2.41.3):
+#
+#   $ runuser -u probe-svc -- env | grep -E '^(HOME|USER|LOGNAME)='
+#   HOME=/var/lib/guarden/services/probe-svc/home
+#   LOGNAME=probe-svc
+#   USER=probe-svc
+#
+# `runuser` SETS HOME, USER, LOGNAME, SHELL and PATH for a non-root target
+# and inherits everything ELSE verbatim — XDG_RUNTIME_DIR, XDG_DATA_HOME,
+# XDG_CONFIG_HOME, XDG_CACHE_HOME, DBUS_SESSION_BUS_ADDRESS, CONTAINERS_*,
+# PWD, OLDPWD. So the USER this suite names is defence in depth (and podman's
+# keep-id mapping IS keyed by $USER: with USER=root podman answers "cannot
+# find UID/GID for user root: no subuid ranges found for user \"root\" in
+# /etc/subuid"), while the XDG_* scrub is what actually keeps podman's store
+# and its secret database inside the service's own home. `guarden`'s own
+# helper for this is `tool.runuser_as`.
 podman_as() {
     local service=$1 home uid
     shift

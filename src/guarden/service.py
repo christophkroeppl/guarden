@@ -1729,22 +1729,47 @@ def _podman(name: str, record, *argv: str):
     stays on the unit write (ADR-0001).
 
     **`USER` and `LOGNAME` are named for the service, and that is measured
-    rather than decoration.** `runuser -u` swaps the uid but keeps the caller's
-    environment, and the caller is root — so podman saw `USER=root`, and its
-    keep-id mapping reads the subid files keyed by that name: every keep-id
-    container came out with a map of one pair (no gid 0, no gid 5), which crun
-    then refused to init (`ping_group_range`, `devpts`). With `USER` named for
-    the service the map is complete — measured on the golden: init uid/gid
-    10001/10001 under `keep-id:uid=10001,gid=10001`, three-row maps. A systemd
-    user manager sets both for the service already; this is the same shape for
-    the calls this program makes itself."""
+    rather than decoration — but the reason is NOT the one this file used to
+    give.** The old text said "`runuser -u` swaps the uid but keeps the
+    caller's environment, and the caller is root — so podman saw `USER=root`".
+    **That was REFUTED by measurement on the golden VM** (util-linux 2.41.3,
+    podman 5.7.0), and the refutation is recorded in `tool.py` where the
+    scrub lives:
+
+    ```
+    $ runuser -u probe-svc -- env | grep -E '^(HOME|USER|LOGNAME)='
+    HOME=/var/lib/guarden/services/probe-svc/home
+    LOGNAME=probe-svc
+    USER=probe-svc
+    ```
+
+    **`runuser` SETS `HOME`, `USER`, `LOGNAME`, `SHELL` and `PATH` for a
+    non-root target and inherits everything ELSE verbatim.** The measurement
+    that produced the refuted claim was `setpriv`, which this repository's own
+    `tests/t350-keepid.sh` uses and which genuinely keeps the caller's
+    environment — the comment named both tools and only the second behaved
+    that way.
+
+    **The mechanism it described is still true**, and that is what the scrub is
+    for: podman's keep-id mapping reads the subid files keyed by `$USER`, and
+    forcing `USER=root` into podman answers `cannot find UID/GID for user
+    root: no subuid ranges found for user "root" in /etc/subuid` — measured.
+    With `USER` named for the service the map is complete — measured on the
+    golden: init uid/gid 10001/10001 under `keep-id:uid=10001,gid=10001`,
+    three-row maps. A systemd user manager sets both for the service already;
+    this is the same shape for the calls this program makes itself, and
+    naming them is defence in depth against a caller that reaches podman by
+    another route.
+
+    **The environment the scrub actually changes is the one `runuser` really
+    does inherit**: `XDG_RUNTIME_DIR`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`,
+    `XDG_CACHE_HOME`, `DBUS_SESSION_BUS_ADDRESS`, `CONTAINERS_*`, `PWD` and
+    `OLDPWD`. `tool.runuser_as` is where that is decided, and this call goes
+    through it — so there is one place a `runuser -u` command is built and a
+    second call site cannot miss the scrub."""
     home = paths.service_home(name)
-    runtime = Path(f"/run/user/{record.uid}")
-    env = ["env", f"USER={name}", f"LOGNAME={name}"]
-    if runtime.is_dir():
-        env.append(f"XDG_RUNTIME_DIR={runtime}")
     try:
-        return tool.call(["runuser", "-u", name, "--", *env, "podman", *argv], cwd=home)
+        return tool.call(tool.runuser_as(name, "podman", *argv), cwd=home)
     except errors.GuardenError as exc:
         # Every failure `tool.call` reports here is bytes it could not read —
         # an image's own file or podman's own answer, which is what this run

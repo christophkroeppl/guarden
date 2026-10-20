@@ -616,7 +616,7 @@ def pull_background(
     """
     argv = ["podman", "pull", reference]
     if name:
-        argv = ["runuser", "-u", name, "--", "env", f"USER={name}", f"LOGNAME={name}", *argv]
+        argv = tool.runuser_as(name, *argv)
     try:
         process = subprocess.Popen(  # noqa: S603
             argv,
@@ -788,9 +788,13 @@ def container_running(name: str, container: str, record=None) -> Check:
     operator learns to ignore a verification.
 
     The pattern is the one the mutator uses (`service._podman`): `runuser -u
-    <service>` with `USER` and `LOGNAME` named for the service, because
-    `runuser` swaps the uid but keeps the caller's environment, and podman's
-    keep-id mapping reads the subid files keyed by `USER`.
+    <service>` with the service's own `HOME`, `USER`, `LOGNAME`,
+    `XDG_DATA_HOME` and `XDG_RUNTIME_DIR`, because podman's keep-id mapping
+    reads the subid files keyed by `USER` — and because the rest of the
+    caller's environment (`XDG_RUNTIME_DIR`, `XDG_DATA_HOME`, `PWD`, the
+    `CONTAINERS_*` files, the session bus) is inherited by `runuser` verbatim
+    and moves podman's store out of the service's own home. `tool.runuser_as`
+    is where that scrub is decided.
     """
     argv = ["ps", "--filter", f"name={container}", "--format", "{{.Names}}"]
     if record is not None:

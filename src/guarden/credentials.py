@@ -221,10 +221,10 @@ def materialise(service: str | None = None) -> list[str]:
         # printed and it is gone). `call` rather than `run` because a secret that
         # is not there is the normal first-materialise case and must not raise.
         tool.call(
-            ["runuser", "-u", name, "--", "podman", "secret", "rm", key], cwd=where
+            tool.runuser_as(name, "podman", "secret", "rm", key), cwd=where
         )
         tool.run(
-            ["runuser", "-u", name, "--", "podman", "secret", "create", key, "-"],
+            tool.runuser_as(name, "podman", "secret", "create", key, "-"),
             stdin=stored,
             cwd=where,
         )

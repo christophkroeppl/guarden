@@ -81,11 +81,8 @@ def render_units(source: Path, service: str, escaped_ref: str | None = None) -> 
     conf.set_owner(out, (uid, gid))
     os.chmod(out, 0o700)
 
-    argv = [
-        "runuser",
-        "-u",
+    argv = tool.runuser_as(
         GUARDEN_USER,
-        "--",
         str(LOOM),
         "render",
         str(source),
@@ -93,7 +90,7 @@ def render_units(source: Path, service: str, escaped_ref: str | None = None) -> 
         service,
         "--out",
         str(out),
-    ]
+    )
     if escaped_ref:
         argv.extend(["--instance", escaped_ref])
     tool.run(argv, cwd="/tmp")

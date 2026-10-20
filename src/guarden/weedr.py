@@ -1287,11 +1287,8 @@ def _build(args) -> int:
         # declares, or the local one for a pure build with no image:.
         image_ref = images_mod.declared_or_built(home, resolved.name, container)
 
-        podman = [
-            "runuser",
-            "-u",
+        podman = tool.runuser_as(
             resolved.name,
-            "--",
             "podman",
             "build",
             "--tag",
@@ -1299,7 +1296,7 @@ def _build(args) -> int:
             "-f",
             str(context_file),
             ".",
-        ]
+        )
         result = tool.call(podman, cwd=home)
         if not result.ok:
             detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
@@ -1875,8 +1872,8 @@ def _converge_ingress() -> None:
 
 def _sync_routes() -> None:
     """`roots sync`, as `guarden`: a route change the edge reads without a restart."""
-    result = tool.call(["runuser", "-u", units.GUARDEN_USER, "--",
-                        str(paths.BIN / "roots"), "sync"], cwd="/tmp")
+    result = tool.call(tool.runuser_as(units.GUARDEN_USER, str(paths.BIN / "roots"), "sync"),
+                       cwd="/tmp")
     if not result.ok:
         detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
         sys.stderr.write(
@@ -1895,8 +1892,8 @@ def _sync_dashboard() -> None:
     config = config_mod.load()
     if DASHBOARD_MODULE not in config.modules or not paths.DASHBOARD.is_dir():
         return
-    result = tool.call(["runuser", "-u", units.GUARDEN_USER, "--",
-                        str(paths.BIN / "twig"), "sync"], cwd="/tmp")
+    result = tool.call(tool.runuser_as(units.GUARDEN_USER, str(paths.BIN / "twig"), "sync"),
+                       cwd="/tmp")
     if not result.ok:
         detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
         sys.stderr.write(
