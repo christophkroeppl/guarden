@@ -186,12 +186,12 @@ def path_argument(value: Path) -> str:
 # clean. **The reachable path is an operator's ROOT SHELL**: `weedr service
 # build` and a hand-run `weedr secret materialise`.
 
-# The variables that must be the TARGET's own, and the ones that must not be
-# inherited at all. A name in the first set is SET; a name in the second is
-# REMOVED. The two sets do not overlap, and a name in neither is left alone —
-# which is deliberate: the environment carries more than guarden knows about
-# (a locale, a proxy), and a scrub that removed everything would be a policy
-# this module has no standing to set.
+# The variables that must not be inherited at all. A name here is REMOVED
+# from the environment the command runs in, whether or not the caller had it.
+#
+# **A name in neither list is left alone** — deliberately: the environment
+# carries more than guarden knows about (a locale, a proxy), and a scrub that
+# removed everything would be a policy this module has no standing to set.
 SCRUB_REMOVE = (
     "XDG_CONFIG_HOME",
     "XDG_CACHE_HOME",
@@ -202,6 +202,13 @@ SCRUB_REMOVE = (
     "CONTAINERS_POLICY_JSON",
     "PWD",
     "OLDPWD",
+    # **Removed rather than only overwritten.** `XDG_RUNTIME_DIR` is SET below
+    # when the account's own manager has made `/run/user/<uid>` — but it is
+    # REMOVED here regardless, because a manager that has not come up yet
+    # leaves the caller's value in place, and podman then fails on the
+    # caller's path: `Failed to obtain podman configuration: lstat
+    # /run/user/0: no such file or directory` — measured.
+    "XDG_RUNTIME_DIR",
 )
 
 
