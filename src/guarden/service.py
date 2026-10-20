@@ -939,12 +939,14 @@ def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
     `"/Cargo.toml": no such file or directory` (measured, ticket 317). So the
     tree is copied whole, and the tree's own layout is unchanged.
 
-    **What is not copied: the podman store, the snapper subtree, and the
-    quadlet directory the home carries.** The store is podman's — it holds
-    the image layers and the per-user secret database in cleartext, and a
-    source read from another service's home (`add --from <service>`) carries
-    that service's store, so copying it whole would copy another service's
-    credential material into this one. The guard below walks the same
+    **What is not copied: the podman store, the podman configuration directory
+    and the snapper subtree.** The store is podman's — it holds the image
+    layers and the per-user secret database in cleartext, and a source read
+    from another service's home (`add --from <service>`) carries that
+    service's store, so copying it whole would copy another service's
+    credential material into the new one. The configuration directory holds
+    the RENDERED units of the service the tree was read from, which are that
+    service's own and not its source's. The guard below walks the same
     `.snapshots` the service walk skips, because the home is not snapshotted
     today and a build context that carried snapper's read-only subvolume
     would be a context `podman build` cannot copy.

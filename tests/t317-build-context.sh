@@ -74,15 +74,22 @@ trap cleanup EXIT
 
 cleanup
 
-# stage_ctx <project> <sha> <file> <line>...: a staged tree with a unit that
-# declares the local image, a Containerfile, and one source file beside them.
+# stage_ctx <project> <service> <sha> <file> <line>...: a staged tree with a
+# unit that declares the local image, a Containerfile, and one source file
+# beside them.
 #
 # The staged tree is where a poke's source lands (`/var/lib/guarden/staging`),
 # and it is the tree `weedr service ingest` copies into the service's home —
 # so a file planted here is a file the repository shipped.
+#
+# **The unit declares the SERVICE's own reference**, because that is what the
+# build tags: spec 6.6 step 2 says the image is tagged with the reference the
+# unit source declares, and `weedr service build` prints that reference. A
+# unit declaring some other reference would have the build tag that one, and
+# the suite would be asserting about an image nobody built.
 stage_ctx() {
-    local project=$1 sha=$2 file=$3
-    shift 3
+    local project=$1 service=$2 sha=$3 file=$4
+    shift 4
     local staged=/var/lib/guarden/staging/$project/$sha
     rm -rf "$staged"
     mkdir -p "$staged/.guarden/quadlet"
@@ -94,7 +101,7 @@ stage_ctx() {
         "Description=the build context subject" \
         "" \
         "[Container]" \
-        "Image=localhost/$project:latest"
+        "Image=localhost/$service:latest"
     seed "$staged/Containerfile" "FROM scratch" "COPY $file /copied"
     seed "$staged/$file" "$@"
 }
@@ -141,7 +148,7 @@ image_lists() {
 # `.dockerignore` — so under the old four-file copy the build died with 125
 # and the service never had an image.
 
-stage_ctx ctxapp 9f2c1ab Cargo.toml '[package]' 'name = "ctxapp"'
+stage_ctx ctxapp ctxapp-staging 9f2c1ab Cargo.toml '[package]' 'name = "ctxapp"'
 run weedr service ingest ctxapp-staging --from poke ctxapp@9f2c1ab
 assert_exit 0
 
@@ -165,7 +172,7 @@ assert_stdout_has "copied"
 # exclusion is honoured even though guarden adds its own lines to the same
 # file.
 
-stage_ctx ctxignore 9f2c1ab Cargo.toml '[package]' 'name = "ctxignore"'
+stage_ctx ctxignore ctxignore-staging 9f2c1ab Cargo.toml '[package]' 'name = "ctxignore"'
 seed /var/lib/guarden/staging/ctxignore/9f2c1ab/.dockerignore "Cargo.toml"
 run weedr service ingest ctxignore-staging --from poke ctxignore@9f2c1ab
 assert_exit 0
@@ -191,7 +198,7 @@ assert_stdout_lacks "copied"
 # file's COPY would have missed is not in the context at all — `COPY .` is
 # what puts the store in the image, and it is what the exclusion has to stop.
 
-stage_ctx ctxstore 9f2c1ab Cargo.toml '[package]' 'name = "ctxstore"'
+stage_ctx ctxstore ctxstore-staging 9f2c1ab Cargo.toml '[package]' 'name = "ctxstore"'
 # the Containerfile copies the whole tree, so the store is a candidate
 seed /var/lib/guarden/staging/ctxstore/9f2c1ab/Containerfile \
     "FROM scratch" "COPY . /all"
