@@ -305,15 +305,16 @@ assert_exit 0
 # covered because it exists rather than because someone remembered it.
 #
 # Every helper the tree has is in the read set, and no suite but this one.
-# The runner selects exactly `tests/t[0-9]*.sh`, so the negation of that is
-# every helper — and the list below is the tree's own files with the runner's
-# own selection removed.
+# The list below is the tree's own files with **the runner's own selection**
+# removed — the runner selects `$REPO/tests/t[0-9]*.sh`, and the predicate in
+# `suitecache.py` is the same one, so the test and the tool cannot disagree
+# about what a suite is.
 python3 "$CACHE_TOOL" readset "$SUITE" >"$GUARDEN_FIXTURES/readset.list"
 while read -r helper; do
     name=${helper#"$GUARDEN_ROOT"/}
     grep -qxF "$name" "$GUARDEN_FIXTURES/readset.list" \
         || _fail "$name is a helper under tests/ and is not in the read set"
-done <<<"$(find "$GUARDEN_ROOT/tests" -type f ! -name '*.pyc' ! -name 't[0-9]*.sh' | sort)"
+done <<<"$(find "$GUARDEN_ROOT/tests" -type f ! -name '*.pyc' | sort | grep -vE '/t[0-9][^/]*\.sh$')"
 
 # The negation is exact: a suite is a suite because the runner says so, and
 # the runner's own selection is the predicate. The other suite is a suite, so
@@ -437,6 +438,30 @@ GUARDEN_LXC_ROOT="$VENV_COPY" python3 "$CACHE_TOOL" readset \
 if grep -qF '.venv' "$GUARDEN_FIXTURES/venv-readset.list"; then
     _fail "the developer's .venv is in the read set, so a pip install invalidates every cached green"
 fi
+
+# **And the machine does not have one either.** The key not carrying the venv
+# is only half the claim: what the suite actually ran against is the machine's
+# own `python3-yaml` and `python3-jinja2`, and the only way to know that is
+# to look at the machine. The checkout in the guest is the tree the runner
+# pushed, so a `.venv` there would be the developer's, on PATH, supplying the
+# interpreter and the two libraries the renderer needs.
+assert_file_missing "$GUARDEN_ROOT/.venv"
+
+# **The absence above is only as good as the push that causes it, and on a
+# checkout with no venv it is vacuous.** So the push itself is pinned: the
+# runner must exclude the venv from the tar it sends, or the machine gets a
+# developer's interpreter the moment the developer has one. The pin is on the
+# runner's own source — the runner cannot be driven from inside a machine,
+# where `lxc` does not exist.
+runner=$GUARDEN_ROOT/tests/lxc.sh
+[ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
+venv_excludes=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '--exclude=./.venv' || true)
+[ "$venv_excludes" -ge 1 ] \
+    || _fail "the runner pushes the developer's .venv into the machine, so a suite runs against a host's pip install"
+
+# And the machine's own libraries are what a program would import there.
+run python3 -c 'import yaml, jinja2'
+assert_exit 0
 
 # --- one changed file invalidates what read it ------------------------------
 
@@ -618,6 +643,14 @@ grep -qFx '.env.schema' "$GUARDEN_STDOUT" \
 # Covering the package means hashing it, so the cost is measured rather than
 # assumed: how many files the key covers, and how long a digest over them takes
 # on this machine — interpreter start included, which is most of it.
+#
+# **The bound is on the FILE COUNT, not on a wall clock.** A wall-clock bound
+# on a shared machine is a flake wearing a bound's clothes, and a generous one
+# (5000ms against a measured ~150ms) cannot catch the regression it names: a
+# key that grew 30x would still pass it. The count is what actually holds the
+# property — the key is a fixed set of files, so a set that grew is a set
+# that grew for a reason, and the reason is a file class that was added
+# rather than a file that was longer.
 python3 "$CACHE_TOOL" readset "$SUITE" >"$GUARDEN_FIXTURES/readset.list"
 READSET_FILES=$(grep -c . "$GUARDEN_FIXTURES/readset.list")
 START_NS=$(date +%s%N)
@@ -628,7 +661,18 @@ END_NS=$(date +%s%N)
 TREE_MS=$(( (END_NS - START_NS) / 1000000 ))
 printf 'note: the key covers %s files; its digest was built in %s ms\n' \
     "$READSET_FILES" "$TREE_MS"
-[ "$TREE_MS" -lt 5000 ] || _fail "a key digest took ${TREE_MS}ms, so the key is no longer cheap enough to build per suite"
+
+# The count is bounded, and the bound is the tree's own: every file under
+# `tests/` that is not a suite, plus the covered trees. A key that covers
+# more than the tree has is a key that reads something the tree does not
+# hold.
+TREE_FILES=$(find "$GUARDEN_ROOT/src/guarden" "$GUARDEN_ROOT/fixtures" \
+    "$GUARDEN_ROOT/modules" "$GUARDEN_ROOT/packages" "$GUARDEN_ROOT/tools" \
+    "$GUARDEN_ROOT/examples" -type f ! -path '*__pycache__*' ! -name '*.pyc' | wc -l)
+HELPER_FILES=$(find "$GUARDEN_ROOT/tests" -type f ! -name '*.pyc' | grep -cvE '/t[0-9][^/]*\.sh$')
+EXPECTED=$((TREE_FILES + HELPER_FILES + 3))
+[ "$READSET_FILES" -le "$EXPECTED" ] \
+    || _fail "the key covers $READSET_FILES files and the tree holds $EXPECTED, so it reads something the tree does not"
 
 # --- a cached suite's line cannot be read as a pass -------------------------
 
