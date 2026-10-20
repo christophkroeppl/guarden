@@ -428,8 +428,11 @@ exit `1` naming the entry, **before** anything is created and for every environm
 `--env` list at once, so a second `create` can never overwrite the record, the volumes, the
 `provides` or the instances that name carries. Replacing a service is `weedr service remove
 <name>` first, and bringing it a manifest is `weedr service add <name> --from <service>` —
-which copies **that service's** `.guarden/`, `compose.yaml`, `Containerfile` and
-`.dockerignore` out of its home and reconciles from them. That is the whole of what `add`
+which copies **that service's whole staged tree** out of its home and reconciles from it — the
+`.guarden/`, the compose file, the Containerfile and the application's own files, minus the
+podman store and the rendered units (which are that service's own, not its source's). The
+whole tree is copied because the home is `podman build`'s context and a `COPY` resolves against
+it (ticket 317). That is the whole of what `add`
 copies, and no verb reads a directory you wrote: `ingest` takes a poke, `add` takes a service,
 `create` takes a template name resolved inside the template set — the three forms and nothing
 else. **A manifest you wrote for a third-party image therefore has nowhere to land.** Until one
@@ -469,10 +472,13 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   step is `podman unshare chown -R <image uid>:<image uid> <volume>`, run as the service user
   (tickets 273 and 277). Point the image's data directory at a *subdirectory* of the mount, or
   it collides with snapper's root-owned `.snapshots`.
-* **A re-ingest after an edit redeploys** (ticket 275). `source_hash` covers the full set of
-  render inputs — `.guarden/`, `compose.yaml`, `Containerfile` and `.dockerignore` — so an
-  edited manifest, compose file or Containerfile hashes differently and re-ingests as **not**
-  `converged`: the units are re-rendered and installed, and there is nothing to delete first —
+* **A re-ingest after an edit redeploys** (ticket 275). `source_hash` covers the whole staged
+  tree — the unit source, the compose file, the Containerfile and the application's own files
+  — because the whole tree is the build's context and every file in it is a build input (spec
+  6.6). So an
+  edited manifest, compose file, Containerfile or source file hashes differently and re-ingests
+  as **not** `converged`: the units are re-rendered and installed, and there is nothing to
+  delete first —
   no `rm /var/lib/guarden/registry/<svc>.toml`, and no second ingest after it. The note below
   about `weedr service add` being the reconcile command holds for this case exactly as it
   holds for a poke.

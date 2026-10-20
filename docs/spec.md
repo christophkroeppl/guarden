@@ -2066,6 +2066,31 @@ The steps, in this order, and the order is the point :
   needed covers the whole staged tree — otherwise an edited `Cargo.toml` changes the image
   while the hash says nothing changed, and the rebuild is skipped.
 
+  **How the exclusion is written, and where, is measured rather than chosen.** `podman`
+  reads a context's ignore rules from `.containerignore` **in preference to**
+  `.dockerignore`, and `--ignorefile` **replaces** the context's own lookup rather than
+  adding to it. So:
+
+  - guarden writes the exclusion under **both** names, because a source that ships
+    `.containerignore` would otherwise have guarden's `.dockerignore` ignored entirely and
+    the store would go into the image;
+  - **both names carry both halves** — the source's own patterns AND guarden's exclusion.
+    A first implementation put guarden's block in the `.containerignore` and left the
+    source's patterns in the `.dockerignore`, and the source's narrowing was then silently
+    dropped, because podman never consults the second file. The source's patterns are
+    therefore collected from both names and written to both, so a source that ships either
+    one keeps its narrowing;
+  - the exclusion is written **into the context's own ignore file** and not passed with
+    `--ignorefile`, because that flag would silently drop the source's own narrowing —
+    the thing this section says the source owns;
+  - the source's patterns come **first** and guarden's **last**, because the last matching
+    pattern wins, so a source-side `!` negation cannot re-include the store;
+  - the exclusion is written at **build** time rather than at copy time, because the home's
+    podman store grows after the copy and the store is what the exclusion is about.
+
+  A `.dockerignore` that excludes the Containerfile itself does not stop the build: the
+  ignore rules apply to `COPY` and `ADD` sources, not to the recipe `-f` names.
+
   **`weedr service build` takes no `--from`, and that is the fix rather than a restriction.** It
   takes no `--from` because the staging confinement written for `weedr service add --from` was
   never copied to it — a separate verb on the same sudoers rule, simply not mentioned, and

@@ -1237,7 +1237,13 @@ def _build(args) -> int:
 
     The image is tagged with the reference the unit source declares for each
     container (spec 6.6 step 2). The build context is the service's home, which
-    holds the unit source tree — exactly the tree the renderer reads.
+    holds the staged source tree — the unit source, the compose file, the
+    Containerfile and the application's own files. A `COPY` resolves against
+    the context directory, so a Containerfile that says
+    `COPY Cargo.toml Cargo.lock ./` needs those files IN the home: the home
+    holds the whole staged tree, and the tree's own ignore file decides what
+    the build does not see (spec 6.6) — with guarden's own exclusion written
+    into that file below, because the repository's may be absent.
     `runuser -u <service>` runs podman with the service's uid and subuid range,
     so the container can map root. A failure exits `1` and names the verb; a
     success prints the image reference(s) built.
@@ -1251,7 +1257,7 @@ def _build(args) -> int:
             errors.HOST_NOT_AS_ASSUMED,
         )
 
-    # The service's home is the build context: it holds the unit source tree.
+    # The service's home is the build context: it holds the staged source tree.
     home = paths.service_home(resolved.name)
     if not home.is_dir():
         raise errors.GuardenError(
@@ -1286,6 +1292,14 @@ def _build(args) -> int:
         # Get the reference the build should tag — the one the unit source
         # declares, or the local one for a pure build with no image:.
         image_ref = images_mod.declared_or_built(home, resolved.name, container)
+
+        # **Guarden's exclusion goes into the context's own ignore file before
+        # the build reads it.** The podman store — which holds the per-user
+        # secret database in cleartext — is in the home by now, and a context
+        # carrying it leaks the credential material into an image layer. The
+        # source's own patterns are kept and guarden's come after them, so the
+        # source still owns what the build does not see (spec 6.6).
+        service.write_build_exclusions(home, (record.uid, record.uid))
 
         podman = [
             "runuser",
