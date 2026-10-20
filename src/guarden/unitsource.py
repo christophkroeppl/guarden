@@ -49,6 +49,45 @@ QUOTABLE = frozenset(
 CONTINUATION = "\\"
 
 
+def escape_path(value: str) -> str:
+    """A path, escaped for a key whose value quadlet C-unescapes.
+
+    **Quadlet reads some keys by C-unescaping their value, and a path that
+    holds a backslash is rewritten before anything else sees it.** The keys it
+    reads that way are the ones it takes with `LookupAllArgs` —
+    `EnvironmentFile=`, `Secret=`, `Mount=`, `Mask=`, `Unmask=`, `Exec=`,
+    `PodmanArgs=` and `ReloadCmd=` — and the value guarden writes for an
+    instance carries the instance's **escaped ref** — `feature/x` is
+    `feature\\x2fx` — so the backslash is in the path by design.
+
+    **`Volume=` is not one of them.** It is read with `LookupAll`, which does
+    not unescape, so a volume's path reaches podman with its one backslash
+    intact and must not be escaped here — a second escape would point the
+    mount at a directory that is not there. The rule is about the KEY, and
+    this function is only for the keys that are read the other way.
+
+    Measured on podman 5.7.0: with the value written as one backslash, the
+    generator's own `ExecStart` carries the **decoded** path
+    (`.../feature/x/...`), and podman is handed a file that does not exist —
+    `Error: parsing file "...": open ...: no such file or directory`, exit
+    125. The value is unescaped once by quadlet and once more by systemd when
+    it parses the generated `ExecStart`, so the fix has to survive both.
+
+    **A doubled backslash is what systemd's own convention asks for**, and it
+    is what the measurement shows surviving the whole chain: quadlet turns
+    `\\\\` into one literal backslash, the generator re-escapes it for the
+    `ExecStart` it writes, and systemd's parse hands podman the path with the
+    single backslash that is really on disk. Measured the same way, the argv
+    systemd handed the program named a file that exists.
+
+    So this is the value **as the unit carries it**, and the file on disk keeps
+    the name it has always had: the escaped ref is a fact about the instance's
+    directory, and the directory is not renamed to suit a value the renderer
+    writes.
+    """
+    return value.replace("\\", "\\\\")
+
+
 @dataclass
 class Unit:
     """One parsed `.container` or `.volume` file."""

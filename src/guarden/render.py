@@ -1342,7 +1342,19 @@ def _container_unit(
                 [f"{name}:{context.config.alias}" for name in hosts],
             )
         if edge_ports:
-            unit.put("Container", "EnvironmentFile", [str(context.unit_dir() / ENV_FILE)])
+            # **The value is escaped, and the file on disk is not.** Quadlet
+            # reads `EnvironmentFile=` by C-unescaping its value, and the
+            # instance's directory is named by the escaped ref — `feature/x` is
+            # `feature\x2fx` — so an unescaped value names a path that does not
+            # exist and podman refuses the container with
+            # `parsing file "...": no such file or directory` (ticket 315).
+            # `unitsource.escape_path` is the rule; the file keeps the name it
+            # has always had.
+            unit.put(
+                "Container",
+                "EnvironmentFile",
+                [unitsource.escape_path(str(context.unit_dir() / ENV_FILE))],
+            )
     volume_keys = _volume_lines(document, source, container, context)
     if volume_keys:
         unit.put("Container", "Volume", volume_keys)
