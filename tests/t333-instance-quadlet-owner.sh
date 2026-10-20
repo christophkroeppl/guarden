@@ -126,6 +126,25 @@ dropin_owner=$(stat -c %u:%g "$dropin")
 [ "$dropin_owner" = "$uid:$gid" ] \
     || _fail "$dropin is owned by uid:gid $dropin_owner, not the service's own $uid:$gid"
 
+# --- the MIRROR's drop-in directory -----------------------------------------
+# An instance's units are declared in the instance's own quadlet directory AND
+# given an entry in the SERVICE's own, named `<unit>-<escaped-ref>` — because
+# podman's generator searches the home's quadlet directory and the uid-scoped
+# system paths and nothing below them, so a declaration only in the instance's
+# directory is one systemd never makes.
+#
+# **This one is asserted directly, and not by the sweep below.** The sweep
+# asks whether anything under the home is root-owned, and a mirror drop-in
+# that was `0755` and owned by the SERVICE would pass it — it is not
+# root-owned, it is just wide. The mode is what the tree's rule is about, so
+# it is asked of this directory by name.
+mirror_dropin="$slot_quadlet/web-$escaped.container.d"
+assert_file_exists "$mirror_dropin"
+assert_mode "$mirror_dropin" 700
+mirror_owner=$(stat -c %u:%g "$mirror_dropin")
+[ "$mirror_owner" = "$uid:$gid" ] \
+    || _fail "$mirror_dropin is owned by uid:gid $mirror_owner, not the service's own $uid:$gid"
+
 # --- nothing root-owned lives inside the service's home ----------------------
 # The general claim the two directories above are instances of, asked of the
 # whole tree. Podman's own store and snapper's subtree are excluded: the first
@@ -189,3 +208,50 @@ chmod 0700 "$instance_quadlet"
 # service's, and the mode is the tree's.
 assert_quadlet_mode "$instance_quadlet"
 assert_quadlet_owner "$instance_quadlet"
+
+# --- and a SECOND install holds it too ---------------------------------------
+# A first install is the case the fix was written for, and it is the case that
+# cannot show what happens when the directory ALREADY exists. A second
+# install of the same instance takes the other branch: the tree walk has
+# already made the directory, so the installer's own helper finds it there and
+# leaves it alone. That is the right answer — the walk owns the tree — and it
+# has to be measured rather than assumed, because a helper that re-moded an
+# existing directory would fight an admin's widening on every install.
+#
+# **The instance is re-ingested from a DIFFERENT source, so the install really
+# happens.** A re-ingest of the same source is `converged` and returns before
+# the tree walk, so it would prove nothing. The source hash is what the
+# convergence check compares — it covers `.guarden/`, `compose.yaml` and the
+# build inputs — so the second tree differs in the UNIT SOURCE, which is
+# inside `.guarden/`.
+#
+# **The directory is BROKEN first, and then the install has to fix it.** The
+# break is what makes the assertion load-bearing: without it, a second install
+# that did nothing at all would pass. The instance's quadlet directory is
+# given back to root with the mode the pre-fix mutator produced, and the
+# re-ingest is what has to make it the service's again.
+chmod 0755 "$instance_quadlet"
+chown 0:0 "$instance_quadlet"
+
+mkdir -p "$GUARDEN_PREFIX/var/lib/guarden/staging/routed/second"
+cp -r "$GUARDEN_ROOT/fixtures/projects/routed/." \
+    "$GUARDEN_PREFIX/var/lib/guarden/staging/routed/second/"
+# A different unit source, so the source hash differs and the ingest is not
+# `converged`. The description is the one line the hash sees.
+seed "$GUARDEN_PREFIX/var/lib/guarden/staging/routed/second/.guarden/quadlet/web.container" \
+    "[Unit]" "Description=the routed container, second revision" \
+    "" "[Container]" "Image=docker.io/library/nginx:1.27"
+run weedr service ingest routed-preview/feature/x --from poke routed@second
+assert_exit 0
+
+# The tree walk that the install runs owns the directory, so the answer after
+# the second install is the same answer the first one gave.
+assert_quadlet_mode "$instance_quadlet"
+assert_quadlet_owner "$instance_quadlet"
+
+# And the drop-in directory the installer owns is still the service's, on the
+# second install as on the first.
+assert_mode "$dropin" 700
+dropin_owner=$(stat -c %u:%g "$dropin")
+[ "$dropin_owner" = "$uid:$gid" ] \
+    || _fail "$dropin is owned by uid:gid $dropin_owner, not the service's own $uid:$gid"

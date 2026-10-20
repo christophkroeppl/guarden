@@ -564,11 +564,19 @@ def create_service(
     # service's own podman generator, which is the process that has to read it
     # (AGENTS.md: nothing root-owned inside a service's home). This copy is what
     # `weedr service start` finds.
+    #
+    # **The directory each file lands in is owned too.** A template that ships
+    # `<unit>.container.d/<file>` has a directory in it, and `conf.write_file`
+    # would create that directory with the mutator's umask and root's
+    # ownership — the same defect the install path closes, in the one place
+    # that writes a template's tree. The shipped templates are flat today, so
+    # this is latent, and a latent hole in the same class is still the hole.
     quadlet_dir = units_dir(resolved.name, resolved.escaped_ref)
     quadlet_dir.mkdir(parents=True, exist_ok=True)
     for path in sorted(template_dir.rglob("*")):
         if path.is_file():
             target = quadlet_dir / path.relative_to(template_dir)
+            units.own_directory(target.parent, owner)
             conf.write_file(target, path.read_text(encoding="utf-8"), units.UNIT_MODE, owner)
 
     record = registry.Registry(

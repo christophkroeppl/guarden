@@ -141,7 +141,7 @@ def allow_mounts(source: Path, service: str) -> list[str]:
     return missing
 
 
-def _own_directory(path: Path, owner: tuple[int, int]) -> None:
+def own_directory(path: Path, owner: tuple[int, int]) -> None:
     """A directory inside a service's home, owned by that service's user.
 
     `conf.write_file` creates the parent with `mkdir(parents=True)` and
@@ -159,12 +159,30 @@ def _own_directory(path: Path, owner: tuple[int, int]) -> None:
 
     The mode is `0700`, the tree's own mode: the drop-in directory holds one
     file the service owns, inside a directory only the service can enter.
+
+    **Every directory this call creates is owned, and not only the leaf.** The
+    leaf's own parent may be missing too — `home/.config/containers` is
+    created by the same `mkdir` — and `mkdir(parents=True)` gives every level
+    it makes the mutator's umask and root's ownership. A helper that owned
+    the leaf and left the levels above it root-owned inside a `0700` home
+    would be the defect it exists to prevent, one level up. So the chain is
+    walked up to the first directory that already exists, and each level this
+    call makes is created, owned and moded in turn.
+
+    **A directory that already exists is left alone.** Not repaired and not
+    re-moded: the walk that owns a service's tree is `_make_tree`'s, and a
+    second statement of the same mode here would be two places to keep
+    agreeing.
     """
-    if path.is_dir():
-        return
-    path.mkdir(parents=True, exist_ok=True)
-    conf.set_owner(path, owner)
-    os.chmod(path, 0o700)
+    missing: list[Path] = []
+    probe = path
+    while not probe.exists():
+        missing.append(probe)
+        probe = probe.parent
+    for directory in reversed(missing):
+        directory.mkdir(parents=True, exist_ok=True)
+        conf.set_owner(directory, owner)
+        os.chmod(directory, 0o700)
 
 
 def install(source: Path, service: str, escaped_ref: str | None = None) -> list[str]:
@@ -186,13 +204,13 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
         relative = path.relative_to(out / "units")
         body = path.read_text(encoding="utf-8")
         target = unit_dir(service, escaped_ref) / relative
-        _own_directory(target.parent, owner)
+        own_directory(target.parent, owner)
         conf.write_file(target, body, UNIT_MODE, owner)
         written.append(str(target))
         entry = search_entry(relative, escaped_ref)
         if entry is not None:
             mirror = unit_dir(service) / entry
-            _own_directory(mirror.parent, owner)
+            own_directory(mirror.parent, owner)
             conf.write_file(mirror, body, UNIT_MODE, owner)
             written.append(str(mirror))
 
