@@ -86,6 +86,22 @@ svc=ruenv-staging
 assert_file_exists "$home"
 assert_mode "$home" 700
 
+# **The service's own user manager, waited for.** `XDG_RUNTIME_DIR` is the
+# service's `/run/user/<uid>` — and the helper sets it only when that
+# directory exists, because a manager that has not come up yet is worse than
+# none. The manager comes up asynchronously after an ingest, so the suite
+# waits for it rather than assuming it: the wait is on the DIRECTORY here
+# because this file is about the environment, and ticket 322's finding (that
+# the directory outlives a dead manager) is a question about the BUILD's
+# sandbox cgroup rather than about which variables reach the command.
+runtime=/run/user/"$(id -u "$svc")"
+for _ in $(seq 1 30); do
+    [ -d "$runtime" ] && break
+    sleep 1
+done
+assert_file_exists "$runtime"
+echo "MEASURE: the service's runtime directory is $runtime"
+
 # --- the hostile environment -------------------------------------------------
 #
 # A real directory on the machine, world-readable, so that "the value landed
@@ -128,10 +144,17 @@ echo "MEASURE: the caller's XDG_DATA_HOME is $XDG_DATA_HOME, its XDG_RUNTIME_DIR
 # --- the plant ---------------------------------------------------------------
 #
 # `weedr secret set` writes the blob and asks the materialiser to carry it
-# into the service's store. The materialiser is what runs the `runuser`, so
-# this is the call site under test — and with the caller's environment this
-# hostile, the materialiser's podman would fail on three of the variables if
-# the scrub were not there.
+# into the service's store — **but it asks through the systemd oneshot**, and
+# a oneshot's environment is only `PWD=/` and `USER=root` with no `XDG_*` at
+# all (measured). So the plant's own shell is NOT the path this file is about:
+# the hostile environment never reaches it.
+#
+# **The path that IS about it is `weedr secret materialise` run directly**, in
+# the caller's shell — which is the shape an operator has when they run it by
+# hand, and the shape the ticket names. The verb is the same one the oneshot
+# runs (`ExecStart=/usr/lib/guarden/bin/weedr secret materialise %i`), so what
+# this drives is the product's own credential path and not a reimplementation
+# of it.
 run weedr secret set "$svc" DB_PASSWORD <<<"a-real-value"
 assert_exit 0
 assert_stdout_has "planted DB_PASSWORD of $svc"
@@ -139,6 +162,15 @@ assert_stdout_has "planted DB_PASSWORD of $svc"
 # The blob is on disk, encrypted, root-owned.
 assert_file_exists /etc/guarden/creds/$svc/DB_PASSWORD.cred
 assert_mode /etc/guarden/creds/$svc/DB_PASSWORD.cred 600
+
+# **And now the materialiser runs in THIS shell, with the hostile
+# environment.** Before the scrub, the caller's `XDG_RUNTIME_DIR` alone was
+# enough to stop it: podman answers "Failed to obtain podman configuration:
+# lstat /run/user/0: no such file or directory" and the value never reaches
+# the store at all.
+run weedr secret materialise "$svc"
+assert_exit 0
+echo "MEASURE: the materialiser said: $(cat "$GUARDEN_STDOUT")"
 
 # --- the STATE: the secret database is inside the service's own home ---------
 #
@@ -177,7 +209,16 @@ hostile_matches=$(grep -rlF "$encoded" "$hostile" 2>/dev/null || true)
 #
 # Read through podman as the service user, in the service's own home: the
 # store is the service's, and this is the question asked of the store's owner.
-run_in "$home" runuser -u "$svc" -- podman secret ls
+#
+# **The suite's own question is asked in a CLEAN environment**, because the
+# suite is not the product: the product's path is the materialiser above, and
+# this is the suite checking what the machine now holds. The hostile
+# environment stays exported for the rest of the file — the point of it is
+# that the PRODUCT survives it.
+run_in "$home" env -u XDG_RUNTIME_DIR -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+    -u XDG_CACHE_HOME -u DBUS_SESSION_BUS_ADDRESS \
+    -u CONTAINERS_STORAGE_CONF -u CONTAINERS_CONF \
+    runuser -u "$svc" -- podman secret ls
 assert_exit 0
 assert_stdout_has "DB_PASSWORD"
 
@@ -189,9 +230,12 @@ assert_stdout_has "DB_PASSWORD"
 #
 # **The caller's hostile XDG_DATA_HOME is IN the environment here**, because
 # the question is whether the service's own podman finds its own store or the
-# caller's.
-run_in "$home" runuser -u "$svc" -- env "XDG_DATA_HOME=$hostile" podman info \
-    --format '{{.Store.GraphRoot}}'
+# caller's — and a scrub that is only in guarden's own helper would not
+# answer it.
+run_in "$home" env -u XDG_RUNTIME_DIR -u XDG_CONFIG_HOME -u XDG_CACHE_HOME \
+    -u DBUS_SESSION_BUS_ADDRESS -u CONTAINERS_STORAGE_CONF -u CONTAINERS_CONF \
+    "XDG_DATA_HOME=$hostile" \
+    runuser -u "$svc" -- podman info --format '{{.Store.GraphRoot}}'
 assert_exit 0
 echo "MEASURE: podman's graphroot with the caller's XDG_DATA_HOME still set: $(cat "$GUARDEN_STDOUT")"
 graphroot=$(cat "$GUARDEN_STDOUT")
@@ -212,8 +256,15 @@ assert_mode "$store/secrets" 700
 # The materialiser removes the old secret before it creates the new one, so a
 # store holding both would be a store holding a stale credential — and this is
 # the same call site a second time, under the same hostile environment.
-run weedr secret set "$svc" DB_PASSWORD <<<"a-rotated-value"
+#
+# **The materialiser is run DIRECTLY here too**, because the oneshot's
+# environment is clean and would not exercise the path. The `secret rm` that
+# precedes the `create` is the half that matters: it runs `podman secret rm`
+# as the service user, under the caller's environment, and a removal that did
+# not happen is a `create` that answers "secret name in use".
+run weedr secret materialise "$svc"
 assert_exit 0
+echo "MEASURE: the rotation's materialiser said: $(cat "$GUARDEN_STDOUT")"
 
 rotated=$(printf '%s' "a-rotated-value" | base64 -w0)
 assert_file_has "$store/secrets/filedriver/secretsdata.json" "$rotated"
@@ -232,21 +283,26 @@ rotated_matches=$(grep -rlF "$rotated" "$hostile" 2>/dev/null || true)
 # inherits the caller's `XDG_RUNTIME_DIR` dies in podman's configuration
 # before it runs anything — so the build's own answer is the assertion.
 #
-# The build needs a Containerfile in the service's home, and it builds FROM
-# scratch so no base image is fetched: the verb is what is under test, not the
-# network.
-printf '%s\n' \
-    "FROM scratch" \
-    "COPY .guarden/quadlet/web.container /web.container" >"$home/Containerfile"
+# **FROM scratch**, so no base image is fetched: the verb is what is under
+# test and not the network.
+seed "$home/Containerfile" \
+    "FROM scratch" "COPY .guarden/quadlet/web.container /unit"
 
 run weedr service build "$svc"
 assert_exit 0
-echo "MEASURE: the build's stdout: $(cat "$GUARDEN_STDOUT")"
-echo "MEASURE: the build's stderr: $(cat "$GUARDEN_STDOUT")"
+echo "MEASURE: the build said: $(cat "$GUARDEN_STDOUT")"
+assert_stdout_has "docker.io/library/nginx:1.27"
 
 # The build's image landed in the SERVICE's own store — the same store the
 # secret database is in, and not under the hostile path.
+run_in "$home" env -u XDG_RUNTIME_DIR -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+    -u XDG_CACHE_HOME -u DBUS_SESSION_BUS_ADDRESS \
+    -u CONTAINERS_STORAGE_CONF -u CONTAINERS_CONF \
+    runuser -u "$svc" -- podman image inspect docker.io/library/nginx:1.27 \
+    --format '{{.Id}}'
+assert_exit 0
+echo "MEASURE: the built image's id: $(cat "$GUARDEN_STDOUT")"
+
 assert_file_missing "$hostile/containers/storage"
-assert_file_has "$store/overlay-images/images.json"
 
 rm -rf "$hostile"
