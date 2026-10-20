@@ -63,6 +63,41 @@ RUN_AS = "guarden"
 # `hose`, and the rule grants the VERB. A rule naming `furrow deploy` with an
 # argument would have to be rewritten per project; a rule naming the verb is
 # stable, and what it can reach is unchanged.
+# The verbs the poke reaches, and the ARGUMENTS each one may be given.
+#
+# **The arguments are `*`, and the reason is measured, not chosen.**
+#
+# A sudoers command with associated arguments must match the caller's
+# arguments EXACTLY (`man sudoers`: "the arguments in the Cmnd must match
+# exactly those given by the user on the command line"). So a rule naming
+#
+#     …/bin/furrow deploy
+#
+# admits `furrow deploy` and REFUSES `furrow deploy <service> --from poke
+# <project>@<sha>` — which is the invocation a poke actually makes. MEASURED
+# on a live host:
+#
+#     $ sudo -n -u hose sudo -n -u guarden …/bin/furrow deploy svc --from poke p@s
+#     sudo: I'm sorry hose. I'm afraid I can't do that
+#
+# So the rule as written was INERT: it failed closed, which is safe, and it
+# also meant **no poke could deploy anything at all** — the whole gitops path
+# was dead on every real host.
+#
+# **The `*` is safe because the per-project binding is not in the rule.** The
+# rule grants the VERB to the `hose` account, and `hose` is the only account
+# that can reach it — and `hose` derives the project from the SSH forced
+# command that `weedr project grant` wrote (`command="…/hose --project
+# <name>"`), never from the caller's arguments. A `*` on the rule therefore
+# grants the same set of verbs to the same account as before; what it does NOT
+# grant is anything new, because the rule never carried the binding.
+#
+# **`furrow` re-derives the project and does not take it on faith.** The
+# `--from poke <project>@<sha>` pair names the project, and `furrow` checks
+# that project against the key file's own binding — the project the CALLER's
+# key is granted, read from the key file the operator wrote. So a `*` on the
+# rule and a project named in an argument cannot disagree: the argument names
+# a project, and the key file says which project the caller may name.
 VERBS = (
     ("furrow", "deploy"),
     ("furrow", "preview drop"),
@@ -163,6 +198,13 @@ def rule_text() -> str:
         "",
     ]
     for program, verb in VERBS:
-        lines.append(f"{GRANTEE} ALL=({RUN_AS}) NOPASSWD: {BIN / program} {verb}")
+        # **The `*` is what makes the rule match the real invocation.** A
+        # sudoers command with arguments must match them EXACTLY, so a rule
+        # naming the bare verb admits only the bare verb — and the poke's
+        # invocation carries a service name, a `--from` and a sha. The `*` is
+        # the whole of the arguments the rule permits, and the per-project
+        # binding is NOT here: it is in the SSH forced command `hose` reads,
+        # and `furrow` re-derives the project from the key file.
+        lines.append(f"{GRANTEE} ALL=({RUN_AS}) NOPASSWD: {BIN / program} {verb} *")
     lines.append(f"{GUARDEN_USER} ALL=(root) NOPASSWD: {BIN / 'weedr'}")
     return "\n".join(lines) + "\n"

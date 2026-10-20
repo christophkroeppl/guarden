@@ -66,8 +66,31 @@ class SudoersRuleTest(unittest.TestCase):
         """A bare program matches any arguments, and an argument is a capability."""
         for line in self.poke_lines:
             self.assertTrue(
-                line.endswith(tuple(verb for _, verb in sudoers.VERBS)),
-                f"the rule entry {line!r} does not name a whole verb",
+                line.endswith(" *"),
+                f"the rule entry {line!r} does not name a whole verb and the "
+                f"arguments it may carry",
+            )
+
+    def test_every_poke_entry_permits_arguments_with_a_wildcard(self) -> None:
+        """**The `*` is what makes the rule match the real invocation.**
+
+        A sudoers command with associated arguments must match them EXACTLY
+        (`man sudoers`), and the poke's real invocation is
+        `furrow deploy <service> --from poke <project>@<sha>` — so a rule
+        naming the bare verb admits only the bare verb, and the whole gitops
+        path is dead. MEASURED on a live host before the fix:
+
+            sudo: I'm sorry hose. I'm afraid I can't do that
+
+        The `*` is safe because the per-project binding is NOT in the rule: it
+        is in the SSH forced command `hose` reads, and `furrow` re-derives the
+        project from the key file and refuses a project no key holds.
+        """
+        for program, verb in sudoers.VERBS:
+            self.assertIn(
+                f"{sudoers.BIN / program} {verb} *",
+                self.text,
+                f"the rule does not admit the arguments of {program} {verb}",
             )
 
     def test_the_poke_rule_grants_the_deploy_verbs_and_nothing_more(self) -> None:

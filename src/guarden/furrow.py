@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from guarden import cli, compose, conf, errors, names, paths, registry, tool, unitsource
+from guarden import cli, compose, conf, errors, names, paths, projects, registry, tool, unitsource
 from guarden import config as config_mod
 from guarden import manifest as manifest_mod
 
@@ -420,6 +420,7 @@ def _enqueue(args) -> dict:
 
     known = registry.load(resolved.name) is not None
     project, sha = _poke(args.from_values, args.sha, known, resolved.name)
+    _require_granted_project(project)
     source = paths.STAGING / project / sha
     if not (source / manifest_mod.MANIFEST_REL).is_file():
         raise errors.GuardenError(
@@ -557,6 +558,47 @@ def _gate(resolved: names.Resolved) -> tuple[str, str]:
             errors.HOST_NOT_AS_ASSUMED,
         )
     return state, str(verdict.get("reason") or "the gate recorded no reason")
+
+
+def _require_granted_project(project: str) -> None:
+    """The project named in the request is one the KEY FILE grants.
+
+    **The per-project binding is checked HERE, in the privileged program, and
+    not in the sudoers rule.** The rule grants a VERB to the `hose` account
+    with `*` for the arguments — because a sudoers command with arguments must
+    match them EXACTLY, and the poke's real invocation carries a service name,
+    a `--from` and a sha, so a rule naming the bare verb was INERT and no poke
+    could deploy anything at all.
+
+    A `*` is safe here because **the binding was never in the rule**. It is in
+    the SSH forced command that `weedr project grant` wrote
+    (`command="…/hose --project <name>"`), and the key file that carries it is
+    `0644` and world-readable — so the privileged program can read the binding
+    and check the request against it.
+
+    **So the project in the request is not taken on faith.** The key file says
+    which project a key is bound to; a request naming a project that no key
+    grants is refused, and the refusal names the projects that ARE granted.
+
+    A deploy of a project no key holds is refused rather than queued, and
+    nothing is written.
+    """
+    try:
+        granted = projects.key_projects()
+    except OSError as exc:  # pragma: no cover - the key file is readable
+        raise errors.GuardenError(
+            f"the key file could not be read, so the per-project binding could not be "
+            f"checked: {exc}",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    if project in granted:
+        return
+    known = ", ".join(sorted(granted)) or "none"
+    raise errors.GuardenError(
+        f"the project {project!r} is not one any key is granted, and the granted "
+        f"projects are {known}; a deploy names a project its key holds",
+        errors.REJECTED_INPUT,
+    )
 
 
 def _deploy_lock(resolved: names.Resolved) -> str:
