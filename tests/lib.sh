@@ -287,7 +287,12 @@ assert_no_firewall_rule() {
 
 assert_rule_count() {
     local count
-    count=$(grep -vE '^[[:space:]]*(#|$)' "$1" | grep -cE '^[[:space:]]+(jump|proto|mod|ip|if|daddr|iif) ')
+    # `grep -c` exits 1 when it counts ZERO, and a rules-less file is a real
+    # state (a host with no service yet) rather than an error — so the count is
+    # taken with the status ignored, and the comparison below is what decides.
+    # Same shape as `assert_file_lacks`: an empty result is not a failure of
+    # the helper, it is the answer.
+    count=$(grep -vE '^[[:space:]]*(#|$)' "$1" | grep -cE '^[[:space:]]+(jump|proto|mod|ip|if|daddr|iif) ' || true)
     [ "$count" = "$2" ] || _fail "$1 carries $count rules, expected $2"
 }
 
@@ -305,10 +310,21 @@ assert_rule_count() {
 # present at byte 1,156 and the helper reported it absent. A negative
 # assertion that cannot fail is not a weak assertion, it is no assertion at
 # all, and it was silent about that.
+#
+# **And `grep -v` exits 1 when it filters EVERYTHING out.** A file that is all
+# comments — a rendered firewall file with no rules in it yet, which is exactly
+# what a host with no grants and no services has — leaves the filter with
+# nothing to print, so `grep -vE` exits 1, the assignment takes that status,
+# and under `set -e` the whole SUITE dies on a file it was only inspecting.
+# Measured: `t160-grants.sh` failed at this line with
+# `error: failed at line 311: grep -vE … (exit 1)` and named no assertion at
+# all, because the assertion never ran. **An empty filter is not an error and
+# it is not a match**, so `|| true` says so; the `if` below is what decides
+# whether the string is present.
 assert_file_lacks() {
     [ -e "$1" ] || return 0
     local filtered
-    filtered=$(grep -vE '^[[:space:]]*(#|;)' "$1")
+    filtered=$(grep -vE '^[[:space:]]*(#|;)' "$1" || true)
     if printf '%s\n' "$filtered" | grep -qF -- "$2"; then
         _fail "$1 names $2 and should not"
     fi

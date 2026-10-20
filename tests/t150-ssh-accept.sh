@@ -55,14 +55,14 @@ assert_file_has /etc/guarden/firewall/00-ssh.conf "proto tcp dport 22 jump ACCEP
 # 10-framework.conf INPUT chain has 'jump guarden-ssh' as first rule after conntrack+lo
 assert_file_has /etc/guarden/firewall/10-framework.conf "chain INPUT {"
 # The first non-comment rule in INPUT should be conntrack, then lo, then jump guarden-ssh
-input_rules=$(grep -vE '^[[:space:]]*(#|$)' /etc/guarden/firewall/10-framework.conf | sed -n '/chain INPUT {/,/^}/p' | grep -vE '^(chain INPUT {|})$')
+input_rules=$(grep -vE '^[[:space:]]*(#|$)' /etc/guarden/firewall/10-framework.conf | sed -n '/chain INPUT {/,/^}/p' | grep -vE '^(chain INPUT {|})$' || true)
 # Check that the order is: conntrack, lo, guarden-ssh
 echo "$input_rules" | head -1 | grep -q "mod conntrack ctstate" || _fail "first rule in INPUT is not conntrack"
 echo "$input_rules" | sed -n '2p' | grep -q "if lo" || _fail "second rule in INPUT is not 'if lo'"
 echo "$input_rules" | sed -n '3p' | grep -q "jump guarden-ssh;" || _fail "third rule in INPUT is not 'jump guarden-ssh;'"
 
                                                        
-ssh_rules=$(grep -vE '^[[:space:]]*(#|$)' /etc/guarden/firewall/00-ssh.conf | sed -n '/chain guarden-ssh {/,/^}/p' | grep -vE '^(chain guarden-ssh {|})$')
+ssh_rules=$(grep -vE '^[[:space:]]*(#|$)' /etc/guarden/firewall/00-ssh.conf | sed -n '/chain guarden-ssh {/,/^}/p' | grep -vE '^(chain guarden-ssh {|})$' || true)
 first_ssh_rule=$(echo "$ssh_rules" | head -1 | xargs)
 [ "$first_ssh_rule" = "proto tcp dport 22 jump ACCEPT;" ] || _fail "first rule in guarden-ssh is '$first_ssh_rule', expected 'proto tcp dport 22 jump ACCEPT;'"
 
