@@ -289,6 +289,26 @@ SUITE_TIMEOUT=${GUARDEN_LXC_SUITE_TIMEOUT:-480}
 # wins against every holder, so the budget is the guard and the evidence the
 # failure prints is the answer when it does not.
 APT_LOCK_WAIT=${GUARDEN_LXC_APT_LOCK_WAIT:-600}
+# **And the budget has to be long enough for the install that holds the lock.**
+# Measured 2026-10-21: on a FRESH golden, cloud-init's `packages:` install is
+# twenty-four packages -- podman, dracut-core, fail2ban, ferm among them -- and
+# it was still running at 40s of its own clock, well past the point where the
+# harness's own `apt-get install` had already given up. The harness's
+# 600-second budget expired while cloud-init was mid-install, and the
+# harness's install then collided with it: "Could not get lock
+# /var/lib/dpkg/lock-frontend. It is held by process 1916 (apt-get)".
+#
+# **The budget is a guard against a wedge, not a claim about how long apt
+# takes.** 600s was a guess that happened to be short for a fresh machine and
+# ample for a cut one, and the difference between the two is exactly the
+# 24-package install that only a fresh machine does. So the golden's budget is
+# longer than a cut's: a cut re-runs cloud-init over a machine that already
+# has every package, so its install is short, while a golden's first boot
+# does the whole set from an empty image.
+#
+# The value is overridable, because a bound is a policy and the operator may
+# have a reason for a different one.
+GOLDEN_APT_LOCK_WAIT=${GUARDEN_LXC_GOLDEN_APT_LOCK_WAIT:-2400}
 # `cloud-init status --wait` polls until cloud-init reports a final state and
 # has no end of its own: cloud-init that never gets there would hold the cut
 # with nothing printed, which is the wedge every other exec on this path is
@@ -349,6 +369,15 @@ _boot_id() {
 # longer holding the dpkg lock.
 _wait_cloud_init() {
     local instance=$1
+    # **The budget is the caller's, because the two callers need different
+    # ones.** A cut re-runs cloud-init over a machine that already has every
+    # package, so its install is short; a golden's first boot installs the
+    # whole set from an empty image, and its 24-package install (podman,
+    # dracut-core, fail2ban, ferm) is what the shorter budget was losing to.
+    # Measured 2026-10-21: the golden's own apt-get was still running at 40s
+    # of its clock while the harness's 600s budget had already expired, and the
+    # harness's install then collided with it on `lock-frontend`.
+    local budget=${2:-$APT_LOCK_WAIT}
     # **Wait on apt's locks as well as on cloud-init, and this is the whole fix.**
     # `cloud-init status --wait` returns as soon as cloud-init reports done, but
     # cloud-init's own `package_update` can still be holding
@@ -377,7 +406,7 @@ _wait_cloud_init() {
     # `CLOUD_INIT_WAIT` above — because `status --wait` has no end of its own;
     # the lock wait below is what decides readiness, so past the bound the only
     # thing lost is that signal.
-    timeout --foreground --signal=KILL "$CLOUD_INIT_WAIT" \
+    timeout --foreground --signal=KILL "$budget" \
         $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1 || :
     # **`fuser` may be absent, and its absence would make this a silent no-op.**
     # It comes from `psmisc`, which the package list's harness role and this
@@ -464,7 +493,7 @@ _wait_cloud_init() {
     # elapsed time. `SECONDS` is the shell's own clock and the elapsed time it
     # gives back is what the failure below prints.
     local started=$SECONDS answer='' holder='' elapsed
-    while [ $((SECONDS - started)) -lt "$APT_LOCK_WAIT" ]; do
+    while [ $((SECONDS - started)) -lt "$budget" ]; do
         # The poll itself is bounded, so a wedged `lxc exec` cannot hold the
         # loop past a single pass: a 124 from `timeout` leaves the word empty and
         # is retried like any other failed measurement. `--foreground` is as
@@ -754,7 +783,7 @@ cmd_provision() {
     # returning one.** `tests/lxc.sh` runs under `set -uo pipefail` and NOT
     # `set -e`, so an unchecked non-zero return here is silently ignored — the
     # diagnostic prints and the run continues into the race anyway.
-    _wait_cloud_init "$GOLDEN" || die "cannot wait for cloud-init on $GOLDEN"
+    _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" || die "cannot wait for cloud-init on $GOLDEN"
 
     if [ "${_needs_build:-0}" = 0 ] && [ "$(_conversion_state "$GOLDEN")" != done ]; then
         printf 'replacing %s: no snapshot and its conversion state is not done\n' "$GOLDEN"
@@ -814,7 +843,7 @@ cmd_provision() {
     # that silently lacks snapper is a golden whose conversion fails an hour
     # later with a cause three steps removed. Failing here, with apt's own
     # message, is the cheap and honest failure.
-    _wait_cloud_init "$GOLDEN" || die "cannot wait for apt's locks on $GOLDEN"
+    _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" || die "cannot wait for apt's locks on $GOLDEN"
     vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
         apt-get install -y -qq --no-install-recommends
