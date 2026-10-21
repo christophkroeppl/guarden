@@ -20,6 +20,7 @@ from pathlib import Path
 from guarden import (
     basicauth,
     cli,
+    clone,
     conf,
     creator,
     credentials,
@@ -133,6 +134,21 @@ FIREWALL = (
 
 PIN = (("sync", "recompute the snapper marks from the pin files and the registries"),)
 
+# The snapshot-clone chain (ticket 327, ADR-0025).
+#
+# **A separate group, and not four more verbs on `weedr service`.** A `service`
+# verb acts on a service; these act on a SNAPSHOT (a `<service>:<volume>@<n>`
+# id), on a DATABASE inside a service, and on a DUMP file. The chain crosses
+# services — the snapshot belongs to one, the load happens in another — and no
+# single one of the four steps has "a service" as its subject.
+CLONE = (
+    ("snapshot", "a throwaway container cut from a snapshot"),
+    ("dump", "a dump out of a service's running database"),
+    ("transform", "the scrub, and what it removed"),
+    ("load", "a dump into a service's own database"),
+    ("remove", "the throwaway container and the clone it runs against"),
+)
+
 SHARE = (
     ("issue", "record a time-bounded grant to reach a tunnel route"),
     ("revoke", "end one issuance immediately"),
@@ -160,6 +176,7 @@ GROUPS = (
     ("secret", "the values a service's containers are given", SECRET),
     ("port", "the public ports an admin has granted", PORT),
     ("pin", "the privileged bridge into snapper", PIN),
+    ("clone", "the snapshot-clone chain: a tmp container, a dump, a scrub and a load", CLONE),
     ("share", "the time-bounded grants that reach a tunnel route", SHARE),
     ("module", "the shipped bundles of services and shared programs", MODULE),
     ("firewall", "the firewall rules a service asks for", FIREWALL),
@@ -180,9 +197,11 @@ Not on the guarden sudoers rule, and not reachable from a deploy:
 `weedr module add`, `weedr expose set`, `weedr expose unset`,
 `weedr basicauth off`, `weedr basicauth on`,
 `weedr project add`,
-`weedr project grant`, `weedr project revoke`, and every `weedr share`
-verb. A customer-facing grant is safe to have precisely because a poke
-can deploy to a preview and cannot mint, extend or revoke access to one.
+`weedr project grant`, `weedr project revoke`, every `weedr share` verb,
+and every `weedr clone` verb: a clone reads production data and a load
+writes it, so neither is reachable from a poke. A customer-facing grant is
+safe to have precisely because a poke can deploy to a preview and cannot
+mint, extend or revoke access to one.
 """
 
 
@@ -339,6 +358,86 @@ def build_parser() -> argparse.ArgumentParser:
         verb_parser = top["port"]["verbs"][verb]
         verb_parser.add_argument("name", metavar="NAME", help="the service")
         verb_parser.add_argument("public_port", metavar="PUBLIC_PORT", help="the public port")
+
+    # --- the snapshot-clone chain (ticket 327, ADR-0025) --------------------
+    clone_snapshot = top["clone"]["verbs"]["snapshot"]
+    clone_snapshot.add_argument(
+        "id", metavar="SNAPSHOT", help="<service>:<volume>@<number>, the clone's source"
+    )
+    clone_snapshot.add_argument(
+        "--as",
+        dest="as_name",
+        metavar="NAME",
+        required=True,
+        help="the throwaway container's name, and the clone's directory below the service",
+    )
+
+    clone_remove = top["clone"]["verbs"]["remove"]
+    cli.add_name(clone_remove, "the service whose clone is removed")
+    clone_remove.add_argument(
+        "--as",
+        dest="as_name",
+        metavar="NAME",
+        required=True,
+        help="the clone's name, as `weedr clone snapshot --as` gave it",
+    )
+
+    for verb, help_text in (
+        ("dump", "the service whose database is dumped"),
+        ("load", "the service whose database is loaded"),
+    ):
+        verb_parser = top["clone"]["verbs"][verb]
+        cli.add_name(verb_parser, help_text)
+        verb_parser.add_argument(
+            "--db",
+            dest="database",
+            metavar="DATABASE",
+            required=True,
+            help="the database inside the service",
+        )
+
+    top["clone"]["verbs"]["dump"].add_argument(
+        "--out",
+        dest="out",
+        metavar="FILE",
+        required=True,
+        help="the dump's name, inside the service's own bulk volume",
+    )
+    top["clone"]["verbs"]["dump"].add_argument(
+        "--from",
+        dest="source",
+        metavar="SERVICE:CONTAINER",
+        default=None,
+        help="the source service and container to dump from, as `<service>:<container>`; the "
+        "service's own database container when omitted, and the throwaway clone as "
+        "`<source-service>:<as-name>` in the chain's own first step. The container runs in the "
+        "SOURCE service's podman store, so the service it belongs to is part of the name",
+    )
+
+    clone_transform = top["clone"]["verbs"]["transform"]
+    cli.add_name(clone_transform, "the service whose `scrub:` rule is applied")
+    clone_transform.add_argument(
+        "--from",
+        dest="source",
+        metavar="FILE",
+        required=True,
+        help="the dump to transform, inside the service's own bulk volume",
+    )
+    clone_transform.add_argument(
+        "--out",
+        dest="out",
+        metavar="FILE",
+        required=True,
+        help="the scrubbed dump's name, inside the service's own bulk volume",
+    )
+
+    top["clone"]["verbs"]["load"].add_argument(
+        "--from",
+        dest="source",
+        metavar="FILE",
+        required=True,
+        help="the dump to load, inside the service's own bulk volume",
+    )
 
     cli.add_json(top["firewall"]["verbs"]["list"])
     for verb in ("open", "close"):
@@ -1575,6 +1674,60 @@ def _pin_sync(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# the snapshot-clone chain (ticket 327, ADR-0025)
+# --------------------------------------------------------------------------
+
+
+def _clone_snapshot(args) -> int:
+    snapshot = snapshotid.parse(args.id)
+    config = config_mod.load()
+    for line in clone.snapshot(snapshot, args.as_name, list(config.tracks)):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+def _clone_remove(args) -> int:
+    config = config_mod.load()
+    for line in clone.remove(args.name, args.as_name, list(config.tracks)):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+def _clone_dump(args) -> int:
+    config = config_mod.load()
+    service = clone.resolve(args.name, list(config.tracks))
+    source = None
+    if args.source is not None:
+        name, separator, container = args.source.partition(":")
+        if not separator or not name.strip() or not container.strip():
+            raise errors.GuardenError(
+                f"--from is {args.source!r}, and it is `<service>:<container>`: the service whose "
+                f"podman store the container lives in, and the container's name",
+                errors.REJECTED_INPUT,
+            )
+        source = (name.strip(), container.strip())
+    for line in clone.dump(service, args.database, args.out, source, list(config.tracks)):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+def _clone_transform(args) -> int:
+    config = config_mod.load()
+    service = clone.resolve(args.name, list(config.tracks))
+    for line in clone.transform(service, args.source, args.out):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+def _clone_load(args) -> int:
+    config = config_mod.load()
+    service = clone.resolve(args.name, list(config.tracks))
+    for line in clone.load(service, args.database, args.source):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
 def _share_issue(args) -> int:
     """Record one issuance. Every refusal happens before anything is written."""
     config = config_mod.load()
@@ -2370,6 +2523,11 @@ HANDLERS = {
     "weedr module add": _module_add,
     "weedr module remove": _module_remove,
     "weedr pin sync": _pin_sync,
+    "weedr clone snapshot": _clone_snapshot,
+    "weedr clone remove": _clone_remove,
+    "weedr clone dump": _clone_dump,
+    "weedr clone transform": _clone_transform,
+    "weedr clone load": _clone_load,
     "weedr share issue": _share_issue,
     "weedr share revoke": _share_revoke,
     "weedr share list": _share_list,

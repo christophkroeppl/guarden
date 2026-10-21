@@ -189,6 +189,11 @@ to it.
   tree contains nothing but snapshotted subvolumes. A `bulk` volume is
   mounted from the subvolume itself: it has no snapper configuration and
   therefore no `.snapshots` subtree to keep out of the way
+  services/<name>/clones/<name>/  a throwaway clone of one snapshot, made by
+  `weedr clone snapshot` (ADR-0025). It has no
+  snapper configuration and is never snapshotted;
+  it holds the clone's data and is owned by the
+  service user, and a `weedr clone remove` deletes it
   services/<name>/instances/<escaped-ref>/  an instance's OWN tree, on an instance track.
   A sibling of `state/`, never a child of it — see below.
   Its `state/<vol>` has a snapper configuration named
@@ -1009,6 +1014,17 @@ widgets:
   file: .guarden/widgets/web.yml
 
 schema: .guarden/.env.schema  # names, types, examples; never values
+
+scrub:  # the operator's policy for a CLONED copy of this database (ADR-0025).
+  # `weedr clone transform` reads it and nothing else does. Every row of
+  # a `tables:` entry goes; a `keys:` entry removes the rows whose named
+  # column matches a prefix or one exact value. It is not SQL.
+  tables:
+    - name: ir_mail_server
+  keys:
+    - table: ir_config_parameter
+      column: key
+      prefix: "mail."
 ```
 
 `service:` names a guarden service; `container:` names a container inside this service. A
@@ -1033,7 +1049,10 @@ Validation rules:
   nothing else; a `routes` or `ports` entry takes `container` and `port`; a `firewall` entry
   takes `name`, `chain` and `rule` and nothing else; a
   `widgets` entry
-  takes `container` and `file`; a `provides` entry is a **single string naming a kind** — `db`,
+  takes `container` and `file`; a `scrub:` entry takes `tables` and `keys` and nothing else, a
+  `tables` entry takes `name` and nothing else, and a `keys` entry takes `table`, `column` and
+  **exactly one** of `prefix` and `equals` — a rule that named neither would match every row of
+  the table, which is what a `tables` entry is for; a `provides` entry is a **single string naming a kind** — `db`,
   `secret` — and nothing else, because a `provides` entry carries no value and no structure; a
   `state`/`bulk` entry is a string. An unknown key inside one
   of them is refused **by name**, the same as an unknown top-level key. This was a gap: the
@@ -1775,6 +1794,21 @@ against one shape.
 
 weedr pin sync  # the privileged bridge into snapper 
 
+weedr clone snapshot <service>:<volume>@<number> --as <name>  # a throwaway container cut from
+  # a snapshot. It is NOT a service: no unit,
+  # no publication, no registry entry and no
+  # track, and it runs in the SOURCE service's
+  # own podman store as that service's user
+weedr clone dump <service> --db <database> --out <file> [--from <service>:<container>]
+  # a plain SQL dump. Without `--from` it is the
+  # service's own database container; the file is
+  # written into the TARGET's bulk volume
+weedr clone transform <service> --from <file> --out <file>  # the service's `scrub:` rule, and
+  # what it removed
+weedr clone load <service> --db <database> --from <file>  # a dump into a database that must
+  # already exist
+weedr clone remove <service> --as <name>  # the container and the clone's subvolume
+
 weedr share issue <name[/ref]> <email> --until <duration>  # record a time-bounded grant to a
   # tunnel route. --until is required and there is no
   # spelling of "never"; a value above [share] max is
@@ -1837,6 +1871,31 @@ weedr project revoke <name> <pubkey>
 
 There is no `weedr redeploy`: deploying is `furrow deploy`, and a mutator that also deploys is
 two programs wearing one name. `remove` has the alias `rm`; nothing else does.
+
+**`weedr clone` is the snapshot-clone chain, and it is a group because the chain crosses
+services** (ADR-0025). A `service` verb acts on a service; these act on a snapshot id, on a
+database inside a service, and on a file in a service's bulk volume, and the four steps belong to
+different services: the snapshot is the source's, the dump lands in the target's bulk volume, the
+scrub rule is the target's manifest, and the load happens in the target. A service that does not
+provide the `db` kind is refused. The chain is postgres's, and `ENGINE` names it in `clone` as it
+does in `edges`.
+
+**The tmp container is not a service and has no lifecycle guarden owns.** It has no unit, no
+publication and no registry entry, and `weedr clone remove` is what ends it. A subvolume under
+`services/<name>/clones/` is guarden's by construction; nothing else is deleted.
+
+**The dump is written into the target's bulk volume and never into `/tmp`.** The operator's own
+step was "staging pg (bulk volume)": a bulk volume is never snapshotted, so a dump in it enters
+no snapshot and no fork. `--out` and `--from` are names inside that volume, and an absolute name
+or one carrying `..` is refused.
+
+**The load restores into a database that already exists and refuses one that does not.** The role
+and the database are the edge's to create (`edges.provision`), and a load that created them would
+make the dump's password the role's password. Re-provisioning an edge's credential after a
+provider's data was recreated is a separate defect and not a verb here.
+
+**A clone is root's and is on no sudoers rule.** It reads production data and a load writes it,
+so neither is reachable from a poke.
 
 `weedr service list` is the status command: name, track, uid, publications with their
 allocated ports, granted public ports with anything pending marked `pending`, volumes with

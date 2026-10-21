@@ -13,6 +13,23 @@ provides:
 # re-ingest (ticket 326). Declared here and mounted by the container below.
 state:
   - pgdata
+# The landing area the snapshot-clone chain writes a dump into and reads it
+# back from (ticket 327, ADR-0025). A bulk volume is never snapshotted, so a
+# dump in it enters no snapshot and no fork.
+bulk:
+  - bulk
 ports:
   - container: db
     port: 5432
+# The scrub rule, and it lives HERE because it is the project's own policy
+# (ADR-0025): what this database's rows look like when they are cloned is a fact
+# about the project, so it is versioned with the deployment and reviewable in a
+# pull request. It removes the outgoing mail configuration — the operator's own
+# rule — and keeps the message history, which is a different thing.
+scrub:
+  tables:
+    - name: ir_mail_server
+  keys:
+    - table: ir_config_parameter
+      column: key
+      prefix: "mail."
