@@ -199,9 +199,13 @@ assert_exit 0
 # `soil storage` did or did not write, so "no ladder" is not something the phase
 # can assert about itself.
 #
-# Every assertion here asks the machine rather than the phase, and every one of
-# them is a property a host converted before `@tmp` existed fails: that is the
-# RED this block turns when the source change is reverted.
+# Every assertion here asks the machine rather than the phase. Three of them —
+# the filesystem, the subvolume the mount came from, and `path @tmp` in the
+# list — are the ones a host converted before `@tmp` existed fails, which is
+# the RED this block turns when the source change is reverted: that host's
+# `/tmp` is the tmpfs it always was. The rest — the mount options, the mode, the
+# absent configuration, the marker — hold on such a host too, and are asserted
+# because each is part of the requirement rather than because each is red.
 #
 # `@tmp` is required as `path @tmp` and refused as `path @/@tmp`, because a
 # `@tmp` nested inside `@` is the fail-open shape — `subvol=@tmp` resolves

@@ -222,6 +222,15 @@ than assuming it. What that costs:
 `/tmp` keeps the `nosuid` and `nodev` the tmpfs it replaces carried, and its mode is `1777`, set
 by tmpfiles and not by the conversion.
 
+**A host converted before `@tmp` existed takes one extra stage, and it is not a re-conversion.**
+Its layout is `@` and `@var` with the state file saying `done`, so the ordinary conversion will
+never look at it again. `soil storage --apply` recognises that layout, creates `@tmp` at the
+top level, writes the `/tmp` fstab line and asks for a reboot; the run after the reboot reports
+no drift. Nothing is copied and the `@`/`@var` migration is not re-run — `@` is the running
+system, and rsyncing `/` into it would copy the system onto itself. The one reboot is needed
+because `/tmp` holds live files on a running host, and mounting a new subvolume over them would
+orphan them under processes that are not going away.
+
 ### the values `soil storage` owns
 
 The storage phase converges one fixed set of canonical values into every snapper configuration it

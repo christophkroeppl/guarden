@@ -1570,7 +1570,10 @@ still converge and the run still exits `1`.
   again after each reboot (twice in all: the conversion, then the `@`/`@var`/`@tmp` migration) — and
   while a reboot is outstanding it reports the marker it wrote at
   `/var/lib/guarden/soil/reboot-required` and stays unmet, which is the one drift a `storage`
-  run is expected to carry between reboots. It also **disables the
+  run is expected to carry between reboots. **A host already on `@` and `@var` with no `@tmp` is
+  finished, not converted again**: the phase creates the missing subvolume at the top level and
+  writes its `/tmp` fstab line, which is one subvolume and one line, then asks for the same
+  reboot — re-running the `@` migration instead would rsync `/` onto itself. It also **disables the
   distribution's packaged snapper cleanup timer** and installs the replacement that takes the
   `snapshots` lock (§8.5). A snapper configuration belonging to a service is created by the mutator and is
   never recreated here.

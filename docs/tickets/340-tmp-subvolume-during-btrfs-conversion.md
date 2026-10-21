@@ -343,15 +343,20 @@ assert a converged `soil storage --check` are red on the layout item.** That
 is expected, and the fix is a rebuild — **not** an assertion change.
 
 The suites that go red are exactly the ones that assert a converged
-`soil storage --check`: `tests/t20-storage.sh` asserts exit 0 for it
-(`:182-187`), and an old golden reports the layout item as drift instead.
+`soil storage --check`, and the first place `tests/t20-storage.sh` goes red is
+its first `soil storage --apply` (`:59-60`): on a cut from an old golden the
+phase stages the finish, reports the reboot it needs and exits 1, so
+`assert_exit 0` fails there. A `--check` on the same host reports the layout
+item as drift as well — both are the same absence, and neither is an
+assertion to change.
 
 The capability gate (`tests/lxc.sh`'s `_prove`) now also requires `path @tmp`
 in the subvolume list, so the **next** provisioning of the golden — the rebuild
 itself — is what fails if the conversion did not produce the third subvolume.
 The gate runs at provisioning and not per run (`cmd_provision` returns early
 for a golden that already has a snapshot, `:757-762`), so it does not refuse
-the suites on an old golden; the layout check inside `t20-storage.sh` does.
+the suites on an old golden; the first `soil storage --apply` inside
+`t20-storage.sh` does.
 
 The rebuild is a **separate, explicitly scheduled act**:
 `just provision` (`tests/lxc.sh provision`) deletes the golden and builds a

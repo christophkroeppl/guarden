@@ -145,9 +145,17 @@ check_mount() { # <mount> <subvol> [quiet]
   return 1
 }
 
-# This is the same predicate hostprep._btrfs_layout_holds() applies:
+# The predicate hostprep._btrfs_layout_holds() applies, and one step stricter.
+# The phase asks whether the three subvolumes exist —
 #   h.run("btrfs", "subvolume", "list", "/")  then
 #   "@" in layout and "@var" in layout and "@tmp" in layout
+# — and this asks whether each is the one *mounted* at its path. The difference
+# is a staged layout: `migrate_subvolumes` and `migrate_tmp_subvolume` create the
+# subvolumes and write fstab, and until the reboot the phase's predicate already
+# holds while the mount does not exist. That is deliberate — the phase cannot
+# finish a stage that needs a reboot, and the reboot marker item is what reports
+# it — but it is why this check, and not that predicate, is what refuses a host
+# whose /tmp is still the tmpfs.
 verify_layout() {
   local rc=0
   [[ "$(root_fstype)" == btrfs ]] || { err "root filesystem is '$(root_fstype)', not btrfs"; return 1; }
