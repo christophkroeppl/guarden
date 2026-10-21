@@ -472,9 +472,10 @@ def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, di
     rule is a rule violation in a well-formed file, so it is exit `2` — the
     default `GuardenError` carries, and the same code the track table's own
     `kind`/`cap`/`fork_from` rules use. A type that is wrong is exit `1`
-    (`_type_error`). A table naming a track the host does not have is a
-    host-state fact rather than a rule the file states, so it is exit `1` and
-    names the tracks the host does have.
+    (`_type_error`). A table naming a track the host does not have is the same
+    shape as a `fork_from` naming no track — a name in this file that names no
+    track — so it is exit `2` as well, and it names the tracks the host does
+    have.
     """
     if not isinstance(table, dict):
         raise _type_error(str(where_file), "providers", "a table")
@@ -484,8 +485,7 @@ def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, di
         if not isinstance(track, str) or track not in known:
             raise errors.GuardenError(
                 f"{where_file}: [providers] names a track {track!r}, and the tracks are: "
-                f"{', '.join(sorted(known)) or 'none'}",
-                errors.HOST_NOT_AS_ASSUMED,
+                f"{', '.join(sorted(known)) or 'none'}"
             )
         if not isinstance(mapping, dict):
             raise _type_error(str(where_file), f"providers.{track}", "a table")

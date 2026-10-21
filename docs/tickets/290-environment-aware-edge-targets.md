@@ -115,8 +115,15 @@ MUST FIX findings, and both were real:
   `kind`/`cap`/`fork_from` mistakes raise `GuardenError` with the default code
   (2) and type errors go through `_type_error` (1). The three new refusals all
   used 1, so a name that breaks a rule was reported as a host-state fact. They
-  now carry 2, and the track-not-found case stays 1 because it is a host fact
-  and not a rule the file states.
+  now carry 2.
+
+  A second review then caught the half of this that the first fix left behind:
+  the track-not-found case had stayed 1 on the argument that it "is a host fact
+  and not a rule the file states", and the spec paragraph written to match said
+  the same. That argument is wrong. A `[providers.preprod]` table names a track
+  and the file names the tracks, so it is a name in this file that names no
+  track — the same shape as a `fork_from` naming no track, which is exit `2`, and
+  the two cases now carry one code. The spec and the docstring say so.
 - **The spec said the opposite of the code.** It stated that both sides of a row
   are service names and both are validated as such, while the code holds the
   logical name to the pattern alone — and the rationale it gave ("a key that is

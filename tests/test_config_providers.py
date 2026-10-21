@@ -6,9 +6,11 @@ nothing else: a file of plain functions reports "Ran 0 tests" and exits `0`,
 which is a green that measured nothing. The five assertions this file carried
 were exactly that — a test nobody could ever see fail.
 
-The rules are the ones spec 3.1 states: a logical name and a service name on
-both sides of a row, a track the host has, and a name the table does not map
-left alone.
+The rules are the ones spec 3.1 states: the **concrete** name is a service name
+in full, because it becomes a Linux user name; the **logical** name is the
+manifest's own token and is held to the pattern alone, which is the rule the
+manifest's `needs:` entry is held to. A track the host has, and a name the
+table does not map, left alone.
 """
 
 from __future__ import annotations

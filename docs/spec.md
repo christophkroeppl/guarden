@@ -501,7 +501,7 @@ Each `[providers.<track>]` table maps a logical provider name to the concrete se
 
 **The two sides of a row are not held to the same rule.** The **concrete** name becomes a Linux user name, so it is a service name in full: the pattern, the 31-character limit and no `..`. The **logical** name is the manifest's own token and a lookup key that becomes nothing, so it is held to the pattern alone — the same rule the manifest's `needs:` entry is held to, and a forty-character logical name is legal in a manifest. A key that is not a name at all can never match a `needs:` entry, and a concrete name that is not one resolves to a service that does not exist — so the consumer is refused at the render with a name no provider can be connected to, and the operator is hunting a line the diagnostic never describes. A name that breaks either rule is **exit `2`**, the same code the track table's own `kind`/`cap`/`fork_from` mistakes carry, and a value of the wrong type is exit `1`.
 
-A `[providers.<track>]` for a track the host does not have is **exit `1`** and names the tracks the host does have: it is a host-state fact rather than a rule this file states. A mapping nothing reads is a mapping an operator believes is in effect.
+A `[providers.<track>]` for a track the host does not have is **exit `2`** and names the tracks the host does have: it is the same shape as a `fork_from` naming no track, which is a name in this file that names no track, and it is a rule this file states. A mapping nothing reads is a mapping an operator believes is in effect.
 
 #### `[edge_overrides]` — the operator's pin
 

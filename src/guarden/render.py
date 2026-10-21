@@ -817,9 +817,9 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
         concrete = context.provider(edge.service)
         if concrete == context.service:
             raise errors.GuardenError(
-                f"the manifest {document.source} needs {edge.service!r}, which is the service "
-                f"that declared it: a self-edge has no consumer and is nearly always a "
-                f"copy-paste"
+                f"the manifest {document.source} needs {edge.service!r}, which resolves to "
+                f"{concrete!r} — the service that declared it: a self-edge has no consumer "
+                f"and is nearly always a copy-paste"
             )
         provider = registry.load(concrete)
         if provider is None:
@@ -883,10 +883,10 @@ def edge_publications(
         ]
         if not numbers:
             raise errors.GuardenError(
-                f"{context.service} needs {edge.service!r} on port {edge.port} and its "
-                f"registry entry names no allocated publication for that edge; the mutator "
-                f"allocates one when it installs the edge, and the renderer does not guess "
-                f"a loopback port",
+                f"{context.service} needs {edge.service!r} on port {edge.port}, which "
+                f"resolves to {concrete!r}, and that provider's registry entry names no "
+                f"allocated publication for the edge; the mutator allocates one when it "
+                f"installs the edge, and the renderer does not guess a loopback port",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         out.append((edge.service, concrete, min(numbers)))
