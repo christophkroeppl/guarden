@@ -181,10 +181,21 @@ def owns(service: str, key: str) -> bool:
     service that never carried a login has no entry to rewrite, and a key
     that is not this module's is not this module's business — the credential
     module asks every owner it knows, and each one answers for itself.
+
+    **A record that cannot be read is not this module's business either.**
+    The registry is the record of the fact, and a registry that will not
+    parse is the host not being in the state the request assumed — but it is
+    a fact about the RECORD, and this function is asked a question about the
+    credential. The verb that owns the record reports that failure itself,
+    with the path in the message; here the answer is "not mine", and the
+    credential is written exactly as it would be for any other key.
     """
     if key != KEY:
         return False
-    record = registry.load(service)
+    try:
+        record = registry.load(service)
+    except errors.GuardenError:
+        return False
     return record is not None and record.basicauth
 
 
