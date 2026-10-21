@@ -69,3 +69,41 @@ assert_one_diagnostic "error:"
 assert_stderr_has "absent-staging"
 assert_stderr_has "myapp-staging"
 assert_file_missing "$render"
+
+# The MUTATOR's two refusals name the concrete provider as well. A poke whose
+# manifest names the logical `postgres` is resolved by the mutator against the
+# consumer's own track, and the refusal it produces has to name the service
+# the operator has to fix.
+#
+# The provider does not offer the kind. The mutator consults the registry
+# before it creates anything, so the refusal comes from `edges.check`.
+ghost=$GUARDEN_PREFIX/var/lib/guarden/staging/ghost/9f2c1ab
+mkdir -p "$ghost/.guarden/quadlet"
+seed "$ghost/.guarden/service.yml" "project: ghost" "units: .guarden/quadlet/" \
+    "state:" "  - data" "needs:" "  - service: postgres" "    as: db" \
+    "    port: 5432" "    auth: database"
+seed "$ghost/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27"
+run weedr service ingest ghost-staging --from poke ghost@9f2c1ab
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "postgres-staging"
+assert_stderr_has "ghost-staging"
+assert_stderr_has "db"
+assert_stderr_has "cache"
+
+# The provider the logical name resolves to does not exist. This one is a
+# WARNING, not a refusal: a poke creates services in dependency order and a
+# manifest may name one a later deploy brings into being, so the edge is
+# recorded with no publication and `loom` is what refuses it.
+nowhere=$GUARDEN_PREFIX/var/lib/guarden/staging/nowhere/9f2c1ab
+mkdir -p "$nowhere/.guarden/quadlet"
+seed "$nowhere/.guarden/service.yml" "project: nowhere" "units: .guarden/quadlet/" \
+    "state:" "  - data" "needs:" "  - service: absent" "    as: db" \
+    "    port: 5432" "    auth: database"
+seed "$nowhere/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27"
+run weedr service ingest nowhere-staging --from poke nowhere@9f2c1ab
+assert_exit 0
+assert_stderr_has "absent-staging"
+assert_stderr_has "nowhere-staging"

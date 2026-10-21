@@ -825,9 +825,9 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
         if provider is None:
             raise errors.GuardenError(
                 f"{context.service} needs {edge.service!r} as {edge.prefix!r}, and there is "
-                f"no registry entry for it; a service that does not exist yet is created by a "
-                f"later deploy, and one that never is names a service this host has never "
-                f"heard of",
+                f"no registry entry for {concrete}; a service that does not exist yet is "
+                f"created by a later deploy, and one that never is names a service this host "
+                f"has never heard of",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         if edge.prefix not in provider.provides:
