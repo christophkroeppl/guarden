@@ -669,9 +669,17 @@ def _wanted(manifest: manifest_mod.Manifest, source: Source) -> list[str]:
     destination. A module's service adds the entrypoints its own file declares
     and, when it declares an API, the API — which is a control surface on its own
     publication and is never forwarded.
+
+    **A `siblings:` entry's container gets one too** (ADR-0023): a sibling is
+    reached on its publication, because the host binds each container's
+    publication and forwards the container's port to it — so a sibling with no
+    publication has no address to answer on.
     """
     out: list[str] = []
     for entry in [*manifest.routes, *manifest.ports]:
+        if entry.container not in out:
+            out.append(entry.container)
+    for entry in manifest.siblings:
         if entry.container not in out:
             out.append(entry.container)
     if source.kind == "module":

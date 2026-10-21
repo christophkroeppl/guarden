@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# A sibling container named inside one unit source resolves, and a name from
+# OUTSIDE the source still does not (ticket 316, ADR-0023, spec 7.3).
+#
+# Ticket 285 refused this, and the refusal was right about the mechanism and
+# wrong about the conclusion: the alias is the host's loopback, where each
+# container answers on its allocated PUBLICATION and never on the container port
+# the value dials — so `http://api:3000` reaches a port nothing binds. The
+# mechanism that makes it work is the one an edge already uses, with the port
+# added: `AddHost=<sibling>:<alias>` names the sibling, and the sibling's
+# publication — its own allocation, in the same record — is the port it answers
+# on. The renderer writes both, and the repository composes its own URL from
+# them.
+#
+# **The boundary this suite pins.** A name inside ONE unit source resolves. A
+# name from another source resolves to nothing and is still refused, with the
+# diagnostic naming the difference. And the repository's own `AddHost=` and
+# `extra_hosts` are still refused, because the key is the renderer's.
+#
+# machine: shared
+# `guarden_prefix` stages the host, and every staged manifest, registry row and
+# rendered unit is under `$GUARDEN_PREFIX` or `$GUARDEN_FIXTURES`. The unit
+# source is hand-written quadlet, so no converter is driven and nothing is
+# fetched.
+
+. "$(dirname "$0")/lib.sh"
+
+guarden_prefix
+stage_config guarden-measured.toml
+
+registry=$GUARDEN_PREFIX/var/lib/guarden/registry
+seed "$registry/myapp-staging.toml" \
+    'service = "myapp-staging"' 'workload = "myapp"' 'project = "myapp"' \
+    'environment = "staging"' 'uid = 1103' 'created = "2026-10-19T08:00:00Z"' \
+    '[publication]' 'api = 20021' 'nuxt = 20022'
+
+project=$GUARDEN_FIXTURES/project
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
+    "siblings:" "  - container: api" "    port: 3000"
+seed "$project/.guarden/quadlet/api.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20"
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://api:3000"
+
+render=$GUARDEN_FIXTURES/render
+
+# --- the sibling name resolves -------------------------------------------------
+#
+# The refusal is GONE for a name inside the source, and what replaced it is a
+# name the consumer can resolve: the sibling's own name and the alias, which is
+# the address the host is reachable on from inside a container.
+run loom render "$project" --service myapp-staging --out "$render"
+assert_exit 0
+assert_stderr_empty
+assert_file_has "$render/units/nuxt.container" "AddHost=api:10.0.2.2"
+assert_file_has "$render/units/api.container" "AddHost=api:10.0.2.2"
+
+# **The port is the PUBLICATION and not the container's own port.** The value in
+# the repository says 3000, which is the port inside the api container; what the
+# consumer may dial is the loopback publication guarden allocated for it. The
+# environment file is where the two meet, and it is the same file the edges'
+# variables live in.
+assert_file_has "$render/units/guarden.env" "API_HOST=api"
+assert_file_has "$render/units/guarden.env" "API_PORT=20021"
+
+# The publication is allocated per container, and the sibling's is its own —
+# not the consumer's, and not the container port the manifest named.
+assert_file_lacks "$render/units/guarden.env" "API_PORT=3000"
+
+# **The name is scoped to the source.** A sibling name is never a service name
+# and never reaches another service's units, so two sources each naming a
+# container `api` cannot collide.
+assert_file_lacks "$render/units/nuxt.container" "AddHost=myapp-staging:"
+
+# --- the boundary: a name from ANOTHER source still refuses -------------------
+#
+# The refusal survives, and it is the one thing this change must not have
+# softened: a name that is not in this unit source resolves to nothing.
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://elsewhere:3000"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "elsewhere"
+assert_stderr_lacks "AddHost="
+
+# --- the repository's own AddHost= is still refused ---------------------------
+#
+# The key is the renderer's (spec 6.3) and the renderer writes the sibling
+# names itself. A repository writing one would overwrite the renderer's own
+# entry, and the address it names is not one guarden owns.
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20" "AddHost=api:10.0.0.1"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "api"
+
+# And a name that only looks like the sibling's is not a reference: the
+# authority after `//` runs until the next delimiter of a hostname, so
+# `apiary` is a different host and a value mentioning one is text. Refusing it
+# would be a check that fires on its own shadow.
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20" "Environment=API_DOCS=https://apiary.example.com/docs"
+run loom check "$project"
+assert_exit 0
+assert_stderr_empty
+
+# --- the manifest's half ------------------------------------------------------
+#
+# The port is the container's own port, and the manifest says so: `siblings:`
+# names a container of THIS service and the port it serves. The translation to
+# the publication is guarden's, and it is the only thing the renderer does with
+# the entry.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
+    "siblings:" "  - container: api" "    port: 3000"
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://api:3000"
+run loom render "$project" --service myapp-staging --out "$render"
+assert_exit 0
+assert_file_has "$render/units/guarden.env" "API_PORT=20021"
+
+# A sibling that names a container this service does not have is refused: the
+# manifest and the unit source are both input, and the entry names a container
+# that does not exist.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
+    "siblings:" "  - container: nowhere" "    port: 3000"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "nowhere"
+
+# A sibling naming ITSELF is refused: a container dialling itself is a
+# copy-paste, and there is nothing to translate.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
+    "siblings:" "  - container: nuxt" "    port: 3000"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "nuxt"
+
+# --- a service with no siblings renders as it always did ---------------------
+#
+# The absence of the block is the absence of the mechanism, not a refusal, and
+# the rendered unit carries no sibling entry at all.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet"
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://api:3000"
+run loom check "$project"
+assert_exit 0
+assert_stderr_empty
+
+echo "ok   t316-sibling.sh"
