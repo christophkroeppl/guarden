@@ -47,7 +47,7 @@ itself.
 **The run order is 75, 75, 0, and the two 75s are the design.** The btrfs
 root conversion is a staged offline operation that crosses two reboots — the
 first converts the root filesystem, the second boots into the migrated
-`@`/`@var` layout — and the installer stops at each of them with **exit 75**,
+`@`/`@var`/`@tmp` layout — and the installer stops at each of them with **exit 75**,
 which means *a reboot is required, then run me again*. The command to re-run
 is printed in the banner before the script exits, so you never have to
 remember it:
@@ -63,7 +63,7 @@ So the whole thing is three runs:
 | run | what it does | what you do |
 |---|---|---|
 | 1 | converges `install` and `packages`, stages the conversion | reboot |
-| 2 | runs the conversion in the initramfs, stages the `@`/`@var` migration | reboot |
+| 2 | runs the conversion in the initramfs, stages the `@`/`@var`/`@tmp` migration | reboot |
 | 3 | finishes the migration and converges the rest | nothing — it prints `guarden host converged` |
 
 Re-running is safe and is the expected recovery, not a workaround: every phase
@@ -196,13 +196,40 @@ reboot                   # only if --check asked for it
 ```
 
 State lives in `/var/lib/guarden/soil/`. **Two reboots**: the first converts the root offline in
-the initramfs, the second boots into the migrated `@`/`@var` layout; `--check` names the marker
+the initramfs, the second boots into the migrated `@`/`@var`/`@tmp` layout; `--check` names the marker
 while either is outstanding, and a run after the second reports no drift. `/boot` stays on ext4. The same phase installs
 `/etc/apt/apt.conf.d/80guarden-snapper`, whose `DPkg::Pre-Invoke` snapshots `root` before every
-package transaction, creates the `root` and `home` configurations, and installs the replacement
+package transaction, creates the `root` configuration, and installs the replacement
 cleanup timer. It creates **no** service volume, and a snapper configuration belonging to a service is created by
 the mutator and never recreated here. Never hand-edit a snapper configuration — change the
 canonical values in the phase and re-apply.
+
+**`/tmp` gets its own subvolume, and the two facts that follow from it are worth knowing before
+you rely on it.** The layout is three subvolumes, not two: `@` for `/`, `@var` for `/var` and
+`@tmp` for `/tmp`, the third at the btrfs top level. `/tmp` is volatile data and is **not
+snapshotted** — it has no snapper configuration and no ladder, so nothing rolls it back and no
+`TIMELINE_LIMIT_*` value governs it; the phase checks that no configuration for it exists rather
+than assuming it. What that costs:
+
+- **The tmpfs's size cap is gone.** `/tmp` used to be bounded by the tmpfs mount, roughly half
+  of RAM; now it is bounded by the filesystem. A process that fills `/tmp` fills the root
+  filesystem. A bound, if you want one, is a btrfs qgroup limit, which guarden does not manage.
+- **`/tmp` survives a reboot.** A tmpfs is empty at every boot; a subvolume is not. Nothing
+  clears it at boot — the distribution's `q /tmp 1777 root root 10d` still ages its contents out
+  after ten days, and that is the only thing that does. If you need `/tmp` gone at every boot,
+  say so and guarden will give it a clearing entry rather than leaving it to you.
+
+`/tmp` keeps the `nosuid` and `nodev` the tmpfs it replaces carried, and its mode is `1777`, set
+by tmpfiles and not by the conversion.
+
+**A host converted before `@tmp` existed takes one extra stage, and it is not a re-conversion.**
+Its layout is `@` and `@var` with the state file saying `done`, so the ordinary conversion will
+never look at it again. `soil storage --apply` recognises that layout, creates `@tmp` at the
+top level, writes the `/tmp` fstab line and asks for a reboot; the run after the reboot reports
+no drift. Nothing is copied and the `@`/`@var` migration is not re-run — `@` is the running
+system, and rsyncing `/` into it would copy the system onto itself. The one reboot is needed
+because `/tmp` holds live files on a running host, and mounting a new subvolume over them would
+orphan them under processes that are not going away.
 
 ### the values `soil storage` owns
 

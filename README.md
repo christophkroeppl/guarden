@@ -114,7 +114,7 @@ soil firewall --apply
 soil units    --apply
 # ... reboot when `storage` says to — it names the marker it wrote, under
 # /var/lib/guarden/soil/ — then run `soil storage --apply` again: the offline
-# conversion takes one reboot and the @/@var migration takes the second ...
+# conversion takes one reboot and the @/@var/@tmp migration takes the second ...
 
 # 2. Check nothing drifted.
 soil --check
