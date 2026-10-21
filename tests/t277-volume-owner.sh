@@ -33,6 +33,10 @@
 #     `state` volume the chown FAILS on snapper's root-owned `.snapshots` —
 #     and it has already moved the volume's own owner when it does, so a
 #     command that reports failure still breaks the deployment.
+#   * **the spec's `[ownership]` sentence, measured**: §3.3 now records that the
+#     table ADR-0021 decided is refused by the program until it lands. A
+#     sentence about an exit code is a claim about a machine, so the file the
+#     spec names is written here and the verb that reads it is asked.
 #   * **the tree does not prescribe it any more**: a grep over the standing
 #     documents and the programs for the step, the same shape as t350's
 #     refuted-claims block. A runbook that tells an operator to break a
@@ -42,6 +46,14 @@
 # systemd: `GUARDEN_PREFIX=/`, as `t350-keepid.sh` does.
 
 # machine: fresh
+#
+# The documents are in this suite's read set because the first and the last
+# claim are assertions about their text. `docs/` is out of every cache key by
+# design, so a suite that asserts on a document is the one whose result has to
+# move when that document does — without this line the suite that catches a
+# runbook reintroducing the step would inherit its green over the edit
+# (ticket 309).
+# reads: docs/spec.md docs/sysadmin.md CONTEXT.md AGENTS.md
 
 . "$(dirname "$0")/lib.sh"
 
@@ -200,6 +212,29 @@ for volume in "$state_vol" "$bulk_vol"; do
     [ "$owner" = "$svc_uid" ] \
         || _fail "the volume $volume is owned by host uid $owner after the start, not the service uid $svc_uid — the pin makes the write possible without touching the owner"
 done
+
+# --- the spec's §3.3 sentence, measured --------------------------------------
+#
+# ADR-0021 decided `[ownership]` and ticket 308's item 2 implements it. Until
+# then §3.3 says a file carrying the table is REFUSED by name, with exit 1 —
+# and a sentence about an exit code is a claim about a machine. So the file the
+# spec documents is written here, and the verb that reads `overrides.toml` is
+# asked. `weedr expose set` is the cheapest caller: it loads the grants before
+# it writes anything, so a refused file leaves the record untouched.
+#
+# The day the table lands this section fails with "expected exit 1, got 0", and
+# that failure is the reminder that §3.3 and the ADR both have to stop calling
+# it unimplemented in the same change.
+
+mkdir -p /etc/guarden/services/kidv-staging
+seed /etc/guarden/services/kidv-staging/overrides.toml \
+    "[ownership]" \
+    'volumes = { "data" = 999 }'
+run weedr expose set kidv-staging loopback
+echo "MEASURE: a file carrying the table §3.3 records: exit=$GUARDEN_EXIT $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_stderr_has "unknown key 'ownership'"
+rm -f /etc/guarden/services/kidv-staging/overrides.toml
 
 # --- claim 2: what the runbook's step costs ---------------------------------
 #

@@ -88,14 +88,18 @@ in its own right:
    a file carrying the table the spec documents was **refused with exit 1**. The
    spec now says the table is decided-and-unimplemented and that the answer to
    "a volume is owned by the service uid and the container runs as another" is
-   the pin.
+   the pin — and the table is **out of the copy-paste sample**, because a sample
+   an operator copies is not the place for a table the program refuses. The
+   refusal itself is measured by the suite rather than asserted.
 3. **`src/guarden/overrides.py` said "Five tables and nothing else" and "not
-   one of the eight"** — there are six (`[expose]` is the sixth).
+   one of the eight"** — there are six (`[expose]` is the sixth). The same count
+   was off by one in ADR-0021, which called `[ownership]` "a sixth table" two
+   paragraphs after stating that six already exist; it is the seventh.
 
 ## The measurement
 
 `tests/t277-volume-owner.sh`, on a real cut with a real `useradd`, a real
-subuid range, real rootless podman and real systemd. Three claims:
+subuid range, real rootless podman and real systemd. Four claims:
 
 - **the create path's owner** (the decision lock): both volumes are owned by the
   **service uid** before the start and after it, the container writes into the
@@ -110,6 +114,11 @@ subuid range, real rootless podman and real systemd. Three claims:
 - **the tree does not prescribe it any more**: a grep over the standing
   documents and the programs for the step, the same shape as t350's
   refuted-claims block.
+- **the spec's `[ownership]` sentence is true of the program**: a file carrying
+  the table §3.3 records is written, and `weedr expose set` — the cheapest
+  reader of `overrides.toml` — refuses it by name with exit `1`. The day ticket
+  308's item 2 lands, that section fails "expected exit 1, got 0" and says both
+  documents have to stop calling the table unimplemented in the same change.
 
 ## The same class, third instance
 
