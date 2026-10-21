@@ -58,9 +58,10 @@ Verified in the VM on a clean cut — `weedr service ingest` now leaves:
 
 ```
 /var/lib/guarden/services/qx-production/home/.config/containers/systemd/
-    web.container  worker.container  data.volume  chainstate.volume
+    web.container  worker.container
     web.container.d/10-guarden-order.conf
 ```
 
 and `service.units_of("qx-production")` answers `['web', 'worker']`, so the deploy path
-has something to start for the first time.
+has something to start for the first time. There is no separate volume unit: a declared
+volume is a `Volume=` line naming the path the mutator made (spec §6.3).

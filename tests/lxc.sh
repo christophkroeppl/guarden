@@ -202,10 +202,17 @@ _has_snapshot() {
     # `grep -q` exits at the first match and leaves `sed` with SIGPIPE, which
     # `set -o pipefail` then reports as the pipeline failing — so a snapshot that
     # demonstrably exists reads as absent, and every run rebuilt the golden for
-    # ten minutes. Capture first, then match.
+    # ten minutes. Capture first, then match with a here-string: there is no
+    # producer left to signal.
+    #
+    # **An unreadable listing answers "no snapshot".** That direction is
+    # deliberate: the caller rebuilds the golden, which costs ten minutes and is
+    # correct, where claiming a snapshot that could not be read would hand a
+    # suite a machine cut from a state nobody verified. A death by signal in the
+    # capture is the same case — it returns 1 below.
     local listing
     listing=$($LXC info "$1" 2>/dev/null | sed -n '/^Snapshots:/,$p') || return 1
-    printf '%s\n' "$listing" | grep -qE "^\| +$SNAPSHOT +"
+    grep -qE "^\| +$SNAPSHOT +" <<<"$listing"
 }
 
 # The golden's identity, and the only half of the cache key the harness does not
