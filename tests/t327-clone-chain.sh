@@ -37,6 +37,7 @@ export GUARDEN_PREFIX=/
 
 ensure_accounts
 stage_config guarden-measured.toml
+stage_podlet_release
 run soil packages --apply
 assert_exit 0
 run soil install --apply
