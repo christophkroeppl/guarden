@@ -714,38 +714,46 @@ assert_no_snapper_config() {
     fi
 }
 
-# snapper_configs_of <service>: the configurations whose subvolume lives in that tree.
+# snapper_configs_of <service>...: the configuration files whose SUBVOLUME lives in
+# one of those trees, read without the daemon — measured: `snapper list-configs`
+# can name none of the configurations that exist as files.
 snapper_configs_of() {
-    local listing
-    listing=$(snapper list-configs 2>/dev/null) || return 1
-    printf '%s\n' "$listing" | awk -F'|' -v root="/var/lib/guarden/services/$1/" '
-        { name = $1; subvolume = $2
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", subvolume)
-          if (index(subvolume, root) == 1) print name }'
-}
-
-# remove_snapper_configs <service>...: call it before the trees go, because
-# `delete-config` takes the read-only `.snapshots` subtree with it, and because it
-# refuses outright once the subvolume is gone (measured: rc=1, errno:2).
-remove_snapper_configs() {
-    local service names config
-    for service in "$@"; do
-        names=$(snapper_configs_of "$service") || return 1
-        for config in $names; do
-            snapper --config "$config" delete-config >/dev/null 2>&1 || :
+    local path name subvolume service
+    for path in /etc/snapper/configs/*; do
+        [ -f "$path" ] || continue
+        name=${path##*/}
+        subvolume=$(snapper --no-dbus -c "$name" get-config 2>/dev/null \
+            | awk -F'|' 'tolower($1) ~ /subvolume/ {gsub(/[[:space:]]/, "", $2); print $2}' || true)
+        [ -n "$subvolume" ] || continue
+        for service in "$@"; do
+            case "$subvolume" in
+                "/var/lib/guarden/services/$service/"*)
+                    printf '%s\n' "$name"
+                    break
+                    ;;
+            esac
         done
     done
 }
 
-# assert_no_snapper_configs <service>...: the teardown's promise, per tree.
-assert_no_snapper_configs() {
-    local service names
-    for service in "$@"; do
-        names=$(snapper_configs_of "$service") \
-            || _fail "snapper list-configs failed, so no configuration can be ruled out for $service"
-        [ -z "$names" ] || _fail "snapper configuration(s) left in $service's tree: $(printf '%s ' $names)"
+# remove_snapper_configs <service>...: call it before the trees go, because
+# `delete-config` refuses once the subvolume is gone (measured: errno:2, and the
+# configuration stays).
+remove_snapper_configs() {
+    local names config
+    names=$(snapper_configs_of "$@") || return 1
+    for config in $names; do
+        snapper --config "$config" delete-config >/dev/null 2>&1 \
+            || snapper --no-dbus --config "$config" delete-config >/dev/null 2>&1 || :
     done
+}
+
+# assert_no_snapper_configs <service>...: the teardown's promise. `configuration_exists`
+# in the product is a stat of snapper's directory, so this is the same question.
+assert_no_snapper_configs() {
+    local names
+    names=$(snapper_configs_of "$@") || _fail "snapper could not be asked, so no configuration can be ruled out for: $*"
+    [ -z "$names" ] || _fail "snapper configuration(s) left after the purge: $(printf '%s ' $names)"
 }
 
 # assert_dpkg <pkg> / assert_no_dpkg <pkg>: what a converge actually installed.
