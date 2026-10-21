@@ -158,7 +158,10 @@ assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging
 # which is not a file cloudflared would accept.
 assert_file_has "$tunnel_config" "credentials-file: /run/secrets/TUNNEL_CREDENTIAL"
 assert_file_has "$tunnel_config" "ingress:"
-assert_file_has "$tunnel_config" 'hostname: "staging.web"'
+# **A tunnel route's name is in the TUNNEL's zone** (ticket 324), so the
+# track's prefix and the tunnel's zone are both on it: `staging.web` would be a
+# name in no zone at all.
+assert_file_has "$tunnel_config" 'hostname: "staging.web.tunnel.example.net"'
 
 # The catch-all is `http_status:404` and it is **last**: a hostname in the
 # tunnel's zone that no service claims is a 404 from the tunnel, not a default
