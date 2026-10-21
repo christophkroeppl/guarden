@@ -105,18 +105,11 @@ def provider_of(key: str) -> str:
 
 
 def _offered(consumer: str, edge, provider) -> None:
-    """Raise unless the provider's `provides:` lists the kind the consumer wants.
-
-    **The diagnostic names the CONCRETE provider, because that is the service
-    the operator has to fix.** The manifest's `needs:` entry may carry a
-    logical name, and the host resolves it per track; a refusal that named the
-    logical name would send the operator looking for a service that does not
-    exist on this host.
-    """
+    """Raise unless the provider's `provides:` lists the kind the consumer wants."""
     if edge.prefix in provider.provides:
         return
     raise errors.GuardenError(
-        f"{consumer} needs {edge.service!r} as {edge.prefix!r}, and {provider.service} offers "
+        f"{consumer} needs {edge.service!r} as {edge.prefix!r}, and {edge.service} offers "
         f"{', '.join(provider.provides) or 'nothing'}: the consumer wants the kind "
         f"{edge.prefix!r} and the provider does not list it",
         errors.HOST_NOT_AS_ASSUMED,
@@ -143,9 +136,8 @@ def install(entry: registry.Registry, document: manifest_mod.Manifest,
             warnings.append(
                 errors.warn(
                     f"{entry.service} needs {edge.service!r} as {edge.prefix!r}, and there is "
-                    f"no registry entry for {provider_name}; the edge is recorded with no "
-                    f"publication and no credential, and a deploy that creates the provider "
-                    f"completes it"
+                    f"no registry entry for it; the edge is recorded with no publication and "
+                    f"no credential, and a deploy that creates the provider completes it"
                 )
             )
         else:
