@@ -149,18 +149,11 @@ calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '"$PROBE_CUT" cut "$LX
 gate=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'exec -T "$probe" -- true' || true)
 [ "$gate" = 0 ] || _fail "the runner gates the probe on 'exec … true' again, and that gate means the agent is up, not that the machine has finished"
 
-# **One copy of the conditions, in every file under tests/.** The runner is in
-# this loop as well: a copy put back beside the shipped one would make the host's
-# question and the machine's answer drift apart with nothing failing.
-seen=0
-for candidate in "$GUARDEN_ROOT"/tests/*.sh; do
-    n=$(grep -vE '^[[:space:]]*#' "$candidate" | grep -cF -- 'snapper -c root get-config' || true)
-    if [ "$n" = 0 ]; then
-        continue
-    fi
-    [ "$candidate" = "$guest" ] \
-        || _fail "${candidate##*/} carries its own copy of the probe's snapper condition"
-    [ "$n" = 1 ] || _fail "${candidate##*/} asks for the root snapper configuration $n times"
-    seen=$((seen + 1))
-done
-[ "$seen" = 1 ] || _fail "the probe's snapper condition is in $seen of tests/*.sh; probestate.sh is the one place it lives"
+# **One copy of the conditions, and it is the shipped one.** The runner is asked
+# about too: the inline three-condition test this ticket replaced lived in it, and
+# a copy put back beside the shipped one would let the host's question and the
+# machine's answer drift apart with nothing failing.
+guest_copies=$(grep -vE '^[[:space:]]*#' "$guest" | grep -cF -- 'snapper -c root get-config' || true)
+[ "$guest_copies" = 1 ] || _fail "probestate.sh asks for the root snapper configuration $guest_copies time(s); one condition is the set"
+runner_copies=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'snapper -c root get-config' || true)
+[ "$runner_copies" = 0 ] || _fail "the runner carries its own copy of the probe's snapper condition ($runner_copies site(s)); the three conditions live in tests/probestate.sh"
