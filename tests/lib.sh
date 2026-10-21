@@ -714,6 +714,39 @@ assert_no_snapper_config() {
     fi
 }
 
+# snapper_configs_of <service>: the configurations whose subvolume lives in that tree.
+snapper_configs_of() {
+    local listing
+    listing=$(snapper list-configs 2>/dev/null) || return 1
+    printf '%s\n' "$listing" | awk -F'|' -v root="/var/lib/guarden/services/$1/" '
+        { name = $1; subvolume = $2
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", subvolume)
+          if (index(subvolume, root) == 1) print name }'
+}
+
+# remove_snapper_configs <service>...: call it before the trees go, because
+# `delete-config` takes the read-only `.snapshots` subtree with it.
+remove_snapper_configs() {
+    local service names config
+    for service in "$@"; do
+        names=$(snapper_configs_of "$service") || return 1
+        for config in $names; do
+            snapper --config "$config" delete-config >/dev/null 2>&1 || :
+        done
+    done
+}
+
+# assert_no_snapper_configs <service>...: the teardown's promise, per tree.
+assert_no_snapper_configs() {
+    local service names
+    for service in "$@"; do
+        names=$(snapper_configs_of "$service") \
+            || _fail "snapper list-configs failed, so no configuration can be ruled out for $service"
+        [ -z "$names" ] || _fail "snapper configuration(s) left in $service's tree: $(printf '%s ' $names)"
+    done
+}
+
 # assert_dpkg <pkg> / assert_no_dpkg <pkg>: what a converge actually installed.
 assert_dpkg() {
     local state

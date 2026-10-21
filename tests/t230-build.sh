@@ -54,18 +54,22 @@ assert_exit 0
 assert_stdout_has "podman version"
 
 purge() {
+    local failed=0 service
+    remove_snapper_configs "$@" || failed=1
     for service in "$@"; do
         rm -rf "/var/lib/guarden/services/$service" "/etc/guarden/services/$service" \
-            "$creds/$service" "$registry/$service.toml"
+            "$creds/$service" "$registry/$service.toml" || failed=1
         userdel "$service" >/dev/null 2>&1 || :
     done
+    assert_no_snapper_configs "$@" || failed=1
+    [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
 }
 
 cleanup() {
     # the images this build tagged, out of the service user's own store
     runuser -u built-app-production -- env -C /tmp podman rmi \
         docker.io/library/nginx:1.27 docker.io/library/alpine:3.20 >/dev/null 2>&1 || :
-    purge built-app-production plain-app-staging
+    purge built-app-production plain-app-staging postgres-staging
 }
 trap cleanup EXIT
 
