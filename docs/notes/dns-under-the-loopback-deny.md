@@ -6,6 +6,15 @@ deny for `udp` and `tcp`. **The canonical statements are ADR-0015 and spec §7.6
 and this note is not one of them; it records how the answer was found. The
 measurements below are unchanged and are what the decision rests on.
 
+**Update 2026-10-21 (ticket 303, ADR-0023).** The uid set of that accept grew: it is
+now the service uids **and root**, because every name lookup on the host goes to the stub
+and the deny was breaking root's own tooling — root's `getent hosts <name>` exited 2 and
+`apt-get update` silently stopped refreshing the index on a converged host. **The sentence
+below that says "owner-matched to service uids" describes the answer as it stood on
+2026-10-05**; it is history, and the current statement is spec §7.6. The measurements in
+this note are unchanged and still hold — they are about a service uid, which is still
+what the accept was for.
+
 **Update 2026-10-05 (ticket 240 landed, `caa414d`→`13a76a9`).** The probe below that
 "created no service, so `50-services.conf` did not exist" is no longer needed to see
 this: `t50-slice.sh` creates `routed-staging`, `weedr service ingest` writes the

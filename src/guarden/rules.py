@@ -192,8 +192,8 @@ def resolver_lines(uids: Iterable[int]) -> list[str]:
     through `OUTPUT` and meets the default deny — pasta's exclusion from the
     loopback mapping is about traffic from *inside* a container and says nothing
     about this path (spec §7.6, ADR-0016). One address, one port, both
-    protocols, owner-matched to service uids like every other accept, and no key
-    anywhere that adds another.
+    protocols, owner-matched to service uids like every other accept and to root
+    beside them (ADR-0023), and no key anywhere that adds another.
 
     **The reply accept belongs here, in `OUTPUT`, and not in `INPUT`.** The
     query is sent by the service uid, so it carries the owner match. The reply
