@@ -1414,8 +1414,8 @@ def _render_source(directory: Path) -> Iterator[Path]:
 
 
 def _ensure_admin_units(uid: int) -> None:
-    """Reconcile the existence of podman's uid-scoped search path and nothing
-    inside it: a regenerated unit must not clobber a root-owned drop-in, which is
+    """Reconcile the existence of podman's uid-scoped search path and create
+    nothing in it: a regenerated unit must not clobber a root-owned drop-in, which is
     what that path being searched after the home's own directory buys (ADR-0003).
 
     **The path's own directories are created with a stated mode**, because the
