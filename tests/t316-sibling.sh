@@ -144,9 +144,13 @@ assert_file_has "$render/units/guarden.env" "API_PORT=20021"
 
 # A sibling that names a container this service does not have is refused: the
 # manifest and the unit source are both input, and the entry names a container
-# that does not exist.
+# that does not exist. The unit source is re-seeded too, because the manifest
+# is not the only half of this case — the value still dials `api`, and the
+# undeclared-sibling refusal would fire on it first.
 seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
     "siblings:" "  - container: nowhere" "    port: 3000"
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20"
 run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
