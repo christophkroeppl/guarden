@@ -388,6 +388,12 @@ last_accept=$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -n 'jump ACCEPT;' | t
 # `operator` are the two uids on a converged guarden host that are not service
 # uids and are not meant to reach the stub this way: images are pulled as the
 # service user, which is the path this accept exists for.
+#
+# **Root is not in this list, and that is deliberate** (ADR-0023): root holds the
+# resolver's accepts too, because every name lookup on the host goes through the
+# stub and the deny was breaking root's own tooling. So the two uids checked
+# here are the ones that are neither service uids nor root — the set of uids the
+# resolver's accepts are for, less root.
 for uid in $(getent passwd guarden operator | cut -d: -f3); do
     [ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
         | grep -cE "^[[:space:]]+mod owner uid-owner $uid daddr 127\.0\.0\.53 " || true)" = 0 ] \
