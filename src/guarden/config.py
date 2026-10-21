@@ -469,6 +469,14 @@ def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, di
     manifest's own `needs:` entry is held to (`manifest._needs`). A logical name
     of forty characters is legal in a manifest, and a table that refused to map
     it would refuse a mapping the manifest is asking for.
+
+    **The exit codes follow this module's own split.** A name that breaks a
+    rule is a rule violation in a well-formed file, so it is exit `2` — the
+    default `GuardenError` carries, and the same code the track table's own
+    `kind`/`cap`/`fork_from` rules use. A type that is wrong is exit `1`
+    (`_type_error`). A table naming a track the host does not have is a
+    host-state fact rather than a rule the file states, so it is exit `1` and
+    names the tracks the host does have.
     """
     if not isinstance(table, dict):
         raise _type_error(str(where_file), "providers", "a table")
@@ -478,14 +486,14 @@ def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, di
         if not isinstance(track, str) or track not in known:
             raise errors.GuardenError(
                 f"{where_file}: [providers] names a track {track!r}, and the tracks are: "
-                f"{', '.join(sorted(known))}",
+                f"{', '.join(sorted(known)) or 'none'}",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         if not isinstance(mapping, dict):
             raise _type_error(str(where_file), f"providers.{track}", "a table")
         resolved: dict[str, str] = {}
         for logical, concrete in mapping.items():
-            if not isinstance(concrete, str) or not concrete:
+            if not isinstance(concrete, str):
                 raise _type_error(
                     str(where_file), f"providers.{track}.{logical}", "a service name"
                 )
@@ -493,16 +501,14 @@ def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, di
                 raise errors.GuardenError(
                     f"{where_file}: [providers.{track}] maps a logical provider name to a "
                     f"service name: the logical name {logical!r} must match "
-                    f"{names.NAME_RE.pattern}",
-                    errors.HOST_NOT_AS_ASSUMED,
+                    f"{names.NAME_RE.pattern}"
                 )
             try:
                 names.validate(concrete, f"the service name {logical!r} resolves to")
             except errors.GuardenError as exc:
                 raise errors.GuardenError(
                     f"{where_file}: [providers.{track}] maps a logical provider name to "
-                    f"a service name: {exc.message}",
-                    errors.HOST_NOT_AS_ASSUMED,
+                    f"a service name: {exc.message}"
                 ) from None
             resolved[logical] = concrete
         out[track] = resolved

@@ -481,7 +481,7 @@ def providers_table() -> None:
     try:
         load(f'[providers.staging]\n{long_logical} = "{long_logical}"\n')
     except errors.GuardenError as exc:
-        check(exc.code == 1, "an over-long concrete name is the host, so exit 1")
+        check(exc.code == 2, "an over-long concrete name is a rule, so exit 2")
         check("providers" in exc.message, "the over-long concrete name is named")
     else:
         FAILURES.append("an over-long concrete name was accepted")
@@ -496,7 +496,12 @@ def providers_table() -> None:
         try:
             load(body)
         except errors.GuardenError as exc:
-            check(exc.code == 1, f"{what} is the host, so exit 1")
+            # A name that breaks a rule is a rule violation in a well-formed
+            # file, so it is exit 2 — the code the track table's own
+            # `kind`/`cap`/`fork_from` rules carry. A value of the wrong TYPE
+            # is the host, so it is exit 1.
+            wanted = 1 if what.startswith("a non-string") or what.startswith("a list") else 2
+            check(exc.code == wanted, f"{what} is exit {exc.code}, expected {wanted}")
             check("providers" in exc.message, f"{what} is named")
         else:
             FAILURES.append(f"{what} was accepted")
