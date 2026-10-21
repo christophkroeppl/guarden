@@ -8,34 +8,44 @@
 # those is a file on the host. None of them is the credential in the store the
 # container reads.
 #
-# **How the value gets there is the thing worth stating, and it was measured
-# rather than assumed.** `basicauth.mint` calls `credentials.plant`, which
-# writes the encrypted blob; it does NOT call `credentials.ask_materialiser`.
-# The value reaches the store because `guarden-creds.path` watches
-# `/etc/guarden/creds/` for a change and starts `guarden-creds-boot.service`,
-# which materialises every blob into its own service's podman store.
+# **What is asserted here is STATE, and it is asserted twice, because the two
+# questions are different.** "Is the credential in the store NOW" and "is it in
+# the store EVENTUALLY" are two claims about two mechanisms, and a suite that
+# asked only one of them would pass for the wrong reason.
 #
-# **It arrives BEFORE the ingest returns — measured at 0s.** A probe timed the
-# ingest and then polled the store: the secret was already there the instant
-# the ingest came back, because the watcher fires on the blob's own write
-# while the mutator is still working. So the credential IS in the service's
-# store when the creation returns, and this suite waits for it only because a
-# wait is what a reader of a watcher-driven mechanism expects — not because
-# the value is late. The wait's bound is generous because the trigger is a
-# systemd unit on a busy machine, and its failure names what was missing.
+# **NOW — the mint asked the materialiser to run.** `basicauth.mint` plants the
+# encrypted blob and then asks the credential materialiser to carry it into
+# the service's own podman store, the way every other plant does: `weedr
+# secret set` (spec 6.2: "encrypts into
+# `/etc/guarden/creds/<name>/<KEY>.cred` mode `0600`, then asks the
+# credential materialiser to run") and the interactive creator. The store is
+# what the container's `Secret=` line resolves against, so a credential that
+# is in the blob and not in the store is a credential nothing can use.
 #
-# That wait is not politeness: an assertion that reads the store the moment
-# the ingest returns is racing a unit that has not run yet, and it is green or
-# red depending on how fast the machine was. The first version of this file
-# asserted instantly and went red with "GUARDEN_BASICAUTH is not named in the
-# store" — and the probe that followed found the secret PRESENT, which is how
-# the race was told apart from a missing credential.
+# **To tell "the mint asked" apart from "a watcher noticed", the watcher is
+# masked for this half.** `guarden-creds.path` watches `/etc/guarden/creds/`
+# and starts `guarden-creds-boot.service` when the tree changes, and it fires
+# on the blob's own write while the mutator is still working — measured, the
+# credential was in the store BEFORE the ingest returned, so an unmasked
+# assertion cannot tell the mint's ask from the watcher's timing. **With the
+# watcher masked, the mint's own ask is the ONLY thing that can deliver the
+# value**, so an assertion with no wait at all is a claim about the mint and
+# not about a race. Measured on the other side: with the watcher stopped, the
+# value never arrived — not immediately, not after fifteen seconds, and only
+# when `guarden-creds-boot.service` was started by hand.
 #
-# **What is asserted here is STATE**: the podman store under the service's own
-# home carries the key, and the value in it is the SAME value the encrypted
-# blob decrypts to AND the same value the htpasswd entry the edge reads
-# verifies against. All three halves are one credential, measured rather than
-# assumed.
+# **EVENTUALLY — the watcher still delivers.** The second half unmasks the
+# watcher and asks a question the mint cannot answer: a credential planted by
+# the gate's own generated-value path (`gate.mint_generated`, which plants and
+# does NOT ask) reaches the same store, through the watcher, within a bounded
+# wait. That is the path the `.path` unit exists for, and a regression in it
+# is a regression nobody else would see.
+#
+# **What is asserted is STATE, not intent**: the podman store under the
+# service's own home carries the key, and the value in it is the SAME value
+# the encrypted blob decrypts to AND the same value the htpasswd entry the
+# edge reads verifies against. All three halves are one credential, measured
+# rather than assumed.
 #
 # The value is never written into this file: it is minted at runtime and read
 # back out of the blob.
@@ -58,11 +68,29 @@ assert_not_rejected
 run soil install --apply
 assert_not_rejected
 
+# **The precondition of the first half, stated rather than assumed.** The
+# materialiser is what carries a blob into a store, and the half below says
+# the mint asks it to run. A box whose `soil install` has not converged has no
+# materialiser at all, and `ask_materialiser` warns and returns for that case
+# rather than raising — so the suite says out loud that it is on a host where
+# the unit exists, and the claim it makes is the one that holds there.
+assert_file_exists /etc/systemd/system/guarden-creds-boot.service
+
 # The gate module generates the policy; without it a service created now is
 # grandfathered and holds no login at all.
 run weedr module add gate-traefik
 assert_exit 0
 assert_file_exists /etc/guarden/edge/basicauth-policy
+
+# --- the watcher is masked, so the mint's own ask is the only delivery -------
+#
+# Stopped first, then masked: a masked unit cannot be started, and a stopped
+# one that something starts again is not the absence the first half needs.
+run systemctl stop guarden-creds.path
+assert_exit 0
+run systemctl mask guarden-creds.path
+assert_exit 0
+assert_inactive guarden-creds.path
 
 app=$GUARDEN_PREFIX/var/lib/guarden/staging/basapp/9f2c1ab
 mkdir -p "$app/.guarden/quadlet"
@@ -88,25 +116,10 @@ containers=$home/.local/share/containers
 driver=$containers/storage/secrets/filedriver
 secrets_json=$containers/storage/secrets/secrets.json
 
-# **THE WAIT.** The credential arrives when the path watcher fires — measured
-# at 0s, so it is normally already there — and the store is read in a loop
-# until it carries the key so the suite does not depend on that measurement
-# holding on a slower machine. The bound is generous because the trigger is a
-# systemd unit on a busy machine; the failure says what was missing rather
-# than only that it was missing.
-waited=0
-while [ "$waited" -lt 60 ]; do
-    if grep -q GUARDEN_BASICAUTH "$secrets_json" 2>/dev/null; then
-        break
-    fi
-    sleep 1
-    waited=$((waited + 1))
-done
-grep -q GUARDEN_BASICAUTH "$secrets_json" 2>/dev/null \
-    || _fail "the credential never reached $secrets_json after ${waited}s"
-
-# **THE CLAIM.** The credential is in the SERVICE'S OWN podman store, under that
-# service's home — the `0700` tree that is the documented limit (spec 6.2).
+# **THE CLAIM, ASSERTED NOW.** No wait, no loop, no tolerance: the value is in
+# the store at the moment the creation returned, because the mint asked the
+# materialiser to run before it returned. The watcher is masked, so nothing
+# else could have put it there.
 #
 # podman's `file` secret driver keeps each value base64-encoded in
 # `.../storage/secrets/filedriver/secretsdata.json` and the names in
@@ -128,15 +141,10 @@ assert_file_has "$secrets_json" "GUARDEN_BASICAUTH"
 # `secrets.json` is a NESTED document — `secrets: {<id>: {name: …}}` plus
 # `nameToID` and `idToName` — and `secretsdata.json` is keyed by that same
 # `<id>`. Looking the value up by the NAME therefore finds nothing for a
-# secret that is present, which is what the first two versions of this
-# assertion did: the first reported a missing KEY, the second a missing
-# VALUE. Both were the assertion's mistake, and both read as a product
-# defect. The ID is taken from `nameToID` and the value is read under it.
-#
-# The value in the file is base64 (podman's file driver encodes it, and
-# `t60-secrets.sh` measures the same for a DB_PASSWORD), so it is decoded
-# before the comparison; whether it is encoded is podman's business, and the
-# property under test is that the store holds THIS credential.
+# secret that is present. The ID is taken from `nameToID` and the value is
+# read under it, and it is compared both raw and base64-decoded, because
+# whether the file driver encodes is podman's business and the property under
+# test is that the store holds THIS credential.
 run python3 -c "
 import base64, hashlib, json, subprocess, sys
 
@@ -179,10 +187,70 @@ if name != user or found != expect:
   /var/lib/guarden/edge/basicauth/basapp-staging.htpasswd basapp-staging
 assert_exit 0
 
-# **And no verb prints the value.** `weedr secret list` is names and booleans
-# (spec 6.2), and the credential path's whole boundary is that a value is
-# never printed by anything. The value itself is read here from the blob, so
-# the comparison is against the real one rather than a captured copy of it.
+# **A re-ingest never re-mints.** The first mint is the login, and a login
+# that changed underneath an operator's stored credential is worse than no
+# credential at all. The htpasswd entry is the visible half of that, and it is
+# compared before and after.
+htpasswd=/var/lib/guarden/edge/basicauth/basapp-staging.htpasswd
+before=$(cat "$htpasswd")
+run weedr service ingest basapp-staging --from poke basapp@9f2c1ab
+assert_exit 0
+after=$(cat "$htpasswd")
+[ "$before" = "$after" ] \
+    || _fail "a re-ingest re-minted the basic-auth login"
+
+# --- and the watcher still delivers ------------------------------------------
+#
+# The second question: the credential in the store EVENTUALLY, by the path the
+# `.path` unit exists for. The service here declares a schema, so the gate
+# mints a generated value for its `@sensitive` key — and the gate's mint does
+# NOT ask the materialiser, so that value can only arrive by the watcher.
+run systemctl unmask guarden-creds.path
+assert_exit 0
+run systemctl start guarden-creds.path
+assert_exit 0
+
+wapp=$GUARDEN_PREFIX/var/lib/guarden/staging/watchapp/9f2c1ab
+mkdir -p "$wapp/.guarden/quadlet"
+cp "$GUARDEN_ROOT/fixtures/projects/quadlet-app/.guarden/.env.schema" \
+   "$wapp/.guarden/.env.schema"
+cp "$GUARDEN_ROOT/fixtures/projects/quadlet-app/.guarden/quadlet/web.container" \
+   "$wapp/.guarden/quadlet/web.container"
+seed "$wapp/.guarden/service.yml" "project: watchapp" "units: .guarden/quadlet/" \
+    "schema: .guarden/.env.schema" \
+    "routes:" "  - container: web" "    port: 8080" "    host: watch"
+run weedr service ingest watchapp-staging --from poke watchapp@9f2c1ab
+assert_exit 0
+
+wcontainers=$GUARDEN_PREFIX/var/lib/guarden/services/watchapp-staging/home/.local/share/containers
+wsecrets=$wcontainers/storage/secrets/secrets.json
+wdriver=$wcontainers/storage/secrets/filedriver
+
+# The bounded wait. DB_PASSWORD is `@sensitive` in the fixture's schema, so
+# the gate minted a value for it, and the gate's mint does not ask — so the
+# watcher is the only thing that can carry it into the store.
+waited=0
+while [ "$waited" -lt 60 ]; do
+    if grep -q DB_PASSWORD "$wsecrets" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+done
+grep -q DB_PASSWORD "$wsecrets" 2>/dev/null \
+    || _fail "the watcher never carried DB_PASSWORD into $wsecrets after ${waited}s"
+assert_file_exists "$wdriver/secretsdata.json"
+# The NAME is in `secrets.json`; the DATA file is keyed by the secret's id, so
+# the name is not in it and asserting it there would be the same wrong
+# assertion twice.
+assert_file_has "$wsecrets" "DB_PASSWORD"
+
+# --- and no verb prints the value -------------------------------------------
+#
+# `weedr secret list` is names and booleans (spec 6.2), and the credential
+# path's whole boundary is that a value is never printed by anything. The
+# value itself is read here from the blob, so the comparison is against the
+# real one rather than a captured copy of it.
 run weedr secret list basapp-staging
 assert_exit 0
 assert_stdout_has "GUARDEN_BASICAUTH"
