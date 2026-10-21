@@ -1415,8 +1415,8 @@ def _render_source(directory: Path) -> Iterator[Path]:
 
 
 def _ensure_admin_units(uid: int) -> None:
-    """Reconcile the existence of podman's uid-scoped search path and nothing
-    inside it: a regenerated unit must not clobber a root-owned drop-in, which is
+    """Reconcile the existence of podman's uid-scoped search path and create
+    nothing in it: a regenerated unit must not clobber a root-owned drop-in, which is
     what that path being searched after the home's own directory buys (ADR-0003).
 
     **The path's own directories are created with a stated mode**, because the
@@ -1430,6 +1430,16 @@ def _ensure_admin_units(uid: int) -> None:
     the admin's own `90-admin.conf` is the human's file, and the one file
     guarden writes in there is written where it is written — by the install,
     with the name it has.
+
+    **This is the mutator's half of the admin path, and the renderer reads
+    the directory too** (ADR-0024). `render._dropins` merges every `*.conf`
+    in a unit's drop-in directory into the unit before generation, so an
+    operator's `MemoryMax=` reaches the rendered unit. That read is the
+    renderer's and not this function's: the mutator reconciles the EXISTENCE
+    of the path and writes the one file it owns, and it neither copies the
+    admin's file in from somewhere else nor stages a copy of it anywhere.
+    The admin path is the only path to an admin's unit, and there is no
+    staging copy of it.
     """
     for parent in paths.admin_parents():
         parent.mkdir(parents=True, exist_ok=True)
