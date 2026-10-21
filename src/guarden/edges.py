@@ -27,6 +27,13 @@ PSQL_USER = "postgres"
 MIN_VERSION = 100000
 SQL_ON_STDIN: tuple[str, ...] = ("-f", "-")
 VALUE_ALPHABET = "-_"
+# Every command below runs as the PROVIDER's own user, and a rootless podman
+# enters the working directory as that uid before it reads anything — so the cwd
+# has to be one every account can enter. The caller's is not: the first real
+# execution of the psql half answered `cannot chdir to /home/ubuntu/guarden:
+# Permission denied` with a correct DDL it never got to send, because the
+# mutator had been started from a tree that is 0700 to somebody else.
+SERVICE_CWD = "/tmp"
 # A postgres identifier is truncated at 63 BYTES, silently. A derived name over
 # that would be shortened into a name nobody chose — and two of them could be
 # shortened into one — so it is refused where it is derived (spec 4).
@@ -334,7 +341,7 @@ def provision(consumer: str, provider: registry.Registry, container: str,
     container_name = f"{provider.service}-{container}"
     podman = tool.runuser_as(provider.service, "podman")
     listing = [*podman, "ps", "--filter", f"name=^{container_name}$", "--format", "{{.Names}}"]
-    running = tool.call(listing, cwd="/tmp")
+    running = tool.call(listing, cwd=SERVICE_CWD)
     if container_name not in running.stdout.split():
         return [
             errors.warn(
@@ -346,7 +353,10 @@ def provision(consumer: str, provider: registry.Registry, container: str,
         ]
     psql = [*podman, "exec", "-i", container_name, "psql", "-U", PSQL_USER, "-d", PSQL_USER]
     _check_version(container_name, [*psql, "-Atc", "SHOW server_version_num"])
-    done = tool.call([*psql, "-v", "ON_ERROR_STOP=1", "-f", "-"], stdin=_ddl(role, password, names))
+    done = tool.call(
+        [*psql, "-v", "ON_ERROR_STOP=1", "-f", "-"], stdin=_ddl(role, password, names),
+        cwd=SERVICE_CWD,
+    )
     if not done.ok:
         raise errors.GuardenError(
             f"{container_name}: {ENGINE} refused the role and the databases for {consumer}: "
@@ -435,7 +445,7 @@ def _refuse_foreign(name: str, psql: list[str], role: str, databases: tuple[str,
         "SELECT datname || ' (owner ' || pg_get_userbyid(datdba) || ')' FROM pg_database "
         f"WHERE datname IN ({listed}) AND pg_get_userbyid(datdba) <> '{role}'"
     )
-    held = tool.call([*psql, "-Atc", query])
+    held = tool.call([*psql, "-Atc", query], cwd=SERVICE_CWD)
     if not held.ok:
         raise errors.GuardenError(
             f"{name}: {ENGINE} did not answer which role owns the databases of {role!r}: "
@@ -455,7 +465,7 @@ def _refuse_foreign(name: str, psql: list[str], role: str, databases: tuple[str,
 def _check_version(name: str, argv: list[str]) -> None:
     """The one feature check. Refusing an older server is better than issuing a
     statement whose behaviour is not the one this was written against."""
-    reported = tool.call(argv)
+    reported = tool.call(argv, cwd=SERVICE_CWD)
     if not reported.ok:
         raise errors.GuardenError(
             f"{name}: {ENGINE} did not answer its version: "
