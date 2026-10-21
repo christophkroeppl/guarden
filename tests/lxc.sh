@@ -81,24 +81,12 @@ APT_LOCK_SH=$REPO/tests/aptlock.sh
 APT_LOCK_GUEST=''
 [ -r "$APT_LOCK_SH" ] && APT_LOCK_GUEST=$(<"$APT_LOCK_SH")
 
-# Tests that cannot run in the machine, by construction rather than by accident.
-#
-# t35-env-schema.sh asks git about the repository: `check-ignore` and
-# `ls-files` need a work tree, and this checkout's `.git` is a file pointing at
-# /media/data/projects/infra/.git/worktrees/service-based, which is a host path
-# that does not exist in a guest. The checkout is pushed without `.git`, so the
-# commands fail and the test reports git's exit 128 as a guarden defect. It is a
-# repository-hygiene test, not a guarden test; the VM runner skips it
-# (`HOST_ONLY`, below), and nothing else runs it today — see ticket 266.
-HOST_ONLY=${GUARDEN_LXC_HOST_ONLY:-t35-env-schema.sh}
-
-_is_host_only() {
-    local name=$1 candidate
-    for candidate in $HOST_ONLY; do
-        [ "$name" = "$candidate" ] && return 0
-    done
-    return 1
-}
+# **Every suite in the selection runs in a cut machine, and there is no list
+# that can skip one** (ADR-0025). A suite whose subject a machine cannot see
+# fails there rather than vanishing from a run: the host-only allowlist this
+# used to carry made an unrun check read as a green one, and a check that
+# cannot fail is not a check. A claim about the checkout is a unit test under
+# `tests/test_*.py`, selected by `just unit` and never by this runner.
 
 # A suite says whether it needs a machine of its own, in the suite itself:
 #
@@ -1155,9 +1143,6 @@ cmd_run() {
         if [ -n "$pat" ] && [[ "$name" != *"$pat"* ]]; then
             continue
         fi
-        if _is_host_only "$name"; then
-            continue
-        fi
         if [ "$shared" = 1 ]; then
             want_fresh=0
             machine=0
@@ -1262,14 +1247,33 @@ cmd_run() {
         # A hit does not open a shared group either. The suite it stands for did
         # not run, so the machine the next shared suite gets is the one its group
         # was cut as, which was decided from the selection above.
+        #
+        # **The key's status is checked, and a key that was not computed is
+        # never used.** `key=$(python3 ...)` leaves the variable EMPTY when the
+        # computation fails, and the empty key is the same for every suite and
+        # every tree — so a run that carried on with it would consult a record
+        # filed under nothing and file its own green under nothing, and a later
+        # run would inherit that green whatever the tree did. That is ticket
+        # 309's shape reached through a different door: a green inherited over
+        # code nothing re-ran.
+        #
+        # A failed computation is not a reason to die: the suite has not run, so
+        # it has no key, and the honest answer is that it RUNS and nothing is
+        # recorded for it. The helper refuses a malformed key as well, so this
+        # is the second of the two refusals and not the only one.
         local key=''
         if [ -n "$golden_digest" ]; then
-            key=$(python3 "$CACHE_TOOL" key "$golden_digest" "$file" "$mode" "$group")
-            if [ "$no_cache" = 0 ] && python3 "$CACHE_TOOL" get "$golden_digest" "$key" "$name"; then
-                printf 'inherit\t%s\n' "$name" >>"$ledger"
-                python3 "$CACHE_TOOL" line inherited "$name"
-                continue
+            if ! key=$(python3 "$CACHE_TOOL" key "$golden_digest" "$file" "$mode" "$group"); then
+                printf 'error: cannot compute the cache key for %s; it runs and nothing is recorded for it\n' \
+                    "$name" >&2
+                key=''
             fi
+        fi
+        if [ -n "$key" ] && [ "$no_cache" = 0 ] \
+            && python3 "$CACHE_TOOL" get "$golden_digest" "$key" "$name"; then
+            printf 'inherit\t%s\n' "$name" >>"$ledger"
+            python3 "$CACHE_TOOL" line inherited "$name"
+            continue
         fi
 
         if [ "$want_fresh" = 1 ]; then
@@ -1301,7 +1305,12 @@ cmd_run() {
         # Reached only for exit 0, and `put` refuses anything else a second time.
         # A failure has no record, so the next run runs the suite rather than
         # inheriting it — the whole of what makes a cached green worth anything.
-        if [ -n "$golden_digest" ]; then
+        #
+        # **A key that was never computed records nothing.** The suite ran and
+        # passed, but there is no key to file the result under, and a result
+        # filed under nothing would be inherited by a run that never ran the
+        # suite. So the result is observed by this run and simply not kept.
+        if [ -n "$golden_digest" ] && [ -n "$key" ]; then
             python3 "$CACHE_TOOL" put "$golden_digest" "$key" "$name" "$mode" "$group" 0 \
                 || die "cannot record the result of $name; the cache is not writable"
         fi
