@@ -477,11 +477,14 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   than that: the walk reaches snapper's root-owned `.snapshots` and fails, **having already
   moved the volume's own owner**, so a command that reports failure leaves a broken
   deployment behind it.
-  **Nothing to do here** — if a service's image cannot write its volume, the answer is in
-  `weedr service start`'s output and in the registry's `owner_uid`, not a chown. The one
-  manual step that remains is pointing the image's data directory at a *subdirectory* of the
-  mount, so its entrypoint's recursive chown never reaches snapper's root-owned `.snapshots`
-  (ticket 273, ADR-0020).
+  **Nothing to do here** — if a service's image cannot write its volume, the answer is the pair
+  the probe recorded, `owner_uid` and `owner_gid` in
+  `/var/lib/guarden/registry/<name>.toml`, and the `UserNS=keep-id:uid=…,gid=…` line
+  `weedr service start` writes into
+  `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf`. It is not a
+  chown. The one manual step that remains is pointing the image's data directory at a
+  *subdirectory* of the mount, so its entrypoint's recursive chown never reaches snapper's
+  root-owned `.snapshots` (ticket 273, ADR-0020).
 * **A re-ingest after an edit redeploys** (ticket 275). `source_hash` covers the whole staged
   tree — the unit source, the compose file, the Containerfile and the application's own files
   — because the whole tree is the build's context and every file in it is a build input (spec
