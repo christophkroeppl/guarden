@@ -75,14 +75,16 @@ run weedr service ingest routed-preview/feature/x --from poke routed@9f2c1ab
 assert_exit 0
 assert_stdout_has "converged"
 
-# **The repair SAYS what it repaired.** A correction an operator cannot see is
-# a correction an operator cannot consent to, and this is the line that makes
-# the tree's rule the tree's rule rather than a fight.
-assert_stdout_has "repaired"
-assert_stdout_has "$instance_quadlet"
-
-# The tree is the service's own again, and the tree's mode. Every level of the
-# chain, because the older mutator created every level of it.
+# **The tree is the service's own again, and the tree's mode.** Every level of
+# the chain, because the older mutator created every level of it.
+#
+# **This is the MEASUREMENT, and it comes first.** The mode and the owner are
+# what the defect is — a directory the older installer made wrong — so the
+# assertion that names the defect is the one that has to fire. The "the
+# repair says what it repaired" assertion below is a SECOND property, and a
+# suite that stopped on the second one would report a missing report line
+# where the tree is still root-owned and `0755` — a diagnostic about the
+# wrong thing.
 for path in "$instance_quadlet" "$instance_home/.config" \
     "$instance_home/.config/containers" "$slot_quadlet" \
     "$home/.config" "$home/.config/containers" \
@@ -90,6 +92,12 @@ for path in "$instance_quadlet" "$instance_home/.config" \
     assert_mode "$path" 700
     assert_owner "$path" "routed-preview:$group"
 done
+
+# **And the repair SAYS what it repaired.** A correction an operator cannot
+# see is a correction an operator cannot consent to, and this is the line
+# that makes the tree's rule the tree's rule rather than a fight.
+assert_stdout_has "repaired"
+assert_stdout_has "$instance_quadlet"
 
 # The deploy is still converged: the repair is not a redeploy, and a verb that
 # re-rendered the units on every converge would not be a converge.
