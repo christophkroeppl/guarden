@@ -844,11 +844,42 @@ cmd_provision() {
     # later with a cause three steps removed. Failing here, with apt's own
     # message, is the cheap and honest failure.
     _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" || die "cannot wait for apt's locks on $GOLDEN"
-    vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y -qq --no-install-recommends
-            snapper btrfs-progs iptables iproute2 passwd uidmap curl ca-certificates' \
-        >/dev/null 2>&1 \
+    # **The install RETRIES, because a lock check and a lock acquisition are
+    # not the same thing.** Measured 2026-10-21: the wait above reported the
+    # locks free, and the install that followed immediately failed with
+    #
+    #     E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 1916 (apt-get)
+    #
+    # -- because cloud-init's own 24-package install was in a phase that takes
+    # the lock in a window AFTER the probe observed it free. The probe asks
+    # "is anyone holding the lock right now"; apt asks "can I take it", and
+    # between the two questions another apt can start.
+    #
+    # **So the install is retried, and only a lock collision is retried.**
+    # `apt-get` exits 100 when it cannot acquire the frontend lock, and its
+    # message says so; a mirror that is unreachable exits 100 as well, so the
+    # MESSAGE is what separates the two -- not the exit code. The install's
+    # stderr is therefore kept, and the retry is decided by what it says.
+    # (An earlier version of this re-ran apt to ask whether the message was
+    # about a lock, which is self-defeating: that second apt competes for the
+    # very lock it is trying to read about.)
+    local install_attempt install_rc install_err="/tmp/guarden-apt-install.$$.err"
+    install_rc=0
+    for ((install_attempt = 1; install_attempt <= 5; install_attempt++)); do
+        install_rc=0
+        vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends
+                snapper btrfs-progs iptables iproute2 passwd uidmap curl ca-certificates' \
+            2>"$install_err" >/dev/null || install_rc=$?
+        [ "$install_rc" = 0 ] && break
+        printf '  packages: install attempt %d failed (rc %d)\n' \
+            "$install_attempt" "$install_rc" >&2
+        grep -q 'Could not get lock' "$install_err" 2>/dev/null || break
+        _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" \
+            || die "cannot wait for apt's locks on $GOLDEN"
+    done
+    [ "$install_rc" = 0 ] \
         || die "$GOLDEN could not install the golden's own packages; apt's locks are held or the mirror is unreachable"
     # **And the install is ASSERED, not assumed.** The `|| true` that used to
     # hide this also hid a partially-installed list, and the capability gate
