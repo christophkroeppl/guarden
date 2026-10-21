@@ -685,13 +685,13 @@ def create_service(
     _make_tree(resolved.name, owner, resolved.escaped_ref)
 
     # Copy the template's quadlet files into the service's own quadlet
-    # directory, **as the service user and `0640`** — the way `units.install`
-    # lands every rendered unit. The template is root-owned and installed, and a
-    # copy that kept its `root:root 0644` was a file inside a `0700` home that
-    # the service could neither read, chown nor remove — including from the
-    # service's own podman generator, which is the process that has to read it
-    # (AGENTS.md: nothing root-owned inside a service's home). This copy is what
-    # `weedr service start` finds.
+    # directory, **as the service user and the tree's own `0700`** — the way
+    # `units.install` lands every rendered unit. The template is root-owned and
+    # installed, and a copy that kept its `root:root 0644` was a file inside a
+    # `0700` home that the service could neither read, chown nor remove —
+    # including from the service's own podman generator, which is the process
+    # that has to read it (AGENTS.md: nothing root-owned inside a service's
+    # home). This copy is what `weedr service start` finds.
     #
     # **The directory each file lands in is owned too.** A template that ships
     # `<unit>.container.d/<file>` has a directory in it, and `conf.write_file`
@@ -705,7 +705,7 @@ def create_service(
         if path.is_file():
             target = quadlet_dir / path.relative_to(template_dir)
             units.own_directory(target.parent, owner)
-            conf.write_file(target, path.read_text(encoding="utf-8"), units.UNIT_MODE, owner)
+            conf.write_file(target, path.read_text(encoding="utf-8"), TREE_MODE, owner)
 
     record = registry.Registry(
         service=resolved.name,
@@ -929,10 +929,10 @@ def _repair(record, resolved) -> list[str]:
     two would drift. The repair is narrow because the INSTALLER is the only
     writer that made a directory wrong.
 
-    **Why not the files.** A unit file's mode is ticket 320's question — two
-    writers disagree about it and suites pin the answer it has not yet been
-    given. A repair that re-moded the files would settle that question by side
-    effect, and this is not that ticket.
+    **Why not the files.** A unit file's mode is the tree's `0700` like every
+    other file under it (spec 2.1, ticket 320), and the one writer that makes a
+    unit states it. What a converged create repairs is the thing the service
+    cannot make for itself: a directory in its own home.
 
     **Whose mode wins: the tree's.** The tree's rule is `0700` to the service
     user (spec 2.1), and it is a rule about the ISOLATION BOUNDARY rather than
@@ -958,8 +958,9 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
     every other service's state volumes straight off the host filesystem, and the
     per-consumer credentials and the uid-matched firewall rules stop being
     controls and become decoration. A service is `0700` as a unit — home, state,
-    bulk and every instance's volumes — and **no config subvolume is ever
-    created**, for any track, including a gitops-created production service.
+    bulk and every instance's volumes, unit files included — and **no config
+    subvolume is ever created**, for any track, including a gitops-created
+    production service.
     """
     tree = paths.service_tree(name)
     tree.mkdir(parents=True, exist_ok=True)
@@ -1414,8 +1415,8 @@ def _render_source(directory: Path) -> Iterator[Path]:
 
 
 def _ensure_admin_units(uid: int) -> None:
-    """Reconcile the existence of podman's uid-scoped search path and nothing
-    inside it: a regenerated unit must not clobber a root-owned drop-in, which is
+    """Reconcile the existence of podman's uid-scoped search path and create
+    nothing in it: a regenerated unit must not clobber a root-owned drop-in, which is
     what that path being searched after the home's own directory buys (ADR-0003).
 
     **The path's own directories are created with a stated mode**, because the
@@ -1429,6 +1430,16 @@ def _ensure_admin_units(uid: int) -> None:
     the admin's own `90-admin.conf` is the human's file, and the one file
     guarden writes in there is written where it is written — by the install,
     with the name it has.
+
+    **This is the mutator's half of the admin path, and the renderer reads
+    the directory too** (ADR-0024). `render._dropins` merges every `*.conf`
+    in a unit's drop-in directory into the unit before generation, so an
+    operator's `MemoryMax=` reaches the rendered unit. That read is the
+    renderer's and not this function's: the mutator reconciles the EXISTENCE
+    of the path and writes the one file it owns, and it neither copies the
+    admin's file in from somewhere else nor stages a copy of it anywhere.
+    The admin path is the only path to an admin's unit, and there is no
+    staging copy of it.
     """
     for parent in paths.admin_parents():
         parent.mkdir(parents=True, exist_ok=True)

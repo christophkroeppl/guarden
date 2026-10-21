@@ -27,6 +27,11 @@ them — so a key here that is not one of the seven tables is refused by name
 rather than ignored, because a silently ignored grant is a grant an operator
 believes is in effect.
 
+**`[ownership]` is the eighth, and it is DECIDED and NOT YET IMPLEMENTED**
+(ADR-0021; ticket 308's item 2). A file carrying it is refused by name here
+rather than read and ignored, and the refusal is the honest answer until the
+table lands. The spec's §3.3 says so where an operator reads it.
+
 `keep_last` is the ladder's **daily bucket maximum** and nothing else (spec 8.1):
 it is not a mark count, and it does not move `NUMBER_LIMIT_IMPORTANT`. The other
 buckets live beside it so an operator who wants a track to keep nothing can say

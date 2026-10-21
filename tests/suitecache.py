@@ -10,6 +10,9 @@ Every way this file could lie is closed here rather than at a call site:
 - **Only an observed pass is recorded.** `put` takes the suite's exit code and
   refuses anything but `0`, so a failure has no record and the next run runs the
   suite.
+- **A key is a digest or it is refused.** `put`, `get` and `why` refuse a key
+  that is not a sha256, so the empty key a failed computation leaves behind is
+  neither a place a green can be filed nor one it can be read from.
 - **A record answers only for the golden it was observed on.** The digest is in
   the directory name, in the record and in the key, and `get` checks all three.
   A rebuilt golden digests differently, so nothing is inherited from a machine
@@ -35,9 +38,10 @@ provable. `fixtures/`, `modules/`, `packages/`, `tools/`, `examples/`,
 `src/guarden/**` and `pyproject.toml` are in every key, because a suite
 reaches those through helpers whose arguments cannot be resolved from
 outside — `stage_config` reads `fixtures/$1` and `$1` is a bare name in the
-suite. The root `.env.schema` is in every key as an over-approximation: the
-only reader is `t35-env-schema.sh`, which the runner does not select, so
-nothing in a machine run reads it, and carrying it costs one hash.
+suite. The root `.env.schema` is in every key as an over-approximation: no
+suite in a machine run reads it — its reader is the unit test
+`tests/test_env_schema.py`, which a cut never runs (ADR-0025) — and carrying it
+costs one hash, so it stays on the safe side of the approximation.
 
 **Everything under `tests/` that is not a suite is in every key**, and the
 predicate is the runner's own: `tests/lxc.sh` selects exactly
@@ -178,6 +182,35 @@ def _xdg_cache() -> Path:
 
 def record_path(golden: str, key: str) -> Path:
     return cache_root() / golden / f"{key}.json"
+
+
+def check_key(key: str) -> str | None:
+    """The refusal for a key that names no result, and nothing else.
+
+    A key is the digest of a tree, so it is a sha256 and nothing else. **A key
+    that is not one is refused rather than stored**, because the key is the
+    whole of what a record is filed under:
+
+    - the EMPTY key is what a failed key computation leaves behind, and it is
+      the same for every suite and every tree, so a green recorded under it
+      would be inherited by a run whose tree it never ran — the failure this
+      cache exists to prevent, reached through a different door;
+    - a key carrying a separator names a PATH, and the record's path is built
+      from it, so such a key would write outside the cache root — the one place
+      this mechanism is allowed to write.
+
+    The refusal is the helper's rather than the caller's, because the caller is
+    a shell that cannot tell a digest from a string, and because a record that
+    cannot be written must not be readable either: `get` refuses the same key,
+    so a refusal to record is worth something.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", key):
+        return refuse(
+            f"{key!r} is not a key: a key is a sha256 digest of the tree a result "
+            "was observed against, and anything else names no result at all",
+            2,
+        )
+    return None
 
 
 def files_under(root: Path, relative: str) -> list[str]:
@@ -342,6 +375,9 @@ def _load(golden: str, key: str) -> dict | None:
 
 
 def cmd_get(args: argparse.Namespace) -> int:
+    refused = check_key(args.key)
+    if refused is not None:
+        return refused
     record = _load(args.golden, args.key)
     if record is None:
         return 1
@@ -352,6 +388,9 @@ def cmd_get(args: argparse.Namespace) -> int:
 
 
 def cmd_why(args: argparse.Namespace) -> int:
+    refused = check_key(args.key)
+    if refused is not None:
+        return refused
     record = _load(args.golden, args.key)
     if record is None:
         return refuse(f"no recorded result at {record_path(args.golden, args.key)}")
@@ -365,6 +404,9 @@ def cmd_put(args: argparse.Namespace) -> int:
             f"{args.suite} exited {args.exit_code}, and only an observed pass is recorded, "
             "so the next run runs it again"
         )
+    refused = check_key(args.key)
+    if refused is not None:
+        return refused
     record = {
         "golden": args.golden,
         "group": args.group,
