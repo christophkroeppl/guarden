@@ -313,7 +313,12 @@ def render_tunnel(routes: list[dict], config) -> str:
     service claims is a 404 from the tunnel rather than a default page.
 
     Preview instances on the tunnel are published at preview.<tunnel_domain>/<ref>
-    as a path on one host (same shape as preview.$DOMAIN/<ref>).
+    as a path on one host (same shape as preview.$DOMAIN/<ref>). **A route with a
+    `ref` is therefore never a `rows` entry of its own**: an instance's recorded
+    name is `preview.web` — the track's prefix and a label, which is the path's
+    shape and not a name in the tunnel's zone — so publishing it as a hostname
+    would put a name in no zone in the file, first-match-wins above the path
+    rules (spec 9, ticket 324).
     """
     if not config.tunnel_domain:
         return ""
@@ -323,7 +328,7 @@ def render_tunnel(routes: list[dict], config) -> str:
             "service": f"http://{route.get('target', '')}",
         }
         for route in routes
-        if route.get("destination") == "tunnel"
+        if route.get("destination") == "tunnel" and not route.get("ref")
     ]
 
     previews = []

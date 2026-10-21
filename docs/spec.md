@@ -365,8 +365,12 @@ alias = ""  # the address a rootless container can reach the host on. Empty unti
   # and it is a NAME the consumer resolves -- never a firewall
   # destination
 tunnel_domain = ""  # the public zone for tunneled routes. Empty until the operator
-  # sets it; `roots` constructs `preview.<tunnel_domain>` hostnames from it,
-  # and `weedr` refuses to install `cloudflared` without it
+  # sets it, and it is the NAME's zone: a route whose destination is `tunnel`
+  # is allocated `<track host_prefix><label>.<tunnel_domain>` and recorded at
+  # that name (§3.4), a preview's one shared host is `preview.<tunnel_domain>`
+  # (§9), `weedr` refuses to install `cloudflared` without it, and a tunnel
+  # route with no zone to name it in is exit 1 rather than a bare label — a
+  # name in no zone is one no DNS can answer
 publication_range = [20000, 32767]  # loopback ports guarden may allocate
 forwarded = [ "80/tcp", "443/tcp", "443/udp" ]  # what soil forwards to the edge
 
@@ -716,8 +720,11 @@ kinds = [ "db" ]  # what the manifest's provides: listed, and only that. Written
   # whose manifest declares none, which is not the same as empty
 
 [route_hosts]
-web = "web.myapp.com"  # manifest label -> the full name, prefix applied. A claim, like a
-  # publication: allocated, refused when taken, released on remove
+web = "web.myapp.com"  # manifest label -> the full name, prefix applied, and the
+  # tunnel's zone after it when the route's destination is `tunnel`
+  # (§3.1 `tunnel_domain`): `web` alone is a name in no zone, which
+  # no DNS can answer. A claim, like a publication: allocated,
+  # refused when taken, released on remove
 
 [route_destinations]
 web = "loopback"  # manifest label -> where that route is published: `loopback`, `tunnel`

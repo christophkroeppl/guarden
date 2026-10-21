@@ -2103,11 +2103,14 @@ def _write_exposure(config, record, track, value: str | None) -> None:
     """One record written, and every decision it makes re-resolved with it.
 
     The destinations are rewritten in the same act as the record so the
-    registry never carries a record and a stale answer beside it; the firewall
-    re-renders for the same reason `weedr port open` re-renders — the accept
-    set is a consequence of the record, and a consequence that lags is drift
-    the check would then report. The rendered slice is the *next render*'s
-    (ticket 294): this verb changes one record and nothing a repository owns.
+    registry never carries a record and a stale answer beside it; the route
+    hosts are re-allocated in the same act for the same reason — the name is
+    derived from the destination, so a route moving between the tunnel's zone
+    and the bare name has to move its name with it or the grant and the tunnel
+    disagree (ticket 324). The firewall re-renders because the accept set is a
+    consequence of the record, and a consequence that lags is drift the check
+    would then report. The rendered slice is the *next render*'s (ticket 294):
+    this verb changes one record and nothing a repository owns.
     """
     record.exposure = value
     granted = overrides.load(record.service)
@@ -2118,6 +2121,7 @@ def _write_exposure(config, record, track, value: str | None) -> None:
         set(granted.expose_tunnel) if granted else set(),
         list(record.route_hosts),
     )
+    service.claim_route_hosts(record, track, record.route_destinations, config)
     with conf.lock("registry"):
         registry.save(record, (0, users.group_id(PROGRAM_GROUP)))
     firewall.print_diff(firewall.install(config))
