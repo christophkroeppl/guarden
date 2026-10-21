@@ -27,6 +27,10 @@ PSQL_USER = "postgres"
 MIN_VERSION = 100000
 SQL_ON_STDIN: tuple[str, ...] = ("-f", "-")
 VALUE_ALPHABET = "-_"
+# A postgres identifier is truncated at 63 BYTES, silently. A derived name over
+# that would be shortened into a name nobody chose — and two of them could be
+# shortened into one — so it is refused where it is derived (spec 4).
+MAX_IDENTIFIER = 63
 
 
 def credential_key(kind: str, edge: manifest_mod.Edge) -> str:
@@ -39,8 +43,52 @@ def credential_key(kind: str, edge: manifest_mod.Edge) -> str:
     prefix. The PORT and the AS distinguish two edges in the REGISTRY (see
     `edge_key`), which is where two edges of one provider are told apart.
     """
+    return key_of(kind, edge.variable)
+
+
+def key_of(kind: str, prefix: str) -> str:
+    """The same key from the prefix alone, for a caller that holds no `Edge`.
+
+    `weedr service start` re-attempts step 10 from the consumer's registry entry
+    (`provision_pending`), and a registry record carries `as:` rather than a
+    parsed `needs:` entry — so the one rule for the name lives here and both
+    callers read it.
+    """
     suffix = "SECRET" if kind == AUTH_SECRET else "PASSWORD"
-    return f"{edge.variable}_{suffix}"
+    return f"{prefix.upper()}_{suffix}"
+
+
+def role_name(consumer: str) -> str:
+    """The role a `database` edge creates in its provider: the consumer's own name.
+
+    **One role per consumer, per provider.** The edge is the unit of
+    authorization (spec 7.6), so the role is the consumer's identity inside the
+    provider, and a second database is a second database OWNED by that one role
+    rather than a second authority to revoke. That is what makes `databases:` a
+    list of objects under one credential instead of several, and it is why the
+    role does not carry the database's name.
+    """
+    return consumer
+
+
+def database_names(consumer: str, databases: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """The databases one `database` edge owns: the consumer's, or one per name.
+
+    `<consumer>` alone when the manifest names none, so a consumer keeps the one
+    database named after itself; `databases: [odoo, btcpay]` gives
+    `<consumer>-odoo` and `<consumer>-btcpay`.
+
+    **The consumer's name is the prefix because the provider is SHARED.** A
+    staging and a production service of one workload both asking for `odoo` are
+    two databases and not one, and a database name is a global name inside the
+    provider's engine — so the half the manifest chooses is the suffix only, and
+    the half that keeps two consumers apart is guarden's. The name is what the
+    consumer is told to dial (`<AS>_DATABASE`), and the renderer derives it from
+    this same function, so the two cannot disagree.
+    """
+    if not databases:
+        return (consumer,)
+    return tuple(f"{consumer}-{name}" for name in databases)
 
 
 def resolve_name(config: config_mod.Config, environment: str, edge: manifest_mod.Edge) -> str:
@@ -72,12 +120,35 @@ def check(consumer: str, document: manifest_mod.Manifest, environment: str,
     in dependency order and a manifest may name one a later deploy brings into being
     (spec 4), so there is nothing to compare against, and the render is the right place
     to say so.
+
+    **The derived names are checked here too, and for the same reason.** A
+    `database` edge's role and database names are the consumer's, and postgres
+    truncates an identifier at 63 bytes — so a name that would be shortened is a
+    rejected input, and it is refused before a user, a home and a subvolume exist
+    for a service whose own edge could never be created.
     """
     for edge in document.needs:
+        _identifiers(consumer, edge)
         provider = registry.load(resolve_name(config, environment, edge))
         if provider is None:
             continue
         _offered(consumer, edge, provider)
+
+
+def _identifiers(consumer: str, edge: manifest_mod.Edge) -> None:
+    """Raise unless every name this edge derives is an identifier postgres keeps."""
+    if edge.auth != AUTH_DATABASE:
+        return
+    for name in (role_name(consumer), *database_names(consumer, edge.databases)):
+        if len(name.encode()) <= MAX_IDENTIFIER:
+            continue
+        raise errors.GuardenError(
+            f"the manifest gives {consumer!r} a {ENGINE} name {name!r} that is "
+            f"{len(name.encode())} bytes long, and {ENGINE} truncates an identifier at "
+            f"{MAX_IDENTIFIER}; the name it kept would not be the name written here, so "
+            f"it is refused rather than shortened",
+            errors.REJECTED_INPUT,
+        )
 
 
 def edge_key(provider: str, port: int, as_: str = "") -> str:
@@ -211,8 +282,10 @@ def _credential(entry: registry.Registry, edge, provider, container, publication
     A `secret` edge is planted in both stores because the provider has to be able to
     verify it. The provider's copy is planted only when nothing is there, so a second
     consumer of one provider never takes the first one's value away; the collision that
-    leaves is two consumers sharing one `as:` prefix, and no document says how one
-    provider names two of the same edge.
+    leaves is two consumers of one provider sharing one `<AS>_SECRET`, and no document
+    says how one provider names two of the same edge. A `database` edge plants in the
+    consumer's store alone (spec 5.3 step 10) and the role it creates is the
+    consumer's own, so no two consumers of one provider can collide there.
     """
     if edge.auth == AUTH_NONE:
         return []
@@ -231,23 +304,21 @@ def _credential(entry: registry.Registry, edge, provider, container, publication
 
 def provision(consumer: str, provider: registry.Registry, container: str,
               password: str, databases: tuple[str, ...] = ()) -> list[str]:
-    """One role and one database in the provider, both named after the consumer.
+    """One role named after the consumer, and one database per name the edge declares.
 
-    When `databases` is non-empty, one role+database pair is created per name,
-    named `{provider.service}-{db_name}`. The password is minted once per edge
-    and reused for all databases.
-
-    **That sharing is a deliberate simplification and not a free one.** The edge
-    gets one credential, so every database it provisions is reachable with the
-    same password: a leak of the consumer's secret is a leak of all of them, and
-    there is no per-database isolation. Nor is there a rotation path —
-    `credentials.plant` plants only what is absent, so the value minted on the
-    first ingest is the value until the service is removed. A deployment that
-    needs isolation between its databases must either give each its own edge
-    (possible only when the provider offers the kind twice, which today it does
-    not) or mint its own credentials outside guarden. Written down here because
-    the shape of the rendered variables — one `DB_PASSWORD` for several
-    databases — reads like a per-database secret and is not.
+    **One role, several databases** (spec 5.3 step 10). The role is the
+    consumer's identity inside the provider and the databases are its objects, so
+    every database is owned by the one role and reached with the one credential
+    the edge minted. That is deliberate and it is not free: a leak of the
+    consumer's secret is a leak of all its databases, and there is no per-database
+    isolation. Nor is there a rotation path — `credentials.plant` plants only what
+    is absent, so the value minted on the first ingest is the value until the
+    service is removed. A deployment that needs isolation between its databases
+    must mint its own credentials outside guarden; the manifest has no second edge
+    to give it, because a second `database` edge to one provider is refused by the
+    provider's own kind list (spec 4). Written down because the rendered
+    variables — one `<AS>_PASSWORD` over several `<AS>_<DB>_DATABASE` names —
+    would otherwise read like a per-database secret.
 
     **The only engine-aware code in guarden, and it is this function.** `ENGINE` is a
     constant named here and nowhere else, and a provider older than `MIN_VERSION` is
@@ -255,13 +326,12 @@ def provision(consumer: str, provider: registry.Registry, container: str,
     not a refusal: a poke installs the provider and the consumer in that order and the
     container starts after the command returns, so refusing here would make every edge
     a two-command deploy. The credential is planted either way, so what the warning
-    costs is the role and nothing else.
+    costs is the role and nothing else — and `provision_pending` is the other half of
+    that bargain: the command that starts the consumer creates what this one could not.
     """
+    role = role_name(consumer)
+    names = database_names(consumer, databases)
     container_name = f"{provider.service}-{container}"
-    if databases:
-        db_names = [f"{provider.service}-{db_name}" for db_name in databases]
-    else:
-        db_names = [container_name]
     podman = tool.runuser_as(provider.service, "podman")
     listing = [*podman, "ps", "--filter", f"name=^{container_name}$", "--format", "{{.Names}}"]
     running = tool.call(listing, cwd="/tmp")
@@ -276,15 +346,110 @@ def provision(consumer: str, provider: registry.Registry, container: str,
         ]
     psql = [*podman, "exec", "-i", container_name, "psql", "-U", PSQL_USER, "-d", PSQL_USER]
     _check_version(container_name, [*psql, "-Atc", "SHOW server_version_num"])
-    ddl = "\n".join(_ddl(name, password) for name in db_names)
-    done = tool.call([*psql, "-v", "ON_ERROR_STOP=1", "-f", "-"], stdin=ddl)
+    done = tool.call([*psql, "-v", "ON_ERROR_STOP=1", "-f", "-"], stdin=_ddl(role, password, names))
     if not done.ok:
         raise errors.GuardenError(
-            f"{container_name}: {ENGINE} refused the role and the database for {consumer}: "
+            f"{container_name}: {ENGINE} refused the role and the databases for {consumer}: "
             f"{errors.oneline(done.stderr.strip() or done.stdout.strip())}",
             errors.HOST_NOT_AS_ASSUMED,
         )
+    _refuse_foreign(container_name, psql, role, names)
     return []
+
+
+def provision_pending(record: registry.Registry) -> list[str]:
+    """Step 10 again, for a service that is already installed (spec 5.3).
+
+    A consumer's ingest normally runs before its provider's container is up — a
+    poke installs the provider and the consumer in that order and neither ingest
+    starts anything — so `provision` warns, creates no role, and is never asked
+    again: the deploy that would re-run step 10 answers `converged` and installs
+    nothing. What is left on the box is a credential naming a role nobody made,
+    which is the state ticket 284 measured — every `auth: database` edge on the
+    host decorative, and every working consumer talking to its provider as the
+    superuser instead.
+
+    **`weedr service start` is the later command**, and it is the right one: it
+    is the moment the container that needs the role is about to run, the provider
+    it dials is up by then, and `provision` is idempotent — a role and a database
+    that exist are left as they are and the password is set to the value the edge
+    already holds. Nothing here can create a second credential: the value is read
+    from the consumer's own store, which is where the ingest planted it.
+    """
+    warnings: list[str] = []
+    for key in sorted(record.edges):
+        entry = record.edges[key] or {}
+        if entry.get("auth") != AUTH_DATABASE:
+            continue
+        provider = registry.load(provider_of(key))
+        if provider is None:
+            warnings.append(
+                errors.warn(
+                    f"{record.service} has a database edge to {provider_of(key)} and there is "
+                    f"no registry entry for it, so the role was not created; a deploy of "
+                    f"{provider_of(key)} completes it"
+                )
+            )
+            continue
+        port = entry.get("port")
+        container = _serving(provider, port) if isinstance(port, int) else None
+        if container is None:
+            warnings.append(
+                errors.warn(
+                    f"{record.service} has a database edge to {provider.service} on port "
+                    f"{port}, and the manifest of {provider.service} names no container on "
+                    f"it, so the role was not created"
+                )
+            )
+            continue
+        prefix = str(entry.get("as") or "")
+        if not prefix:
+            continue
+        password = credentials.value(record.service, key_of(AUTH_DATABASE, prefix)) or ""
+        if not password:
+            warnings.append(
+                errors.warn(
+                    f"{record.service} has a database edge recorded with no planted "
+                    f"{key_of(AUTH_DATABASE, prefix)}, so the role in {provider.service} was "
+                    f"not created; `weedr service ingest` plants it"
+                )
+            )
+            continue
+        databases = tuple(str(name) for name in (entry.get("databases") or ()))
+        warnings += provision(record.service, provider, container, password, databases)
+    return warnings
+
+
+def _refuse_foreign(name: str, psql: list[str], role: str, databases: tuple[str, ...]) -> None:
+    """Refuse a database of this edge's own name that another role already owns.
+
+    `CREATE DATABASE` is conditional on the name being ABSENT, so a database that
+    already exists and belongs to somebody else is the one case the DDL passes
+    over in silence — and the consumer would then hold a credential for a
+    database it cannot write to, which is the failure mode ticket 284 is about.
+    The alternative, `ALTER DATABASE ... OWNER TO`, would take the other
+    consumer's data, so the name is refused and both names are printed.
+    """
+    listed = ", ".join(f"'{database}'" for database in databases)
+    query = (
+        "SELECT datname || ' (owner ' || pg_get_userbyid(datdba) || ')' FROM pg_database "
+        f"WHERE datname IN ({listed}) AND pg_get_userbyid(datdba) <> '{role}'"
+    )
+    held = tool.call([*psql, "-Atc", query])
+    if not held.ok:
+        raise errors.GuardenError(
+            f"{name}: {ENGINE} did not answer which role owns the databases of {role!r}: "
+            f"{errors.oneline(held.stderr.strip() or held.stdout.strip())}",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    foreign = ", ".join(held.stdout.split())
+    if foreign:
+        raise errors.GuardenError(
+            f"{name}: the edge of {role!r} would own a database another role already has: "
+            f"{foreign}; a database name is global inside the provider, so the edge refuses "
+            f"it rather than taking it over",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
 
 
 def _check_version(name: str, argv: list[str]) -> None:
@@ -312,9 +477,15 @@ def _check_version(name: str, argv: list[str]) -> None:
         )
 
 
-def _ddl(role: str, password: str) -> str:
+def _ddl(role: str, password: str, databases: tuple[str, ...]) -> str:
     """Idempotent: each object is created only when absent, and the password is then
     set so a re-run converges.
+
+    One role, and one `CREATE DATABASE ... OWNER` per name, so an edge's databases
+    belong to the edge's role and to nothing else. The `\\gexec` form is what
+    makes a create conditional — `CREATE DATABASE` has no `IF NOT EXISTS` — and
+    each statement runs on its own, which is required: `CREATE DATABASE` cannot
+    run inside a transaction block.
 
     The password goes on the pipe rather than in argv, where every process list on the
     box would show it, and it is interpolated only because a minted value is
@@ -326,12 +497,14 @@ def _ddl(role: str, password: str) -> str:
             f"the minted password for the role {role!r} is not [A-Za-z0-9_-]",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    return "\n".join(
-        [
-            f"SELECT 'CREATE ROLE \"{role}\" LOGIN' WHERE NOT EXISTS"
-            f" (SELECT 1 FROM pg_roles WHERE rolname = '{role}')\\gexec",
-            f"ALTER ROLE \"{role}\" LOGIN PASSWORD '{password}';",
-            f"SELECT 'CREATE DATABASE \"{role}\" OWNER \"{role}\"' WHERE NOT EXISTS"
-            f" (SELECT 1 FROM pg_database WHERE datname = '{role}')\\gexec",
-        ]
-    ) + "\n"
+    lines = [
+        f"SELECT 'CREATE ROLE \"{role}\" LOGIN' WHERE NOT EXISTS"
+        f" (SELECT 1 FROM pg_roles WHERE rolname = '{role}')\\gexec",
+        f"ALTER ROLE \"{role}\" LOGIN PASSWORD '{password}';",
+    ]
+    for database in databases:
+        lines.append(
+            f"SELECT 'CREATE DATABASE \"{database}\" OWNER \"{role}\"' WHERE NOT EXISTS"
+            f" (SELECT 1 FROM pg_database WHERE datname = '{database}')\\gexec"
+        )
+    return "\n".join(lines) + "\n"

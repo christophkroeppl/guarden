@@ -920,6 +920,9 @@ needs:  # declared edges to other services
   as: db  # the prefix for this edge's generated variables
   port: 5432
   auth: database  # database | secret | none
+  databases:  # OPTIONAL, `auth: database` only: the databases this edge owns
+    - odoo  # each is `<consumer>-<name>`, owned by the edge's one role
+    - btcpay
 
 provides:  # what this service can offer a consumer, as KINDS
   - db  # consumed as `as: db`, which also gives DB_HOST/DB_PORT
@@ -967,8 +970,8 @@ because it required reading two manifests the renderer cannot reach.
 Validation rules:
 
 - Unknown top-level keys are refused, and so are unknown keys **inside** a known one. Each
-  block has a closed key set: a `needs` entry takes `service`, `as`, `port` and `auth` and
-  nothing else; a `routes` or `ports` entry takes `container` and `port`; a `firewall` entry
+  block has a closed key set: a `needs` entry takes `service`, `as`, `port`, `auth` and
+  `databases` and nothing else; a `routes` or `ports` entry takes `container` and `port`; a `firewall` entry
   takes `name`, `chain` and `rule` and nothing else; a
   `widgets` entry
   takes `container` and `file`; a `provides` entry is a **single string naming a kind** — `db`,
@@ -1044,6 +1047,26 @@ Validation rules:
   `SEARCH_URL` writes `as: search`. For a `database` auth edge the credential additionally arrives
   as `/run/secrets/DB_PASSWORD` — the same uppercased prefix plus `_PASSWORD` — and for a `secret`
   edge as `/run/secrets/<KEY>` named in the manifest's schema.
+- **A `database` edge also names its role and its databases, because neither is derivable
+  from `as:`.** It adds `<AS>_USER` — the role — and `<AS>_DATABASE`, or one
+  `<AS>_<NAME>_DATABASE` per entry in `databases:`. **The role is the consumer's own name, and
+  there is one per consumer per provider**: the edge is the unit of authorization (§7.6), so a
+  second database is a second object owned by that one role and not a second authority. The
+  databases are `<consumer>` when the key is absent, and `<consumer>-<name>` per entry otherwise,
+  so the half the manifest chooses is the suffix and the half that keeps two consumers of one
+  shared provider apart is guarden's: a staging and a production service both asking for `odoo`
+  are two databases. The mutator creates exactly these objects (§5.3 step 10) and the renderer
+  emits these names from the same two functions, so the variable and the object cannot disagree.
+  **One `<AS>_PASSWORD` covers all of them, deliberately**: a leak of the consumer's secret is a
+  leak of every database the edge owns, and the manifest has no second edge to give it —
+  a second `database` edge to one provider is refused, because `as:` must name a KIND and `db`
+  is already the prefix of the first one. That refusal is why `databases:` is a list.
+- **`databases:` is a list of names, and only on a `database` edge.** Each entry must match
+  `^[a-z_][a-z0-9_]*$` — it is the suffix of a postgres identifier — and a name may not appear
+  twice in one list. A `databases:` key on an edge of any other `auth:` kind is refused rather
+  than carried, because that edge creates no database and the list would be a declaration that
+  does nothing. A derived name over postgres's 63-byte identifier limit is refused rather than
+  truncated: postgres truncates silently, and two names could be truncated into one.
 - `ports` entries carry `container:` and `port:`, exactly as `routes` entries do, and `port:`
   is the **container's** port. A bare `"8080/tcp"` string is not a valid entry. This is a
   correction rather than a new requirement: a grant is a translation to a publication (§7.5),
@@ -1389,9 +1412,30 @@ In order:
   declares and no value has been planted for — minted once, stable until the service is
   removed, and visible in `weedr service list` as generated. A gated track gets no generated
   value: there, a missing key is a gate failure, and generating one would hide it.
-10. For a `database` edge, a role and a database in the provider, a minted password planted as
-  a podman secret in the **consumer's** store, and nothing in the provider's. For a `secret`
-  edge, a minted secret planted in both, because the provider has to be able to verify it.
+10. For a `database` edge, **one role named after the consumer and one database per name the
+  edge declares** — `<consumer>` when the manifest names none, `<consumer>-<name>` per entry in
+  `databases:` — a minted password planted as a podman secret in the **consumer's** store, and
+  nothing in the provider's. For a `secret` edge, a minted secret planted in both, because the
+  provider has to be able to verify it. **A role and a database that exist are left as they
+  are**: the creation is conditional on the name being absent, and only the password is set
+  again, so a repeat converges. A database of this edge's own name that another role already
+  owns is refused, with both names printed, rather than taken over — a database name is global
+  inside the provider, and changing its owner would take the other consumer's data.
+
+  **This step is re-attempted by the command that starts the consumer, because it is the one
+  step the deploy order makes too early.** A poke installs the provider and the consumer in
+  dependency order and no ingest starts anything, so the provider's container is usually not
+  running when step 10 runs: it warns, plants the credential, and creates no role — and the
+  deploy that would re-run step 10 answers `converged` and installs nothing, so the credential
+  and the role it names would stay parted forever. That was ticket 284's finding: **every
+  `auth: database` edge on the measured host was decorative**, and the consumers that worked
+  did so as the provider's superuser with a hand-written literal. So `weedr service start` —
+  and `weedr service restart`, which is a stop and a start — runs step 10 for every `database`
+  edge of the service it is starting, before the units are handed to systemd. The provider is
+  up by then, the container that needs the role is about to run, and the creation is
+  idempotent; a provider that is still down is the same warning and does not refuse the start.
+  The one refusal remains the engine's own: a `psql` that answers wrongly, or a server older
+  than 10, fails the command it ran under.
 11. Units, rendered by `loom` and installed by the mutator.
 12. **A fork, when the track forks — as an internal step of this command, from the track's
   `fork_from` field and nothing else.** §8.3 has the rules; the two that matter here are that

@@ -1134,8 +1134,10 @@ def build(
                 ),
             )
 
-    if edge_ports:
-        plan.add(f"units/{ENV_FILE}", _environment_file(document, edge_ports))
+    if edge_ports and context is not None:
+        plan.add(
+            f"units/{ENV_FILE}", _environment_file(document, edge_ports, context.service)
+        )
     plan.add(f"system/{ORDER_TARGET}", _order_target(document, context))
     plan.add("shared/routes.toml", _routes(document, context, ports))
     plan.add("shared/schema.toml", _schema_slice(schema, context))
@@ -1502,32 +1504,40 @@ def _secret_requests(
 
 
 def _environment_file(
-    document: manifest_mod.Manifest, edge_ports: list[tuple[str, str, int]]
+    document: manifest_mod.Manifest, edge_ports: list[tuple[str, str, int]], consumer: str
 ) -> str:
-    """`<AS>_HOST` and `<AS>_PORT` for every edge, or `<AS>_<DB>_HOST`,
-    `<AS>_<DB>_PORT` and `<AS>_<DB>_USER` for each database of a
-    multi-database edge.
+    """`<AS>_HOST` and `<AS>_PORT` for every edge, plus what a database edge adds.
+
+    A `database` edge also tells the consumer **which role it is and which
+    database to dial**, because neither can be derived from `as:`: the role is
+    `<consumer>` and the databases are `<consumer>` or `<consumer>-<name>` (spec
+    4). So the edge adds `<AS>_USER` and either `<AS>_DATABASE` for its one
+    database or `<AS>_<NAME>_DATABASE` per name in `databases:`. The names come
+    from `edges.role_name` and `edges.database_names` — the same functions the
+    mutator creates the objects with, so the variable and the object cannot
+    disagree.
 
     The host is the concrete provider service name the host resolved the
     logical name to, with no suffix and no alias, and there is no name map
-    and no `/etc/hosts` (spec 7.3).
-
-    For a multi-database edge the consumer also needs:
-    - `<AS>_<DB>_USER`: the role name, `{concrete_provider}-{db_name}`
-    - `<AS>_PASSWORD`: the edge's password, available as a Secret
+    and no `/etc/hosts` (spec 7.3). The password is not written here: it
+    arrives as the `<AS>_PASSWORD` secret.
     """
-    rows = []
+    rows: list[tuple[str, str]] = []
     for edge in document.needs:
         for logical, concrete, publication in edge_ports:
             if logical != edge.service:
                 continue
-            if edge.databases:
-                for db_name in edge.databases:
-                    user = f"{concrete}-{db_name}"
-                    name = f"{edge.variable}_{db_name.upper()}"
-                    rows.append((name, concrete, publication, user))
-            else:
-                rows.append((edge.variable, concrete, publication, None))
+            rows.append((f"{edge.variable}_HOST", concrete))
+            rows.append((f"{edge.variable}_PORT", str(publication)))
+            if edge.auth != edges.AUTH_DATABASE:
+                continue
+            rows.append((f"{edge.variable}_USER", edges.role_name(consumer)))
+            if not edge.databases:
+                rows.append((f"{edge.variable}_DATABASE", edges.role_name(consumer)))
+            for database, name in zip(
+                edge.databases, edges.database_names(consumer, edge.databases), strict=True
+            ):
+                rows.append((f"{edge.variable}_{database.upper()}_DATABASE", name))
     return render_template("guarden.env.j2", rows=rows)
 
 

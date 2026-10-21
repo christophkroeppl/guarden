@@ -370,18 +370,22 @@ run weedr service ingest multidb-staging --from poke multidb@9f2c1ab
 assert_exit 0
 assert_file_has "$registry/multidb-staging.toml" 'databases = ["odoo", "btcpay"]'
 
-# The rendered environment names each database's own role. The role and the
-# database are `{provider.service}-{db_name}`, so the consumer addresses them
-# by name and never by position.
+# The rendered environment names the edge's ONE role and each database of it.
+# The role is the consumer's own name, so the consumer addresses both databases
+# as itself and tells them apart by the database name it is given — never by a
+# role name, which is the shape ticket 284 replaced.
 multidb_home=/var/lib/guarden/services/multidb-staging/home
 multidb_render=$GUARDEN_FIXTURES/multidb-render
 run loom render "$multidb_home" --service multidb-staging --out "$multidb_render"
 assert_exit 0
-assert_file_has "$multidb_render/units/guarden.env" "DB_ODOO_HOST=pgprov-staging"
-assert_file_has "$multidb_render/units/guarden.env" "DB_ODOO_PORT=$db_pub"
-assert_file_has "$multidb_render/units/guarden.env" "DB_ODOO_USER=pgprov-staging-odoo"
-assert_file_has "$multidb_render/units/guarden.env" "DB_BTCPAY_HOST=pgprov-staging"
-assert_file_has "$multidb_render/units/guarden.env" "DB_BTCPAY_USER=pgprov-staging-btcpay"
+assert_file_has "$multidb_render/units/guarden.env" "DB_HOST=pgprov-staging"
+assert_file_has "$multidb_render/units/guarden.env" "DB_PORT=$db_pub"
+assert_file_has "$multidb_render/units/guarden.env" "DB_USER=multidb-staging"
+assert_file_has "$multidb_render/units/guarden.env" \
+    "DB_ODOO_DATABASE=multidb-staging-odoo"
+assert_file_has "$multidb_render/units/guarden.env" \
+    "DB_BTCPAY_DATABASE=multidb-staging-btcpay"
+assert_file_lacks "$multidb_render/units/guarden.env" "DB_ODOO_USER"
 assert_file_has "$multidb_render/units/web.container" "Secret=DB_PASSWORD,type=mount"
 
 # One password for the edge: the two databases share it, which is what the

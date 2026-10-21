@@ -137,8 +137,11 @@ class Edge:
     `postgres-production` in production. An unresolved name is used unchanged,
     so a manifest naming a full service name keeps working.
 
-    When `databases` is set, the edge provisions one role/database pair per
-    name. The credential is minted once per edge and reused for all.
+    `databases` names the databases this edge owns in the provider. The role is
+    one per consumer, named after it; each entry here is a database owned by that
+    role, named `<consumer>-<entry>`, and the credential is minted once per edge
+    and reused for all of them. Empty means the one database named after the
+    consumer.
     """
 
     service: str
@@ -646,6 +649,12 @@ def _needs(value: Any, path: Path) -> list[Edge]:
                 f"and there is no default: it is one of {', '.join(AUTH_KINDS)}"
             )
         databases = _databases(entry.get("databases"), service, path)
+        if databases and auth != "database":
+            raise errors.GuardenError(
+                f"the manifest {path}: the needs entry for {service!r} has `auth: {auth}` "
+                f"and a `databases:` list, and a database is created by a `database` edge "
+                f"alone: an edge of another kind would carry the list and create nothing"
+            )
         out.append(
             Edge(
                 service=service,
@@ -661,9 +670,11 @@ def _needs(value: Any, path: Path) -> list[Edge]:
 def _databases(value: Any, service: str, path: Path) -> tuple[str, ...]:
     """Parse the optional `databases:` key on a needs entry.
 
-    Returns a tuple of database names (possibly empty). Each name becomes a
-    role+database pair in the provider. Names must be valid postgres
-    identifiers and must be unique within the edge.
+    Returns a tuple of database names (possibly empty), and each becomes one
+    database in the provider, owned by the edge's single role and named
+    `<consumer>-<name>`. A name must be a valid postgres identifier and must be
+    unique within the edge; the consumer's half is guarden's and is not written
+    here.
     """
     if value is None:
         return ()
