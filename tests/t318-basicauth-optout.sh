@@ -114,6 +114,11 @@ assert_exit 0
 assert_file_exists "$rendered"
 assert_file_has "$rendered" "basicAuth:"
 assert_file_has "$rendered" "usersFile: \"/etc/guarden/basicauth/optapp-staging.htpasswd\""
+# The file as the DEFAULT posture renders it, held so the round trip below can
+# be compared against it: a flagged service that nobody opted out keeps the
+# middleware byte for byte (the ticket's third acceptance item), and turning the
+# setting off and back on must land on exactly these bytes.
+cp "$rendered" /tmp/t318-rendered-default.yml
 
 # --- the act: `weedr basicauth off` ------------------------------------------
 #
@@ -176,6 +181,13 @@ run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 assert_file_has "$rendered" "basicAuth:"
 assert_file_has "$rendered" "usersFile: \"/etc/guarden/basicauth/optapp-staging.htpasswd\""
+
+# And the round trip landed on the SAME BYTES the default posture rendered —
+# not merely on a file that mentions basicAuth again. A setting that left a
+# residue in the edge's own file (an empty `middlewares:` list, an orphaned
+# definition) would pass a grep and change what the edge serves.
+cmp -s /tmp/t318-rendered-default.yml "$rendered" \
+    || _fail "the default posture does not render byte for byte what it rendered before the opt-out"
 
 after=$(cat "$htpasswd")
 [ "$before" = "$after" ] \
