@@ -9,16 +9,24 @@ non-zero exit is the host not being in the state the request assumed, so it is
 exit `1` and the diagnostic names the tool. Nothing here is a shell: the tools
 are invoked with an argv, never through a shell, and the only strings guarden
 interpolates into a command are a system user's own name.
+
+**`runuser_as` is here for the same reason: it is where a `runuser -u` command
+is BUILT, and there is one of them.** Seven call sites ran a command as another
+account, and each spelled the argv itself, so an environment a second site
+forgot was invisible — a grep for `runuser` showed every site and none of them
+said what environment the command would land in.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import pwd
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from guarden import errors
+from guarden import errors, paths
 
 log = logging.getLogger("guarden")
 
@@ -102,3 +110,244 @@ def lines(result: Result) -> list[str]:
 
 def path_argument(value: Path) -> str:
     return str(value)
+
+
+# --- the `runuser -u` command, and the environment it runs in ----------------
+#
+# **What `runuser` does to the environment, MEASURED on a cut of the golden VM
+# (util-linux 2.41.3, podman 5.7.0), caller root with `USER=root`,
+# `HOME=/root`:**
+#
+# ```
+# $ runuser -u probe-svc -- env | grep -E '^(HOME|USER|LOGNAME|SHELL)='
+# HOME=/var/lib/guarden/services/probe-svc/home
+# LOGNAME=probe-svc
+# SHELL=/bin/sh
+# USER=probe-svc
+#
+# $ XDG_RUNTIME_DIR=/run/user/0 runuser -u probe-svc -- env
+# ... the four above, unchanged ...
+# XDG_RUNTIME_DIR=/run/user/0        <-- INHERITED VERBATIM
+# ```
+#
+# **So `runuser` SETS `HOME`, `USER`, `LOGNAME`, `SHELL` and `PATH` for a
+# non-root target, and inherits everything ELSE verbatim.** The repository
+# claimed the opposite — "swaps the uid but keeps the caller's environment, and
+# the caller is root — so podman saw `USER=root`" — and that claim was copied
+# into four places. It was refuted by measurement, and the refutation is
+# recorded in `service.py`'s docstring, in `creator.py`'s, in
+# `tests/t350-keepid.sh` and in tickets 321 and 332 so that it stops being
+# copied.
+#
+# **The measurement that produced the refuted claim was `setpriv`, not
+# `runuser`.** `tests/t350-keepid.sh` scrubs with
+# `setpriv --reuid=<svc> --regid=<svc> --clear-groups env …`, and `setpriv`
+# genuinely keeps the caller's environment — measured on the same machine:
+# `setpriv --reuid=nobody --regid=nogroup --clear-groups env` answers
+# `HOME=/root` and `USER=root`. The comment named both tools; only the second
+# behaves the way the comment describes.
+#
+# **The mechanism is still right.** Podman's keep-id mapping reads `/etc/subuid`
+# keyed by `$USER`, and forcing `USER=root` into podman answers `cannot find
+# UID/GID for user root: no subuid ranges found for user "root" in /etc/subuid`
+# — measured. So `USER` is set here, but as defence in depth against a caller
+# that reaches podman by another route, NOT as the fix for an inherited
+# `USER=root`.
+#
+# **What is genuinely inherited is what this helper removes.** Measured costs
+# of each, same machine:
+#
+#   * `XDG_RUNTIME_DIR` — the caller's own. Podman answers `Failed to obtain
+#     podman configuration: lstat /run/user/0: no such file or directory`.
+#   * `XDG_DATA_HOME` — the caller's own. **The podman STORE moves, and with it
+#     the secret database**: `containers/storage/secrets/secrets.json` and
+#     `containers/storage/secrets/filedriver/secretsdata.json` hold the
+#     materialised credential values. The files stay `0600` to the service uid,
+#     but the DIRECTORY leaves the service's `0700` home — and
+#     `credentials.materialise` names that home as the documented limit on
+#     that secret. This is the sharpest consequence, and it is why the two
+#     `podman secret` sites are the first to fix.
+#   * `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` — podman reads them.
+#   * `CONTAINERS_*` — podman fails on the file they name.
+#   * `DBUS_SESSION_BUS_ADDRESS` — inherited verbatim, and it points podman at
+#     the caller's session bus rather than the service's own manager.
+#   * `PWD` and `OLDPWD` — the caller's directory, which a service uid may not
+#     be able to enter: `cannot chdir to /root: Permission denied`.
+#
+# **`PATH` is NOT scrubbed, because `runuser` resets it** to a fixed system
+# default (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`),
+# measured — so there is no `PATH` hijack through this path and pretending
+# otherwise would be a claim nobody measured.
+#
+# **Reachability, measured.** `sudo -u root` RESETS the environment
+# (`XDG_RUNTIME_DIR` arrives unset), and a systemd oneshot's environment is
+# only `PWD=/` and `USER=root` with no `XDG_*` at all — so the credential
+# materialiser (`guarden-creds-boot.service`, a `Type=oneshot`) is already
+# clean. **The reachable path is an operator's ROOT SHELL**: `weedr service
+# build` and a hand-run `weedr secret materialise`.
+
+# The variables that must not be inherited at all. A name here is REMOVED
+# from the environment the command runs in, whether or not the caller had it.
+#
+# **A name in neither list is left alone** — deliberately: the environment
+# carries more than guarden knows about (a locale, a proxy), and a scrub that
+# removed everything would be a policy this module has no standing to set.
+SCRUB_REMOVE = (
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "CONTAINERS_STORAGE_CONF",
+    "CONTAINERS_CONF",
+    "CONTAINERS_REGISTRIES_CONF",
+    "CONTAINERS_POLICY_JSON",
+    "PWD",
+    "OLDPWD",
+    # **Removed rather than only overwritten.** `XDG_RUNTIME_DIR` is SET below
+    # when the account's own manager has made `/run/user/<uid>` — but it is
+    # REMOVED here regardless, because a manager that has not come up yet
+    # leaves the caller's value in place, and podman then fails on the
+    # caller's path: `Failed to obtain podman configuration: lstat
+    # /run/user/0: no such file or directory` — measured.
+    "XDG_RUNTIME_DIR",
+)
+
+
+def _home_for(account: str) -> Path:
+    """The home an account's commands run in.
+
+    **A service's home is its own tree**, `/var/lib/guarden/services/<name>/home`
+    (`paths.service_home`), and it is where podman's rootless store lives — the
+    `0700` that `credentials.materialise` names as the limit on the
+    materialised secret.
+
+    **The `guarden` account is not a service** and has no home under
+    `/var/lib/guarden/services`: it is one of the two program users `soil
+    install` creates, and `useradd --system --no-create-home` gives it the
+    passwd home `/home/guarden` — **which is never created** (measured on the
+    golden VM: `ls -ld /home/guarden` answers "No such file or directory",
+    and `tests/t20-install.sh:92` asserts the absence).
+
+    **So the passwd home is NOT used here, and the reason is measured rather
+    than tidy.** A `HOME` naming a directory that is not there is a `HOME`
+    that a program can create: Python's `os.makedirs(os.path.expanduser("~/x"))`
+    under `HOME=/home/guarden` answers "makedirs ok" — it CREATES the
+    directory the install phase deliberately does not have, and the absence
+    `t20-install.sh` asserts stops being true. A `HOME` that exists is
+    therefore the honest answer, and the one that exists and belongs to the
+    account is **`/var/lib/guarden/render`** (`0770 guarden:guarden`, spec
+    2.1's table, created by the install phase) — the tree the mutator hands
+    the renderer and the one the `guarden` programs' own output is written
+    through.
+
+    `loom render`, `roots sync` and `twig sync` write only into
+    `/var/lib/guarden`, and none of them reads `HOME` — so this is not a
+    change in where their output lands. It is the choice of a directory that
+    exists and is the account's own, over one that does not exist and that
+    something might create.
+    """
+    if account == "guarden":
+        return paths.LIB / "render"
+    return paths.service_home(account)
+
+
+def _data_home(account: str) -> Path:
+    """Where podman's store — and the secret database inside it — belongs.
+
+    **`XDG_DATA_HOME` is the XDG DATA DIRECTORY, not the home**, and podman
+    puts its store under `<XDG_DATA_HOME>/containers/storage`. Measured on the
+    golden VM, with the service's home as the only variable:
+
+    ```
+    XDG_DATA_HOME unset   -> <home>/.local/share/containers/storage
+    XDG_DATA_HOME=<home>  -> <home>/containers/storage
+    XDG_DATA_HOME=<home>/.local/share
+                           -> <home>/.local/share/containers/storage
+    XDG_DATA_HOME=/tmp/hostile
+                           -> /tmp/hostile/containers/storage
+    ```
+
+    **So the value that keeps the store where the repository already says it
+    is — `paths.PODMAN_STORE`, `<home>/.local/share/containers` — is
+    `<home>/.local/share`, and that is what this returns.** Setting it to the
+    home itself would move the store to `<home>/containers`, which is not the
+    path `service.py`'s store walk and `paths.PODMAN_STORE` name, and every
+    assertion about the store would then be about a tree that is not there.
+
+    **And the hostile case is the one this exists for**: with the caller's own
+    `XDG_DATA_HOME` inherited, the whole store — and with it
+    `containers/storage/secrets/secrets.json` and
+    `containers/storage/secrets/filedriver/secretsdata.json`, which hold the
+    materialised credential values — lands OUTSIDE the service's `0700` home.
+    The files stay `0600` to the service uid; the DIRECTORY is what leaves.
+    """
+    return _home_for(account) / ".local" / "share"
+
+
+def _runtime_dir(account: str) -> Path:
+    """The service's own `/run/user/<uid>`, when the manager has made it.
+
+    The user manager comes up asynchronously after an ingest, so the directory
+    is not always there. `service.py`'s probe has always set
+    `XDG_RUNTIME_DIR` only when it exists, and that condition is kept: a
+    `XDG_RUNTIME_DIR` naming a directory that is not there is worse than none,
+    because podman fails on the missing path rather than falling back.
+    """
+    try:
+        uid = pwd.getpwnam(account).pw_uid
+    except KeyError:
+        return Path(f"/run/user/{os.getuid()}")
+    return Path(f"/run/user/{uid}")
+
+
+def runuser_as(account: str, *argv: str) -> list[str]:
+    """The argv that runs a command as another account, in a scrubbed environment.
+
+    **`runuser -u <account> --` plus an `env` that sets the account's own
+    variables and removes the ones that must not be inherited.** The `env` is
+    INSIDE the `runuser`, so it is the environment of the command that runs as
+    the account and not of the caller's.
+
+    **The variables that are SET are the account's own**, and every one of them
+    is set whether or not the caller had it:
+
+      * `HOME` — the account's home (`_home_for`).
+      * `XDG_DATA_HOME` — the account's XDG data directory (`_data_home`), so
+        podman's store and the secret database inside it land inside the
+        service's `0700` home rather than wherever the caller's pointed. This
+        is the one that matters: without it the materialised credential leaves
+        the home that is its documented limit.
+      * `XDG_RUNTIME_DIR` — the account's own `/run/user/<uid>`, **only when
+        that directory exists** (see `_runtime_dir`).
+      * `USER` and `LOGNAME` — the account's name.
+
+    **The variables that are REMOVED are the ones the caller must not pass
+    on**: `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `DBUS_SESSION_BUS_ADDRESS`,
+    every `CONTAINERS_*` this module names, `PWD` and `OLDPWD`.
+
+    **`USER` and `LOGNAME` are set although `runuser` already sets them.** That
+    is defence in depth and not a measured fix: `runuser` sets both for a
+    non-root target (measured above), so setting them costs nothing and the
+    decision was to set them. What the measurement DID find is that `USER` is
+    what podman's keep-id mapping is keyed by, so a caller that reaches podman
+    by another route must not be able to put `USER=root` into it.
+
+    **This builds the argv and nothing else.** The working directory belongs
+    to the CALL — `tool.call(argv, cwd=...)` — because a rootless podman
+    enters the working directory as the service's uid and is refused before it
+    does any work, and the suite's own `0700` root tree is not a directory any
+    service uid can enter.
+    """
+    home = _home_for(account)
+    runtime = _runtime_dir(account)
+    env = [
+        "env",
+        *(item for name in SCRUB_REMOVE for item in ("-u", name)),
+        "--",
+        f"HOME={home}",
+        f"USER={account}",
+        f"LOGNAME={account}",
+        f"XDG_DATA_HOME={_data_home(account)}",
+    ]
+    if runtime.is_dir():
+        env.append(f"XDG_RUNTIME_DIR={runtime}")
+    return ["runuser", "-u", account, "--", *env, *argv]

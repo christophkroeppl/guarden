@@ -616,7 +616,7 @@ def pull_background(
     """
     argv = ["podman", "pull", reference]
     if name:
-        argv = ["runuser", "-u", name, "--", "env", f"USER={name}", f"LOGNAME={name}", *argv]
+        argv = tool.runuser_as(name, *argv)
     try:
         process = subprocess.Popen(  # noqa: S603
             argv,
@@ -801,9 +801,30 @@ def container_running(name: str, container: str, record=None) -> Check:
     operator learns to ignore a verification.
 
     The pattern is the one the mutator uses (`service._podman`): `runuser -u
-    <service>` with `USER` and `LOGNAME` named for the service, because
-    `runuser` swaps the uid but keeps the caller's environment, and podman's
-    keep-id mapping reads the subid files keyed by `USER`.
+    <service>` with the service's own `HOME`, `USER`, `LOGNAME`,
+    `XDG_DATA_HOME` and `XDG_RUNTIME_DIR`.
+
+    **The reason this file used to give was WRONG, and it is recorded here so
+    it is not copied again.** It said "`runuser` swaps the uid but keeps the
+    caller's environment, and podman's keep-id mapping reads the subid files
+    keyed by `USER`". The MECHANISM is right — podman's keep-id mapping reads
+    `/etc/subuid` keyed by `$USER`, and forcing `USER=root` into podman
+    answers `cannot find UID/GID for user root: no subuid ranges found for
+    user "root" in /etc/subuid` — but the PREMISE is false: MEASURED on the
+    golden VM (util-linux 2.41.3), `runuser -u <service> -- env` answers
+    `HOME=<the service's home>`, `USER=<the service>` and
+    `LOGNAME=<the service>`. `runuser` SETS those for a non-root target; it
+    does not inherit the caller's `USER`. The measurement that produced the
+    refuted claim was `setpriv`, which genuinely does keep the caller's
+    environment.
+
+    **What `runuser` really does inherit is everything else** —
+    `XDG_RUNTIME_DIR`, `XDG_DATA_HOME`, `XDG_CONFIG_HOME`,
+    `XDG_CACHE_HOME`, `DBUS_SESSION_BUS_ADDRESS`, `CONTAINERS_*`, `PWD` and
+    `OLDPWD` — and `XDG_DATA_HOME` is the one that moves podman's store, with
+    the secret database inside it, out of the service's own home.
+    `tool.runuser_as` is where that scrub is decided, and this check goes
+    through it.
     """
     argv = ["ps", "--filter", f"name={container}", "--format", "{{.Names}}"]
     if record is not None:

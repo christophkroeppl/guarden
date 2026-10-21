@@ -262,7 +262,7 @@ def provision(consumer: str, provider: registry.Registry, container: str,
         db_names = [f"{provider.service}-{db_name}" for db_name in databases]
     else:
         db_names = [container_name]
-    podman = ["runuser", "-u", provider.service, "--", "podman"]
+    podman = tool.runuser_as(provider.service, "podman")
     listing = [*podman, "ps", "--filter", f"name=^{container_name}$", "--format", "{{.Names}}"]
     running = tool.call(listing, cwd="/tmp")
     if container_name not in running.stdout.split():
