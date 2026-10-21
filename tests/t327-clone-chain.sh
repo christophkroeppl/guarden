@@ -38,9 +38,9 @@ export GUARDEN_PREFIX=/
 ensure_accounts
 stage_config guarden-measured.toml
 run soil packages --apply
-assert_not_rejected
+assert_exit 0
 run soil install --apply
-assert_not_rejected
+assert_exit 0
 
 # --- the two services, one production and one staging ------------------------
 #
