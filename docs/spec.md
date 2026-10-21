@@ -523,6 +523,10 @@ postgres = "postgres-production"
 
 Each `[providers.<track>]` table maps a logical provider name to the concrete service that serves it in that track. `Config.resolve_provider(track, logical)` returns the concrete name, or `logical` unchanged when there is no mapping — so a manifest that names a full service name (`postgres-production`) keeps working, and a host with no `[providers]` table behaves exactly as before. The resolution runs in the mutator and the renderer, at every point a `needs:` entry becomes a provider lookup, an edge key, a hostname or a `Wants=` edge; both sides resolve from the same table, so the key the mutator writes is the key the renderer reads.
 
+**The two sides of a row are not held to the same rule.** The **concrete** name becomes a Linux user name, so it is a service name in full: the pattern, the 31-character limit and no `..`. The **logical** name is the manifest's own token and a lookup key that becomes nothing, so it is held to the pattern alone — the same rule the manifest's `needs:` entry is held to, and a forty-character logical name is legal in a manifest. A key that is not a name at all can never match a `needs:` entry, and a concrete name that is not one resolves to a service that does not exist — so the consumer is refused at the render with a name no provider can be connected to, and the operator is hunting a line the diagnostic never describes. A name that breaks either rule is **exit `2`**, the same code the track table's own `kind`/`cap`/`fork_from` mistakes carry, and a value of the wrong type is exit `1`.
+
+A `[providers.<track>]` for a track the host does not have is **exit `2`** and names the tracks the host does have: it is the same shape as a `fork_from` naming no track, which is a name in this file that names no track, and it is a rule this file states. A mapping nothing reads is a mapping an operator believes is in effect.
+
 #### `[edge_overrides]` — the operator's pin
 
 `/etc/guarden/overrides.toml` is the host-level exception to the per-track default. It holds one table:
@@ -533,6 +537,8 @@ postgres = "postgres-staging"   # on this host, postgres always means staging
 ```
 
 Precedence: **explicit override > `[providers]` environment default > literal name**. The override is host-wide and names no track — it applies to every service on the host that names the logical provider. The file is `0640 root:guarden` so that `loom`, running as `guarden`, can read it; it is seeded empty by `soil install` only when absent, and no program writes it afterwards. A pin that an operator has to re-ingest to apply is not a pin: the renderer reads the file on every render, so a pin is effective on the very next `loom render`.
+
+**Both sides of an override row are service names in full** — the pattern, the 31-character limit and no `..` — which is a stricter rule than `[providers]` applies to its logical side (§3.1 above). The difference is deliberate and it is the override's own: the override is the one table an operator writes by hand to redirect a provider on one box, so its key is a service name in the operator's own vocabulary rather than a manifest's token. The cost is that a logical provider name long enough to be legal in a manifest cannot be pinned — and the refusal is exit `1` naming the file, because the override is read on every resolution and a bad one takes the host's edge resolution down. The override is read **first**, so this rule governs before `[providers]` is consulted at all.
 
 The manifest refuses `environment:` and `track:` by name (spec 4): the host decides the environment. This table is where that decision is expressed — the repository names the logical provider, and the root-owned track table says which concrete service answers it per track.
 
@@ -1461,6 +1467,10 @@ In order:
 10. For a `database` edge, a role and a database in the provider, a minted password planted as
   a podman secret in the **consumer's** store, and nothing in the provider's. For a `secret`
   edge, a minted secret planted in both, because the provider has to be able to verify it.
+  **The provider is the concrete service the consumer's track resolves the manifest's
+  logical name to** (§3.1): the role and the database are created in *that* provider, and
+  the edge's registry record is keyed by its name. A manifest that names no logical name
+  names the service itself, and nothing changes.
 11. Units, rendered by `loom` and installed by the mutator.
 12. **A fork, when the track forks — as an internal step of this command, from the track's
   `fork_from` field and nothing else.** §8.3 has the rules; the two that matter here are that
@@ -2744,6 +2754,15 @@ no alias — to the host's loopback alias. The edge's route target is
 `<provider-service>:<publication>`, resolved the same way inside the edge's own units. A
 generated environment variable per edge carries `DB_HOST` and `DB_PORT`, and for a database
 edge the credential arrives as `/run/secrets/DB_PASSWORD`.
+
+**The name is the concrete one, and the concrete one is what the consumer's track resolves
+the manifest's logical name to** (§3.1). A manifest that names `postgres` renders
+`AddHost=postgres-staging:…` in a staging consumer and `AddHost=postgres-production:…` in a
+production one, and the environment variable carries the same name. The manifest names one
+logical provider and the host says which service answers it per track; the repository cannot
+name the environment (§4), so the resolution is the host's and the host's alone. A name the
+table does not map is the name as written, so a manifest that names a full service name keeps
+working and a host with no `[providers]` table behaves exactly as it did before.
 
 **A name inside a unit source is not a name.** Every container of one service runs in its own
 pasta namespace and there is no shared network (§7.1), so the containers of one unit source

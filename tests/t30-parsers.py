@@ -410,6 +410,118 @@ def edge_overrides() -> None:
     )
 
 
+def providers_table() -> None:
+    """`[providers.<track>]`: the logical name, and the concrete name it names.
+
+    **The two sides are not held to the same rule.** The concrete name becomes
+    a Linux user name, so it is a service name in full — the pattern, the
+    31-character limit and no `..`; the logical name is the manifest's own
+    token and a lookup key that becomes nothing, so it carries only the
+    pattern, which is the rule the manifest's `needs:` entry is held to too.
+
+    A concrete name that is not a service name resolves to a service that does
+    not exist — so the consumer is refused at the render with a name nobody can
+    connect to a provider by, and the operator is hunting a line the diagnostic
+    never describes.
+
+    The track is a track too: a `[providers.preprod]` on a host with no `preprod`
+    track is a table nothing reads, and a silently ignored mapping is a mapping
+    an operator believes is in effect.
+    """
+    from guarden import config as config_mod
+
+    def load(body: str):
+        path = _write_file(
+            "guarden.toml",
+            "[[environments]]\n"
+            'name = "staging"\n'
+            'kind = "slot"\n'
+            "[[environments]]\n"
+            'name = "production"\n'
+            'kind = "slot"\n' + body,
+        )
+        return config_mod.load(path)
+
+    base = (
+        "[providers.staging]\n"
+        'postgres = "postgres-staging"\n'
+        "[providers.production]\n"
+        'postgres = "postgres-production"\n'
+    )
+    config = load(base)
+    check(
+        config.resolve_provider("staging", "postgres") == "postgres-staging",
+        "a staging consumer resolves the staging provider",
+    )
+    check(
+        config.resolve_provider("production", "postgres") == "postgres-production",
+        "a production consumer resolves the production provider",
+    )
+    check(
+        config.resolve_provider("staging", "postgres-production") == "postgres-production",
+        "a manifest naming a full service name is unchanged",
+    )
+    check(
+        config.resolve_provider("staging", "rustfs") == "rustfs",
+        "a name no table holds is unchanged",
+    )
+    check(
+        config.resolve_provider("preview", "postgres") == "postgres",
+        "a track with no table of its own resolves nothing",
+    )
+
+    # **The two sides are not held to the same rule.** The concrete name becomes
+    # a Linux user name and carries the 31-character limit; the logical name is
+    # a lookup key that becomes nothing, and the manifest's own `needs:` entry
+    # holds it to the pattern alone. A forty-character logical name is legal in
+    # a manifest, so a table that refused to map it would refuse a mapping the
+    # manifest is asking for.
+    long_logical = "a-logical-provider-name-longer-than-a-service-name"
+    config = load(f'[providers.staging]\n{long_logical} = "postgres-staging"\n')
+    check(
+        config.resolve_provider("staging", long_logical) == "postgres-staging",
+        "a logical name longer than a service name is mapped",
+    )
+    try:
+        load(f'[providers.staging]\n{long_logical} = "{long_logical}"\n')
+    except errors.GuardenError as exc:
+        check(exc.code == 2, "an over-long concrete name is a rule, so exit 2")
+        check("providers" in exc.message, "the over-long concrete name is named")
+    else:
+        FAILURES.append("an over-long concrete name was accepted")
+
+    for body, what, wanted in (
+        ('[providers.staging]\n"Not a name" = "postgres-staging"\n', "an invalid key", 2),
+        ('[providers.staging]\npostgres = "Not a name"\n', "an invalid value", 2),
+        ('[providers.staging]\npostgres = 5\n', "a non-string value", 1),
+        ('[providers.staging]\npostgres = ""\n', "an empty value", 2),
+        ('[providers.staging]\npostgres = ["a"]\n', "a list value", 1),
+    ):
+        try:
+            load(body)
+        except errors.GuardenError as exc:
+            # A name that breaks a rule is a rule violation in a well-formed
+            # file, so it is exit 2 — the code the track table's own
+            # `kind`/`cap`/`fork_from` rules carry. A value of the wrong TYPE
+            # is the host, so it is exit 1.
+            check(exc.code == wanted, f"{what} is exit {exc.code}, expected {wanted}")
+            check("providers" in exc.message, f"{what} is named")
+        else:
+            FAILURES.append(f"{what} was accepted")
+
+    # A table for a track the host does not have is refused by name: a mapping
+    # nothing reads is a mapping an operator believes is in effect. It is the
+    # same shape as a `fork_from` naming no track — a name in this file that
+    # names no track — so it carries the same exit code, 2.
+    try:
+        load("[providers.preprod]\npostgres = \"postgres-preprod\"\n")
+    except errors.GuardenError as exc:
+        check(exc.code == 2, "a table for an unknown track is a rule, so exit 2")
+        check("preprod" in exc.message, "the unknown track is named")
+    else:
+        FAILURES.append("a table for an unknown track was accepted")
+
+
 def _write_file(name: str, body: str) -> Path:
     path = Path(tempfile.mkdtemp()) / name
     path.write_text(body, encoding="utf-8")
@@ -430,6 +542,7 @@ def main() -> int:
     registries()
     keys()
     edge_overrides()
+    providers_table()
     for failure in FAILURES:
         sys.stderr.write(f"error: {failure}\n")
     return 1 if FAILURES else 0

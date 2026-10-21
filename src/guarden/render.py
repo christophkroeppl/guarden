@@ -821,17 +821,17 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
         concrete = context.provider(edge.service)
         if concrete == context.service:
             raise errors.GuardenError(
-                f"the manifest {document.source} needs {edge.service!r}, which is the service "
-                f"that declared it: a self-edge has no consumer and is nearly always a "
-                f"copy-paste"
+                f"the manifest {document.source} needs {edge.service!r}, which resolves to "
+                f"{concrete!r} — the service that declared it: a self-edge has no consumer "
+                f"and is nearly always a copy-paste"
             )
         provider = registry.load(concrete)
         if provider is None:
             raise errors.GuardenError(
                 f"{context.service} needs {edge.service!r} as {edge.prefix!r}, and there is "
-                f"no registry entry for it; a service that does not exist yet is created by a "
-                f"later deploy, and one that never is names a service this host has never "
-                f"heard of",
+                f"no registry entry for {concrete}; a service that does not exist yet is "
+                f"created by a later deploy, and one that never is names a service this host "
+                f"has never heard of",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         if edge.prefix not in provider.provides:
@@ -887,10 +887,10 @@ def edge_publications(
         ]
         if not numbers:
             raise errors.GuardenError(
-                f"{context.service} needs {edge.service!r} on port {edge.port} and its "
-                f"registry entry names no allocated publication for that edge; the mutator "
-                f"allocates one when it installs the edge, and the renderer does not guess "
-                f"a loopback port",
+                f"{context.service} needs {edge.service!r} on port {edge.port}, which "
+                f"resolves to {concrete!r}, and that provider's registry entry names no "
+                f"allocated publication for the edge; the mutator allocates one when it "
+                f"installs the edge, and the renderer does not guess a loopback port",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         out.append((edge.service, concrete, min(numbers)))
