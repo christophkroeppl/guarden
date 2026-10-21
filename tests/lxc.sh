@@ -321,12 +321,6 @@ APT_LOCK_WAIT=${GUARDEN_LXC_APT_LOCK_WAIT:-600}
 # The value is overridable, because a bound is a policy and the operator may
 # have a reason for a different one.
 GOLDEN_APT_LOCK_WAIT=${GUARDEN_LXC_GOLDEN_APT_LOCK_WAIT:-2400}
-# `cloud-init status --wait` polls until cloud-init reports a final state and
-# has no end of its own: cloud-init that never gets there would hold the cut
-# with nothing printed, which is the wedge every other exec on this path is
-# bounded against. Its result was never read, and the lock wait is what decides
-# readiness, so past the bound the only thing lost is the honest signal.
-CLOUD_INIT_WAIT=${GUARDEN_LXC_CLOUD_INIT_WAIT:-600}
 
 # Ready means the agent answers, not that the state says RUNNING.
 _wait_ready() {
@@ -414,10 +408,10 @@ _wait_cloud_init() {
     # The cloud-init wait is kept because it is the honest signal when it works,
     # and its result is deliberately not used to skip the lock wait: `status
     # --wait` can return before `package_update` has released the lists lock,
-    # which is the race this function exists to close. It is bounded — see
-    # `CLOUD_INIT_WAIT` above — because `status --wait` has no end of its own;
-    # the lock wait below is what decides readiness, so past the bound the only
-    # thing lost is that signal.
+    # which is the race this function exists to close. It is bounded by the
+    # caller's `budget` because `status --wait` has no end of its own; the lock
+    # wait below is what decides readiness, so past the bound the only thing
+    # lost is that signal.
     timeout --foreground --signal=KILL "$budget" \
         $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1 || :
     # **`fuser` may be absent, and its absence would make this a silent no-op.**
