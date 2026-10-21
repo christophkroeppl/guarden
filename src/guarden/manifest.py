@@ -62,8 +62,13 @@ BLOCK_KEYS = {
     "routes": {"container", "port", "host", "auth"},
     "widgets": {"container", "file"},
     "firewall": {"name", "chain", "rule"},
-    "scrub": {"tables", "keys"},
 }
+
+# `scrub:` is a MAPPING of two lists, and it is not in BLOCK_KEYS because that
+# table is the list-of-entries blocks: the generic check there refuses anything
+# that is not a list, and running `scrub:` through it read `scrub is not a list`
+# for a block that is legal and correct. Its own closed key sets are below, and
+# `_scrub` applies them.
 
 # The `scrub:` block's own key sets, closed (ADR-0025).
 #
