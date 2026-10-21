@@ -46,7 +46,7 @@ buys would then hold twice, with the copies able to disagree:
   the admin path.
 - **What does "the admin's file is never deleted" mean?** Today it is exact:
   guarden takes the file it wrote and leaves the admin's where it is
-  (`service._drop_admin_dropins`). With a staged copy there are two admin
+  (`service._drop_admin_units`). With a staged copy there are two admin
   files, and a removal would have to decide what to do with the staged one —
   delete it and lose the admin's configuration, keep it and leave a file
   behind that names a service that no longer exists.
