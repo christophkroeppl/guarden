@@ -1532,12 +1532,13 @@ def _environment_file(
             if edge.auth != edges.AUTH_DATABASE:
                 continue
             rows.append((f"{edge.variable}_USER", edges.role_name(consumer)))
-            if not edge.databases:
+            if edge.databases:
+                for database, name in zip(
+                    edge.databases, edges.database_names(consumer, edge.databases), strict=True
+                ):
+                    rows.append((f"{edge.variable}_{database.upper()}_DATABASE", name))
+            else:
                 rows.append((f"{edge.variable}_DATABASE", edges.role_name(consumer)))
-            for database, name in zip(
-                edge.databases, edges.database_names(consumer, edge.databases), strict=True
-            ):
-                rows.append((f"{edge.variable}_{database.upper()}_DATABASE", name))
     return render_template("guarden.env.j2", rows=rows)
 
 
