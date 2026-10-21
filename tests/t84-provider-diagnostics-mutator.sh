@@ -10,14 +10,14 @@
 # would send the operator looking for a service that does not exist on this
 # host.
 #
-# **`edges.install` makes one other answer about the name — a WARNING when the
-# resolved provider has no registry entry — and a poke cannot observe it.** The
-# same ingest renders the consumer's units once the registry is saved, the
-# render refuses the edge that was recorded with no publication, and the raise
-# takes `_emit` with it: the warning sits in `outcome.warnings` and is never
-# printed. This suite therefore pins the one site a poke reaches. The warning's
-# name is held to the same rule in `edges.install` and has no suite that could
-# assert it; ticket 289 is the ordering that would make it observable.
+# The other edge answers a `needs:` entry can get are refusals made in the same
+# place, before identity, because none of them can be rendered: an absent
+# provider has no allocation to dial, a port the provider names no container for
+# has no publication either, and a self-edge has no consumer at all. The ingest
+# renders the consumer in the same command, so an answer discovered there would
+# leave a system user, a home, its volumes and a registry record with no units
+# (ticket 289). Each scenario below therefore asserts BOTH the one line and the
+# absence of everything the mutator would have created before the render.
 #
 # The RENDERER's refusals are the same rule on the other side of the same
 # resolution, and they need no real host, so they live in
@@ -45,7 +45,7 @@ purge() {
 }
 
 cleanup() {
-    purge postgres-staging ghost-staging
+    purge postgres-staging ghost-staging nowhere-staging
 }
 trap cleanup EXIT
 
@@ -89,3 +89,42 @@ assert_stderr_has "postgres-staging"
 assert_stderr_has "ghost-staging"
 assert_stderr_has "db"
 assert_stderr_has "cache"
+
+# The edge resolves to the service that declares it. A self-edge has no
+# consumer, so no unit can be rendered for it — and the manifest named the
+# service itself, so this is a rejected input (exit `2`) and not an answer about
+# the host. Refused before identity like the rest: nothing is created.
+seed "$ghost/.guarden/service.yml" "project: ghost" "units: .guarden/quadlet/" \
+    "state:" "  - data" "needs:" "  - service: ghost-staging" "    as: db" \
+    "    port: 5432" "    auth: database"
+seed "$ghost/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27" "Volume=data:/var/lib/app"
+run weedr service ingest ghost-staging --from poke ghost@9f2c1ab
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "self-edge"
+assert_stderr_has "ghost-staging"
+assert_no_passwd ghost-staging
+assert_file_missing "$registry/ghost-staging.toml"
+assert_file_missing "/var/lib/guarden/services/ghost-staging"
+
+# The logical name resolves to a provider this host has never heard of. There is
+# no allocation to dial, so the ingest's render would refuse the consumer's
+# units — after the user, the home, the volumes and the registry record existed.
+# The mutator refuses the edge first, and the service is not left half-created.
+nowhere=/var/lib/guarden/staging/nowhere/9f2c1ab
+mkdir -p "$nowhere/.guarden/quadlet"
+seed "$nowhere/.guarden/service.yml" "project: nowhere" "units: .guarden/quadlet/" \
+    "state:" "  - data" "needs:" "  - service: absent" "    as: db" \
+    "    port: 5432" "    auth: database"
+seed "$nowhere/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27" "Volume=data:/var/lib/app"
+run weedr service ingest nowhere-staging --from poke nowhere@9f2c1ab
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "absent-staging"
+assert_stderr_has "nowhere-staging"
+assert_stderr_has "no registry entry"
+assert_no_passwd nowhere-staging
+assert_file_missing "$registry/nowhere-staging.toml"
+assert_file_missing "/var/lib/guarden/services/nowhere-staging"

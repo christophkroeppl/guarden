@@ -123,7 +123,10 @@ done
 systemctl daemon-reload
 run weedr service ingest qapp-production --from poke qapp@9f2c1ab
 assert_exit 0
-assert_stderr_lacks "the edge is recorded with no publication"
+# The edge installed with the provider's own allocation, which is the record the
+# credential below hangs on: exit `0` alone would also be true of a consumer whose
+# edge was refused, and the warning that used to say so is gone (ticket 289).
+assert_file_has "$registry/qapp-production.toml" 'publications = [20108]'
 
 # A database edge mints a value (key = prefix uppercased + _PASSWORD), so the
 # blob is on disk after ingest.

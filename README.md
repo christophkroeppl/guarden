@@ -482,10 +482,11 @@ own documentation.
 
 A second list, `bulk`, is a btrfs subvolume with no snapper configuration at all: never snapshotted, never a
 fork or rollback source, and **an empty subvolume after a fork** — it is never cloned from a live
-volume, because a copy as of an instant is not reproducible afterwards. It still gets a volume
-unit so a container can mount it. A bulk volume is a subvolume on every path, the fork included;
-it is never a plain directory, because a container mounts a `.volume` unit and that has to be the
-same kind of thing either way.
+volume, because a copy as of an instant is not reproducible afterwards. A container mounts it by
+its own path — the subvolume itself — in a `Volume=` line, and there is no `.volume` unit
+(spec §6.3). A bulk volume is a subvolume on every path, the fork included; it is never a plain
+directory, because the path the `Volume=` line names has to resolve to the same kind of thing on
+a fresh deployment and after a fork.
 
 `weedr service fork` clones a snapshot into every state volume of another service in constant
 time: the clone is copy-on-write, the source is never written to, and the target's own engine
