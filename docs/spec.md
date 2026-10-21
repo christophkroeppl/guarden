@@ -67,7 +67,7 @@ the line and both `--check` and `--apply` go through it, so the two modes cannot
 
 `--json` is available on exactly these verbs, and on no other: `weedr service list`, `weedr
 service status`, `weedr secret list`, `weedr secret materialise`, `weedr port list`, `weedr firewall list`, `weedr module
-list`, `weedr project list`, `weedr project keys`, `weedr share list`, `stakes list`, `stakes query`, `furrow queue
+list`, `weedr project list`, `weedr project keys`, `weedr share list`, `weedr basicauth list`, `stakes list`, `stakes query`, `furrow queue
 list`, `furrow status`. `--json` on a write verb, and `--json` on a verb not in this list, is
 exit `2`.
 
@@ -87,6 +87,7 @@ change to this table and not a compatible addition.
 | `weedr project list` | `projects` — one object per project, each with `name`, `repository`, `environments` |
 | `weedr project keys` | `project`, `keys` — one object per key with `type`, `fingerprint`, `added` |
 | `weedr share list` | `issuances` — one object per issuance with `id`, `service`, `ref` (null on a slot track), `hosts`, `email`, `state` (`live` \| `expired` \| `revoked`), `issued`, `deadline`, `revoked` (null unless revoked). The deadlines are **absolute**, and a state is derived from them and the clock rather than stored |
+| `weedr basicauth list` | `services` — one object per service, each with `service`, `middleware` (`on` \| `off`), `minted` (bool — whether the login was ever minted) and `opt_out` (bool — whether the operator's setting turned the middleware off). The two are separate facts and the table says so: a service that was never minted one has no middleware and no opt-out, and a service whose middleware is off by the operator's setting still holds its login |
 | `stakes list` | `pins` — one object per pin with `id`, `service`, `volume`, `number`, `note`, `marked` |
 | `stakes query` | one object: `id`, `service`, `volume`, `number`, `note`, `marked` — **and nothing snapper holds.** See below |
 | `furrow queue list` | `requests` — one object per request with `service`, `ref`, `sha`, `state`, `lane`, `weight`, `queued_at` |
@@ -658,6 +659,11 @@ allow = ["/dev/dri"]  # host paths this service's units may bind-mount
 [expose]
 tunnel = ["web"]  # route labels published through the tunnel instead of the service's
   # resolved destination; a loopback record still wins (§3.3)
+
+[basicauth]
+required = false  # the default basic-auth middleware (§6.2 `weedr basicauth off`)
+  # is NOT attached to this service's edge routers. Absent is the
+  # default: the middleware is on. ADR-0024
 ```
 
 `keep_last` and `free_limit` override the track's defaults. `groups.add` gives the service
@@ -693,6 +699,18 @@ the shape. **The table does not exist in the program yet**, so
 container runs as another" is not this table** — it is the keep-id pin (ADR-0019), which maps
 the image's uid onto the service identity and leaves the volume owned by the service uid.
 
+**`[basicauth] required = false` is the operator's per-service opt-out from the default
+basic-auth middleware** (ADR-0024), and it is a widening in the same sense: the service's
+edge routers are served without the login every other service carries. It is root-owned, it
+is written only by `weedr basicauth off <name>` and `weedr basicauth on <name>` (§6.2), and
+**no manifest key reaches it** — a `basicauth:` key in a repository is refused by name (§4).
+**The credential is not destroyed by it**: the blob and the htpasswd entry stay, and turning
+the middleware back on re-attaches the same login, because the mint is a fact (§3.4) and the
+opt-out is a setting. The setting takes effect where the middleware is attached: `roots` reads
+it from this file each time it writes the edge's own configuration for the service (§6.4), so
+`weedr basicauth off` writes it and syncs in the same act, and a later sync reaches the same
+answer. The route slice carries the **mint** and never this setting.
+
 ### 3.4 `/var/lib/guarden/registry/<name>.toml`
 
 Written only by the mutator.
@@ -719,7 +737,12 @@ basicauth = true  # the default edge login (basic auth) was minted for this serv
   # no middleware — and that absence is a state, exactly like
   # `[gate]` never having been evaluated. Written by the mutator
   # at creation and read by the renderer through the route slice;
-  # no manifest key reaches it (§4's closed key sets)
+  # no manifest key reaches it (§4's closed key sets). This is
+  # the MINT, a fact about the past; whether the middleware is
+  # attached is a SETTING in the root-owned overrides.toml
+  # (§3.3 `[basicauth]`, ADR-0024), and the two are separate on
+  # purpose: the opt-out does not un-mint the login, and turning
+  # it back on re-attaches the same one
 
 [publication]
 web = 20114  # container name -> allocated loopback port
@@ -1002,6 +1025,11 @@ Validation rules:
   saying so.
 - An `environment` key is refused **specifically**, with a message saying the host decides the
   environment and where the decision is recorded.
+- A `basicauth` key is refused **specifically**, with a message saying the host decides it and
+  where the decision is recorded (§3.3 `[basicauth]`, ADR-0024). The default basic-auth
+  middleware is on for every service, and **no repository may turn it off** — the same rule
+  that refuses `exposure:` and `public:`, and for the same reason: a repository that could
+  remove the login in front of its own route would be publishing itself.
 - `project` must match `^[a-z0-9][a-z0-9._-]*$`. It has no length limit of its own; the
   **resulting service name** must not exceed 31 characters, and that is what is checked.
 - `state` and `bulk` entries must match `^[a-z0-9][a-z0-9._-]*$`, must name a volume the unit
@@ -1262,6 +1290,7 @@ flag therefore do not have one, and each capability is a separate verb instead:
 | fork, with a chosen source | `weedr service fork` | **no** |
 | grant a public port | `weedr port open` | **no** |
 | install a requested firewall rule | `weedr firewall open` | **no** |
+| drop the default basic-auth login from one service's routes | `weedr basicauth off` | **no** |
 | destroy a service's volumes | `weedr service purge` | **no** |
 | roll a service back to a snapshot | `weedr service rollback` | **no** |
 
@@ -1739,6 +1768,17 @@ weedr expose unset <name>  # return the service to its default exposure; already
   # the default is exit 0 and changes nothing
 weedr expose list [--json]  # every service's recorded exposure and what it resolves to
 
+weedr basicauth off <name>  # the operator's per-service opt-out: this service's edge
+  # routers carry NO basic-auth middleware (ADR-0024, §3.3
+  # `[basicauth] required = false`). The credential is NOT
+  # destroyed — the blob and the htpasswd entry stay — and the
+  # setting takes effect at the edge's next `roots sync`, which
+  # this act performs itself. A service that was never minted one
+  # (grandfathered, or with no routes) is already in that state:
+  # exit 0, and it says so. Not on any sudoers rule.
+weedr basicauth on <name>  # the middleware back; the same login is re-attached
+weedr basicauth list [--json]  # every service's basic-auth posture
+
 weedr module list [--json]
 weedr module add <name>
 weedr module remove <name>
@@ -2120,6 +2160,16 @@ longer accepted on. `roots` renders from the record for the same reason the fire
 from it: one authority, read by both, and no window in which the two disagree. A label the
 record does not name keeps the slice's answer — a service created before the field existed has
 no entry, and its slice is the only answer there is.
+
+**The basic-auth middleware is attached here, from two facts that are asked separately.** The
+slice's `basicauth` flag is the **mint** (§3.4) and never changes; whether the login is attached
+is the operator's setting in the service's root-owned `overrides.toml` (§3.3 `[basicauth]`,
+ADR-0024), read on every sync. So `weedr basicauth off` takes effect at the next `roots sync`
+rather than at the service's next full render, and a slice that predates the table keeps the
+middleware it was rendered with — absent is the default, which is *on*. A setting that cannot be
+read is not guessed at and is not silently obeyed: the middleware stays and one `warning:` line
+names the service, because the failure a malformed root-owned file must not produce is a route
+that quietly lost its login.
 
 With the auth-authelia module installed, a route declaring `auth: true` gets the forward-auth rule aimed
 at the service named in `/etc/guarden/edge/auth-provider`, which must be the name of an
@@ -3435,7 +3485,9 @@ Exactly one rule, applied in this order, and nothing else overrides anything:
   public ports it *asks* for, the firewall rules it *asks* for, its routes, its widgets, the
   shape of its secrets.
 2. `overrides.toml`, root-owned, grants public ports, installs requested firewall rules, sets
-  retention, adds supplementary groups, and lists the host paths its units may mount.
+  retention, adds supplementary groups, lists the host paths its units may mount, and holds
+  the operator's per-service opt-out from the default basic-auth middleware (§3.3
+  `[basicauth]`, ADR-0024).
 3. `guarden.toml`, root-owned, decides the environment set and the host's policy: route host
   prefixes, the credential gate, resource weights, retention defaults, ingress, the module
   set, the admin user.

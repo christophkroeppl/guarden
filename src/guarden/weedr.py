@@ -113,6 +113,12 @@ EXPOSE = (
     ("list", "every service's recorded exposure and what it resolves to"),
 )
 
+BASICAUTH = (
+    ("off", "turn the default basic-auth middleware off for one service"),
+    ("on", "put the middleware back; the same login is re-attached"),
+    ("list", "every service's basic-auth posture: the mint and the operator's setting"),
+)
+
 PORT = (
     ("list", "requested, granted and pending, per service"),
     ("open", "grant a public port the manifest requested"),
@@ -158,6 +164,8 @@ GROUPS = (
     ("module", "the shipped bundles of services and shared programs", MODULE),
     ("firewall", "the firewall rules a service asks for", FIREWALL),
     ("expose", "the per-service exposure record: loopback, tunnel or public", EXPOSE),
+    ("basicauth", "the per-service opt-out from the default basic-auth middleware",
+     BASICAUTH),
     ("project", "repositories, their refs and their poke keys", PROJECT),
 )
 
@@ -170,6 +178,7 @@ Not on the guarden sudoers rule, and not reachable from a deploy:
 `weedr firewall close`, `weedr service purge`,
 `weedr service rollback`, `weedr service add`, `weedr service create`,
 `weedr module add`, `weedr expose set`, `weedr expose unset`,
+`weedr basicauth off`, `weedr basicauth on`,
 `weedr project add`,
 `weedr project grant`, `weedr project revoke`, and every `weedr share`
 verb. A customer-facing grant is safe to have precisely because a poke
@@ -348,6 +357,13 @@ def build_parser() -> argparse.ArgumentParser:
         top["expose"]["verbs"]["unset"], "the service returned to its default exposure"
     )
     cli.add_json(top["expose"]["verbs"]["list"])
+
+    for verb, help_text in (
+        ("off", "the service whose edge routers lose the middleware"),
+        ("on", "the service whose middleware comes back"),
+    ):
+        _add_service_name(top["basicauth"]["verbs"][verb], help_text)
+    cli.add_json(top["basicauth"]["verbs"]["list"])
 
     cli.add_json(top["module"]["verbs"]["list"])
     for verb in ("add", "remove"):
@@ -2186,6 +2202,119 @@ def _expose_list(args) -> int:
     return 0
 
 
+def _basicauth_record(name: str):
+    """The service's registry record, or the refusal naming what is missing.
+
+    A name with no record has no posture to report and no middleware to turn
+    off: the record IS the mint (spec 3.4), so an absent one is the host not
+    being in the state the verb assumed rather than a service awaiting a
+    setting.
+    """
+    record = registry.load(name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{name} has no registry entry, so it has no basic-auth posture to report; "
+            f"`weedr service list` reports the services that exist",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return record
+
+
+def _basicauth_set(args, required: bool) -> int:
+    """`weedr basicauth off|on`: one setting, into the root-owned file.
+
+    **The setting goes into `overrides.toml` and nothing else is written.** The
+    credential is not un-minted and no htpasswd entry is touched: the mint is a
+    fact about the past (spec 3.4) and the opt-out is a decision about the
+    present (ADR-0024), so turning the middleware off leaves the operator's
+    login where it is and turning it back on re-attaches the same one.
+
+    **A service that was never minted one is already in the requested state.**
+    It was created before the policy was in force, or it declares no routes, so
+    there is no middleware to switch — exit `0`, and nothing is written. A file
+    that gained a setting would be a file claiming a posture the service never
+    had.
+
+    **The edge is synced in the same act**, because the setting is read where
+    the edge's own file is written (`roots`, spec 6.4): a verb that wrote the
+    file and left the edge serving the old one would report a change it had not
+    made yet.
+    """
+    record = _basicauth_record(args.name)
+    posture = "on" if required else "off"
+    if not record.basicauth:
+        sys.stdout.write(
+            f"{record.service} has no basic-auth login: it was created before the policy was "
+            f"in force, or it declares no routes, so there is no middleware to turn "
+            f"{posture}; the state is already the requested one\n"
+        )
+        return 0
+
+    path = paths.overrides(record.service)
+    with conf.lock("overrides"):
+        granted = overrides.load(record.service)
+        opted_out = granted.basicauth_required is False
+        already = opted_out if not required else not opted_out
+        if not already:
+            granted.basicauth_required = required
+            overrides.save(record.service, granted, (0, users.group_id(PROGRAM_GROUP)))
+
+    if already:
+        sys.stdout.write(f"{record.service} basic-auth middleware is already {posture}\n")
+        return 0
+    _sync_routes()
+    sys.stdout.write(
+        f"{record.service} basic-auth middleware {posture}; the setting is in {path}, and the "
+        f"edge has been asked to re-sync\n"
+    )
+    return 0
+
+
+def _basicauth_off(args) -> int:
+    return _basicauth_set(args, False)
+
+
+def _basicauth_on(args) -> int:
+    return _basicauth_set(args, True)
+
+
+def _basicauth_list(args) -> int:
+    """The two facts, reported separately because they are separate.
+
+    `minted` is the record's (was a login ever minted here) and `opt_out` is the
+    operator's setting. A service that was never minted one has no middleware
+    and no opt-out, and a service whose middleware is off by the setting still
+    holds its login — so `middleware` is derived from both, and neither fact is
+    folded into the other.
+    """
+    rows = []
+    for name in registry.names():
+        record = registry.load(name)
+        if record is None:
+            continue
+        minted = bool(record.basicauth)
+        opted_out = minted and basicauth.opted_out(record.service)
+        rows.append(
+            {
+                "service": record.service,
+                "middleware": "off" if not minted or opted_out else "on",
+                "minted": minted,
+                "opt_out": opted_out,
+            }
+        )
+    if args.json:
+        sys.stdout.write(json.dumps({"services": rows}) + "\n")
+        return 0
+    for row in rows:
+        note = ""
+        if not row["minted"]:
+            note = " (no login minted)"
+        elif row["opt_out"]:
+            note = " (opted out; the login is still there)"
+        sys.stdout.write(f"{row['service']} {row['middleware']}{note}\n")
+    return 0
+
+
 HANDLERS = {
     "weedr project list": projects.list_json,
     "weedr project add": projects.do_add,
@@ -2199,6 +2328,9 @@ HANDLERS = {
     "weedr expose set": _expose_set,
     "weedr expose unset": _expose_unset,
     "weedr expose list": _expose_list,
+    "weedr basicauth off": _basicauth_off,
+    "weedr basicauth on": _basicauth_on,
+    "weedr basicauth list": _basicauth_list,
     "weedr service ingest": _ingest,
     "weedr service add": _add,
     "weedr service create": _create_service,
