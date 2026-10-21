@@ -182,11 +182,11 @@ assert_file_exists "$stage/bulk/bulk/clone.sql"
 assert_file_has "$stage/bulk/bulk/clone.sql" "PostgreSQL database dump"
 assert_file_has "$stage/bulk/bulk/clone.sql" "ProdSmtpSecret"
 
-# The same verb against the target's OWN running database, which is the path
-# without `--from`: a service can dump itself into its own bulk volume.
-run weedr clone dump pgdual-staging --db postgres --out self.sql
-assert_exit 0
-assert_file_exists "$stage/bulk/bulk/self.sql"
+# `--from` and `--out` naming one file is refused: the verb writes a new dump.
+run weedr clone transform pgdual-staging --from clone.sql --out clone.sql
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "same"
 
 # --- step 4: the scrub, and what it removed ----------------------------------
 #
@@ -215,12 +215,6 @@ assert_one_diagnostic "error:"
 assert_stderr_has "scrub"
 assert_file_missing "$stage/bulk/bulk/none.sql"
 
-# `--from` and `--out` naming one file is refused: the verb writes a new dump.
-run weedr clone transform pgdual-staging --from self.sql --out self.sql
-assert_exit 2
-assert_one_diagnostic "error:"
-assert_stderr_has "same"
-
 # --- step 5: the load, into the staging engine -------------------------------
 #
 # The operator's own step: "push to staging pg". The target database is the
@@ -230,6 +224,12 @@ assert_stderr_has "same"
 run weedr service start pgdual-staging
 assert_exit 0
 wait_ready pgdual-staging pgdual-staging-db
+
+# The same dump verb against the target's OWN running database, which is the
+# path without `--from`: a service can dump itself into its own bulk volume.
+run weedr clone dump pgdual-staging --db postgres --out self.sql
+assert_exit 0
+assert_file_exists "$stage/bulk/bulk/self.sql"
 
 as_podman pgdual-staging exec pgdual-staging-db \
     psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE restored"
