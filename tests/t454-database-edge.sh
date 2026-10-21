@@ -286,15 +286,23 @@ seed "$taken/.guarden/service.yml" \
 seed "$taken/.guarden/quadlet/web.container" \
     "[Container]" \
     "Image=docker.io/library/nginx:1.27"
+# The provider is up by now, so the ingest's own step 10 is what meets the
+# database — and it is the INGEST that refuses, not the start.
 run weedr service ingest taken-staging --from poke taken@9f2c1ab
-assert_exit 0
-run weedr secret materialise taken-staging
-assert_exit 0
-run weedr service start taken-staging
 assert_exit 1
 assert_stderr_has "taken-staging"
 assert_stderr_has "owner postgres"
 assert_stderr_has "refuses it rather than taking it over"
+# **The refusal changes nothing in the provider**: the database is still the
+# other role's, and no role was created for the consumer. That is what the
+# ownership check running BEFORE the DDL buys, and it is the difference between
+# refusing a name and leaving a name behind.
+still=$(sql "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'taken-staging'")
+[ "$still" = "postgres" ] \
+    || _fail "the refused database is owned by '$still', not postgres: the edge took it over"
+leftover=$(sql "SELECT rolname FROM pg_roles WHERE rolname = 'taken-staging'")
+[ -z "$leftover" ] \
+    || _fail "the refused edge created the role '$leftover' anyway"
 
 # ---------------------------------------------------------------------------
 # `databases:` is a `database`-edge key, and its names are a closed set

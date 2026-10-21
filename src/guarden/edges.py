@@ -353,6 +353,11 @@ def provision(consumer: str, provider: registry.Registry, container: str,
         ]
     psql = [*podman, "exec", "-i", container_name, "psql", "-U", PSQL_USER, "-d", PSQL_USER]
     _check_version(container_name, [*psql, "-Atc", "SHOW server_version_num"])
+    # **The ownership check runs BEFORE the DDL**, so a name this edge cannot
+    # have costs nothing: a role created for a database that is then refused
+    # would be a name with no objects behind it, and the next attempt would meet
+    # it as an existing role and have to decide what to do with it.
+    _refuse_foreign(container_name, psql, role, names)
     done = tool.call(
         [*psql, "-v", "ON_ERROR_STOP=1", "-f", "-"], stdin=_ddl(role, password, names),
         cwd=SERVICE_CWD,
@@ -363,7 +368,6 @@ def provision(consumer: str, provider: registry.Registry, container: str,
             f"{errors.oneline(done.stderr.strip() or done.stdout.strip())}",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    _refuse_foreign(container_name, psql, role, names)
     return []
 
 
@@ -452,7 +456,9 @@ def _refuse_foreign(name: str, psql: list[str], role: str, databases: tuple[str,
             f"{errors.oneline(held.stderr.strip() or held.stdout.strip())}",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    foreign = ", ".join(held.stdout.split())
+    foreign = "; ".join(
+        errors.oneline(line) for line in held.stdout.splitlines() if line.strip()
+    )
     if foreign:
         raise errors.GuardenError(
             f"{name}: the edge of {role!r} would own a database another role already has: "
