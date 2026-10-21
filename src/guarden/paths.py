@@ -123,6 +123,12 @@ PODMAN_STORE = Path(".local/share/containers")
 # rather than in a template — so it widens no authority.
 TEMPLATES = Path(os.environ.get("GUARDEN_TEMPLATES") or (PREFIX / "usr/lib/guarden/templates"))
 
+# The checkout a host's programs are installed FROM, and the tree `soil install`
+# converges a stale copy from. `GUARDEN_REPO_DIR` is the variable
+# `tools/install.sh` already takes, so a host whose checkout is elsewhere
+# converges from the tree it cloned.
+CHECKOUT = Path(os.environ.get("GUARDEN_REPO_DIR") or (PREFIX / "usr/local/src/guarden"))
+
 
 def overrides(service: str) -> Path:
     return ETC_SERVICES / service / "overrides.toml"

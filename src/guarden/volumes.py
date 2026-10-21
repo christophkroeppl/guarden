@@ -10,11 +10,12 @@ snapshot entirely — so the parent snapshotted cleanly, nightly, forever, while
 containing no instance data at all, and the only symptom was an empty restore.
 
 A `bulk` volume is a subvolume on **every** path, including a fork, and never an
-empty directory: a container mounts a `.volume` unit, and that has to resolve to
-the same kind of thing on the create path and the fork path or a mounted bulk
-volume is a mount of something else afterwards. The fork is ticket 70's; what
-belongs here is that creation and creation-as-a-fork are the same call, so a
-later ticket cannot get it wrong by writing a different one.
+empty directory: a container mounts it by a `Volume=` line naming that path —
+there is no `.volume` unit (spec 6.3) — and the path has to resolve to the same
+kind of thing on the create path and the fork path or a mounted bulk volume is
+a mount of something else afterwards. The fork is ticket 70's; what belongs here
+is that creation and creation-as-a-fork are the same call, so a later ticket
+cannot get it wrong by writing a different one.
 
 A configuration's name is opaque and nothing parses it (spec 8.1), because
 workload and volume names may both contain `-`.

@@ -614,11 +614,11 @@ def _schema(value: Any, path: Path) -> str | None:
 def _needs(value: Any, path: Path) -> list[Edge]:
     """`needs:` entries: a provider service, a prefix, a port and an auth kind.
 
-    A service that does not exist *yet* is not an error here — a poke creates
-    services in dependency order and a manifest may name one a later deploy
-    brings into being — so the existence check is the renderer's, against the
-    provider's registry, and it is exit `1` because the answer came from the
-    host.
+    **The parser checks the shape and nothing about the host.** Whether the
+    provider exists, names a container on the port and holds an allocation for it
+    is the mutator's answer before it creates anything (`edges.check`) and the
+    renderer's when a document is rendered directly — both against the provider's
+    registry, and both exit `1` because the answer came from the host.
     """
     entries = _entries(value, "needs", path)
     out: list[Edge] = []

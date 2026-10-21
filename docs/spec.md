@@ -1092,9 +1092,18 @@ Validation rules:
   - **A `state:` volume and a `bulk:` volume both satisfy it.** What the rule protects is the
     data being *gone*; `state:` adds the rollback on top, and a provider that wants that
     declares `state:`.
-- `needs` entries must name a service that exists **or will exist**, carry an `as:` kind, and a
-  port in range. A service that does not exist *yet* is not an error: a poke creates services in
-  dependency order and a manifest may name a service a later deploy brings into being.
+- `needs` entries must name a service this host already has, carry an `as:` kind, and a port in
+  range. **A provider has to exist before its consumer, and the edge is refused before anything is
+  created.** An edge dials the provider's own allocated publication (§7.4), which lives in the
+  provider's registry entry and nowhere else, so a consumer whose provider is absent, whose
+  provider's manifest names no container on that port, or whose provider's registry entry
+  allocates no publication for that container has no port to dial — and every creation path
+  renders the consumer in the same command (`service.create`, and `module add` immediately after
+  it), where that edge is refused. So the mutator makes the same refusal first, before the system
+  user, the home and the volumes, and the refused service leaves nothing behind: no registry
+  record, no units and no tree. A poke creates services in dependency order: the provider first.
+  The one refusal that is `2` rather than `1` is a self-edge — a `needs:` entry that resolves to
+  the service declaring it has no consumer, and the manifest named it itself.
 - **The provider's `provides:` is read from the provider's registry, never from its manifest.** A
   manifest that declared both sides of every edge would be one document the renderer cannot
   reach: the consumer's tree is `0700` to the consumer and `loom` runs as `guarden`, so the
@@ -1103,8 +1112,7 @@ Validation rules:
   code for it rather than two: a provider with no registry entry, or one whose `[provides]
   kinds` does not include the consumer's `as:`, is **exit `1`** with the kind and both service
   names in the diagnostic. There is no case where the disagreement is visible from two manifests
-  alone, so §1.2 has no `2` row for it.
-  check no program could have performed.
+  alone, so §1.2 has no `2` row for it — a check no program could have performed.
 - **`as:` is the variable name, uppercased.** `as: db` gives the consumer `DB_HOST` and
   `DB_PORT`; `as: cache` gives `CACHE_HOST` and `CACHE_PORT`. There is no mapping table to keep in
   step, and no per-edge exception: the manifest names the prefix, so a service that wants
@@ -2048,6 +2056,20 @@ The renderer refuses, with the directive named: `PodmanArgs=`, `--privileged`, `
 `cap_drop`, `devices`, `network_mode: host`, `pid: host`, `userns_mode`,
 `network_mode: container:`, and any host-path bind outside the service's own volumes,
 `/etc/guarden`, and the paths the admin listed in `mounts.allow`.
+
+**A resource cap or a weight is refused in this vocabulary too, and §4 is the one statement of
+the rule** (ticket 350). A repository that ships units rather than a `compose.yaml` writes
+`[Container] Memory=`, `PidsLimit=` or `Ulimit=`, or `[Service] MemoryMax=`, `CPUQuota=`,
+`TasksMax=`, `LimitNOFILE=` and their neighbours from `systemd.resource-control(5)` and
+`systemd.exec(5)`; none of those is a key the renderer owns, so each reached the generated unit
+verbatim and really capped the container. Each is refused by name on the repository's own unit
+source, with exit `2`, before the unit is generated — and the list is measured against the
+machine's own man pages and parser rather than remembered, because a name that is not a
+per-unit setting refuses nothing while reading like a refusal. `[Service] CPUWeight=` and
+`IOWeight=` are not refused: `_service_keys` overwrites both with the track's weight, so a
+source's value never reaches the unit, and a key is refused where it would otherwise arrive.
+**The admin's drop-in is not part of this refusal** — it is merged into the unit after the
+source's refusals have run, and it is the only way an operator grants a cap.
 
 **The user-namespace directive is refused as repository input, and it is guarden's own line
 to write.** The refusal covers it in both vocabularies and in both of quadlet's spellings —
