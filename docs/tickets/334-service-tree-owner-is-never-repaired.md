@@ -178,25 +178,78 @@ because a note is a result and a warning is a fault.
 
 ## The test
 
-`tests/t334-tree-repair.sh` — one new suite.
+`tests/t334-tree-repair.sh` — one new suite, and `tests/registrykey.py` — one
+new helper that plants an instance key in a registry.
 
-It creates an instance, breaks the tree the way an older guarden left it
-(root-owned, `0755`, at every level of the chain the installer made), and then
-asks a **converged** create — the same source again — to repair it. The
+The suite creates an instance, breaks the tree the way an older guarden left
+it (root-owned, `0755`, at every level of the chain the installer made), and
+then asks a **converged** create — the same source again — to repair it. The
 assertion is `stat` on a real machine.
 
-```
-# RED, before the fix:
-error: /var/lib/guarden/services/routed-preview/home/feature\x2fx/.config/containers/systemd is mode 755, not 700
-FAIL t334-tree-repair.sh
+### The RED, verbatim, before the fix
 
-# GREEN, with the fix:
+The source reverted to develop's `6617f72` and the tests kept:
+
+```
+$ GUARDEN_LXC_RUNNER=guarden-run-t334w timeout 1800 tests/lxc.sh run t334-tree-repair --no-cache
+sha: ed87491e7049ffaf0813e59356125577dad5b186 (SOURCE REVERTED to develop 6617f72, tests kept)
+error: /var/lib/guarden/services/routed-preview/home/feature\x2fx/.config/containers/systemd is mode 755, not 700
+error: failed at line 526: return 1 (exit 1)
+FAIL t334-tree-repair.sh
+error: t334-tree-repair.sh exited 1; the suite stopped on an assertion, and its own line is above
+1 suites: 1 ran, 0 inherited, 1 failures, 1 machines cut
+note: --no-cache: all 1 suites ran and every result was recorded
+```
+
+### The GREEN, verbatim, with the fix
+
+```
+$ GUARDEN_LXC_RUNNER=guarden-run-t334w timeout 1800 tests/lxc.sh run t334-tree-repair --no-cache
+sha: ed87491e7049ffaf0813e59356125577dad5b186
 ok   t334-tree-repair.sh
 1 suites: 1 ran, 0 inherited, 0 failures, 1 machines cut
+note: --no-cache: all 1 suites ran and every result was recorded
 ```
 
-**The suite is not vacuous**: with the source reverted (`git revert --no-commit`
-of the fix commit, the test kept) it goes RED again with the same diagnostic.
+### The RED again, with the source reverted
+
+**The suite is not vacuous, and the revert is of the SOURCE and not of the
+test.** The source files are put back to develop's `6617f72` and the tree is
+left otherwise alone:
+
+```
+git checkout 6617f72 -- src/guarden/paths.py src/guarden/service.py \
+    src/guarden/units.py src/guarden/weedr.py
+```
+
+and the suite goes RED again with the same diagnostic — the block above is
+that run. The source is then restored with `git checkout HEAD --` on the same
+four files, and the suite is green again.
+
+**The mode assertion comes FIRST, and that is a thing that was got wrong and
+fixed.** The suite asserted the repair's report line ("the repair says what
+it repaired") before it asserted the mode, and the reverted run stopped on
+`stdout does not name repaired` — a diagnostic about a missing report line
+where the tree was still root-owned and `0755`. The measurement has to name
+the DEFECT, and the defect is the mode and the owner.
+
+### The suites that had to stay green
+
+The repair is about modes, and the modes are a question other suites pin:
+
+| suite | what it pins | result |
+|---|---|---|
+| `t333-instance-quadlet-owner` | the instance's own quadlet directory, `0700` and the service's own | ok |
+| `t250-verb-split` | a unit file is `0640` under the service uid | ok |
+| `t260-examples` | a template's copy lands `0640` under the service uid | ok |
+| `t440-instance-start` | the instance's unit file is `0640` after the walk | ok |
+| `t30-create` | a converged ingest says `converged` and changes nothing | ok |
+| `t380-store-walk` | the walk leaves podman's store and snapper's subtree alone | ok |
+| `t432-add-applies-an-edit` | `add` converges, and an edit re-deploys | ok |
+| `t433-shared-record-idempotency` | a converged deploy converges and changes nothing | ok |
+| `t500-container-files` | a container writes into the service's own tree | ok |
+| `t501-service-user-files` | a service user cannot reach another service's tree | ok |
+| `t10-no-fakes`, `t10-help` | no stand-in for a system tool; the verb surface | ok |
 
 ## The adversarial review, and what it found
 
@@ -258,3 +311,37 @@ is resolved and checked against the service's own home before it is touched).
 creates a same-named group for the service user, which makes the two gids
 identical on the test machine. The defect is real on a host where `useradd`
 does not make one, and no suite on this golden would have seen it.
+
+## A sixth finding, found by running it rather than by reading it
+
+**The helper that plants the key wrote a document that was not TOML.** The
+review's finding 5 was closed by planting the hostile key with a helper that
+parses the registry and writes it back — and the helper wrote it with its own
+TOML writer, which quoted the key but did not ESCAPE the backslash inside
+that quoting. The document it produced was not TOML at all:
+
+```
+error: /var/lib/guarden/registry/routed-preview.toml is not valid TOML: Unescaped '\' in a string (at line 14, column 22)
+```
+
+So the mutator refused to read its own registry, the deploy never reached
+the repair, and the containment block measured nothing — the review's finding
+5, unfixed, in a new shape. The diagnostic named the registry and not the
+suite that had planted the key, which is what a defect in a test helper
+looks like from the outside.
+
+**The helper now hands the parsed document back to `conf.toml_dumps`** — the
+code that writes every registry guarden has ever written. It knows the two
+things a second writer gets wrong: a key that is not a bare key has to be
+QUOTED, and the backslash in an escaped ref has to be ESCAPED inside that
+quoting. **A second writer is a second thing to keep agreeing, and this one
+did not agree.** The helper also reads the document back with a parser before
+it says it planted the key, so a writer that produces something the parser
+refuses is caught by the helper and not by the mutator on the next line.
+
+**This is the third time a thing that had to be MEASURED was wrong when it
+was only READ** — the review's finding 5 was the same shape, and the fix for
+finding 5 was wrong in the same way. The lesson is in the code, not in the
+story: a test helper that writes a file the program will read is a piece of
+the program, and the only way to know it is right is to let the program read
+it.
