@@ -202,4 +202,3 @@ comes up), then GREEN.
 | another role's database is not taken over | created as `postgres`, then the ingest exits 1 naming both, the owner is unchanged and no role was created |
 | `databases:` is a `database`-edge key | on `auth: none` the ingest exits 2 naming the key |
 | a name asked for twice | exits 2 naming the duplicate |
-
