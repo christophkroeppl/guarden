@@ -88,13 +88,14 @@ def slices() -> dict[str, list[dict]]:
     return out
 
 
-def basicauth_flags() -> dict[str, bool]:
-    """The per-service basic-auth policy the renderer recorded (ticket 292).
+def basicauth_flags() -> tuple[dict[str, bool], list[str]]:
+    """The per-service basic-auth middleware the edge attaches, and what could
+    not be decided.
 
-    Read from the same slice files `slices()` reads, so the middleware and the
-    routes it attaches to can never come from two sources. A service whose
-    slice predates the flag (or carries `false`) is grandfathered: no flag, no
-    middleware, byte-identical output.
+    The MINT is read from the same slice files `slices()` reads, so the login the
+    edge attaches and the routes it attaches it to can never come from two
+    sources. A service whose slice predates the flag (or carries `false`) is
+    grandfathered: no flag, no middleware, byte-identical output.
 
     **An instance's slice is one of the places the flag is read from, and that
     is what keeps the middleware on a preview.** The flag is a SERVICE's
@@ -110,10 +111,27 @@ def basicauth_flags() -> dict[str, bool]:
     it: an instance's slice carries the same value the service's own would.
     The service's own file is read first, so a service with a slot slice and
     an instance slice renders exactly as it did before.
+
+    **The slice's flag is the MINT; whether the login is attached is the
+    operator's setting** (ADR-0024). `[basicauth] required = false` in the
+    service's root-owned `overrides.toml` is read HERE, at the moment the
+    edge's own file is written, and that is the whole reason the act takes
+    effect on the next sync instead of the service's next full render: the
+    mint never changes and the setting is asked for afresh. Absent is the
+    default (attached), so a service nobody has opted out renders byte for byte
+    what it rendered before.
+
+    **A setting that cannot be read fails CLOSED, which here means the login
+    stays on.** The overrides file is root-owned and this program is
+    unprivileged; a file it cannot parse is the host not being in the assumed
+    state, and the one outcome a malformed grant surface must not produce is a
+    route that silently lost its login. So the middleware stays and the caller
+    gets one `warning:` line naming the service.
     """
     out: dict[str, bool] = {}
+    diagnostics: list[str] = []
     if not paths.SHARED.is_dir():
-        return out
+        return out, diagnostics
     for directory in sorted(path for path in paths.SHARED.iterdir() if path.is_dir()):
         flag = bool(conf.read_toml(directory / "routes.toml").get("basicauth"))
         if not flag:
@@ -123,8 +141,17 @@ def basicauth_flags() -> dict[str, bool]:
                     if conf.read_toml(own / "routes.toml").get("basicauth"):
                         flag = True
                         break
+        if flag:
+            try:
+                flag = not basicauth.opted_out(directory.name)
+            except errors.GuardenError as failure:
+                diagnostics.append(
+                    errors.warn(
+                        f"{directory.name}: {failure.message}; the basic-auth middleware stays on"
+                    )
+                )
         out[directory.name] = flag
-    return out
+    return out, diagnostics
 
 
 def file_name(service: str) -> str:
@@ -231,11 +258,12 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
     page behind itself cannot be reached, whatever its manifest declares.
 
     The **basic-auth** middleware (ticket 292) is the other half of the story
-    and is deliberately not a route's to choose: when the mutator recorded the
-    policy for this service, every route the edge serves here carries it, in
-    front of forward-auth when both apply. No manifest reaches this flag — it
-    arrives in the slice from the registry — so there is no key that removes
-    it (spec 4's closed key sets, spec 10).
+    and is deliberately not a route's to choose: when the login was minted for
+    this service and the operator has not opted out of it, every route the edge
+    serves here carries it, in front of forward-auth when both apply. No
+    manifest reaches this answer — the mint arrives in the slice from the
+    registry and the setting is the root-owned `overrides.toml` (ADR-0024) —
+    so there is no key that removes it (spec 4's closed key sets, spec 10).
     """
     rows = [
         {
@@ -486,7 +514,7 @@ def sync() -> int:
     # different uids — cannot disagree about where a route went.
     routes = {service: _recorded(service, entries)
               for service, entries in slices().items()}
-    policies = basicauth_flags()
+    policies, policy_diagnostics = basicauth_flags()
     # **The whole plan is rendered before the first byte is written**, after
     # `provider_for` has refused a marker that does not hold. A validator that
     # writes the routes and then complains has already broken the routes that
@@ -513,7 +541,7 @@ def sync() -> int:
     for name in sweep(written):
         printed.append(f"removed {name}")
 
-    for line in _warnings(routes, provider):
+    for line in [*policy_diagnostics, *_warnings(routes, provider)]:
         sys.stderr.write(line + "\n")
     for line in printed:
         sys.stdout.write(line + "\n")
