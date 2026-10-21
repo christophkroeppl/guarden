@@ -125,7 +125,7 @@ own `GUARDEN_LXC_RUNNER`.
   traefik-production` in `/var/lib/guarden/services`, four registry entries, two
   creds directories and `postgres-staging-pgdata qapp-production-data
   qapp-staging-data` in `/etc/snapper/configs`. Giving three suites a teardown is
-  its own change with its own inventory; ticket 355 carries it.
+  its own change with its own inventory; ticket 357 carries it.
 - **The product is not changed.** `weedr service remove` leaves a service's
   snapper configurations to `soil storage` on purpose
   (`tests/t30-remove.sh:102`, asserted on stdout at `:139`), and
