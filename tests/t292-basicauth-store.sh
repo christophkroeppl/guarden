@@ -219,6 +219,13 @@ after=$(cat "$htpasswd")
 run systemctl start guarden-creds.path
 assert_exit 0
 
+# **The manifest declares the volume the container mounts.** The quadlet-app
+# container mounts a named volume `data`, and guarden refuses a manifest that
+# does not declare a volume the container mounts: "the container 'web' mounts
+# the named volume 'data', which the manifest declares in neither `state:`
+# nor `bulk:`". A hand-written manifest grows that field by hand, which is
+# the sort of thing a fixture exists to avoid, so the field is stated here
+# and the rest of the manifest is the fixture's shape.
 wapp=$GUARDEN_PREFIX/var/lib/guarden/staging/watchapp/9f2c1ab
 mkdir -p "$wapp/.guarden/quadlet"
 cp "$GUARDEN_ROOT/fixtures/projects/quadlet-app/.guarden/.env.schema" \
@@ -227,6 +234,7 @@ cp "$GUARDEN_ROOT/fixtures/projects/quadlet-app/.guarden/quadlet/web.container" 
    "$wapp/.guarden/quadlet/web.container"
 seed "$wapp/.guarden/service.yml" "project: watchapp" "units: .guarden/quadlet/" \
     "schema: .guarden/.env.schema" \
+    "state:" "  - data" \
     "routes:" "  - container: web" "    port: 8080" "    host: watch"
 run weedr service ingest watchapp-staging --from poke watchapp@9f2c1ab
 assert_exit 0
