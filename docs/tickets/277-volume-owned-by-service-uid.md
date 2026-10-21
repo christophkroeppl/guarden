@@ -131,3 +131,22 @@ to exist.
 
 **Ownership was the face ADR-0019 closed; the other two are 273 (ADR-0020, the
 `.snapshots` subtree) and 325 (the image's own data-directory convention).**
+
+## Found while verifying this ticket — and filed, not fixed here
+
+`tests/t480-doc-claims.sh:96` forbids the phase order that `docs/sysadmin.md`
+has stated since 2026-09-29, and the suite's own comment says that order is the
+right one; it is a stale assertion left behind by ticket 310's correction. It
+has never been caught because `assert_file_lacks` in `tests/lib.sh` **cannot
+fail on a large file**: it pipes `printf` into `grep -q` under `pipefail`, and
+`grep -q`'s early exit kills the producer with SIGPIPE, so the pipeline answers
+`141` and the assertion silently passes. Measured in this session: the same
+assertion is `FAIL` on this branch and `ok` twice on `develop`, and a copy of
+`develop` carrying a diagnostic printed the matching line *and* the `ok`.
+
+That is a gate-integrity defect, not this ticket's subject — it is filed on the
+board (card `t_1732cca7`) with the reproduction, because fixing the helper is a
+*tightening* that may turn other suites red for reasons nobody has measured and
+needs its own gate. **Nothing in this ticket's tree rests on it**: the suite's
+one `assert_file_lacks` is over a small unit file that fits the pipe buffer.
+
