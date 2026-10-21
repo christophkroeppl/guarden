@@ -296,3 +296,49 @@ assert_file_exists "$legacy_tree/state/pgdata/PG_VERSION"
 assert_file_missing "$legacy_tree/state/pgdata/data"
 
 echo "MEASURE: the refusal moved nothing and created nothing"
+
+# --- the refusal at the START, where the operator meets it -----------------
+#
+# The mutator's refusal is enough for a fresh deployment, but a service
+# deployed BEFORE this change already carries a volume with its data at the
+# root, and the operator who re-runs `weedr service start` on it would
+# otherwise get the container's own answer: the image's chown error, in a
+# container's log, naming nothing that can be acted on.
+#
+# So the start refuses too, with the same line. The service is deployed
+# normally FIRST — with the payload in place, so the ingest does not refuse —
+# and the volume is then made to look the way it looked before the change.
+# The start is then refused, and the refusal names the same work.
+started=/var/lib/guarden/staging/started/0000001
+mkdir -p "$started/.guarden/quadlet"
+seed "$started/.guarden/service.yml" \
+    "project: started" \
+    "units: .guarden/quadlet/" \
+    "state:" \
+    "  - pgdata" \
+    "ports:" \
+    "  - container: db" \
+    "    port: 5432"
+seed "$started/.guarden/quadlet/db.container" \
+    "[Container]" \
+    "Image=docker.io/library/postgres:17" \
+    "Volume=pgdata:/var/lib/postgresql/data"
+
+run weedr service ingest started-staging --from poke started@0000001
+assert_exit 0
+assert_stdout_has "created started-staging"
+
+# The volume is now made to look the way it looked before this change: the
+# data at the root, and the payload empty.
+start_tree=/var/lib/guarden/services/started-staging
+printf 'legacy data at the root\n' >"$start_tree/state/pgdata/PG_VERSION"
+rm -f "$start_tree/state/pgdata/data/EMPTY"
+printf 'the payload holds nothing\n' >"$start_tree/state/pgdata/data/EMPTY"
+
+run weedr service start started-staging
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "started-staging"
+assert_stderr_has "pgdata"
+assert_stderr_has "move"
+echo "MEASURE: the start refused the root-shaped volume"

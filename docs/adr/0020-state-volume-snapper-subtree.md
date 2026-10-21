@@ -55,11 +55,14 @@ close:
   bookkeeping in it either. "Snapper's bookkeeping is not the container's business" is
   already a principle here; shape 2 applies it to the volume.
 - **Shape 2's cost is knowable, and shape 1's is not.** Mounting the subvolume's
-  contents changes what a snapshot of the volume contains: the snapshot covers the
-  *data*, and `.snapshots` is snapper's own metadata about the snapshot, not part of it.
-  That is a change to what a restore produces, and it is a change we can state. Shape 1's
-  cost is that the service gains write access to snapper's metadata, and nothing
-  measures that cost — it is a permission grant with no bound.
+  contents costs one extra directory level inside the snapshot: the snapshot
+  covers the *data*, and `.snapshots` is snapper's own metadata about the
+  snapshot and was never part of it — it is a nested btrfs subvolume, and
+  btrfs does not recurse into a nested subvolume when it snapshots. So the
+  content a restore produces is the data, before and after, and the delta is
+  where the data sits. That is a cost we can state. Shape 1's cost is that
+  the service gains write access to snapper's metadata, and nothing measures
+  that cost — it is a permission grant with no bound.
 
 ## What the decision costs, stated
 

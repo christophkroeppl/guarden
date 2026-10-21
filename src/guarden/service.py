@@ -1398,6 +1398,31 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
     return sorted(path.stem for path in directory.glob("*.container"))
 
 
+def refuse_legacy_volumes(name: str, escaped_ref: str | None = None) -> None:
+    """Refuse a `state` volume whose data is at the root, at the START and not
+    only at the ingest (ADR-0020).
+
+    **Why the start needs it too.** The mutator refuses at ingest, so a fresh
+    deployment never carries the wrong shape. But a service deployed before
+    this change has a volume with its data at the root, and the operator who
+    re-runs `weedr service start` on it gets the container's own answer: the
+    image's chown error, in a container's log, naming nothing that can be
+    acted on. The refusal here is the same one the mutator makes, and it
+    names the volume, the payload directory and the work.
+
+    **The volumes are the service's own, read from its registry.** A service
+    that declares no `state` volume has nothing to refuse, and a service whose
+    registry entry is gone has nothing to read and nothing to refuse.
+    """
+    record = registry.load(name)
+    if record is None:
+        return
+    for vol in record.volumes.values():
+        if vol.kind != "state":
+            continue
+        volumes.refuse_root_data(name, vol.name, escaped_ref)
+
+
 def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
     """Probe what the record does not answer yet, record it, and put guarden's
     `UserNS=` line where the generator reads it, before the units are started

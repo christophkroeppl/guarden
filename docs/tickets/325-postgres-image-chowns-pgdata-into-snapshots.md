@@ -91,7 +91,9 @@ holds.
   line naming the service, the volume, the payload directory and the work, and
   changes nothing: the volume starts EMPTY and the operator moves the data
   across deliberately — the same rule the spec already states for a newly
-  declared volume.
+  declared volume. **`weedr service start` refuses with the same line**, because
+  a service deployed before this change carries the old shape and the operator's
+  way out of it is the start.
 
 **Verified on the LXD golden VM** by `tests/t325-pgdata-subdir.sh`, which
 pulls the real `postgres:17` image, starts a real rootless container against a

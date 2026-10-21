@@ -627,16 +627,19 @@ whose entrypoint chowns its data directory — `postgres`, `mariadb`, `mysql`,
 **The payload directory is the fix**: the container mounts `state/<vol>/data/`, the payload's
 sibling is `.snapshots/`, and the image's chown walks the payload only.
 
-**Guarden does not migrate a volume that already has its data at the root.** The mutator
-refuses with one line naming the service, the volume, the payload directory and the work, and
-it changes nothing. To move the data across:
+**Guarden does not migrate a volume that already has its data at the root.** The mutator and
+`weedr service start` both refuse with one line naming the service, the volume, the payload
+directory and the work, and they change nothing. To move the data across:
 
-    systemctl --user stop <service>
+    weedr service stop <service>
     mkdir -p /var/lib/guarden/services/<svc>/state/<vol>/data
     find /var/lib/guarden/services/<svc>/state/<vol> -mindepth 1 -maxdepth 1 \
         ! -name .snapshots -exec mv -t /var/lib/guarden/services/<svc>/state/<vol>/data {} +
     chown -R <svc>:<svc> /var/lib/guarden/services/<svc>/state/<vol>/data
-    systemctl --user start <service>
+    weedr service start <service>
+
+**The start asks the same question again**, so a move that missed something is refused rather
+than started against a half-moved volume.
 
 **The move is the operator's, deliberately**, and it is the same rule guarden already states
 for a newly declared volume: the volume starts EMPTY and the data does not follow the change.

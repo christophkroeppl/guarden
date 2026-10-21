@@ -14,7 +14,7 @@ and the order is the argument: the opinionated pass runs *after* the source is
 read and *before* anything is emitted, so a converter that passes a field through
 and a repository that writes one by hand are treated identically. The owned fields
 are the refusal list, the whole `PublishPort` set, `Network=pasta:`, `AddHost=`,
-the credential requests, the `.volume` units and the start-order edges. What is
+the credential requests and the start-order edges. What is
 left — image, command, entrypoint, environment, user, working directory, labels —
 belongs to the repository, and podlet owns the translation of those.
 

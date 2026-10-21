@@ -159,9 +159,25 @@ def _payload(
     A subvolume whose root holds anything else is a volume whose data is at
     the ROOT, and that is the case the refusal is for.
 
+    **The check comes before the payload is created**, and it comes whether or
+    not a payload is already there: a volume with a payload AND something at
+    its root has its data in two places, and only the payload is mounted.
+    """
+    subvolume = paths.volume(name, SUBVOLUME, vol, escaped_ref)
+    payload = paths.mount_source(name, SUBVOLUME, vol, escaped_ref)
+    if subvolume.is_dir():
+        refuse_root_data(name, vol, escaped_ref)
+    payload.mkdir(parents=True, exist_ok=True)
+    own(payload, owner)
+
+
+def refuse_root_data(name: str, vol: str, escaped_ref: str | None = None) -> None:
+    """Refuse a `state` volume whose data is at the root, and say what to do
+    (ADR-0020).
+
     **The refusal is one line and it moves nothing.** Guarden does not move
-    the data down a level: a move renames live data under a running process,
-    it cannot skip `.snapshots` without a second rule, and it is not atomic
+    the data down a level: a move renames live data under a running process, it
+    cannot skip `.snapshots` without a second rule, and it is not atomic
     across a service's several volumes. The rule the spec already states for
     a newly declared volume is the same one here -- **the volume starts EMPTY
     and the operator moves the data across deliberately** -- and the refusal
@@ -171,24 +187,21 @@ def _payload(
     The exit is `1` and not `2`: the host is not in the state the request
     assumed (spec 1.2), and it is the same shape as every other "the host is
     not what you expected" answer.
+
+    **The check is "is there data at the root", and not "is the payload
+    there".** A volume with a payload and something else at its root is still a
+    volume whose data is in two places, and the container would mount only the
+    payload — so the data at the root would be invisible to the service and
+    would still be walked by anything that chowns the whole volume. A volume
+    whose root holds nothing but snapper's own subtree is the ordinary case
+    and is silent.
     """
     subvolume = paths.volume(name, SUBVOLUME, vol, escaped_ref)
-    payload = paths.mount_source_at(
-        paths.service_tree(name) if not escaped_ref else paths.instance_tree(name, escaped_ref),
-        SUBVOLUME,
-        vol,
-    )
-    if payload.is_dir():
-        own(payload, owner)
-        return
+    payload = paths.mount_source(name, SUBVOLUME, vol, escaped_ref)
     if not subvolume.is_dir():
-        # The subvolume does not exist yet, so there is nothing to inspect and
-        # nothing to refuse: `create_state` has made it by now.
-        payload.mkdir(parents=True, exist_ok=True)
-        own(payload, owner)
         return
     for entry in sorted(subvolume.iterdir()):
-        if entry.name == paths.SNAPSHOTS:
+        if entry.name == paths.SNAPSHOTS or entry == payload:
             continue
         raise errors.GuardenError(
             f"the state volume {vol} of {name} holds data at the root of "
@@ -199,8 +212,6 @@ def _payload(
             f"volume starts EMPTY and the data does not follow the change",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    payload.mkdir(parents=True, exist_ok=True)
-    own(payload, owner)
 
 
 def create_bulk(

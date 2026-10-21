@@ -3038,6 +3038,12 @@ and it changes nothing: **the volume starts EMPTY and the operator moves the dat
 deliberately** — the same rule as for a newly declared volume, below. The refusal is exit `1`
 (the host is not in the state the request assumed) and not `2`.
 
+**`weedr service start` asks the same question and answers with the same line**, because a
+service deployed before this change carries a volume with its data at the root and the start is
+the operator's way out of that: without the check they meet the image's own chown error in a
+container's log instead of a line naming the volume and the work. The check is the mutator's
+own function, so the two answers cannot drift apart.
+
 **A volume is what makes a service's data durable, and a service that keeps data declares
 one.** A container that mounts no declared volume keeps its data in **podman's anonymous
 volume** for whatever path the image declares, and podman's garbage collector removes that
