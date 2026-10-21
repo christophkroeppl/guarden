@@ -71,6 +71,19 @@ REPO=${GUARDEN_LXC_REPO:-$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}"
 VM_REPO=${GUARDEN_LXC_VM_REPO:-/home/ubuntu/guarden}
 CACHE_TOOL=${GUARDEN_LXC_CACHE_TOOL:-$REPO/tests/suitecache.py}
 
+# **The run's own state, and the ledger inside it** (ticket 328). The ledger used
+# to be `$(mktemp -d)/ledger`, which resolves under `TMPDIR` — and on the
+# 2026-10-21 gate the host pruned that directory out from under a live run, so
+# every append failed and the run reached its summary holding a record nobody
+# could read. Not under `TMPDIR`, then; and not in `$REPO` either, because
+# `_push` copies the checkout into every cut and a file the run is writing must
+# not travel with it. It is the suite cache's sibling — both are the harness's
+# own bookkeeping, outside the checkout and outside anything a distribution
+# cleans — created by the run that needs it, so a fresh clone needs nothing.
+# `$RUNNER` is in the path because three parallel streams is the supported shape,
+# and one shared ledger would have them tallying each other's suites.
+RUN_STATE=${GUARDEN_LXC_RUN_STATE:-${XDG_CACHE_HOME:-$HOME/.cache}/guarden/lxc-runs}
+
 # The guest half of the apt-lock wait (ticket 271), read once at load. These
 # bytes travel with the exec because `_wait_cloud_init` runs *before* the
 # checkout is pushed into the cut, and `tests/t370-apt-lock-wait.sh` runs this
@@ -81,24 +94,18 @@ APT_LOCK_SH=$REPO/tests/aptlock.sh
 APT_LOCK_GUEST=''
 [ -r "$APT_LOCK_SH" ] && APT_LOCK_GUEST=$(<"$APT_LOCK_SH")
 
-# Tests that cannot run in the machine, by construction rather than by accident.
-#
-# t35-env-schema.sh asks git about the repository: `check-ignore` and
-# `ls-files` need a work tree, and this checkout's `.git` is a file pointing at
-# /media/data/projects/infra/.git/worktrees/service-based, which is a host path
-# that does not exist in a guest. The checkout is pushed without `.git`, so the
-# commands fail and the test reports git's exit 128 as a guarden defect. It is a
-# repository-hygiene test, not a guarden test; the VM runner skips it
-# (`HOST_ONLY`, below), and nothing else runs it today — see ticket 266.
-HOST_ONLY=${GUARDEN_LXC_HOST_ONLY:-t35-env-schema.sh}
+# The host half of the probe cut's storage check (ticket 352), named here for the
+# reason `tests/aptlock.sh` is: a checkout without it is refused before a machine
+# is cut, and not after a conversion has already spent forty-five minutes. The
+# wait itself, and why it is a wait, are in that file's header.
+PROBE_CUT=$REPO/tests/probecut.sh
 
-_is_host_only() {
-    local name=$1 candidate
-    for candidate in $HOST_ONLY; do
-        [ "$name" = "$candidate" ] && return 0
-    done
-    return 1
-}
+# **Every suite in the selection runs in a cut machine, and there is no list
+# that can skip one** (ADR-0025). A suite whose subject a machine cannot see
+# fails there rather than vanishing from a run: the host-only allowlist this
+# used to carry made an unrun check read as a green one, and a check that
+# cannot fail is not a check. A claim about the checkout is a unit test under
+# `tests/test_*.py`, selected by `just unit` and never by this runner.
 
 # A suite says whether it needs a machine of its own, in the suite itself:
 #
@@ -143,6 +150,17 @@ die() {
     exit 1
 }
 
+# **A run's ledger is its only record of what it did, so an append that fails is
+# the end of the run** (ticket 328). The alternative was measured on 2026-10-21:
+# the ledger's directory was pruned mid-run, every write failed, the per-suite
+# lines still printed, and the run exited 0 on a counter in memory while its
+# summary could not be computed at all. Stopping at the write that failed puts
+# the diagnostic where the damage is, instead of at the end of a long run whose
+# record stopped being its own hours earlier.
+_ledger_lost() {
+    die "the run's ledger $1 could not be written, so the run cannot name what it did: $2"
+}
+
 [ -x "$LXC" ] || die "$LXC not found; the LXD snap is not installed at that path"
 
 # **The failure lines are a function in their own file, and this is its only
@@ -184,10 +202,17 @@ _has_snapshot() {
     # `grep -q` exits at the first match and leaves `sed` with SIGPIPE, which
     # `set -o pipefail` then reports as the pipeline failing — so a snapshot that
     # demonstrably exists reads as absent, and every run rebuilt the golden for
-    # ten minutes. Capture first, then match.
+    # ten minutes. Capture first, then match with a here-string: there is no
+    # producer left to signal.
+    #
+    # **An unreadable listing answers "no snapshot".** That direction is
+    # deliberate: the caller rebuilds the golden, which costs ten minutes and is
+    # correct, where claiming a snapshot that could not be read would hand a
+    # suite a machine cut from a state nobody verified. A death by signal in the
+    # capture is the same case — it returns 1 below.
     local listing
     listing=$($LXC info "$1" 2>/dev/null | sed -n '/^Snapshots:/,$p') || return 1
-    printf '%s\n' "$listing" | grep -qE "^\| +$SNAPSHOT +"
+    grep -qE "^\| +$SNAPSHOT +" <<<"$listing"
 }
 
 # The golden's identity, and the only half of the cache key the harness does not
@@ -309,12 +334,6 @@ APT_LOCK_WAIT=${GUARDEN_LXC_APT_LOCK_WAIT:-600}
 # The value is overridable, because a bound is a policy and the operator may
 # have a reason for a different one.
 GOLDEN_APT_LOCK_WAIT=${GUARDEN_LXC_GOLDEN_APT_LOCK_WAIT:-2400}
-# `cloud-init status --wait` polls until cloud-init reports a final state and
-# has no end of its own: cloud-init that never gets there would hold the cut
-# with nothing printed, which is the wedge every other exec on this path is
-# bounded against. Its result was never read, and the lock wait is what decides
-# readiness, so past the bound the only thing lost is the honest signal.
-CLOUD_INIT_WAIT=${GUARDEN_LXC_CLOUD_INIT_WAIT:-600}
 
 # Ready means the agent answers, not that the state says RUNNING.
 _wait_ready() {
@@ -402,10 +421,10 @@ _wait_cloud_init() {
     # The cloud-init wait is kept because it is the honest signal when it works,
     # and its result is deliberately not used to skip the lock wait: `status
     # --wait` can return before `package_update` has released the lists lock,
-    # which is the race this function exists to close. It is bounded — see
-    # `CLOUD_INIT_WAIT` above — because `status --wait` has no end of its own;
-    # the lock wait below is what decides readiness, so past the bound the only
-    # thing lost is that signal.
+    # which is the race this function exists to close. It is bounded by the
+    # caller's `budget` because `status --wait` has no end of its own; the lock
+    # wait below is what decides readiness, so past the bound the only thing
+    # lost is that signal.
     timeout --foreground --signal=KILL "$budget" \
         $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1 || :
     # **`fuser` may be absent, and its absence would make this a silent no-op.**
@@ -741,6 +760,11 @@ cmd_provision() {
     # failure as that one machine's and would skip suites instead of the run.
     [ -n "$APT_LOCK_GUEST" ] \
         || die "$APT_LOCK_SH is unreadable; a cut cannot wait for apt's locks without it"
+    # The probe cut's check, refused the same way and for the same reason: it is
+    # the last step of a rebuild, and a checkout that cannot perform it should
+    # say so before the golden is deleted rather than after the conversion.
+    [ -x "$PROBE_CUT" ] \
+        || die "$PROBE_CUT is missing, so provision cannot verify the probe cut's storage"
     _ensure_pool
 
     # The rebuild decision needs the machine's own conversion state, which needs
@@ -948,38 +972,17 @@ cmd_provision() {
     # carried the state before its final apply, and only a cut could tell.
     # This cut reads the premises the suites ride: the conversion state, the
     # marker, and the snapper configuration the apt hook needs.
-    local probe="${GOLDEN}-probe"
-    $LXC delete "$probe" --force >/dev/null 2>&1 || true
-    $LXC copy "$GOLDEN/$SNAPSHOT" "$probe" >/dev/null 2>&1 \
-        || die "cannot cut a probe from $GOLDEN/$SNAPSHOT"
-    $LXC start "$probe" >/dev/null 2>&1 || die "the probe cut did not start"
-    for ((i = 0; i < 60; i++)); do
-        $LXC exec -T "$probe" -- true >/dev/null 2>&1 && break
-        sleep 3
-    done
-    # **The readiness loop's outcome is checked, because the assertion after it
-    # is about the STORAGE and not about the machine.** Measured 2026-10-21:
-    # the probe was cut from a golden whose conversion had just converged, and
-    # the provision died with "a cut from guarden-golden/base does not carry
-    # the converged storage state" -- while the cut's own storage was perfect
-    # (btrfs root, no reboot marker, a working `snapper -c root get-config`).
-    # The probe had simply not finished booting: the loop gave up, the
-    # assertion then ran against a machine that was not up, and the report
-    # blamed the storage.
     #
-    # **So the wait is a wait, and its failure is its own failure.** A cut that
-    # cannot answer is not a cut with drifted storage, and saying so is the
-    # difference between "reboot the probe and look again" and "the golden's
-    # snapshot is wrong".
-    $LXC exec -T "$probe" -- true >/dev/null 2>&1 \
-        || die "the probe cut did not come up, so its storage state was never read"
-    $LXC exec -T "$probe" -- bash -lc '
-        test "$(cat /var/lib/guarden/soil/state 2>/dev/null)" = done &&
-        test ! -e /var/lib/guarden/soil/reboot-required &&
-        snapper -c root get-config >/dev/null 2>&1' >/dev/null 2>&1 \
-        || die "a cut from $GOLDEN/$SNAPSHOT does not carry the converged storage state"
-    $LXC delete "$probe" --force >/dev/null 2>&1 || true
-    printf '  the probe cut carries the converged state\n'
+    # **The check is a file of its own because the condition test is the wait**
+    # (ticket 352). It used to be `lxc exec … true` as a gate and one test behind
+    # it; `true` answers as soon as the guest agent is up, while the three
+    # conditions settle after that, so a machine that was merely still booting
+    # was reported as a snapshot with drifted storage. `tests/probecut.sh` cuts
+    # the probe, retries the conditions on a bounded loop, and keeps "never
+    # answered" apart from "answered and wrong" — its header carries the
+    # measurement — and `tests/probestate.sh` is the three conditions themselves,
+    # shipped into the machine so the host's question and a suite's are one file.
+    "$PROBE_CUT" cut "$LXC" "$GOLDEN/$SNAPSHOT" "${GOLDEN}-probe" || exit 1
 
     printf 'provisioned %s on pool %s (snapshot %s)\n' "$GOLDEN" "$POOL" "$SNAPSHOT"
 }
@@ -1155,9 +1158,6 @@ cmd_run() {
         if [ -n "$pat" ] && [[ "$name" != *"$pat"* ]]; then
             continue
         fi
-        if _is_host_only "$name"; then
-            continue
-        fi
         if [ "$shared" = 1 ]; then
             want_fresh=0
             machine=0
@@ -1211,12 +1211,17 @@ cmd_run() {
 
     # The ledger: one line per selected suite, `verdict<TAB>name`. It is the run's
     # own record of what happened, and the summary is computed from it rather
-    # than from counters that a caller could set to anything. A ledger written
-    # somewhere it cannot be read is a run that reports nothing, so it is
-    # created up front and its directory is refused if it cannot be written.
+    # than from counters that a caller could set to anything.
+    #
+    # **It is created where the harness owns it, and its directory is created
+    # with it**, so a fresh clone needs no directory and no host pruner owns the
+    # path (`RUN_STATE` above has the measured reason). A ledger that cannot be
+    # created, or written, is the end of the run: the record is what the verdict
+    # is computed from, and a run that has lost it has nothing to report with.
     local ledger
-    ledger=$(mktemp -d)/ledger
-    : >"$ledger" || die "cannot write a run ledger"
+    ledger=$RUN_STATE/$RUNNER/ledger
+    mkdir -p "${ledger%/*}" || die "cannot create the run's state directory ${ledger%/*}"
+    : >"$ledger" || die "cannot write the run's ledger $ledger"
 
     # The mode is part of the key, not a run-wide annotation, and it carries two
     # things a run decides.
@@ -1262,19 +1267,40 @@ cmd_run() {
         # A hit does not open a shared group either. The suite it stands for did
         # not run, so the machine the next shared suite gets is the one its group
         # was cut as, which was decided from the selection above.
+        #
+        # **The key's status is checked, and a key that was not computed is
+        # never used.** `key=$(python3 ...)` leaves the variable EMPTY when the
+        # computation fails, and the empty key is the same for every suite and
+        # every tree — so a run that carried on with it would consult a record
+        # filed under nothing and file its own green under nothing, and a later
+        # run would inherit that green whatever the tree did. That is ticket
+        # 309's shape reached through a different door: a green inherited over
+        # code nothing re-ran.
+        #
+        # A failed computation is not a reason to die: the suite has not run, so
+        # it has no key, and the honest answer is that it RUNS and nothing is
+        # recorded for it. The helper refuses a malformed key as well, so this
+        # is the second of the two refusals and not the only one.
         local key=''
         if [ -n "$golden_digest" ]; then
-            key=$(python3 "$CACHE_TOOL" key "$golden_digest" "$file" "$mode" "$group")
-            if [ "$no_cache" = 0 ] && python3 "$CACHE_TOOL" get "$golden_digest" "$key" "$name"; then
-                printf 'inherit\t%s\n' "$name" >>"$ledger"
-                python3 "$CACHE_TOOL" line inherited "$name"
-                continue
+            if ! key=$(python3 "$CACHE_TOOL" key "$golden_digest" "$file" "$mode" "$group"); then
+                printf 'error: cannot compute the cache key for %s; it runs and nothing is recorded for it\n' \
+                    "$name" >&2
+                key=''
             fi
+        fi
+        if [ -n "$key" ] && [ "$no_cache" = 0 ] \
+            && python3 "$CACHE_TOOL" get "$golden_digest" "$key" "$name"; then
+            printf 'inherit\t%s\n' "$name" >>"$ledger" \
+                || _ledger_lost "$ledger" "$name"
+            python3 "$CACHE_TOOL" line inherited "$name"
+            continue
         fi
 
         if [ "$want_fresh" = 1 ]; then
             if ! _reset; then
-                printf 'fail\t%s\n' "$name" >>"$ledger"
+                printf 'fail\t%s\n' "$name" >>"$ledger" \
+                    || _ledger_lost "$ledger" "$name"
                 printf 'error: cannot cut a clean %s\n' "$RUNNER" >&2
                 failures=$((failures + 1))
                 shared_open=0
@@ -1291,9 +1317,11 @@ cmd_run() {
         local rc=0
         _run_suite "$name" || rc=$?
         if [ "$rc" -eq 0 ]; then
-            printf 'pass\t%s\n' "$name" >>"$ledger"
+            printf 'pass\t%s\n' "$name" >>"$ledger" \
+                || _ledger_lost "$ledger" "$name"
         else
-            printf 'fail\t%s\n' "$name" >>"$ledger"
+            printf 'fail\t%s\n' "$name" >>"$ledger" \
+                || _ledger_lost "$ledger" "$name"
             failures=$((failures + 1))
             continue
         fi
@@ -1301,7 +1329,12 @@ cmd_run() {
         # Reached only for exit 0, and `put` refuses anything else a second time.
         # A failure has no record, so the next run runs the suite rather than
         # inheriting it — the whole of what makes a cached green worth anything.
-        if [ -n "$golden_digest" ]; then
+        #
+        # **A key that was never computed records nothing.** The suite ran and
+        # passed, but there is no key to file the result under, and a result
+        # filed under nothing would be inherited by a run that never ran the
+        # suite. So the result is observed by this run and simply not kept.
+        if [ -n "$golden_digest" ] && [ -n "$key" ]; then
             python3 "$CACHE_TOOL" put "$golden_digest" "$key" "$name" "$mode" "$group" 0 \
                 || die "cannot record the result of $name; the cache is not writable"
         fi
@@ -1311,9 +1344,16 @@ cmd_run() {
         printf 'note: --fresh cuts a machine per file and overrode the shared declaration of %d suite(s)\n' \
             "$overridden"
     fi
-    local report_args=(--ledger "$ledger" --golden "$golden_digest" --cuts "$cuts")
+    # **The summary is the run's verdict, and it is refused rather than
+    # approximated.** The count it is checked against is the run's own selection
+    # (`$total`), never the file's, so a ledger that lost lines — the pruned
+    # directory of ticket 328 — cannot be summarised as a smaller run that
+    # passed. And a refusal has to END the run: the exit test below reads a
+    # counter in memory, so falling through printed an error where the summary
+    # belonged and then exited 0, which is the silent zero the ticket measured.
+    local report_args=(--ledger "$ledger" --selected "$total" --golden "$golden_digest" --cuts "$cuts")
     [ "$no_cache" = 1 ] && report_args+=(--no-cache)
-    python3 "$CACHE_TOOL" report "${report_args[@]}"
+    python3 "$CACHE_TOOL" report "${report_args[@]}" || die "no summary: the run's ledger $ledger could not certify the $total suite(s) this run selected"
     [ "$failures" -eq 0 ]
 }
 

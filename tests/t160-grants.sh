@@ -205,7 +205,10 @@ assert_file_lacks "$conf" "jump REDIRECT"
 assert_file_has "$conf" "chain guarden-in"
 assert_file_has "$conf" "proto tcp dport 20133 jump ACCEPT;"
 guarden_in_body=$(sed -n '/chain guarden-in/,/^}/p' "$conf")
-printf '%s' "$guarden_in_body" | grep -q 'dport 8333 ' &&
+# `text_has` on the captured body, not `printf '%s' … | grep -q`: the pipe gives
+# the producer SIGPIPE when `grep` exits at its match, `pipefail` reports 141,
+# and this negative assertion then passes on a body that names the port.
+text_has "$guarden_in_body" 'dport 8333 ' &&
     _fail "guarden-in accepts the public port 8333; INPUT sees the publication"
 # The public port belongs to the nat chain and the publication to this one. The
 # absence has to be anchored to the ACCEPT, not to the bare dport: the nat rule

@@ -29,8 +29,18 @@ documents as an accepted htpasswd format, and the input it protects is a
 it, so an unkeyed SHA-1 costs an attacker nothing they can use.
 
 Nothing here reads a manifest, and no key of one reaches this middleware: the
-flag travels registry -> renderer -> slice -> `roots`, and a manifest that
+mint travels registry -> renderer -> slice -> `roots`, the attachment answer is
+read from the root-owned `overrides.toml` by `roots`, and a manifest that
 wants no auth has nowhere to say so (spec 4's closed key sets, spec 10).
+
+**The mint and the opt-out are two different facts, and the second one lives in
+`overrides.toml`.** `registry.basicauth` records that a login WAS minted at
+creation — a fact about the past, and the reason `mint`/`restore`/`rotate` are
+idempotent. Whether the middleware that asks for it is attached NOW is the
+operator's decision (`opted_out`), root-owned in the service's own
+`overrides.toml` (spec 3.3 `[basicauth]`, ADR-0024), and it is read by `roots`
+at the moment the edge's own file is written. Turning it off destroys nothing:
+the blob and the entry stay, and turning it back on re-attaches the same login.
 """
 
 from __future__ import annotations
@@ -40,7 +50,7 @@ import hashlib
 import os
 from pathlib import Path
 
-from guarden import conf, credentials, errors, paths, registry, users
+from guarden import conf, credentials, errors, overrides, paths, registry, users
 
 # The schema key the minted login is planted under, and the name of the record
 # in the registry's [generated] table — the same "guarden minted this" ledger a
@@ -223,6 +233,31 @@ def mint(record, when: str) -> None:
     write_entry(record.service, password)
     record.basicauth = True
     record.generated[KEY] = when
+
+
+def opted_out(service: str) -> bool:
+    """Whether the operator has turned the middleware OFF for this service.
+
+    The setting is `[basicauth] required = false` in the service's own
+    `overrides.toml` (spec 3.3, ADR-0024), and **absent is not the same as
+    `false`**: absent is the default, which is the middleware on, and a service
+    whose file says nothing renders exactly what it rendered before the table
+    existed. `weedr basicauth off` writes `false` and `weedr basicauth on`
+    writes `true`, so the file states the posture in both directions once an
+    operator has touched it.
+
+    **It asks the file every time, and it is read at the edge's own render.**
+    That is what makes the setting take effect on the next `roots sync` rather
+    than at the service's next full render: the mint travels in the slice and
+    never changes, and what the edge attaches is this answer beside it.
+
+    A file that will not parse is the host not being in the assumed state, and
+    the caller decides what that means: `roots` keeps the middleware on — the
+    direction that serves a login rather than silently dropping one — and says
+    so, and `weedr basicauth list` reports the failure rather than a posture it
+    could not read.
+    """
+    return overrides.load(service).basicauth_required is False
 
 
 def owns(service: str, key: str) -> bool:

@@ -537,7 +537,10 @@ run systemctl restart guarden-firewall.service
 assert_exit 0
 run iptables-legacy -S guarden-svc
 assert_exit 0
-if printf '%s' "$(cat "$GUARDEN_STDOUT")" | grep -q "dport $own_pub"; then
+# `text_has` on the captured output, not `printf … | grep -q`: the pipe reports
+# the producer's SIGPIPE instead of the match under `pipefail`, and this RED
+# demonstration would then pass without having gone red.
+if text_has "$(<"$GUARDEN_STDOUT")" "dport $own_pub"; then
     _fail "the RED demonstration did not go red: the accept for dport $own_pub is still in the running ruleset"
 fi
 before=$(deny_packets)

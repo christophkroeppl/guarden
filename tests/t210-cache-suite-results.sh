@@ -169,14 +169,21 @@ assert_exit 1
 
 # A record whose outcome is anything but green is not a hit, whatever else
 # agrees about it.
-seed "$CACHE/$GOLDEN/bogus.json" \
-    "{\"golden\":\"$GOLDEN\",\"key\":\"bogus\",\"outcome\":\"red\",\"suite\":\"$SUITE_NAME\"}"
-cache get "$GOLDEN" bogus "$SUITE_NAME"
+#
+# The two keys below are digests because a key that is not one is refused
+# before a record is read at all (t211): the record has to be reachable under a
+# key the helper would accept, or the miss would be the refusal rather than the
+# record's outcome.
+BOGUS_KEY=$(printf '0%.0s' {1..64})
+seed "$CACHE/$GOLDEN/$BOGUS_KEY.json" \
+    "{\"golden\":\"$GOLDEN\",\"key\":\"$BOGUS_KEY\",\"outcome\":\"red\",\"suite\":\"$SUITE_NAME\"}"
+cache get "$GOLDEN" "$BOGUS_KEY" "$SUITE_NAME"
 assert_exit 1
 
 # A record that is not readable is a miss, not a crash and not a hit.
-seed "$CACHE/$GOLDEN/broken.json" 'not json'
-cache get "$GOLDEN" broken "$SUITE_NAME"
+BROKEN_KEY=$(printf '1%.0s' {1..64})
+seed "$CACHE/$GOLDEN/$BROKEN_KEY.json" 'not json'
+cache get "$GOLDEN" "$BROKEN_KEY" "$SUITE_NAME"
 assert_exit 1
 
 # Pruning drops another golden's records and says how many went.
@@ -598,6 +605,90 @@ RELOCATED_KEY=$(GUARDEN_LXC_ROOT="$RELOCATED" python3 "$CACHE_TOOL" key "$GOLDEN
 [ "$RELOCATED_KEY" = "$(key "$GOLDEN" "$SUITE" declared runner-1)" ] \
     || _fail "the same bytes in a second root answered a different key, so the key depends on where the tree was found"
 
+# --- a suite that names a document reads it ---------------------------------
+
+# `docs/` is in no universal set, because a docs-only change must invalidate no
+# cached green. But a suite that ASSERTS on a document has a result that is a
+# function of that document: `t480-doc-claims.sh` exists to catch a runbook
+# that names a path the code does not implement, and its green would be
+# inherited over the edit it exists to catch — the same stale pass ticket 309
+# fixed for the package, with a different tree.
+#
+# The seam is the suite's own line, `# reads: <path>`, and the name is per
+# suite: a document enters the key of the suite that names it and no other. A
+# declaration that did not work would read as a comment, and nothing else in
+# this file would notice. This section is what notices.
+#
+# It is proved on a copy, for the reason every digest change here is: a suite
+# that is SIGKILLed leaves the live tree modified, and the next suite on a
+# shared machine reads it. Nothing here edits the checkout.
+READS_COPY=$GUARDEN_FIXTURES/reads
+mkdir -p "$READS_COPY/tests" "$READS_COPY/docs"
+cp "$GUARDEN_ROOT/tests/lib.sh" "$READS_COPY/tests/lib.sh"
+printf '# the runbook\n' >"$READS_COPY/docs/sysadmin.md"
+# Two suites that differ in one thing: the declaration.
+printf '#!/usr/bin/env bash\n# reads: docs/sysadmin.md\nexit 0\n' \
+    >"$READS_COPY/tests/t901-reads-doc.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$READS_COPY/tests/t902-reads-nothing.sh"
+
+reads_key() {
+    GUARDEN_LXC_ROOT="$READS_COPY" python3 "$CACHE_TOOL" key "$GOLDEN" \
+        "$READS_COPY/tests/$1" declared runner-1
+}
+
+reads_set() {
+    GUARDEN_LXC_ROOT="$READS_COPY" python3 "$CACHE_TOOL" readset "$READS_COPY/tests/$1"
+}
+
+# The declaration puts the document in the suite's read set, and its absence
+# keeps `docs/` out of a suite that names nothing.
+reads_set t901-reads-doc.sh >"$GUARDEN_FIXTURES/reads-declared.list"
+grep -qxF 'docs/sysadmin.md' "$GUARDEN_FIXTURES/reads-declared.list" \
+    || _fail "a suite that names docs/sysadmin.md does not have it in its read set, so its green is inherited over an edited document"
+reads_set t902-reads-nothing.sh >"$GUARDEN_FIXTURES/reads-plain.list"
+if grep -q '^docs/' "$GUARDEN_FIXTURES/reads-plain.list"; then
+    _fail "a suite that names no document has one in its read set, so docs/ is in every key"
+fi
+
+DECLARED=$(reads_key t901-reads-doc.sh)
+PLAIN=$(reads_key t902-reads-nothing.sh)
+
+# An edit to the document moves the key of the suite that named it, and no
+# other suite's key: the declaration is per suite, in both directions.
+printf '# an edit the suite asserts on\n' >>"$READS_COPY/docs/sysadmin.md"
+[ "$DECLARED" != "$(reads_key t901-reads-doc.sh)" ] \
+    || _fail "an edit to a document a suite names did not move that suite's key, so its green is inherited over the edit"
+[ "$PLAIN" = "$(reads_key t902-reads-nothing.sh)" ] \
+    || _fail "an edit to a document one suite names moved another suite's key, so the declaration is not per suite"
+
+# Restoring the bytes restores the key, so the document is the only difference
+# and the cache follows the bytes here as it does everywhere else.
+printf '# the runbook\n' >"$READS_COPY/docs/sysadmin.md"
+[ "$DECLARED" = "$(reads_key t901-reads-doc.sh)" ] \
+    || _fail "restoring the document did not restore the key"
+
+# A named path the tree does not hold is ignored rather than refused: a suite
+# may name a file a future change adds, and the key must still be computable
+# over the tree as it is.
+printf '#!/usr/bin/env bash\n# reads: docs/a-document-not-written-yet.md\nexit 0\n' \
+    >"$READS_COPY/tests/t903-reads-absent.sh"
+ABSENT=$(reads_key t903-reads-absent.sh) \
+    || _fail "a suite that names a document the tree does not hold cannot be keyed at all"
+[ -n "$ABSENT" ] || _fail "a suite that names a document the tree does not hold produced an empty key"
+
+# And the real declaration in the tree lands in the read set of the suite that
+# makes it, so the seam is not asserted only on a copy.
+cache readset "$GUARDEN_ROOT/tests/t480-doc-claims.sh"
+assert_exit 0
+grep -qxF 'docs/sysadmin.md' "$GUARDEN_STDOUT" \
+    || _fail "t480 declares docs/sysadmin.md and the declaration is not in its read set"
+# A suite that declares nothing carries no document at all.
+cache readset "$SUITE"
+assert_exit 0
+if grep -q '^docs/' "$GUARDEN_STDOUT"; then
+    _fail "a suite that names no document carries docs/ in its read set, so a docs-only change invalidates a green"
+fi
+
 # --- what the key covers, and what it costs ---------------------------------
 
 # The read set is the key's claim about the tree, so it is asserted as content
@@ -710,11 +801,16 @@ assert_one_diagnostic "error:"
 assert_stderr_has "is not a verdict"
 
 # --- the summary says how many ran and how many were inherited --------------
+#
+# `--selected` is how many suites the run selected, and it is what the tally is
+# checked against: the file cannot certify itself, and a summary computed from a
+# ledger that lost lines would be a claim about a run that did not happen
+# (ticket 328, where the ledger's directory was pruned mid-run).
 
 LEDGER=$GUARDEN_FIXTURES/ledger
 
 seed "$LEDGER" "pass	t30-create.sh" "pass	t30-list.sh" "inherit	t70-fork.sh"
-cache report --ledger "$LEDGER" --golden "$GOLDEN" --cuts 2
+cache report --ledger "$LEDGER" --selected 3 --golden "$GOLDEN" --cuts 2
 assert_exit 0
 assert_stdout_has "3 suites"
 assert_stdout_has "2 ran"
@@ -725,7 +821,7 @@ assert_stdout_has "0 failures"
 # summary that said "3 suites" there, with no word about inheriting, would be a
 # claim of verification that did not happen.
 seed "$LEDGER" "inherit	t30-create.sh" "inherit	t30-list.sh" "inherit	t70-fork.sh"
-cache report --ledger "$LEDGER" --golden "$GOLDEN" --cuts 0
+cache report --ledger "$LEDGER" --selected 3 --golden "$GOLDEN" --cuts 0
 assert_exit 0
 assert_stdout_has "0 ran"
 assert_stdout_has "3 inherited"
@@ -734,7 +830,7 @@ assert_stdout_has "verified nothing"
 # A run that inherited some of them says which, and says the rest are the only
 # observations it made.
 seed "$LEDGER" "pass	t30-create.sh" "inherit	t30-list.sh" "inherit	t70-fork.sh"
-cache report --ledger "$LEDGER" --golden "$GOLDEN" --cuts 1
+cache report --ledger "$LEDGER" --selected 3 --golden "$GOLDEN" --cuts 1
 assert_exit 0
 assert_stdout_has "2 of 3 suites were inherited"
 assert_stdout_has "the 1 that ran are the only results this run observed"
@@ -742,7 +838,7 @@ assert_stdout_has "--no-cache"
 
 # A ledger that is not there is a report that cannot be written, and it says so
 # rather than printing a count of nothing.
-cache report --ledger "$GUARDEN_FIXTURES/absent-ledger" --golden "$GOLDEN"
+cache report --ledger "$GUARDEN_FIXTURES/absent-ledger" --selected 3 --golden "$GOLDEN"
 assert_exit 1
 assert_one_diagnostic "error:"
 
@@ -750,7 +846,7 @@ assert_one_diagnostic "error:"
 # everything — the claim a release gate is entitled to make and a cached run is
 # not.
 seed "$LEDGER" "pass	t30-create.sh" "pass	t30-list.sh" "pass	t70-fork.sh"
-cache report --ledger "$LEDGER" --golden "$GOLDEN" --cuts 3 --no-cache
+cache report --ledger "$LEDGER" --selected 3 --golden "$GOLDEN" --cuts 3 --no-cache
 assert_exit 0
 assert_stdout_has "--no-cache: all 3 suites ran"
 assert_stdout_has "0 inherited"

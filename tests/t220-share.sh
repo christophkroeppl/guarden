@@ -181,7 +181,11 @@ assert_file_exists "$record"
 # written is the moment it ends.
 assert_file_has "$record" 'deadline = "'
 assert_file_has "$record" 'email = "alice@example.com"'
-assert_file_has "$record" 'hosts = ["staging.web"]'
+# **The grant names the hostname the tunnel serves**, which is the route's
+# recorded name IN THE TUNNEL'S ZONE (ticket 324). A grant naming a bare label
+# would grant access to a hostname no DNS answers, and the customer would be
+# refused for a reason nobody can see.
+assert_file_has "$record" 'hosts = ["staging.web.tunnel.example.net"]'
 assert_file_lacks "$record" "duration"
 assert_file_lacks "$record" "never"
 
@@ -195,7 +199,7 @@ assert_exit 0
 assert_stdout_lines 1
 assert_json issuances.0.id "\"$first\""
 assert_json issuances.0.state '"live"'
-assert_json issuances.0.hosts.0 '"staging.web"'
+assert_json issuances.0.hosts.0 '"staging.web.tunnel.example.net"'
 assert_json issuances.0.revoked null
 
 # A second email on the same hostname. The union of the live issuances is one
@@ -217,7 +221,7 @@ projection="$store/projection.json"
 assert_file_exists "$projection"
 run cat "$projection"
 assert_exit 0
-assert_json policies.0.hostname '"staging.web"'
+assert_json policies.0.hostname '"staging.web.tunnel.example.net"'
 assert_json policies.0.decision '"allow"'
 assert_json policies.0.include_emails.0 '"alice@example.com"'
 assert_json policies.0.include_emails.1 '"bob@example.com"'

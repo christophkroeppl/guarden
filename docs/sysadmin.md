@@ -411,9 +411,17 @@ than where the renderer reads, and nothing would look at it. The file name is th
 and the user manager is per service uid, so two services created from one template do not
 share a unit.
 
-**No set ships.** `soil install` builds `/usr/lib/guarden/templates/` from
-`src/guarden/templates/`, and that tree has no `services/` subdirectory, so on a host that has
-just been installed `create` is refused before anything else is asked of it:
+**Two templates ship.** `soil install` copies `src/guarden/templates/` to
+`/usr/lib/guarden/templates/`, and that tree carries a `services/` subdirectory with `postgres`
+and `vaultwarden` in it, so a host that has just been installed already holds a set:
+
+```
+$ ls /usr/lib/guarden/templates/services/
+postgres  vaultwarden
+```
+
+**The set is empty only on a host whose templates were taken away**, and then `create` is
+refused before anything else is asked of it:
 
 ```
 weedr service create myapp --env staging --template postgres
@@ -430,7 +438,7 @@ rule, and then it is exit `2` whatever the host holds:
 
 ```
 weedr service create myapp --env staging --template ../x
-error: the template '../x' is not a template name; /usr/lib/guarden/templates/services holds none
+error: the template '../x' is not a template name; available templates: postgres, vaultwarden
 ```
 
 The same line with templates installed: a name that breaks no rule and a set that does not hold
@@ -493,12 +501,25 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   schema and answers `not-required` on an ungated track and `ready` on a gated one, so a
   `Secret=` naming a key nobody planted is refused by podman when the container starts and not
   by `[gate] reason`. There is no blocked state to look at — plant first, then start.
-* **Give the volume an owner the image accepts.** A volume is created `0700` under the service
-  uid, and an image that runs as its own uid cannot write it:
-  `mkdir: can't create directory '/var/lib/postgresql/data/pgdata': Permission denied`. The
-  step is `podman unshare chown -R <image uid>:<image uid> <volume>`, run as the service user
-  (tickets 273 and 277). Point the image's data directory at a *subdirectory* of the mount, or
-  it collides with snapper's root-owned `.snapshots`.
+* **Do not chown a volume to the image's uid.** A volume is created `0700` under the service
+  uid, and that is the right owner: guarden renders `UserNS=keep-id:uid=…,gid=…` for a unit
+  whose image declares a user (ADR-0019), and the line maps that uid **onto the service
+  identity** — so the container's uid 10001 *is* the service user on the host, and it writes
+  the 0700 volume with no chown anywhere. Chowning the volume's tree to the image's uid
+  instead — through the container's namespace, as the service user — moves the tree onto a
+  uid the container does not own under that mapping (the image's uid lands in the service's
+  subuid band), and the container loses the write it had. On a `state` volume it is worse
+  than that: the walk reaches snapper's root-owned `.snapshots` and fails, **having already
+  moved the volume's own owner**, so a command that reports failure leaves a broken
+  deployment behind it.
+  **Nothing to do here** — if a service's image cannot write its volume, the answer is the pair
+  the probe recorded, `owner_uid` and `owner_gid` in
+  `/var/lib/guarden/registry/<name>.toml`, and the `UserNS=keep-id:uid=…,gid=…` line
+  `weedr service start` writes into
+  `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf`. It is not a
+  chown. The one manual step that remains is pointing the image's data directory at a
+  *subdirectory* of the mount, so its entrypoint's recursive chown never reaches snapper's
+  root-owned `.snapshots` (ticket 273, ADR-0020).
 * **A re-ingest after an edit redeploys** (ticket 275). `source_hash` covers the whole staged
   tree — the unit source, the compose file, the Containerfile and the application's own files
   — because the whole tree is the build's context and every file in it is a build input (spec
@@ -630,6 +651,12 @@ else moves data aside.
 ```
 /var/lib/guarden/services/<name>/home/          its home; units, image store, instances
 /var/lib/guarden/services/<name>/state/<vol>/   a subvolume, with snapper config <name>-<vol>
+/var/lib/guarden/services/<name>/state/<vol>/data/
+                                             the volume's data, one level down inside
+                                             the subvolume, and what the container
+                                             mounts: snapper's .snapshots/ is the
+                                             payload's sibling, so a container never
+                                             sees it (ADR-0020)
 /var/lib/guarden/registry/<name>.toml           the record
 /etc/guarden/services/<name>/overrides.toml     admin grants
 /etc/containers/systemd/users/<uid>/            admin units and drop-ins, uid-scoped
@@ -638,6 +665,35 @@ else moves data aside.
     and your own `90-admin.conf`
 /var/lib/guarden/removed/<service>/<time>/<vol>/   moved, not deleted, by service remove
 ```
+
+**A `state` volume's data is one level down, and an existing volume whose data is at the
+root is refused rather than moved.** A `state` volume is a btrfs subvolume and snapper puts
+its own root-owned `0750` `.snapshots/` inside it; the container is rootless, so its `uid 0`
+is the service uid and it cannot chown a directory owned by the real host root. Every image
+whose entrypoint chowns its data directory — `postgres`, `mariadb`, `mysql`,
+`elasticsearch` — therefore fails against a `state` volume whose data is at the root, with
+
+    chown: changing ownership of '/var/lib/postgresql/data/.snapshots': Operation not permitted
+
+**The payload directory is the fix**: the container mounts `state/<vol>/data/`, the payload's
+sibling is `.snapshots/`, and the image's chown walks the payload only.
+
+**Guarden does not migrate a volume that already has its data at the root.** The mutator and
+`weedr service start` both refuse with one line naming the service, the volume, the payload
+directory and the work, and they change nothing. To move the data across:
+
+    weedr service stop <service>
+    mkdir -p /var/lib/guarden/services/<svc>/state/<vol>/data
+    find /var/lib/guarden/services/<svc>/state/<vol> -mindepth 1 -maxdepth 1 \
+        ! -name .snapshots -exec mv -t /var/lib/guarden/services/<svc>/state/<vol>/data {} +
+    chown -R <svc>:<svc> /var/lib/guarden/services/<svc>/state/<vol>/data
+    weedr service start <service>
+
+**The start asks the same question again**, so a move that missed something is refused rather
+than started against a half-moved volume.
+
+**The move is the operator's, deliberately**, and it is the same rule guarden already states
+for a newly declared volume: the volume starts EMPTY and the data does not follow the change.
 
 Nothing root-owned lives under `home`. If a file you expected to be protected is inside `home`,
 it is not — that is the rule, and the fix is to move it.
@@ -1387,11 +1443,12 @@ somebody forgot.
 A service may declare as many `state` volumes as it needs, and one snapshot covers all of them.
 Each is a subvolume with its own snapper configuration named `<service>-<volume>`.
 
-A `bulk` volume is a btrfs subvolume like any other and gets a `.volume` unit so a container can
-mount it, but it has no snapper configuration, is never a fork or rollback source, and **is an
-empty subvolume after a fork**. It is a subvolume on every path, the fork included — never a plain
-directory, because the `.volume` unit has to resolve to the same kind of thing either way. It is
-never cloned from a live volume: a copy as of an instant is not reproducible
+A `bulk` volume is a btrfs subvolume like any other and a container mounts it by its own path —
+the subvolume itself — in a `Volume=` line, not a `.volume` unit (spec §6.3). It has no snapper
+configuration, is never a fork or rollback source, and **is an empty subvolume after a fork**. It
+is a subvolume on every path, the fork included — never a plain directory, because the path the
+`Volume=` line names has to resolve to the same kind of thing on a fresh deployment and after a
+fork. It is never cloned from a live volume: a copy as of an instant is not reproducible
 afterwards, and a fork that quietly produced different data on two targets would be worse than an
 empty one. Rebuild it instead, which is what the declaration promises.
 
@@ -1731,6 +1788,30 @@ is only ever created here. A host with no edge module has no `edge` group, and
 A route on a track whose `expose` is `tunnel` is reached through the tunnel and
 is not public on the edge. Getting somebody to it is a **grant**, and a grant is
 an issuance that always expires.
+
+**A tunnel route carries no middleware, and the edge's basic-auth login does not follow it
+there.** The tunnel is a *different terminator*: cloudflared dials the service's publication
+directly (`http://<name>:<publication>` in `/var/lib/guarden/tunnel/config.yml`), so traefik
+is never in that path and the per-service `basicAuth` login is never in it either. The
+protection on a tunnel route is **Cloudflare's Access policy**, and `weedr share issue` is
+guarden's own instrument for it.
+
+`weedr expose set <name> tunnel` says so on stdout, in one line, whenever the service carries
+the default edge login:
+
+```sh
+weedr expose set myapp-staging tunnel
+myapp-staging exposure tunnel
+myapp-staging is reached through the tunnel, and the tunnel is a different terminator: its
+route carries no middleware at all — the edge's basic auth login and its forward-auth are
+both in front of the edge's own routes. A tunnel route is protected by the vendor's Access
+policy, and `weedr share issue` is guarden's own instrument for that policy.
+```
+
+**Read that line as the answer to "what is in front of this route".** A service with no
+login — one created before the gate module's policy was in force — prints no such line,
+because there is no credential that could have followed it. Promoting a service to the
+tunnel and reading nothing is not a contradiction: the service has no login to lose.
 
 ```sh
 weedr share issue routed-staging alice@example.com --until 7d

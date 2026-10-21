@@ -64,8 +64,13 @@ config=myapp-production-data
 # held the file and the volume came back empty. That is the difference worth
 # having this file assert, because a clone made from the source's *live* volume
 # and one made from its snapshot are otherwise indistinguishable here.
-printf 'the source data\n' >"$production/state/data/pgdata"
-printf 'the target data\n' >"$staging/state/data/pgdata"
+#
+# **The file is written in the PAYLOAD, one level down inside the volume**
+# (ADR-0020), because that is where a `state` volume's data lives and what the
+# container mounts. A file at the subvolume's root would be outside the
+# snapshot's content and outside what a service could read back.
+printf 'the source data\n' >"$production/state/data/data/pgdata"
+printf 'the target data\n' >"$staging/state/data/data/pgdata"
 printf 'the target chainstate\n' >"$staging/bulk/chainstate/state.bin"
 
 # The source's snapshot has to exist as a subvolume for the clone to be made of
@@ -90,14 +95,14 @@ assert_stdout_has "cloned myapp-production:data@$source_number"
 # target's. Three separate facts, and each is read off the filesystem rather than
 # out of a log of the `btrfs subvolume snapshot` that was issued.
 assert_subvolume "$staging/state/data"
-assert_file_has "$staging/state/data/pgdata" "the source data"
-assert_file_lacks "$staging/state/data/pgdata" "the target data"
+assert_file_has "$staging/state/data/data/pgdata" "the source data"
+assert_file_lacks "$staging/state/data/data/pgdata" "the target data"
 # btrfs does not make a snapshot read-only (docs/notes item O measured it), so
 # clearing the flag is a real property write rather than a redundant one — which is
 # why this is asked of the property and not merely of the clone's existence.
 assert_property "$staging/state/data" ro false
 # And the source was not written to: the clone is the buffer.
-assert_file_has "$production/state/data/pgdata" "the source data"
+assert_file_has "$production/state/data/data/pgdata" "the source data"
 
 # A bulk volume is a subvolume on the fork path too, and it is **empty**: a copy
 # as of an instant is not reproducible afterwards, and two targets that quietly
@@ -229,13 +234,13 @@ stage_poke twovol 9f2c1ab
 run weedr service ingest twovol-staging --from poke twovol@9f2c1ab
 assert_exit 0
 twovol_staging=/var/lib/guarden/services/twovol-staging
-printf 'the old target\n' >"$twovol_staging/state/data/before"
+printf 'the old target\n' >"$twovol_staging/state/data/data/before"
 run weedr service fork twovol-staging --from myapp-production
 assert_exit 1
 assert_one_diagnostic "error:"
 assert_stderr_has "cache"
-assert_file_exists "$twovol_staging/state/data/before"
-assert_file_has "$twovol_staging/state/data/before" "the old target"
+assert_file_exists "$twovol_staging/state/data/data/before"
+assert_file_has "$twovol_staging/state/data/data/before" "the old target"
 # The volume that resolved is named in the same refusal, so an operator can see
 # what did resolve and what did not rather than being told only that it failed.
 assert_stderr_has "data@"
@@ -289,7 +294,7 @@ run weedr service snapshot myapp-staging
 assert_exit 0
 assert_snapshot_count myapp-staging-data 1
 staging_number=1
-printf 'the restored marker\n' >"$staging/state/data/marker"
+printf 'the restored marker\n' >"$staging/state/data/data/marker"
 staging_moment=$(python3 "$GUARDEN_ROOT/tests/snapfield.py" myapp-staging-data \
     "$staging_number" date <"$GUARDEN_FIXTURES/snapper-myapp-staging-data.json" \
     | awk '{print $1" "$2}')
@@ -304,10 +309,10 @@ assert_stdout_has "rolled myapp-staging back to data@$staging_number"
 # service's tree and is unaffected, which is why this is a path rewrite and not a
 # different ordering.
 assert_subvolume "$staging/state/data"
-assert_file_missing "$staging/state/data/marker"
+assert_file_missing "$staging/state/data/data/marker"
 # The live volume is back in the registry's name and the moved-aside copy is still
 # there, because a rollback moves data aside and does not destroy it.
-assert_file_exists "$staging/state/data/pgdata"
+assert_file_exists "$staging/state/data/data/pgdata"
 
 # A rollback on a gated track is refused outright, and there is no flag that
 # overrides it: the verb is on no sudoers rule, so this is a refusal an operator
@@ -323,7 +328,7 @@ assert_one_diagnostic "error:"
 assert_stderr_has "gated"
 assert_stdout_empty
 assert_subvolume "$production/state/data"
-assert_file_has "$production/state/data/pgdata" "the source data"
+assert_file_has "$production/state/data/data/pgdata" "the source data"
 # A rollback moves a volume aside under `<volume>.replaced.<stamp>`, so the
 # absence of any such name in the production tree is the claim that nothing moved.
 if [ -n "$(find "$production/state" -maxdepth 2 -name 'data.replaced.*' 2>/dev/null)" ]; then
