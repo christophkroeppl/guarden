@@ -513,7 +513,9 @@ Precedence: **explicit override > `[providers]` environment default > literal na
 The manifest refuses `environment:` and `track:` by name (spec 4): the host decides the environment. This table is where that decision is expressed — the repository names the logical provider, and the root-owned track table says which concrete service answers it per track.
 
 `admin_user` is a login name, resolved to a uid. It is the only uid besides the service uids
-that the firewall names, and it is the uid allowed to reach the edge's API.
+and root that the firewall names, and it is the uid allowed to reach the edge's API. Root is
+named because it holds the resolver's accepts (§7.6) and the operator's publication accept
+(§7.6), and the two are the whole of uid 0's exceptions to the loopback deny.
 
 The `[network]` table is load-bearing rather than a preference, because it decides whether a
 container can reach the host at all (§7.1). **The set is pinned, and its shape is validated**:
@@ -2681,7 +2683,10 @@ filter OUTPUT
   ... one per (publication, allowed uid) ...
   -A guarden-svc -d 127.0.0.53 -p udp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
   -A guarden-svc -d 127.0.0.53 -p tcp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
-  ... one per service uid, the host's stub resolver and nothing else ...
+  ... one per service uid, plus root's pair ...
+  -A guarden-svc -d 127.0.0.53 -p udp --dport 53 -m owner --uid-owner 0 -j ACCEPT
+  -A guarden-svc -d 127.0.0.53 -p tcp --dport 53 -m owner --uid-owner 0 -j ACCEPT
+  ... root's pair, for the host's own name lookups (ADR-0023) ...
   -A guarden-svc -s 127.0.0.53 -p udp --sport 53 -j ACCEPT
   -A guarden-svc -s 127.0.0.53 -p tcp --sport 53 -j ACCEPT
   ... the reply to those queries, source-address matched with NO owner match ...
@@ -2716,11 +2721,46 @@ port 53, over **both** protocols, so a service uid carries two accepts for it �
 `tcp` — exactly as it carries an accept per publication, with the same owner match and above
 the same deny. **The address is `127.0.0.53` and never `127.0.0.0/8`**, and the port is 53 and
 nothing else, so every other loopback destination and every other port on that one are still
-refused. The uid set is the service uids and no other: the rule cannot be widened by a
-manifest, an `overrides.toml`, a module or a poke, and there is no key that adds one. It is
-drawn from guarden's knowledge of what the host runs rather than from configuration, so it is
-not the `[loopback] allow` table the firewall rules removed — see §7.7 for that distinction,
-which is the whole of what makes this rule safe to render unconditionally.
+refused. The uid set is the service uids **and root**, and nothing else: the rule cannot be
+widened by a manifest, an `overrides.toml`, a module or a poke, and there is no key that adds
+one. It is drawn from guarden's knowledge of what the host runs rather than from
+configuration, so it is not the `[loopback] allow` table the firewall rules removed — see
+§7.7 for that distinction, which is the whole of what makes this rule safe to render
+unconditionally.
+
+**Root is in that uid set, beside the service uids and not as one of them.** The uid set is
+the registry's service uids plus **root**, and root's presence is decided rather than
+incidental: it was a side effect of where the list came from until ADR-0023 asked it
+directly. **Root receives the same two owner-matched accepts — `udp` and `tcp`, the same
+address, the same port — and the deny no longer refuses root's query to the resolver.**
+
+Three things carry the answer, and each is a fact about the design rather than a
+preference.
+
+- **The lookup is on the path, and the deny was on the path.** `/etc/resolv.conf` names
+  `127.0.0.53`, so **every** name lookup on the host is a loopback packet *before* any
+  outbound packet exists — the outbound packet is untouched by the deny, but the lookup
+  that precedes it is not, and the stub is inside `127.0.0.0/8`. So `soil packages`'s
+  `apt-get update` and `soil install`'s pinned-artefact fetch, both of which resolve a
+  host name as root, met the deny.
+- **And the refusal was invisible where it cost the most.** Measured on a converged host:
+  root's `getent hosts <name>` exits 2, root's `curl <url>` exits 6, and
+  `apt-get update` reports *"Temporary failure resolving archive.ubuntu.com"* **and
+  still exits 0**. A host whose package index silently stopped refreshing reads as a host
+  with an unreachable mirror, and the operator's next move is the wrong one.
+- **Root already holds a broader exemption on this chain.** The operator's shell reaches
+  every publication (`mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;`), so
+  uid 0 is not outside the loopback deny — it is inside it with a named exception. The
+  question was therefore never "may root use the loopback" but "may root ask the stub a
+  question", and the marginal fact of the resolver accept is **a second address and the udp
+  half of a protocol pair**, for a uid that already holds every TCP port on `127.0.0.1`.
+  **And because the deny names no uid, uid 0's accept list is the whole of root's loopback
+  policy** — which is why it is short and enumerated rather than broad.
+
+**The accept is drawn from the host's own knowledge and from no configuration, exactly as
+the service set is.** No key adds one, no key removes one, and no address an operator may
+substitute — so this is not a second way to grant a destination beside the publication
+set.
 
 **The reply carries no owner match, and that is not a widening.** The query leaves as the
 service uid and is owner-matched; the answer is generated by systemd-resolved itself, so no
@@ -2759,8 +2799,17 @@ DENY_COUNTER_AFTER=1
 
 So the resolver was unreachable from every service uid and **no first deploy of a new
 workload could complete**, which is a much larger claim than the sentence it replaced was.
-The blanket-drop justification — that it "would break name resolution and package updates" — was wrong on both counts: package updates are outbound and untouched, and the name-resolution failure was real but for the wrong layer. Both claims are gone, and the resolver accept above is the measured answer. The claim
-survived as long as it did because nobody ran `iptables -S`; `docs/sysadmin.md` used to say
+The blanket-drop justification — that it "would break name resolution and package updates" —
+was right about name resolution and **wrong about package updates, in a way this
+document itself got wrong afterwards**: package updates are outbound and the outbound
+*packet* is untouched, but the **name lookup that precedes it** is a loopback packet to
+the stub, so `apt-get update` as root could not resolve a mirror. Measured on a converged
+host with the deny in force: `apt-get update` reports *"Temporary failure resolving
+archive.ubuntu.com"* **and still exits 0** — a host whose package index silently stopped
+refreshing reads as a host with an unreachable mirror. ADR-0023 measures this and the
+resolver's accept for root is the answer; the claim about the outbound packet surviving on
+its own was the error, and it is the same error the blanket drop made one layer up. The
+claim survived as long as it did because nobody ran `iptables -S`; `docs/sysadmin.md` used to say
 the firewall files were ferm source and that `iptables -S` "shows you nothing", which is not
 true.
 
