@@ -38,8 +38,12 @@
 #     operator's shell reaches every publication —
 #     `mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;` — so
 #     uid 0 is not outside the loopback deny, it is inside it with a named
-#     exception. The resolver accept adds one address and one port to a uid
-#     that already holds every TCP port on `127.0.0.1`.
+#     exception. The resolver accept adds **a second address and the udp half
+#     of a protocol pair** to a uid that already holds every TCP port on
+#     `127.0.0.1` — the publication accept is `proto tcp` and `127.0.0.1`, so
+#     "one address, one port and one added protocol" would misdescribe it.
+#     **And because the deny names no uid, uid 0's accept list is the whole of
+#     root's loopback policy**, which is why it is short and enumerated.
 #
 # **What the test asserts, and why it cannot be satisfied by the other
 # answer.** Under the other answer — root refused — the render would carry no
