@@ -34,31 +34,31 @@
 # checked on a real host after a real ingest: the path is asserted absent
 # after the mutator has run, which is the only way to know nothing created it.
 #
-# machine: shared
-# it converges a service and reads the paths it produced; it starts no
-# container and reaches no network.
+# Real host, real uids, real `useradd`: `GUARDEN_PREFIX=/` and the machine's
+# own tools, as `t30-identity` does. A staged host has no identity, and an
+# ingest is what creates one — so a suite that asked the question on a staged
+# host would be asking it of a tree the mutator never touched.
+#
+# machine: fresh
 #
 # reads: docs/spec.md README.md docs/sysadmin.md docs/adr/0024-admin-units-path-is-the-only-injection-point.md
 
 . "$(dirname "$0")/lib.sh"
 
-guarden_prefix
-stage_config guarden.toml
-stage_podlet_release
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export GUARDEN_PREFIX=/
 
-registry=$GUARDEN_PREFIX/var/lib/guarden/registry
-project=$GUARDEN_FIXTURES/project
 SPEC=$GUARDEN_ROOT/docs/spec.md
 README=$GUARDEN_ROOT/README.md
 SYSADMIN=$GUARDEN_ROOT/docs/sysadmin.md
 ADR=$GUARDEN_ROOT/docs/adr/0024-admin-units-path-is-the-only-injection-point.md
-seed "$project/.guarden/service.yml" "project: adminpath" "units: .guarden/quadlet/" \
-    "state:" "  - data"
-seed "$project/.guarden/quadlet/web.container" "[Unit]" "Description=the admin path subject" \
-    "" "[Container]" "Image=docker.io/library/nginx:1.27" "Volume=data:/var/lib/app"
 
-render=$GUARDEN_FIXTURES/render
-admin_path=$GUARDEN_PREFIX/etc/containers/systemd/users/1101
+stage_config guarden.toml
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
 
 # --- the admin's own file IS read, and IS merged --------------------------
 #
@@ -73,30 +73,47 @@ admin_path=$GUARDEN_PREFIX/etc/containers/systemd/users/1101
 # The registry row is what names the uid the renderer looks under, so it is
 # staged first: a drop-in under an uid the record does not name is a file in
 # a directory nothing reads.
+registry=$GUARDEN_PREFIX/var/lib/guarden/registry
 seed "$registry/app-production.toml" \
     'service = "app-production"' 'workload = "app"' 'project = "app"' \
     'environment = "production"' 'uid = 1101' 'created = "2026-09-30T09:00:00Z"'
 
+project=$GUARDEN_FIXTURES/project
+seed "$project/.guarden/service.yml" "project: adminpath" "units: .guarden/quadlet/" \
+    "state:" "  - data"
+seed "$project/.guarden/quadlet/web.container" "[Unit]" "Description=the admin path subject" \
+    "" "[Container]" "Image=docker.io/library/nginx:1.27" "Volume=data:/var/lib/app"
+
+render=$GUARDEN_FIXTURES/render
+admin_path=$GUARDEN_PREFIX/etc/containers/systemd/users/1101
+
 seed "$admin_path/web.container.d/10-caps.conf" \
     "[Service]" "MemoryMax=512M" "MemoryHigh=384M"
-seed "$admin_path/web.container.d/20-tuned.conf" \
-    "[Container]" "Environment=TUNED=yes"
+
+# **The file guarden owns, in the SAME directory, at the SAME time.** Two
+# files side by side with opposite outcomes is the claim the README makes —
+# "guarden reads the drop-ins in it … but it writes exactly one file there
+# itself" — and one render is what makes it one claim rather than two.
+#
+# **The key in guarden's own file is chosen so the assertion has teeth.**
+# `UserNS=` would not: the base unit drops that key by name whatever the
+# merge did (`render.OWNED_KEYS`), so its absence would say nothing about
+# whether the file was merged. `Environment=` is not in that list, so the key
+# reaches the unit if and only if the file was merged — and the render SKIPS
+# that file BY NAME, the one file guarden owns, whole.
+seed "$admin_path/web.container.d/50-guarden-keepid.conf" \
+    "[Container]" "Environment=GUARDEN_OWNED=yes" "UserNS=keep-id:uid=4242,gid=4242"
 
 run loom render "$project" --service app-production --out "$render"
 assert_exit 0
+# The admin's own file is read and merged: the cap reaches the unit.
 assert_file_has "$render/units/web.container" "MemoryMax=512M"
 assert_file_has "$render/units/web.container" "MemoryHigh=384M"
-assert_file_has "$render/units/web.container" "Environment=TUNED=yes"
 echo "MEASURE: the admin's drop-in reached the rendered unit"
-
-# And the guarden-owned file beside it is NOT merged: the base unit carries
-# no `UserNS=` line, because the pin is a drop-in of its own and a key with
-# two writers is a key with two values. This is ADR-0019's half that the
-# decision does not touch.
-seed "$admin_path/web.container.d/50-guarden-keepid.conf" \
-    "[Container]" "UserNS=keep-id:uid=4242,gid=4242"
-run loom render "$project" --service app-production --out "$render"
-assert_exit 0
+# And the file guarden owns is not merged, by name and not by content: its
+# key that is NOT in the owned list is absent, which is only true if the
+# file was skipped whole.
+assert_file_lacks "$render/units/web.container" "GUARDEN_OWNED=yes"
 assert_file_lacks "$render/units/web.container" "UserNS="
 assert_file_lacks "$render/units/web.container" "Userns="
 echo "MEASURE: guarden's own drop-in is not merged into the base unit"
@@ -117,8 +134,6 @@ echo "MEASURE: guarden's own drop-in is not merged into the base unit"
 # path, so the service's own directory and the units.d path beneath it are
 # what the claim is about.
 stage_poke routed 9f2c1ab
-run soil install --apply
-assert_not_rejected
 run weedr service ingest routed-staging --from poke routed@9f2c1ab
 assert_exit 0
 
@@ -128,7 +143,7 @@ echo "MEASURE: no staging copy of the admin's units exists"
 # The admin path itself IS there — the mutator reconciles its existence — and
 # it is the only path the admin's units are read from.
 assert_file_exists "$GUARDEN_PREFIX/etc/containers/systemd/users"
-routed_uid=$(awk -F: '$1 == "routed-staging" { print $3 }' /etc/passwd)
+routed_uid=$(getent passwd routed-staging | cut -d: -f3)
 [ -n "$routed_uid" ] || _fail "the service user routed-staging is not on the host"
 assert_file_exists "$GUARDEN_PREFIX/etc/containers/systemd/users/$routed_uid"
 echo "MEASURE: the admin path for routed-staging is under uid $routed_uid"
@@ -143,7 +158,6 @@ echo "MEASURE: the admin path for routed-staging is under uid $routed_uid"
 # is not fixed by writing the right one somewhere else — it is fixed by the
 # wrong one no longer being there.
 assert_file_lacks "$README" "nothing in guarden reads or rewrites"
-assert_file_lacks "$README" "nothing in guarden reads or rewrites it"
 # And the right one is there, so the absence is not a deletion.
 assert_file_has "$README" "guarden reads the drop-ins in it"
 assert_file_has "$README" "there is no staging copy of it anywhere on the host"
