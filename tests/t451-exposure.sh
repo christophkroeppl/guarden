@@ -294,6 +294,48 @@ assert_file_lacks "$reg" "exposure"
 [ "$(destination_of "$slice")" = "$d0" ] \
     || _fail "the staging service's destination moved without an act"
 
+# **The drift item.** The ticket says `soil --check`, which is every phase;
+# the firewall phase carries the item, so the whole-host form reaches it too —
+# but the whole-host form is the wrong INSTRUMENT for this claim, because it
+# reports every phase's drift and a throwaway machine has plenty: the sysctl
+# keys are not set and the recurring units are not installed on a host that
+# only ran `soil install`. So the item is asked through the phase that owns
+# it, `soil firewall --check`, which is where the phase's own exit code is
+# the exposure item's exit code and no other.
+#
+# **The drift is a DEFAULT that moved under a service that holds no record of
+# its own.** A service that holds a record cannot drift: the record overrides
+# the track (spec 3.4's projection rule — the record is the authority), so the
+# expected value is what the record says and the two always agree. What moves
+# underneath a service is the DEFAULT it was minted under — the track's
+# `expose`, the enabled module set — and that is what the item compares.
+#
+# So the service under test here is `routed2-production`: it was created under
+# a track that said `loopback` and it holds no record, so the track — restored
+# to `edge` above — now says something the service's own recorded destination
+# does not. Its recorded destination says `loopback`, the current resolution
+# says `edge`, and the two disagree. The check names the service, so an
+# operator can act on it — a drift nobody can attribute to a service is a drift
+# nobody acts on — and the check changes NOTHING: the way back is the act, not
+# a converge.
+run soil firewall --check
+assert_exit 1
+assert_stderr_has "drift"
+# The offenders are named in the line itself, in parentheses after the item's
+# sentence. The whole parenthesised list is asserted, so the line that names
+# the service is the exposure item's and not some other drift that happens to
+# mention it.
+assert_stderr_has "(off: routed2-production)"
+# The check changed nothing: the service's posture is still the one its record
+# was minted under, and the way back is the act.
+assert_file_lacks "$otherreg" "exposure"
+# The act is the way back: recording what the service already holds makes the
+# host clean again, and the check says so.
+run weedr expose set routed2-production loopback
+assert_exit 0
+run soil firewall --check
+assert_exit 0
+
 # `list` reports the record and the default state, per service, so an operator
 # can see which services are held off their default. The row is asserted in
 # full — a name on one line and the word `public` on another would pass a
