@@ -116,18 +116,118 @@ believed was private has moved.
   registry, so it shares the record — stated, not decided anew; lineage is
   spec 8.3's and this ticket does not read it.
 
-## Status: ready-for-agent
+## What the implementation settled, and what the suite had to be taught
 
-- [ ] A fresh service with no record and no `cloudflared` renders
-      loopback-only in every environment with zero config.
-- [ ] `weedr expose set <service> public` on a gated track changes exactly one
+Two things were found while closing this ticket, and both are this ticket's
+own claims rather than new features. They are recorded here because the next
+reader of `exposure.py` and of `hostprep._exposure_offenders` needs them, and
+because one of them is a property of the design that is not visible from the
+code.
+
+### A service that holds a record cannot drift
+
+The drift item compares a service's **recorded** `route_destinations` with
+what its exposure **resolves to now**. A service with a record always agrees
+with itself: the record overrides the track (spec 3.4's projection rule — the
+record is the authority), so the expected value is what the record says.
+
+What moves underneath a service is the **default it was minted under** — the
+track's `expose`, the enabled module set — and that is what the item
+compares. So the drift is a service with **no record** whose recorded
+destinations were minted under a default that has since moved. The first
+version of the assertion tried to make a *recorded* service drift, and the
+machine refused it: the suite was right and the assertion was wrong.
+
+The offender is named in the line, in parentheses after the item's sentence
+(`… (off: <service>)`), so the whole parenthesised list is what an assertion
+names — a bare service name would pass on any other drift that happened to
+mention it.
+
+### The whole-host check is the wrong instrument for a per-item claim
+
+The acceptance item says `soil --check`, which is every phase. The whole-host
+form reaches the item (the firewall phase carries it) but its **exit code is
+never the exposure item's exit code**: a throwaway machine that only ran
+`soil install` reports the sysctl keys unset and the recurring units
+uninstalled, so the whole-host check exits `1` for reasons that have nothing
+to do with exposure. Measured on the cut: thirteen drift lines, none of them
+the exposure item's.
+
+`soil firewall --check` is the phase that owns the item, and its exit code is
+that item's and no other's. The whole-host spelling is what an operator
+types; the phase spelling is what the claim is measurable with.
+
+## Status: verified
+
+- [x] A fresh service with no record and no `cloudflared` renders
+      loopback-only in every environment with zero config. Asserted by
+      `tests/t452-tunnel-default.sh` (the derived default, fail-closed in both
+      directions), by `tests/t451-exposure.sh` on a **slot** track (a service on
+      a track that says `loopback` renders `loopback` with no record and no
+      configuration), and on the **instance** track — the third environment, a
+      preview service, whose slice is a different file at a different path and
+      which the suite had not covered at all. The preview's `expose` row is
+      **removed**, not pinned, because the claim is about the derived default:
+      with the row gone the track says nothing and the module set is the only
+      input left, so the service renders `loopback` or the claim is false.
+- [x] `weedr expose set <service> public` on a gated track changes exactly one
       registry record; the next render/slice carries the `edge` destination,
       the edge router appears, and the edge uid accept appears on the route
-      publication. `unset` reverses it.
-- [ ] `weedr expose set <service> public` on `staging` (non-gated) is refused
-      exit 2 naming the track; the record is unchanged.
-- [ ] A manifest carrying `exposure: public` is refused with one `error:`
-      guarden line naming where the decision is recorded.
-- [ ] `soil --check` reports `drift` for a service whose recorded exposure no
-      longer matches its current resolution.
-- [ ] Red first: `tests/t451-exposure.sh` (reserved range t450–t459).
+      publication. `unset` reverses it. Asserted by
+      `tests/t451-exposure.sh`, and the promotion had to be made **observable**
+      first: the fixture pins `expose = "edge"` on every track, so a service
+      created on that host already resolves to `edge` and a public promotion
+      changed nothing an observer could see — the slice said `edge` before the
+      act and `edge` after it. The production track is pinned to `loopback`
+      **before** the service is created, so the record is the only thing on the
+      box that can make the route public. The three consequences are then
+      asserted as three: no router and no edge uid before, both after, and
+      neither after the `unset`.
+- [x] `weedr expose set <service> public` on `staging` (non-gated) is refused
+      exit 2 naming the track; the record is unchanged. Asserted by
+      `tests/t451-exposure.sh`.
+- [x] A manifest carrying `exposure: public` is refused with one `error:`
+      guarden line naming where the decision is recorded. Asserted at the top
+      level **and** inside a block, both by name rather than by the generic
+      closed-key-set line.
+- [x] `soil --check` reports `drift` for a service whose recorded exposure no
+      longer matches its current resolution. Asserted by
+      `tests/t451-exposure.sh` through the phase that owns the item, with the
+      offender's parenthesised list named, and with the check changing
+      nothing — the act is the way back.
+- [x] **The record is ONE service's**: a second service on the same gated
+      track is never promoted with the first, and its publication holds no
+      edge accept. A promotion that reached the track instead of the service
+      would publish the whole environment.
+- [x] Red first: `tests/t451-exposure.sh` (reserved range t450–t459).
+
+### The three new assertions are mutation-tested
+
+A green suite proves nothing until the assertion has teeth, and a mutation the
+run cannot reach is a no-op. Each of the three was broken on the path the run
+takes, and each turned the suite red with the failing line naming the
+assertion:
+
+| mutation | where | the suite went red at |
+|---|---|---|
+| the edge uid is not granted on an `edge` route | `firewall.accept_lines` | `50-services.conf does not name mod owner uid-owner 994 … jump ACCEPT;` |
+| the edge router is not rendered for an `edge` route | `roots.render_service` | `…/edge/dynamic/routed-production.yml did not appear` |
+| the derived default resolves to a tunnel nobody carries | `exposure._tunnel_or_loopback` | `a preview on a track with no posture rendered destination tunnel, not loopback` |
+| the offender list is truncated to one | `hostprep._exposure_offenders` | `stderr does not name (off: routed-preview, routed2-production)` |
+
+The last row is the one the instance-track assertion bought. The preview service
+holds no record and was minted under a `loopback` track, so it is a second
+offender beside `routed2-production` — and an assertion that named a bare
+service would have passed on a check that reported one and dropped the other.
+The whole sorted list is what is asserted.
+
+### The runs
+
+- `tests/t451-exposure.sh` — GREEN on `f2e52bb`, on `6a9e232`, and on `56f0f49`
+  (the instance-track assertion added), each on a cut from the golden,
+  `--no-cache`.
+- The four mutation runs above — RED, each on its own cut, each reverted.
+- `tests/t450-basicauth.sh`, `tests/t451-exposure.sh`,
+  `tests/t452-tunnel-default.sh` — GREEN together on `56f0f49`, `--no-cache`,
+  three cuts, zero failures: the exposure cluster and the basic-auth suite
+  that shares the gate module.
