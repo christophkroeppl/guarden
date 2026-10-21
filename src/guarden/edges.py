@@ -249,13 +249,13 @@ def provision(consumer: str, provider: registry.Registry, container: str,
     the shape of the rendered variables — one `DB_PASSWORD` for several
     databases — reads like a per-database secret and is not.
 
-    **The only engine-aware code in guarden, and it is this function.** `ENGINE` is a
-    constant named here and nowhere else, and a provider older than `MIN_VERSION` is
-    refused rather than degraded to. A container which is not running is a warning and
-    not a refusal: a poke installs the provider and the consumer in that order and the
-    container starts after the command returns, so refusing here would make every edge
-    a two-command deploy. The credential is planted either way, so what the warning
-    costs is the role and nothing else.
+    **The engine-aware code of the EDGE, and it is this function.** `ENGINE` is a
+    constant named here and in `clone`, the other module that speaks postgres (ADR-0024),
+    and a provider older than `MIN_VERSION` is refused rather than degraded to. A
+    container which is not running is a warning and not a refusal: a poke installs the
+    provider and the consumer in that order and the container starts after the command
+    returns, so refusing here would make every edge a two-command deploy. The credential
+    is planted either way, so what the warning costs is the role and nothing else.
     """
     container_name = f"{provider.service}-{container}"
     if databases:

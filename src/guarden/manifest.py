@@ -47,6 +47,7 @@ TOP_LEVEL_KEYS = {
     "widgets",
     "firewall",
     "schema",
+    "scrub",
 }
 
 # Each block's own key set, closed. spec 4 is emphatic that the rule covers the
@@ -61,7 +62,19 @@ BLOCK_KEYS = {
     "routes": {"container", "port", "host", "auth"},
     "widgets": {"container", "file"},
     "firewall": {"name", "chain", "rule"},
+    "scrub": {"tables", "keys"},
 }
+
+# The `scrub:` block's own key sets, closed (ADR-0024).
+#
+# **A `tables:` entry says "every row of this table goes", and there is no
+# second answer.** The transform is a filter over a plain dump, and the restored
+# table is created and then filled from an empty COPY block either way — so a
+# `truncate`/`delete` pair would be two spellings of one result, and a mode that
+# cannot differ is a promise the verb cannot keep. A table where only SOME rows
+# go is a `keys:` rule and not this one.
+SCRUB_TABLE_KEYS = {"name"}
+SCRUB_KEYS = {"table", "column", "prefix", "equals"}
 
 # spec 4: an `environment` key is refused specifically, with a message saying who
 # decides it. It is a key a developer would reach for, and the answer is never
@@ -232,6 +245,43 @@ class RuleRequest:
     rule: str
 
 
+@dataclass(frozen=True)
+class ScrubTable:
+    """One `scrub: tables:` entry: a table whose every row goes."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class ScrubKey:
+    """One `scrub: keys:` entry: the rows of one table that go.
+
+    **A prefix match and an equality match, and nothing else.** A rule that
+    could name a row by an arbitrary predicate would be an arbitrary database
+    write dressed as a policy, and the review a manifest block is for — a diff
+    in a pull request — is worthless against arbitrary SQL (ADR-0024). A prefix
+    on a named column says exactly "the rows of this table whose column starts
+    with this", which is the operator's own rule ("every `ir_config_parameter`
+    row whose key begins with `mail.`").
+    """
+
+    table: str
+    column: str
+    prefix: str | None = None
+    equals: str | None = None
+
+
+@dataclass(frozen=True)
+class Scrub:
+    """The whole `scrub:` block: the operator's policy for a cloned database."""
+
+    tables: tuple[ScrubTable, ...] = ()
+    keys: tuple[ScrubKey, ...] = ()
+
+    def empty(self) -> bool:
+        return not self.tables and not self.keys
+
+
 @dataclass
 class Manifest:
     source: Path
@@ -246,6 +296,7 @@ class Manifest:
     widgets: list[Widget] = field(default_factory=list)
     firewall: list[RuleRequest] = field(default_factory=list)
     schema: str | None = None
+    scrub: Scrub = field(default_factory=Scrub)
 
     def volume_kind(self, name: str) -> str:
         return "state" if name in self.state else "bulk"
@@ -352,6 +403,7 @@ def read(path: Path) -> Manifest:
         widgets=_widgets(document.get("widgets", []), path),
         firewall=_firewall(document.get("firewall", []), path),
         schema=_schema(document.get("schema"), path),
+        scrub=_scrub(document.get("scrub"), path),
     )
 
 
@@ -806,6 +858,117 @@ def _entries(value: Any, block: str, path: Path) -> list[dict]:
                 f"two apart"
             )
     return value
+
+
+# --- the `scrub:` block ------------------------------------------------------
+#
+# **The rule is a POLICY and the manifest is its home** (ADR-0024). It is the
+# operator's statement of what a cloned database must not carry, and the
+# manifest is where a project declares what it is — so the rule is versioned
+# with the deployment, reviewable in a pull request, and travels with the code
+# it describes. It is not in `overrides.toml` (that is the admin's GRANT
+# surface, and a scrub grants nothing) and not in the registry (that is the
+# host's record of a service, not a policy).
+
+
+def _scrub(value: Any, path: Path) -> Scrub:
+    """The `scrub:` block, and every way of writing one that is not one."""
+    if value is None:
+        return Scrub()
+    if not isinstance(value, dict):
+        raise errors.GuardenError(f"the manifest {path}: scrub is not a mapping")
+    extra = sorted(set(value) - {"tables", "keys"})
+    if extra:
+        raise errors.GuardenError(
+            f"the manifest {path}: scrub has an unknown key {extra[0]!r}; the keys are: "
+            f"keys, tables"
+        )
+    tables = _scrub_tables(value.get("tables"), path)
+    keys = _scrub_keys(value.get("keys"), path)
+    return Scrub(tables=tuple(tables), keys=tuple(keys))
+
+
+def _scrub_tables(value: Any, path: Path) -> list[ScrubTable]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise errors.GuardenError(f"the manifest {path}: scrub tables is not a list")
+    out: list[ScrubTable] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise errors.GuardenError(
+                f"the manifest {path}: a scrub tables entry is not a mapping"
+            )
+        extra = sorted(set(entry) - SCRUB_TABLE_KEYS)
+        if extra:
+            raise errors.GuardenError(
+                f"the manifest {path}: a scrub tables entry has an unknown key {extra[0]!r}; "
+                f"the keys are: name"
+            )
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise errors.GuardenError(
+                f"the manifest {path}: a scrub tables entry has no `name:`, and a table is "
+                f"what the rule acts on"
+            )
+        out.append(ScrubTable(name=name))
+    return out
+
+
+def _scrub_keys(value: Any, path: Path) -> list[ScrubKey]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise errors.GuardenError(f"the manifest {path}: scrub keys is not a list")
+    out: list[ScrubKey] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise errors.GuardenError(f"the manifest {path}: a scrub keys entry is not a mapping")
+        extra = sorted(set(entry) - SCRUB_KEYS)
+        if extra:
+            raise errors.GuardenError(
+                f"the manifest {path}: a scrub keys entry has an unknown key {extra[0]!r}; the "
+                f"keys are: column, equals, prefix, table"
+            )
+        table = entry.get("table")
+        column = entry.get("column")
+        if not isinstance(table, str) or not table.strip():
+            raise errors.GuardenError(
+                f"the manifest {path}: a scrub keys entry has no `table:`, and a table is what "
+                f"the rule acts on"
+            )
+        if not isinstance(column, str) or not column.strip():
+            raise errors.GuardenError(
+                f"the manifest {path}: a scrub keys entry has no `column:`, and the column is "
+                f"the one the rule matches on"
+            )
+        prefix = entry.get("prefix")
+        equals = entry.get("equals")
+        if prefix is None and equals is None:
+            raise errors.GuardenError(
+                f"the manifest {path}: the scrub keys entry for the table {table!r} names "
+                f"neither a `prefix:` nor an `equals:`, so it matches every row of the table — "
+                f"and a rule that empties a table is a `tables:` rule, not a `keys:` one"
+            )
+        if prefix is not None and equals is not None:
+            raise errors.GuardenError(
+                f"the manifest {path}: the scrub keys entry for the table {table!r} names both "
+                f"a `prefix:` and an `equals:`, and a rule matches one way"
+            )
+        if prefix is not None and not isinstance(prefix, str):
+            raise errors.GuardenError(
+                f"the manifest {path}: the scrub keys entry for the table {table!r} has a "
+                f"`prefix:` that is not a string"
+            )
+        if equals is not None and not isinstance(equals, str):
+            raise errors.GuardenError(
+                f"the manifest {path}: the scrub keys entry for the table {table!r} has an "
+                f"`equals:` that is not a string"
+            )
+        out.append(
+            ScrubKey(table=table, column=column, prefix=prefix, equals=equals)
+        )
+    return out
 
 
 def _port(value: Any, where: str, path: Path) -> int:

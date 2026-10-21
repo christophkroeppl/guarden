@@ -261,3 +261,16 @@ TREE_MODE = 0o700
 # never a parent of an unsnapshotted one.
 STATE = "state"
 BULK = "bulk"
+
+# The clone's own directory, beside `state/` and `bulk/` (ADR-0024).
+#
+# **It is not under `state/`, and that is the point.** `state/` holds nothing
+# but snapshotted subvolumes — that is why it is split from `bulk/` at all —
+# and a clone has no snapper configuration, so a clone under `state/` would be
+# an unsnapshotted tree in the snapshotted one, which is the mistake the split
+# exists to prevent.
+#
+# **It is under the service's own tree**, because the clone holds the service's
+# data and the tree is `0700` to the service user. A clone under a shared
+# directory would be readable by whoever holds that directory.
+CLONES = "clones"
