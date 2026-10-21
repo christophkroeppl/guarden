@@ -950,6 +950,22 @@ cmd_provision() {
         $LXC exec -T "$probe" -- true >/dev/null 2>&1 && break
         sleep 3
     done
+    # **The readiness loop's outcome is checked, because the assertion after it
+    # is about the STORAGE and not about the machine.** Measured 2026-10-21:
+    # the probe was cut from a golden whose conversion had just converged, and
+    # the provision died with "a cut from guarden-golden/base does not carry
+    # the converged storage state" -- while the cut's own storage was perfect
+    # (btrfs root, no reboot marker, a working `snapper -c root get-config`).
+    # The probe had simply not finished booting: the loop gave up, the
+    # assertion then ran against a machine that was not up, and the report
+    # blamed the storage.
+    #
+    # **So the wait is a wait, and its failure is its own failure.** A cut that
+    # cannot answer is not a cut with drifted storage, and saying so is the
+    # difference between "reboot the probe and look again" and "the golden's
+    # snapshot is wrong".
+    $LXC exec -T "$probe" -- true >/dev/null 2>&1 \
+        || die "the probe cut did not come up, so its storage state was never read"
     $LXC exec -T "$probe" -- bash -lc '
         test "$(cat /var/lib/guarden/soil/state 2>/dev/null)" = done &&
         test ! -e /var/lib/guarden/soil/reboot-required &&
