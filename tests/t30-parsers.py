@@ -410,6 +410,88 @@ def edge_overrides() -> None:
     )
 
 
+def providers_table() -> None:
+    """`[providers.<track>]`: the logical name, and the concrete name it names.
+
+    Both sides are service names and both are validated as such, for the reason
+    `edge_overrides` gives: a key that is not a service name can never match a
+    manifest, and a value that is not one resolves to a service that does not
+    exist — so the consumer is refused at the render with a name nobody can
+    connect to a provider by, and the operator is hunting a line the diagnostic
+    never describes.
+
+    The track is a track too: a `[providers.preprod]` on a host with no `preprod`
+    track is a table nothing reads, and a silently ignored mapping is a mapping
+    an operator believes is in effect.
+    """
+    from guarden import config as config_mod
+
+    def load(body: str):
+        path = _write_file(
+            "guarden.toml",
+            "[[environments]]\n"
+            'name = "staging"\n'
+            'kind = "slot"\n'
+            "[[environments]]\n"
+            'name = "production"\n'
+            'kind = "slot"\n' + body,
+        )
+        return config_mod.load(path)
+
+    base = (
+        "[providers.staging]\n"
+        'postgres = "postgres-staging"\n'
+        "[providers.production]\n"
+        'postgres = "postgres-production"\n'
+    )
+    config = load(base)
+    check(
+        config.resolve_provider("staging", "postgres") == "postgres-staging",
+        "a staging consumer resolves the staging provider",
+    )
+    check(
+        config.resolve_provider("production", "postgres") == "postgres-production",
+        "a production consumer resolves the production provider",
+    )
+    check(
+        config.resolve_provider("staging", "postgres-production") == "postgres-production",
+        "a manifest naming a full service name is unchanged",
+    )
+    check(
+        config.resolve_provider("staging", "rustfs") == "rustfs",
+        "a name no table holds is unchanged",
+    )
+    check(
+        config.resolve_provider("preview", "postgres") == "postgres",
+        "a track with no table of its own resolves nothing",
+    )
+
+    for body, what in (
+        ('[providers.staging]\n"Not a name" = "postgres-staging"\n', "an invalid key"),
+        ('[providers.staging]\npostgres = "Not a name"\n', "an invalid value"),
+        ('[providers.staging]\npostgres = 5\n', "a non-string value"),
+        ('[providers.staging]\npostgres = ""\n', "an empty value"),
+        ('[providers.staging]\npostgres = ["a"]\n', "a list value"),
+    ):
+        try:
+            load(body)
+        except errors.GuardenError as exc:
+            check(exc.code == 1, f"{what} is the host, so exit 1")
+            check("providers" in exc.message, f"{what} is named")
+        else:
+            FAILURES.append(f"{what} was accepted")
+
+    # A table for a track the host does not have is refused by name: a mapping
+    # nothing reads is a mapping an operator believes is in effect.
+    try:
+        load("[providers.preprod]\npostgres = \"postgres-preprod\"\n")
+    except errors.GuardenError as exc:
+        check(exc.code == 1, "a table for an unknown track is the host, so exit 1")
+        check("preprod" in exc.message, "the unknown track is named")
+    else:
+        FAILURES.append("a table for an unknown track was accepted")
+
+
 def _write_file(name: str, body: str) -> Path:
     path = Path(tempfile.mkdtemp()) / name
     path.write_text(body, encoding="utf-8")
@@ -430,6 +512,7 @@ def main() -> int:
     registries()
     keys()
     edge_overrides()
+    providers_table()
     for failure in FAILURES:
         sys.stderr.write(f"error: {failure}\n")
     return 1 if FAILURES else 0
