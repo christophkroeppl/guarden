@@ -286,7 +286,15 @@ class Context:
         return home / paths.QUADLET
 
     def volume_path(self, kind: str, volume: str) -> Path:
-        return paths.volume(self.service, kind, volume, self.instance)
+        """The host path a declared volume is mounted from.
+
+        **A `state` volume is mounted from its PAYLOAD, one level down inside
+        the subvolume** (ADR-0020), so the container never sees snapper's
+        `.snapshots` subtree and the image's own recursive chown never reaches
+        it. A `bulk` volume is mounted from the subvolume itself, because it
+        carries no snapper configuration and therefore no such subtree.
+        """
+        return paths.mount_source(self.service, kind, volume, self.instance)
 
     def volume_root(self) -> Path:
         """The tree `volume_root()` paths live under, for this unit.
@@ -1462,7 +1470,13 @@ def _volume_lines(
             if context is not None:
                 path = context.volume_path(declared[mount.source], mount.source)
             else:
-                path = ABSENT / declared[mount.source] / mount.source
+                # No host to read, so the path is the one the host would hold:
+                # the same rule, applied to a tree that does not exist. The
+                # `state` volume's mount source is its payload (ADR-0020) and
+                # the `bulk` volume's is the subvolume itself.
+                path = paths.mount_source_at(
+                    ABSENT, declared[mount.source], mount.source
+                )
             out.append(f"{path}:{mount.target}{mode}")
     return out
 
