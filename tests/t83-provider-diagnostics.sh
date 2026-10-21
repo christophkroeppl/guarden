@@ -107,5 +107,7 @@ run loom render "$project" --service myapp-staging --out "$render"
 assert_exit 1
 assert_one_diagnostic "error:"
 assert_stderr_has "dbprov-staging"
+assert_stderr_has "dbsrc"
+assert_stderr_has "allocated publication"
 assert_stderr_has "myapp-staging"
 assert_file_missing "$render"
