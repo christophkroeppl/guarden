@@ -513,7 +513,9 @@ Precedence: **explicit override > `[providers]` environment default > literal na
 The manifest refuses `environment:` and `track:` by name (spec 4): the host decides the environment. This table is where that decision is expressed — the repository names the logical provider, and the root-owned track table says which concrete service answers it per track.
 
 `admin_user` is a login name, resolved to a uid. It is the only uid besides the service uids
-that the firewall names, and it is the uid allowed to reach the edge's API.
+and root that the firewall names, and it is the uid allowed to reach the edge's API. Root is
+named because it holds the resolver's accepts (§7.6) and the operator's publication accept
+(§7.6), and the two are the whole of uid 0's exceptions to the loopback deny.
 
 The `[network]` table is load-bearing rather than a preference, because it decides whether a
 container can reach the host at all (§7.1). **The set is pinned, and its shape is validated**:
@@ -2681,7 +2683,10 @@ filter OUTPUT
   ... one per (publication, allowed uid) ...
   -A guarden-svc -d 127.0.0.53 -p udp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
   -A guarden-svc -d 127.0.0.53 -p tcp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
-  ... one per service uid, the host's stub resolver and nothing else ...
+  ... one per service uid, plus root's pair ...
+  -A guarden-svc -d 127.0.0.53 -p udp --dport 53 -m owner --uid-owner 0 -j ACCEPT
+  -A guarden-svc -d 127.0.0.53 -p tcp --dport 53 -m owner --uid-owner 0 -j ACCEPT
+  ... root's pair, for the host's own name lookups (ADR-0023) ...
   -A guarden-svc -s 127.0.0.53 -p udp --sport 53 -j ACCEPT
   -A guarden-svc -s 127.0.0.53 -p tcp --sport 53 -j ACCEPT
   ... the reply to those queries, source-address matched with NO owner match ...
@@ -2747,8 +2752,10 @@ preference.
   every publication (`mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;`), so
   uid 0 is not outside the loopback deny — it is inside it with a named exception. The
   question was therefore never "may root use the loopback" but "may root ask the stub a
-  question", and the marginal fact of the resolver accept is **one address, one port and
-  one added protocol**, for a uid that already holds every TCP port on `127.0.0.1`.
+  question", and the marginal fact of the resolver accept is **a second address and the udp
+  half of a protocol pair**, for a uid that already holds every TCP port on `127.0.0.1`.
+  **And because the deny names no uid, uid 0's accept list is the whole of root's loopback
+  policy** — which is why it is short and enumerated rather than broad.
 
 **The accept is drawn from the host's own knowledge and from no configuration, exactly as
 the service set is.** No key adds one, no key removes one, and no address an operator may
@@ -2792,8 +2799,17 @@ DENY_COUNTER_AFTER=1
 
 So the resolver was unreachable from every service uid and **no first deploy of a new
 workload could complete**, which is a much larger claim than the sentence it replaced was.
-The blanket-drop justification — that it "would break name resolution and package updates" — was wrong on both counts: package updates are outbound and untouched, and the name-resolution failure was real but for the wrong layer. Both claims are gone, and the resolver accept above is the measured answer. The claim
-survived as long as it did because nobody ran `iptables -S`; `docs/sysadmin.md` used to say
+The blanket-drop justification — that it "would break name resolution and package updates" —
+was right about name resolution and **wrong about package updates, in a way this
+document itself got wrong afterwards**: package updates are outbound and the outbound
+*packet* is untouched, but the **name lookup that precedes it** is a loopback packet to
+the stub, so `apt-get update` as root could not resolve a mirror. Measured on a converged
+host with the deny in force: `apt-get update` reports *"Temporary failure resolving
+archive.ubuntu.com"* **and still exits 0** — a host whose package index silently stopped
+refreshing reads as a host with an unreachable mirror. ADR-0023 measures this and the
+resolver's accept for root is the answer; the claim about the outbound packet surviving on
+its own was the error, and it is the same error the blanket drop made one layer up. The
+claim survived as long as it did because nobody ran `iptables -S`; `docs/sysadmin.md` used to say
 the firewall files were ferm source and that `iptables -S` "shows you nothing", which is not
 true.
 

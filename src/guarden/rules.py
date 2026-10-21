@@ -218,9 +218,13 @@ def resolver_lines(uids: Iterable[int]) -> list[str]:
     host whose package index silently stopped refreshing looks like a host
     whose mirror was merely unreachable.
 
-    So root's accepts are rendered here, from the host's own knowledge, beside
-    the service ones and not as one of them: the same address, the same port,
-    the same two protocols, and no key anywhere that adds another.
+    So root's accepts are rendered here, from the host's own knowledge, beside the
+    service ones and not as one of them: the same address, the same port, the same two
+    protocols, and no key anywhere that adds another. **"Beside" is about the
+    reasoning and not about the file** — `sorted()` puts uid 0's two lines first, so
+    `50-services.conf` shows root's accepts above every service uid's. The order
+    carries no meaning: accepts are not ordered among themselves and every accept
+    precedes the deny.
     """
     every = sorted(set(uids) | {ROOT_UID})
     lines = [

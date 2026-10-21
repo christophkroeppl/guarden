@@ -122,6 +122,29 @@ assert_file_has "$conf" \
     | grep -cE "^[[:space:]]+daddr 127\.0\.0\.53 proto (udp|tcp) dport [0-9]+ jump ACCEPT;\$" || true)" = 0 ] \
     || _fail "a resolver accept carries no owner match, so any uid could use it"
 
+# **The set is CLOSED: the service uids and root, and nobody else.** The count of
+# owner-matched accepts at the resolver, over the whole rendered file, is the
+# number of uids in the set times two. `guarden` and `operator` are the two
+# uids on a converged guarden host that are neither service uids nor root, and
+# they must not be in it — a render that answered this decision by widening the
+# set would satisfy every positive assertion above.
+#
+# **The count is over the WHOLE file and not over one uid's lines**, because a
+# closure check that only looks at the uids it knows about is not a closure
+# check: it would pass on a set that also carried `guarden`.
+resolver_uids=$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -oE '^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.53 ' \
+    | grep -oE '[0-9]+' | sort -u | tr '\n' ' ')
+expected_uids="$svc_uid 0 "
+[ "$resolver_uids" = "$expected_uids" ] \
+    || _fail "the resolver's uid set is [$resolver_uids], expected [$expected_uids]"
+
+for uid in $(getent passwd guarden operator | cut -d: -f3); do
+    [ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+        | grep -cE "^[[:space:]]+mod owner uid-owner $uid daddr 127\.0\.0\.53 " || true)" = 0 ] \
+        || _fail "uid $uid is neither a service uid nor root, and the resolver accept covers it"
+done
+
 # **Root's publication accept is unchanged too** — the decision adds root's
 # resolver access and does not touch what root already had.
 assert_file_has "$conf" \
@@ -203,18 +226,42 @@ printf 'MEASURE: ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
 [ "$after" = "$before" ] \
     || _fail "root's datagram to 127.0.0.53:53 met the deny: root does not hold a stub accept"
 
-# **And root's name resolution works**, which is the cost the decision was
-# taken to remove. `getent hosts` asks the resolver for a name; on a host where
-# the deny refuses root's query it answers nothing and exits non-zero.
+# **And the round trip completes: root's query is answered and the reply comes
+# back.** This is the cost the decision was taken to remove, measured on the
+# reply's own path rather than on the exit code of a lookup.
 #
-# **The measurement is the EXIT CODE and not the answer.** A `getent` that
-# found nothing would print nothing and exit 2, and so would a `getent` whose
-# query was refused — but the exit code of a lookup that was REFUSED is what
-# the deny changes, and the two are told apart by the counter above, which
-# moved under the other answer and does not move here. The name is one the
-# host can answer: the loopback itself.
-run getent hosts localhost
-assert_exit 0
+# **The measurement is the REPLY accept's counter**, which is a fact about the
+# rule and about the traffic in one read: the reply accept is
+# `saddr 127.0.0.53 proto {udp,tcp} sport 53` — the source, not the
+# destination — so it is the reply's own counter and the query's is not in it.
+# `iptables -nvx -L` prints `pkts bytes target prot opt in out source
+# destination`, so the reply's source is the eighth field and the query's
+# destination is the ninth.
+reply_packets() {
+    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
+        | awk '$3 == "ACCEPT" && $8 == "127.0.0.53" {n += $1} END {print n + 0}'
+}
+reply_before=$(reply_packets)
+
+# **A well-formed DNS query**, so the stub answers it rather than dropping it:
+# a two-byte header (id, flags with RD set), one question, and the question's
+# name and type. The name is `.invalid` by construction — **it is a name no
+# upstream can answer**, so the answer is a refusal from the stub rather than
+# a lookup that depends on the internet, and the round trip is measured
+# hermetically.
+run sh -c "printf '\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03foo\x07invalid\x00\x00\x01\x00\x01' | nc -u -w2 127.0.0.53 53" || true
+
+reply_after=$(reply_packets)
+printf 'MEASURE: REPLY_ACCEPT_COUNTER=%s->%s\n' "$reply_before" "$reply_after" >&2
+[ "$reply_after" -gt "$reply_before" ] \
+    || _fail "the stub did not answer root's query: the reply accept's counter did not move"
+
+# **And the deny's counter did not move across the same exchange**, which is
+# the same event seen from the other side: a refused query never reaches the
+# stub and never produces a reply.
+after_reply=$(deny_packets)
+[ "$after_reply" = "$after" ] \
+    || _fail "root's resolver exchange met the deny, so the accept is not in force"
 
 # **The service uid's query is a different path and the same answer**, which
 # is what makes the service accepts and root's accept one rule rather than
