@@ -59,6 +59,56 @@ d0=$(destination_of "$slice")
 [ -n "$d0" ] || _fail "the fresh service's slice carries no destination at all"
 assert_file_lacks "$reg" "exposure"
 
+# **"In EVERY environment" is a claim about three tracks, and two of them are
+# the slot tracks.** The third is the INSTANCE track, and it is the one this
+# suite had not covered: a preview is a service on a track of its own, and its
+# slice is the instance's own file — a different path, a different render, and
+# a different answer to "where does this route go".
+#
+# The track's `expose` row is REMOVED rather than pinned, because the claim is
+# about the **derived** default: no record, no `cloudflared` module, no
+# configuration — loopback-only, and that is the whole of it. The instance's
+# own slice is at `shared/<service>/instances/<escaped-ref>/routes.toml`, and
+# the ref is escaped the way `systemd-escape` escapes it.
+#
+# The removal is addressed to the preview table and nothing else: the address
+# is the range from the preview's `name` to its `kind`, and the command is a
+# plain `d` on the `expose` line inside it. A `sed` command may not carry a
+# second address — `/a/ /b/d` is a syntax error, not a filter.
+sed -i '/^name = "preview"$/,/^kind =/ { /^expose = "edge"$/d }' \
+    "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+# The count is checked rather than the absence of a line: the file carries an
+# `expose` row per track, and the preview's is the one that must be gone.
+# `grep -c` exits 1 on zero matches, so the `|| true` keeps `set -e` from
+# firing on a count of zero — which is the answer this check is looking for.
+exposerows=$(grep -c '^expose = ' "$GUARDEN_PREFIX/etc/guarden/guarden.toml" || true)
+[ "$exposerows" = 2 ] || _fail "the preview track's expose row was not removed"
+preview=$GUARDEN_PREFIX/var/lib/guarden/staging/routed/cc33dd44
+mkdir -p "$preview/.guarden/quadlet"
+seed "$preview/.guarden/service.yml" "project: routed" "units: .guarden/quadlet/" \
+    "routes:" "  - container: web" "    port: 8080" "    host: web"
+seed "$preview/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27"
+run weedr service ingest routed-preview/feature/x --from poke routed@cc33dd44
+assert_exit 0
+previewreg=$GUARDEN_PREFIX/var/lib/guarden/registry/routed-preview.toml
+assert_file_lacks "$previewreg" "exposure"
+previewslice=$GUARDEN_PREFIX/var/lib/guarden/shared/routed-preview/instances/feature\\x2fx/routes.toml
+assert_file_exists "$previewslice"
+[ "$(destination_of "$previewslice")" = "loopback" ] \
+    || _fail "a preview on a track with no posture rendered destination $(destination_of "$previewslice"), not loopback"
+# The instance track's row goes back, so the rest of the suite measures what
+# it was written to measure. The row is RE-ADDED after the `kind` line it
+# followed in the fixture, so the table is the fixture's table again.
+#
+# The append carries ONE address: `kind = "instance"` names the instance
+# track and nothing else on the box, and a `sed` command may not carry two
+# addresses (`/a/ /b/a` is a syntax error, not a filter).
+sed -i '/^kind = "instance"$/a expose = "edge"' \
+    "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+exposerows=$(grep -c '^expose = ' "$GUARDEN_PREFIX/etc/guarden/guarden.toml" || true)
+[ "$exposerows" = 3 ] || _fail "the preview track's expose row was not restored"
+
 # A manifest that asks for public exposure is refused with one guarden line
 # naming where the decision is recorded, and the refusal happens before a
 # system account exists — a repository cannot even leave the request behind.
@@ -123,6 +173,26 @@ assert_stderr_has "loopback"
 # next render's slice carries the promoted destination — `public` speaking the
 # operator's word, `edge` the slice's, because the edge is the host's public
 # ingress and the share vocabulary already says so.
+#
+# **The track is pinned to `loopback` BEFORE the service is created**, and the
+# reason is the one that makes every assertion below mean something: the
+# fixture pins `expose = "edge"` on every track, so a service created on this
+# host already resolves to `edge` and a public promotion changes nothing an
+# observer can see. The slice said `edge` before the act and says `edge` after
+# it, and the suite would be green for a verb that wrote a record and moved
+# nothing at all. With a private default, the record is the only thing on the
+# box that can make the route public — so a router that appears, or an accept
+# that appears, is the act's doing and not the fixture's.
+#
+# The pin REPLACES the fixture's `expose` line rather than adding one beside
+# it: a second `expose` in the same `[[environments]]` table is a TOML error,
+# and the whole file would stop parsing — which is a different failure from the
+# one this block is about.
+sed -i '/^name = "production"$/,/^kind =/ s/^expose = "edge"$/expose = "loopback"/' \
+    "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+grep -q '^expose = "loopback"$' "$GUARDEN_PREFIX/etc/guarden/guarden.toml" \
+    || _fail "the production track was not pinned to loopback"
+
 prod=$GUARDEN_PREFIX/var/lib/guarden/staging/routed/aa11bb22
 mkdir -p "$prod/.guarden/quadlet"
 seed "$prod/.guarden/service.yml" "project: routed" "units: .guarden/quadlet/" \
@@ -134,23 +204,116 @@ assert_exit 0
 prodreg=$GUARDEN_PREFIX/var/lib/guarden/registry/routed-production.toml
 prodslice=$(slice_of routed-production)
 d0p=$(destination_of "$prodslice")
-[ -n "$d0p" ] || _fail "the production service's slice carries no destination at all"
+[ "$d0p" = "loopback" ] \
+    || _fail "a service on a private track rendered destination $d0p, not loopback"
 
+# A second service on the same gated track, under the same private default. It
+# exists so the block below can assert that the promotion reached ONE service:
+# the record is per service, and a promotion that moved the track's other
+# service would be a promotion nobody asked for.
+#
+# Its route host is `api`, not `web`: two services on one track cannot claim the
+# same host — the allocator refuses the second claimant, and the refusal would
+# be about the fixture rather than about exposure.
+other=$GUARDEN_PREFIX/var/lib/guarden/staging/routed2/bb22cc33
+mkdir -p "$other/.guarden/quadlet"
+seed "$other/.guarden/service.yml" "project: routed2" "units: .guarden/quadlet/" \
+    "routes:" "  - container: web" "    port: 8080" "    host: api"
+seed "$other/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27"
+run weedr service ingest routed2-production --from poke routed2@bb22cc33
+assert_exit 0
+otherreg=$GUARDEN_PREFIX/var/lib/guarden/registry/routed2-production.toml
+otherslice=$(slice_of routed2-production)
+[ "$(destination_of "$otherslice")" = "loopback" ] \
+    || _fail "the second service on a private track rendered $(destination_of "$otherslice"), not loopback"
+
+# The private default, asserted as the shape the promotion has to change: no
+# edge router for either service, and no edge uid on either publication.
+#
+# The second half is the load-bearing one. The OUTPUT chain's default deny
+# drops every service uid on 127.0.0.0/8, so an edge uid with no accept ABOVE
+# the deny cannot reach the publication at all: a router naming it would be a
+# route the edge dials and never reaches, and the deny is what makes that
+# invisible from outside the box.
+edge_uid=$(getent passwd traefik-production | cut -d: -f3)
+[ -n "$edge_uid" ] || _fail "the edge service has no uid on this host"
+services=$GUARDEN_PREFIX/etc/guarden/firewall/50-services.conf
+prodpub=$(sed -n 's/^web = \([0-9]*\)$/\1/p' "$prodreg")
+otherpub=$(sed -n 's/^web = \([0-9]*\)$/\1/p' "$otherreg")
+[ -n "$prodpub" ] || _fail "no publication was allocated for the routed service"
+[ -n "$otherpub" ] || _fail "no publication was allocated for the routed2 service"
+[ "$prodpub" != "$otherpub" ] \
+    || _fail "the two services on one track share a publication"
+run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
+assert_exit 0
+assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
+assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed2-production.yml"
+[ "$(grep -cE "uid-owner $edge_uid daddr 127\.0\.0\.1 proto tcp dport $prodpub jump ACCEPT;" \
+    "$services" || true)" = 0 ] \
+    || _fail "the edge holds an accept on a private service's publication"
+
+# **The promotion: the edge router appears and the edge uid accept appears.**
+# These are the two consequences the ticket names and that nothing else in the
+# suite asserted: the slice's destination is the record's answer, the router is
+# what the edge reads, and the accept is what lets the edge's own packet
+# through the deny. A public route with no accept is a route the edge dials and
+# cannot reach.
 run weedr expose set routed-production public
 assert_exit 0
 assert_file_has "$prodreg" 'value = "public"'
-
-# Re-render: a changed poke sha is a non-converged ingest, and that is the
-# path that re-renders a service's slice — the record is read at render time,
-# so this is the "next render" the act promises.
 echo "# exposure-touched" >>"$prod/.guarden/quadlet/web.container"
 run weedr service ingest routed-production --from poke routed@aa11bb22
 assert_exit 0
 [ "$(destination_of "$prodslice")" = "edge" ] \
     || _fail "a promoted service rendered destination $(destination_of "$prodslice"), not edge"
+run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
+assert_exit 0
+assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
+assert_file_has "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml" \
+    'Host(`web`)'
+# The accept is on the PUBLICATION, not on the public port: the edge dials the
+# loopback publication the service's unit publishes, and a rule naming any
+# other number matches no packet.
+assert_file_has "$services" \
+    "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $prodpub jump ACCEPT;"
 
-# Demotion is the same act in reverse, and unsetting returns the service to
-# exactly what the default resolved to before any record existed.
+# **The record is ONE service's.** The other service on the same gated track
+# never received a record and never became public, so its publication holds no
+# edge accept — a promotion that reached the track instead of the service
+# would publish the whole environment, which is the failure this ticket exists
+# to prevent.
+assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed2-production.yml"
+[ "$(grep -cE "uid-owner $edge_uid daddr 127\.0\.0\.1 proto tcp dport $otherpub jump ACCEPT;" \
+    "$services" || true)" = 0 ] \
+    || _fail "the edge holds an accept on an unpromoted service's publication"
+
+# `unset` reverses it: the router goes and the accept goes with it, and the
+# route is private again. The reversal is the half of the act that says the
+# promotion was a choice and not a posture.
+run weedr expose unset routed-production
+assert_exit 0
+assert_file_lacks "$prodreg" "exposure"
+echo "# exposure-touched-unset" >>"$prod/.guarden/quadlet/web.container"
+run weedr service ingest routed-production --from poke routed@aa11bb22
+assert_exit 0
+[ "$(destination_of "$prodslice")" = "loopback" ] \
+    || _fail "an unset service rendered destination $(destination_of "$prodslice"), not loopback"
+run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
+assert_exit 0
+assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
+[ "$(grep -cE "uid-owner $edge_uid daddr 127\.0\.0\.1 proto tcp dport $prodpub jump ACCEPT;" \
+    "$services" || true)" = 0 ] \
+    || _fail "the edge still holds an accept on an unset service's publication"
+
+# The track goes back to the fixture's own posture, so the rest of the suite
+# measures what it was written to measure.
+sed -i '/^name = "production"$/,/^kind =/ s/^expose = "loopback"$/expose = "edge"/' \
+    "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+
+# Demotion is the same act in reverse: a record that says `loopback` on a
+# service whose track says `edge` is a private service on a public track, and
+# the record — not the track — is what governs it.
 run weedr expose set routed-production loopback
 assert_exit 0
 echo "# exposure-touched-2" >>"$prod/.guarden/quadlet/web.container"
@@ -159,20 +322,72 @@ assert_exit 0
 [ "$(destination_of "$prodslice")" = "loopback" ] \
     || _fail "a demoted service rendered destination $(destination_of "$prodslice"), not loopback"
 
+# Unsetting returns the service to exactly what the default resolved to before
+# any record existed. The default is now the fixture's own `edge` again, and the
+# service's recorded destination was minted under this block's `loopback`
+# posture — so the value the unset returns to is the one the RESOLVER says,
+# not the one the record was minted with. This is the grandfathering rule
+# (ticket 293) meeting the unset: the first answer stands until an act moves
+# it, and the unset is that act.
 run weedr expose unset routed-production
 assert_exit 0
 assert_file_lacks "$prodreg" "exposure"
 echo "# exposure-touched-3" >>"$prod/.guarden/quadlet/web.container"
 run weedr service ingest routed-production --from poke routed@aa11bb22
 assert_exit 0
-[ "$(destination_of "$prodslice")" = "$d0p" ] \
-    || _fail "unsetting the record left destination $(destination_of "$prodslice"), not the default $d0p"
+[ "$(destination_of "$prodslice")" = "edge" ] \
+    || _fail "unsetting the record left destination $(destination_of "$prodslice"), not the default edge"
 
 # The record is one service's: staging never received one while production was
 # promoted and demoted beside it.
 assert_file_lacks "$reg" "exposure"
 [ "$(destination_of "$slice")" = "$d0" ] \
     || _fail "the staging service's destination moved without an act"
+
+# **The drift item.** The ticket says `soil --check`, which is every phase;
+# the firewall phase carries the item, so the whole-host form reaches it too —
+# but the whole-host form is the wrong INSTRUMENT for this claim, because it
+# reports every phase's drift and a throwaway machine has plenty: the sysctl
+# keys are not set and the recurring units are not installed on a host that
+# only ran `soil install`. So the item is asked through the phase that owns
+# it, `soil firewall --check`, which is where the phase's own exit code is
+# the exposure item's exit code and no other.
+#
+# **The drift is a DEFAULT that moved under a service that holds no record of
+# its own.** A service that holds a record cannot drift: the record overrides
+# the track (spec 3.4's projection rule — the record is the authority), so the
+# expected value is what the record says and the two always agree. What moves
+# underneath a service is the DEFAULT it was minted under — the track's
+# `expose`, the enabled module set — and that is what the item compares.
+#
+# So the services under test here are the two that hold no record and were
+# minted under a `loopback` track: `routed2-production` and `routed-preview`.
+# The track is restored to `edge` above, so the current resolution says `edge`
+# while each service's own recorded destination says `loopback`, and the two
+# disagree. The check names the services, so an operator can act on them — a
+# drift nobody can attribute to a service is a drift nobody acts on — and the
+# check changes NOTHING: the way back is the act, not a converge.
+run soil firewall --check
+assert_exit 1
+assert_stderr_has "drift"
+# The offenders are named in the line itself, in parentheses after the item's
+# sentence, and the WHOLE list is asserted — sorted, comma-separated, every
+# name in it. A bare service name would pass on any other drift that happened
+# to mention it, and a partial list would pass on a check that reported one
+# offender and missed the other.
+assert_stderr_has "(off: routed-preview, routed2-production)"
+# The check changed nothing: the services' postures are still the ones their
+# records were minted under, and the way back is the act.
+assert_file_lacks "$otherreg" "exposure"
+assert_file_lacks "$previewreg" "exposure"
+# The act is the way back: recording what each service already holds makes the
+# host clean again, and the check says so.
+run weedr expose set routed2-production loopback
+assert_exit 0
+run weedr expose set routed-preview loopback
+assert_exit 0
+run soil firewall --check
+assert_exit 0
 
 # `list` reports the record and the default state, per service, so an operator
 # can see which services are held off their default. The row is asserted in
