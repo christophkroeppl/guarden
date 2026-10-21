@@ -101,6 +101,11 @@ It refuses to render anything it cannot fully resolve.
       key two writers. The admin's own files are still merged, and a `UserNS=` in one of
       them is refused in the base unit rather than carried into it: the base unit has no
       `UserNS=` line in any spelling
+- [ ] **The admin's drop-in directory is the ONLY path to the admin's own
+      configuration** (ADR-0024). The renderer reads it and merges it, and nothing
+      stages a copy of it for anyone to install — so there is no second way for a
+      repository or a program to reach a unit, and no second file that could disagree
+      with the admin's own
 - [ ] `loom check` validates without writing anything
 - [ ] Units are rendered from `templates/` files with jinja2, not from heredocs, and a changed
       template changes the output on the next run

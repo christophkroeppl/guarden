@@ -160,7 +160,8 @@ to it.
   allow-gated-drop  present only if a poke may drop a service in a
   gated track
 /etc/containers/systemd/users/<uid>/  podman's uid-scoped rootless quadlet path: the admin
-  injection point for a service's own units and drop-ins.
+  injection point for a service's own units and drop-ins, and the ONLY path
+  to them (ADR-0024). There is no staging copy of them anywhere.
   <unit>.container.d/  one directory per unit, holding the drop-ins
   that are merged into that unit's base file. **The mutator writes
   exactly one file in it** — `50-guarden-keepid.conf`, the keep-id
@@ -221,9 +222,19 @@ exists, and keeping a snapshotted tree and an unsnapshotted one in one directory
 above happened in the first place.
 
 Nothing root-owned lives inside a service's home, and **admin units are not copied into
-one**: they live in `/etc/guarden/services/<name>/units.d/` until the mutator installs them
-into `/etc/containers/systemd/users/<uid>/`. Generated units live in the home's quadlet
-directory and are rewritten on regeneration.
+one**: they are drop-ins in `/etc/containers/systemd/users/<uid>/<unit>.container.d/`, which
+the generator reads for a unit whose base file lives in the home (§6.3). Generated units live
+in the home's quadlet directory and are rewritten on regeneration.
+
+**There is no staging copy of an admin's units, and there is no second path to them**
+(ADR-0024). The admin path above is the whole of it: the admin writes the file where the
+generator reads it, the renderer reads it back and merges it into the rendered unit, and the
+mutator writes exactly one file beside it — `50-guarden-keepid.conf`, the keep-id pin
+(§6.3). **A path a document names is a path a program implements**, so this paragraph is the
+answer to the question §2.1's mode table asks: the promised
+`/etc/guarden/services/<name>/units.d/` is not in the table because no program ever read or
+wrote it, and adding the copy would give the admin's own configuration two ways to reach a
+unit — the thing ADR-0019's one-writer-per-file model exists to prevent.
 
 **An instance's units are installed in two places.** The declaration itself lives in the
 instance's own quadlet directory (§5.2), and one entry named `<unit>-<escaped-ref>` — plus
@@ -283,7 +294,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/etc/containers/systemd/users/<uid>/` | `0755` | `root:root` | `weedr service add`/`ingest`. The same traverse grant, one level down: the generator reads it as the service user |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/` | `0755` | `root:root` | the mutator, installing the keep-id drop-in. One directory per unit, and the admin's own file in it is never touched |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | `0644` | `root:root` | the mutator, on the install that renders the pin. **World-readable, and that is the point**: the generator reads this path as the service user, and a root-owned `0600` file there yields NO generated unit at all (measured: `probe-quadlet-dropins.md` row 10). Nothing secret is in it — a `UserNS=` line names a uid and a gid — and root alone writes it |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3) |
+| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3). **The renderer READS it** — `render._dropins` merges every `*.conf` in this directory into the unit before generation, which is what makes an operator's `MemoryMax=` survive a regeneration (§6.3, ADR-0024) |
 | `/tmp` | `1777` | `root:root` | **not the conversion's**: `systemd-tmpfiles`, through `q /tmp 1777 root root 10d` in the distribution's `/usr/lib/tmpfiles.d/tmp.conf`, applied to the `@tmp` subvolume the conversion mounts at it. `btrfs subvolume create` makes `@tmp` `0755` and nothing guarden does would change that, because the mode is the distribution's row and its owner is tmpfiles — the conversion that created the subvolume is not the thing that owns the mode on it |
 
 `/run/guarden/locks/` is `2770 root:guarden` because `guarden` and root both take these locks
@@ -1983,6 +1994,14 @@ three writers, and no file with two of them:
 | the base unit, in the service's own quadlet directory | the renderer, on every install | **no `UserNS=` line at all** — the pin is not in it |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | the mutator, and nobody else | the `UserNS=keep-id:uid=…,gid=…` line |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | **the admin, and nobody else** | whatever the admin wants; a `UserNS=` line in it **overrides** guarden's pin |
+
+**There is no fourth file, and no staging copy of the third** (ADR-0024). The admin's
+configuration reaches a unit by exactly one path — this directory — and the renderer reads
+it there: `render._dropins` merges every `*.conf` in the unit's drop-in directory into the
+unit before generation, so an operator's `[Service] MemoryMax=` lands in the rendered unit.
+A copy of the admin's file staged elsewhere would give that configuration two ways to reach
+a unit, two files that could disagree, and two answers to "which one is the record" — and
+none of it buys anything the generator does not already do (ADR-0019).
 
 The reasons are measured, and they are the whole of the design. **The base unit carries no
 line** because a base unit that carried it would carry it twice over once the generator

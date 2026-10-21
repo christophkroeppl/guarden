@@ -633,11 +633,68 @@ else moves data aside.
 /var/lib/guarden/registry/<name>.toml           the record
 /etc/guarden/services/<name>/overrides.toml     admin grants
 /etc/containers/systemd/users/<uid>/            admin units and drop-ins, uid-scoped
+/etc/containers/systemd/users/<uid>/<unit>.container.d/
+    the drop-ins merged into that unit: guarden's `50-guarden-keepid.conf`
+    and your own `90-admin.conf`
 /var/lib/guarden/removed/<service>/<time>/<vol>/   moved, not deleted, by service remove
 ```
 
 Nothing root-owned lives under `home`. If a file you expected to be protected is inside `home`,
 it is not — that is the rule, and the fix is to move it.
+
+### the drop-in directory, and the one file in it that is yours
+
+`/etc/containers/systemd/users/<uid>/<unit>.container.d/` is podman's rootless quadlet
+search path for that service's units, and it is where your own drop-ins go. Guarden reads
+the files in it and puts them back into the rendered unit — that is what makes a cap survive
+a regeneration — and it writes **exactly one** file there itself:
+
+```
+50-guarden-keepid.conf    the keep-id pin, root:root 0644, written by the mutator
+```
+
+**`90-admin.conf` is yours, and it wins.** Drop-ins merge in alphabetical order by
+filename — not by mtime, not by which directory they are in — and the last value of a
+scalar key is the one that runs. So a file named `90-` overrides guarden's `50-`:
+
+```sh
+# /etc/containers/systemd/users/<uid>/web.container.d/90-admin.conf
+[Container]
+UserNS=keep-id:uid=2002,gid=2002
+```
+
+What that line does, and what it costs:
+
+- **It overrides the pin guarden probed and recorded.** The container then runs under your
+  mapping and not the one the image's own user asked for. The registry still holds
+  guarden's pair — your file is not the record and does not become one, so `weedr service
+  list` will not show your value.
+- **It bypasses the refusal of a repository's own `Userns=`.** That refusal is about
+  repository input. This file is root-owned and no repository can reach it.
+- **It takes effect only after a daemon-reload.** A drop-in is read by the generator, and
+  the generator runs at reload. Edit the file, reload the service user's manager, restart
+  the unit:
+
+  ```sh
+  systemctl --user --machine <service>@ daemon-reload
+  weedr service stop <service>
+  weedr service start <service>
+  ```
+
+- **Guarden never writes that file and never deletes it.** Not on a re-render, and not when
+  the service is removed: the removal takes guarden's own `50-guarden-keepid.conf` and
+  leaves yours where it is. If you want the override gone, delete it yourself.
+
+**The file must be readable by the service user.** The generator reads this path as the
+service's own uid, and a root-owned `0600` file there yields no generated unit at all — the
+unit simply does not exist. `0644` is what guarden's own file carries, and it is the mode to
+use.
+
+**There is no other place to put a drop-in.** This directory is the whole of the admin's
+path to a unit, and there is **no staging copy of it anywhere** on the host: guarden never
+stages your file and never copies it in from somewhere else, so what you write here is what
+the generator reads (ADR-0024). A file dropped into `/etc/guarden/services/<name>/units.d/`
+is a file nothing reads — that path is not created by any program and is not a second way in.
 
 ### what an override can grant
 
@@ -759,7 +816,7 @@ The rest of the host, and where to look when a path is not what you expected:
 | `/var/lib/systemd/credential.secret` | the encryption key, when the host is set up with `systemd-creds --with-key=host`. Absent on a `--with-key=tpm2` host, where the key is sealed to the TPM |
 | `/etc/ssh/authorized_keys.d/hose` | the poke keys, one forced command per project |
 | `guarden-firewall.service` | the unit `soil firewall` installs to load the set |
-| `/etc/containers/systemd/users/<uid>/` | where admin units and drop-ins go, and the only place |
+| `/etc/containers/systemd/users/<uid>/` | where admin units and drop-ins go, and the only place — there is no staging copy of them (ADR-0024) |
 | `/var/lib/guarden/removed/<service>/<time>/<vol>/` | volumes a removal moved aside |
 
 There are two groups and no per-object groups. **`soil install` creates the `guarden` group**, and
