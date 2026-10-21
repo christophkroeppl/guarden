@@ -101,23 +101,14 @@ svc_uid=$(id -u "$svc")
 # The `state` volume is still the subvolume it has always been, and the
 # payload directory is one level down inside it. The `bulk` volume is the
 # subvolume itself, because it has no `.snapshots` to keep out of the way.
+#
+# **These are asserted AFTER the start, and that order is deliberate.** A test
+# that asserted the layout first would fail on the layout when the fix is
+# absent, and would say nothing about the defect: the defect is that the
+# postgres does not start. So the start comes first, the layout second, and a
+# failure in the layout is a failure of a thing that had already worked.
 assert_subvolume "$tree/state/pgdata"
 assert_subvolume "$tree/bulk/scratch"
-assert_dir_exists "$tree/state/pgdata/data"
-assert_no_subvolume "$tree/state/pgdata/data"
-assert_mode "$tree/state/pgdata/data" 700
-assert_owner "$tree/state/pgdata/data" "$svc:$group"
-
-# The unit's `Volume=` line mounts the PAYLOAD, not the subvolume root. This
-# is the line that decides whether the container can see `.snapshots` at all,
-# and it is the whole of the fix.
-assert_file_has "$unit" "Volume=$tree/state/pgdata/data:/var/lib/postgresql/data"
-# And the `bulk` volume is the subvolume root, unchanged.
-assert_file_has "$unit" "Volume=$tree/bulk/scratch:/var/lib/guarden/scratch"
-# The image's own convention is what the container sees: the repository's
-# mount target, unchanged, and NO `PGDATA` anywhere — guarden does not
-# override the image's data path.
-assert_file_lacks "$unit" "PGDATA"
 
 # --- the start: the postgres comes up and `.snapshots` is untouched ---------
 #
@@ -162,8 +153,15 @@ assert_stdout_has "started $svc"
 # The container answers. The unit reaching `active` is not the claim — the
 # claim is that the postgres came up, which is what the container's own
 # `pg_isready` answers.
+#
+# **This is the assertion that fails without the fix**, and it fails with the
+# image's own words in the log: the stock postgres entrypoint chowns `$PGDATA`
+# as root, the volume's root carries snapper's root-owned `.snapshots`, and
+# the chown cannot own it. The unit's log is read and printed when this
+# fails, because a failure that names only "not ready" leaves the reader to
+# guess which of the dozen things between the start and the answer it was.
 ready=0
-for _ in $(seq 1 90); do
+for _ in $(seq 1 45); do
     podman_as "$svc" exec pgsvc-staging-db pg_isready -U postgres
     if [ "$GUARDEN_EXIT" = 0 ]; then
         ready=1
@@ -171,8 +169,54 @@ for _ in $(seq 1 90); do
     fi
     sleep 2
 done
-[ "$ready" = 1 ] || _fail "the postgres never became ready; the unit's own log names the reason"
+if [ "$ready" != 1 ]; then
+    # **Why the container is not there, in the unit's own words.** A failure
+    # that says "no such container" names a symptom: podman never created the
+    # container, and the reason is in the unit's status. So the unit is asked
+    # first, and the container's own log second — between them they say
+    # whether the container was refused, died, or came up and is wrong.
+    systemctl_as() {
+        local service=$1
+        shift
+        local svc_home svc_runtime
+        svc_home=/var/lib/guarden/services/$service/home
+        svc_runtime=/run/user/"$(id -u "$service")"
+        run_in "$svc_home" setpriv --reuid="$service" --regid="$service" --clear-groups \
+            env -u OLDPWD HOME="$svc_home" PWD="$svc_home" USER="$service" LOGNAME="$service" \
+            XDG_RUNTIME_DIR="$svc_runtime" "$@"
+    }
+    systemctl_as "$svc" systemctl --user status db.service --no-pager -l
+    cat "$GUARDEN_STDOUT" "$GUARDEN_STDERR" || true
+    # And the journal, which is where a rootless podman says why it refused.
+    systemctl_as "$svc" journalctl --user-unit db.service --no-pager -n 40
+    cat "$GUARDEN_STDOUT" "$GUARDEN_STDERR" || true
+    # And the container's own log, for the case where it was created and died.
+    podman_as "$svc" logs pgsvc-staging-db
+    cat "$GUARDEN_STDOUT" "$GUARDEN_STDERR" || true
+    _fail "the postgres never became ready; the unit's own state is above"
+fi
 echo "MEASURE: the postgres is ready"
+
+# --- the layout, after the start has already worked ------------------------
+#
+# The payload directory is where the data lives: one level down, inside the
+# volume. The subvolume is still the subvolume, and the `bulk` volume is still
+# the subvolume itself.
+assert_dir_exists "$tree/state/pgdata/data"
+assert_no_subvolume "$tree/state/pgdata/data"
+assert_mode "$tree/state/pgdata/data" 700
+assert_owner "$tree/state/pgdata/data" "$svc:$group"
+
+# The unit's `Volume=` line mounts the PAYLOAD, not the subvolume root. This
+# is the line that decides whether the container can see `.snapshots` at all,
+# and it is the whole of the fix.
+assert_file_has "$unit" "Volume=$tree/state/pgdata/data:/var/lib/postgresql/data"
+# And the `bulk` volume is the subvolume root, unchanged.
+assert_file_has "$unit" "Volume=$tree/bulk/scratch:/var/lib/guarden/scratch"
+# The image's own convention is what the container sees: the repository's
+# mount target, unchanged, and NO `PGDATA` anywhere — guarden does not
+# override the image's data path.
+assert_file_lacks "$unit" "PGDATA"
 
 # The data landed in the payload directory — one level down, inside the
 # volume — and NOT at the subvolume root, which is where the chown used to
