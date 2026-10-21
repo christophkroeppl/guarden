@@ -89,9 +89,9 @@ that is harmless; a deleted credential is not recoverable.
 
 **A grandfathered service is unaffected.** A service created before the policy
 was in force carries no `basicauth` flag in its registry and no middleware. The
-opt-out is refused on it, because there is nothing to turn off: the act would
-report a change it did not make. It says so, and exits 0 — the state is already
-the requested one.
+opt-out is not performed on it, because there is nothing to turn off: the act
+would report a change it did not make. It says so, and exits 0 — the state is
+already the requested one.
 
 **A service with no routes is unaffected**, for the same reason: it was never
 minted anything.

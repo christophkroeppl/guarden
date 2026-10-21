@@ -63,7 +63,7 @@ assert_not_rejected
 oldapp=$GUARDEN_PREFIX/var/lib/guarden/staging/oldopt/9f2c1ab
 mkdir -p "$oldapp/.guarden/quadlet"
 seed "$oldapp/.guarden/service.yml" "project: oldopt" "units: .guarden/quadlet/" \
-    "routes:" "  - container: web" "    port: 8080" "    host: web"
+    "routes:" "  - container: web" "    port: 8080" "    host: old"
 seed "$oldapp/.guarden/quadlet/web.container" "[Container]" \
     "Image=docker.io/library/nginx:1.27"
 run weedr service ingest oldopt-staging --from poke oldopt@9f2c1ab
@@ -204,7 +204,7 @@ assert_exit 0
 refused=$GUARDEN_PREFIX/var/lib/guarden/staging/refused/9f2c1ab
 mkdir -p "$refused/.guarden/quadlet"
 seed "$refused/.guarden/service.yml" "project: refused" "units: .guarden/quadlet/" \
-    "basicauth: false" "routes:" "  - container: web" "    port: 8080" "    host: web"
+    "basicauth: false" "routes:" "  - container: web" "    port: 8080" "    host: refused1"
 seed "$refused/.guarden/quadlet/web.container" "[Container]" \
     "Image=docker.io/library/nginx:1.27"
 run weedr service ingest refused-staging --from poke refused@9f2c1ab
@@ -223,7 +223,7 @@ assert_no_passwd refused-staging
 refused2=$GUARDEN_PREFIX/var/lib/guarden/staging/refused2/9f2c1ab
 mkdir -p "$refused2/.guarden/quadlet"
 seed "$refused2/.guarden/service.yml" "project: refused2" "units: .guarden/quadlet/" \
-    "routes:" "  - container: web" "    port: 8080" "    host: web" \
+    "routes:" "  - container: web" "    port: 8080" "    host: refused2" \
     "    basicauth: false"
 seed "$refused2/.guarden/quadlet/web.container" "[Container]" \
     "Image=docker.io/library/nginx:1.27"
