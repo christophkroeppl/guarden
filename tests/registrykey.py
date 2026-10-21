@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""One instance's registry KEY, renamed or added. For a suite that plants a key.
+"""One instance's registry KEY, added. For a suite that plants a key.
 
 usage: registrykey.py <registry> <old-escaped-ref> <new-escaped-ref>
 
 The registry is TOML and the instance's key is the ESCAPED ref (spec 5.2):
 `feature/x` is the key `feature\\x2fx` on disk. The key is a TOML table name,
-so it is quoted — and the backslash is doubled by the TOML string quoting, so
+so it is quoted — and the backslash is escaped by the TOML string quoting, so
 the line on disk reads `[instances."feature\\x2fx"]`.
 
-**The document is rewritten by a TOML PARSER and not by `sed`.** A `sed` over
-the file guesses the spelling of the key, and the spelling has two escapes in
-it; a parser knows the key as a value and writes it back with the quoting it
-needs. The rewrite keeps the document's shape — the same tables, the same
-values — and changes the one key.
+**The document is rewritten by guarden's OWN TOML writer and not by a second
+one.** `conf.toml_dumps` is the code that writes every registry guarden has
+ever written, and it knows the two things a hand-rolled writer gets wrong:
+a key that is not a bare key has to be QUOTED, and the backslash in an
+escaped ref has to be ESCAPED inside that quoting. A writer that quotes the
+key but not the backslash produces a document that is not TOML at all — and
+the failure shows up as the mutator refusing to read its own registry, which
+is a diagnostic about the registry and not about the suite that planted the
+key. So the helper parses the document and hands it back to the program's
+own writer, and the document it writes is one guarden can read.
 
-**Renaming keeps the ORIGINAL key as well**, and that is the point: a suite
-that plants a key wants the deploy to STAY converged, and the convergence
-check asks whether the ref being deployed is among the registry's instances.
-A registry whose only instance carries a different key is not converged, and
-the verb under test would take another branch entirely. So the new key is
-ADDED beside the old one, and the old one is left in place.
+**The new key is ADDED beside the old one, and the old one is kept**, and
+that is the point: a suite that plants a key wants the deploy to STAY
+converged, and the convergence check asks whether the ref being deployed is
+among the registry's instances. A registry whose only instance carries a
+different key is not converged, and the verb under test would take another
+branch entirely. So the new key is ADDED beside the old one, and the old one
+is left in place.
 
 Exits 0, or 1 with one `error:` line naming what was missing.
 """
@@ -30,42 +36,9 @@ import sys
 import tomllib
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-def dump(document: dict) -> str:
-    """The document back out, with the instance tables as TOML."""
-    lines: list[str] = []
-    scalars = {
-        key: value
-        for key, value in document.items()
-        if key != "instances" and not isinstance(value, dict)
-    }
-    for key, value in scalars.items():
-        lines.append(f"{key} = {value!r}" if not isinstance(value, str) else f'{key} = "{value}"')
-    for name, value in document.items():
-        if not isinstance(value, dict):
-            continue
-        if name == "instances":
-            for key, entry in value.items():
-                lines.append(f'[instances."{key}"]')
-                for field, item in entry.items():
-                    if isinstance(item, dict):
-                        inner = ", ".join(f"{k} = {v}" for k, v in item.items())
-                        lines.append(f"{field} = {{ {inner} }}")
-                    elif isinstance(item, str):
-                        lines.append(f'{field} = "{item}"')
-                    else:
-                        lines.append(f"{field} = {item!r}")
-            continue
-        lines.append(f"[{name}]")
-        for field, item in value.items():
-            if isinstance(item, dict):
-                inner = ", ".join(f"{k} = {v}" for k, v in item.items())
-                lines.append(f"{field} = {{ {inner} }}")
-            elif isinstance(item, str):
-                lines.append(f'{field} = "{item}"')
-            else:
-                lines.append(f"{field} = {item!r}")
-    return "\n".join(lines) + "\n"
+from guarden import conf  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
@@ -88,7 +61,15 @@ def main(argv: list[str]) -> int:
     # registry's instances, and a registry whose only instance carries a
     # different key is not converged at all.
     document["instances"] = {**instances, new: instances[old]}
-    path.write_text(dump(document), encoding="utf-8")
+    path.write_text(conf.toml_dumps(document), encoding="utf-8")
+    # The document is read back with a parser, because a writer that produces
+    # something the parser refuses is a writer that planted a broken file.
+    try:
+        with open(path, "rb") as handle:
+            tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        sys.stderr.write(f"error: {path} was not TOML after the rewrite: {exc}\n")
+        return 1
     sys.stdout.write(f"{old} -> {new}\n")
     return 0
 
