@@ -2049,6 +2049,20 @@ The renderer refuses, with the directive named: `PodmanArgs=`, `--privileged`, `
 `network_mode: container:`, and any host-path bind outside the service's own volumes,
 `/etc/guarden`, and the paths the admin listed in `mounts.allow`.
 
+**A resource cap or a weight is refused in this vocabulary too, and §4 is the one statement of
+the rule** (ticket 350). A repository that ships units rather than a `compose.yaml` writes
+`[Container] Memory=`, `PidsLimit=` or `Ulimit=`, or `[Service] MemoryMax=`, `CPUQuota=`,
+`TasksMax=`, `LimitNOFILE=` and their neighbours from `systemd.resource-control(5)` and
+`systemd.exec(5)`; none of those is a key the renderer owns, so each reached the generated unit
+verbatim and really capped the container. Each is refused by name on the repository's own unit
+source, with exit `2`, before the unit is generated — and the list is measured against the
+machine's own man pages and parser rather than remembered, because a name that is not a
+per-unit setting refuses nothing while reading like a refusal. `[Service] CPUWeight=` and
+`IOWeight=` are not refused: `_service_keys` overwrites both with the track's weight, so a
+source's value never reaches the unit, and a key is refused where it would otherwise arrive.
+**The admin's drop-in is not part of this refusal** — it is merged into the unit after the
+source's refusals have run, and it is the only way an operator grants a cap.
+
 **The user-namespace directive is refused as repository input, and it is guarden's own line
 to write.** The refusal covers it in both vocabularies and in both of quadlet's spellings —
 `userns_mode` above, `Userns=` and `UserNS=` for a hand-written quadlet file — and no

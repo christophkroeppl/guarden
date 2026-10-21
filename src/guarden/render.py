@@ -126,6 +126,88 @@ REFUSED_DIRECTIVES = (
     "Sysctl",
 )
 
+# **A resource cap or a weight is the operator's in this vocabulary too**
+# (spec 4, spec 6.3, ticket 350). The Compose spelling is refused on the
+# repository's own declaration in `compose._refuse_caps`; these are the same
+# statement written in quadlet's tables, and until ticket 350 neither table had a
+# refusal — every key below reached the generated unit verbatim, because none is
+# a key the renderer owns.
+#
+# **The lists are measured against the machine, not transcribed** (the ticket's
+# point 3: a list written from memory during ticket 272 carried manager-level
+# names — `DefaultMemoryLow=`, `DefaultStartupMemoryLow=`, `MemoryPressureWatch=`,
+# `DefaultTasksMax=` — that are not per-unit settings at all, so it refused
+# nothing while reading like a refusal).
+#
+# - `[Container]`: `podman-systemd.unit(5)` (podman 5.7.0) documents `Memory=`,
+#   `PidsLimit=` and `Ulimit=` as the table's resource-carrying keys, and no
+#   other; quadlet has no CPU or IO weight spelling at all, so those are reached
+#   only through `PodmanArgs=`, refused above.
+# - `[Service]`: `systemd.resource-control(5)`'s per-unit directives and
+#   `systemd.exec(5)`'s `Limit…=` set, each of them accepted in a `[Service]`
+#   section by the machine's own parser (`systemd-analyze verify`), which is the
+#   check a remembered list fails. The `Default…` prefix and
+#   `MemoryPressureWatch=` are left out: the parser accepts them in a
+#   `[Service]` section, but they default settings for a unit's *children* and a
+#   service has none, so refusing them would refuse nothing and claim to.
+#
+# **`CPUWeight=` and `IOWeight=` are NOT here, and the exemption is the model**:
+# `_service_keys` overwrites both with the track's weight before the unit is
+# emitted, so a source's value never reaches it. A key is refused where it would
+# otherwise arrive — `StartupCPUWeight=` and `StartupIOWeight=` are the same
+# statement that does survive, so they are refused.
+CONTAINER_CAPS = ("Memory", "PidsLimit", "Ulimit")
+
+SERVICE_CAPS = (
+    "CPUQuota",
+    "CPUQuotaPeriodSec",
+    "AllowedCPUs",
+    "StartupAllowedCPUs",
+    "AllowedMemoryNodes",
+    "StartupAllowedMemoryNodes",
+    "IODeviceWeight",
+    "IODeviceLatencyTargetSec",
+    "IOReadBandwidthMax",
+    "IOWriteBandwidthMax",
+    "IOReadIOPSMax",
+    "IOWriteIOPSMax",
+    "MemoryMin",
+    "MemoryLow",
+    "StartupMemoryLow",
+    "MemoryHigh",
+    "StartupMemoryHigh",
+    "MemoryMax",
+    "StartupMemoryMax",
+    "MemorySwapMax",
+    "StartupMemorySwapMax",
+    "MemoryZSwapMax",
+    "StartupMemoryZSwapMax",
+    "MemoryZSwapWriteback",
+    "TasksMax",
+    "LimitAS",
+    "LimitCORE",
+    "LimitCPU",
+    "LimitDATA",
+    "LimitFSIZE",
+    "LimitLOCKS",
+    "LimitMEMLOCK",
+    "LimitMSGQUEUE",
+    "LimitNICE",
+    "LimitNOFILE",
+    "LimitNPROC",
+    "LimitRSS",
+    "LimitRTPRIO",
+    "LimitRTTIME",
+    "LimitSIGPENDING",
+    "LimitSTACK",
+)
+
+SERVICE_WEIGHTS = ("StartupCPUWeight", "StartupIOWeight")
+
+# `oom_score_adj:` in the Compose vocabulary, and the same statement about
+# whether a container may outlive a host under memory pressure.
+SERVICE_OOM = ("OOMScoreAdjust",)
+
 LOOPBACK = "127.0.0.1"
 ALLOWED_ROOT = "/etc/guarden"
 SUBSTITUTION = "${domain}"
@@ -661,6 +743,21 @@ def refuse_directives(source: Source) -> None:
     files in its own home. What actually holds is the per-service uid and the
     `0700` on its tree (ADR-0003).
 
+    **A resource cap or a weight is refused here as well as in the Compose
+    vocabulary** (spec 4's one statement, ticket 350), which is why
+    `CONTAINER_CAPS` and `SERVICE_CAPS` are checked beside the directive list:
+    `[Container] Memory=` and `[Service] MemoryMax=` state the same thing as
+    `mem_limit:` and `deploy.resources.limits.memory:`, and a rule that held
+    only one vocabulary would be a rule the repository states in the other.
+
+    **The admin's drop-in is not refused, and the ORDER is load-bearing.**
+    `_dropins` merges `/etc/containers/systemd/users/<uid>/<unit>.container.d/`
+    into the unit *after* this runs, and on the copy, so a `[Service]
+    MemoryMax=` there reaches the generated unit — that drop-in is the only way
+    an operator grants a cap (spec 6.3). This function reads the repository's
+    own source and nothing else; a refusal that walked the drop-in too would
+    take away the answer it points at.
+
     **A translated Compose file is not refused here.** Its refusals are on the
     repository's own declaration, in the vocabulary it was written in
     (`compose.refuse`), because `network_mode: host` is *replaced* rather than
@@ -684,6 +781,23 @@ def refuse_directives(source: Source) -> None:
                     f"the unit source {unit.path}: the container {container!r} sets "
                     f"{key}={value!r}, and a guarden service does not get it"
                 )
+        for key in CONTAINER_CAPS:
+            for value in unit.get("Container", key):
+                raise errors.GuardenError(
+                    f"the unit source {unit.path}: the container {container!r} sets "
+                    f"{key}={value!r}, and {compose.CAP_OWNER}"
+                )
+        for keys, why in (
+            (SERVICE_CAPS, compose.CAP_OWNER),
+            (SERVICE_WEIGHTS, compose.WEIGHT_OWNER),
+            (SERVICE_OOM, compose.OOM_OWNER),
+        ):
+            for key in keys:
+                for value in unit.get("Service", key):
+                    raise errors.GuardenError(
+                        f"the unit source {unit.path}: the container {container!r} sets "
+                        f"{key}={value!r}, and {why}"
+                    )
         for value in unit.get("Container", "Network"):
             if not value.startswith(BACKEND):
                 raise errors.GuardenError(
