@@ -741,12 +741,7 @@ def check_containers(document: manifest_mod.Manifest, source: Source) -> None:
 
 
 def _check_siblings(document: manifest_mod.Manifest, source: Source) -> None:
-    """A sibling that is itself, named twice, or colliding on its variable, is
-    refused.
-
-    **A container naming itself is a copy-paste**, the same shape as the
-    self-edge the edge check refuses (spec 7.3): there is nothing to translate,
-    because the container is the one being addressed.
+    """A sibling named twice, or colliding on its variable, is refused.
 
     **Two entries naming one container are refused**, because the generated
     variables would collide — `API_HOST` and `API_PORT` would be written twice
@@ -757,6 +752,13 @@ def _check_siblings(document: manifest_mod.Manifest, source: Source) -> None:
     variable, because a variable name cannot carry a dash. The environment file
     would carry `MY_API_HOST` twice, and the second row would win — a silent
     failure with no diagnostic anywhere.
+
+    **A container declaring itself is not refused**, because it is not a
+    self-reference: the block names the containers of this source that OTHER
+    containers may dial, and a container that is both the dialer and the dialled
+    is a fact about the topology, not a copy-paste. The value that names a
+    container's OWN name is the copy-paste, and the sibling rule is where that
+    is caught.
     """
     seen: dict[str, int] = {}
     variables: dict[str, str] = {}
@@ -779,15 +781,6 @@ def _check_siblings(document: manifest_mod.Manifest, source: Source) -> None:
                 f"{variable}_HOST twice and the second row would win"
             )
         variables[sibling.container] = variable
-    for container in source.containers():
-        for sibling in document.siblings:
-            if sibling.container != container:
-                continue
-            raise errors.GuardenError(
-                f"the manifest {document.source}: the container {container!r} is declared as "
-                f"its own sibling, and a container dialling itself is a copy-paste: there "
-                f"is nothing to translate, because it is the one being addressed"
-            )
 
 
 def check_volumes(document: manifest_mod.Manifest, source: Source) -> list[Mount]:

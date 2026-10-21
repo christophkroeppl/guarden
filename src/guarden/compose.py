@@ -294,6 +294,13 @@ def check_siblings(
                     f"entry written here is dropped and the name in it resolves to "
                     f"nothing"
                 )
+            if _dials(text, container, bare):
+                raise errors.GuardenError(
+                    f"the unit source {path}: the service {container!r} names itself as a "
+                    f"host in {where} ({text!r}), and a container dialling itself is a "
+                    f"copy-paste: there is nothing to translate, because it is the one "
+                    f"being addressed"
+                )
             for sibling in sorted(declared):
                 if sibling == container:
                     continue

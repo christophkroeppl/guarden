@@ -130,10 +130,13 @@ assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "nowhere"
 
-# A sibling naming ITSELF is refused: a container dialling itself is a
-# copy-paste, and there is nothing to translate.
-seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
-    "siblings:" "  - container: nuxt" "    port: 3000"
+# A container naming ITSELF in a value is refused: it is the copy-paste, and
+# there is nothing to translate, because it is the one being addressed. The
+# manifest declaring the container under `siblings:` is NOT that — the block
+# names the containers of this source that others may dial, and a container
+# that is both the dialer and the dialled is a fact about the topology.
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://nuxt:3000"
 run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
