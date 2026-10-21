@@ -389,8 +389,12 @@ alias = ""  # the address a rootless container can reach the host on. Empty unti
   # and it is a NAME the consumer resolves -- never a firewall
   # destination
 tunnel_domain = ""  # the public zone for tunneled routes. Empty until the operator
-  # sets it; `roots` constructs `preview.<tunnel_domain>` hostnames from it,
-  # and `weedr` refuses to install `cloudflared` without it
+  # sets it, and it is the NAME's zone: a route whose destination is `tunnel`
+  # is allocated `<track host_prefix><label>.<tunnel_domain>` and recorded at
+  # that name (§3.4), a preview's one shared host is `preview.<tunnel_domain>`
+  # (§9), `weedr` refuses to install `cloudflared` without it, and a tunnel
+  # route with no zone to name it in is exit 1 rather than a bare label — a
+  # name in no zone is one no DNS can answer
 publication_range = [20000, 32767]  # loopback ports guarden may allocate
 forwarded = [ "80/tcp", "443/tcp", "443/udp" ]  # what soil forwards to the edge
 
@@ -765,8 +769,11 @@ kinds = [ "db" ]  # what the manifest's provides: listed, and only that. Written
   # whose manifest declares none, which is not the same as empty
 
 [route_hosts]
-web = "web.myapp.com"  # manifest label -> the full name, prefix applied. A claim, like a
-  # publication: allocated, refused when taken, released on remove
+web = "web.myapp.com"  # manifest label -> the full name, prefix applied, and the
+  # tunnel's zone after it when the route's destination is `tunnel`
+  # (§3.1 `tunnel_domain`): `web` alone is a name in no zone, which
+  # no DNS can answer. A claim, like a publication: allocated,
+  # refused when taken, released on remove
 
 [route_destinations]
 web = "loopback"  # manifest label -> where that route is published: `loopback`, `tunnel`
@@ -1764,6 +1771,10 @@ weedr expose set <name> <loopback|tunnel|public>  # record the service's exposur
   # gated track, `tunnel` without the cloudflared module, and
   # anything else lists the three — each exit 2, one line, before
   # any record is written. Not on any sudoers rule.
+  # `tunnel` on a service carrying the default edge login
+  # ALSO prints one line naming what protects the route and
+  # what does not (ADR-0024): the tunnel is a different
+  # terminator and carries no middleware at all.
 weedr expose unset <name>  # return the service to its default exposure; already at
   # the default is exit 0 and changes nothing
 weedr expose list [--json]  # every service's recorded exposure and what it resolves to
@@ -2183,6 +2194,23 @@ existing service in a gated track; anything else is exit `1` and no configuratio
 The auth service's own routes never carry the rule. With the module **not** installed, `roots`
 emits the route without a middleware and writes a single `warning:` line naming the service and
 the route, once, on every sync — so `auth: true` in a manifest is never silently ignored.
+
+**A tunnel route is a different terminator, and it carries no middleware at all.**
+`roots` writes the edge's file-provider configuration only for routes whose destination is
+`edge`; a route whose destination is `tunnel` goes into the tunnel's own ingress file
+(`/var/lib/guarden/tunnel/config.yml`, spec 2), which is cloudflared's configuration and carries
+no traefik vocabulary — no `middlewares:`, no `basicAuth`, no `usersFile`. Cloudflared dials the
+service's publication directly, so the edge is never in that path and neither the edge's
+`basicAuth` middleware nor its forward-auth rule can be in it.
+
+**So a tunnel route's protection is the vendor's Access policy, and the edge's default basic-auth
+login does not follow the service there** (ADR-0024). Guarden's own instrument for the vendor's
+policy is `weedr share issue` — a time-bounded issuance projected onto the vendor's `Allow`
+policy (§6.2). `weedr expose set <name> tunnel` says so on stdout, in one line, whenever the
+service carries the default edge login: the act is the only place an operator decides the
+posture, and the split between the two terminators is invisible from the guarden side otherwise.
+A service with no login has no credential that could have followed it, and the act says nothing
+about it.
 
 `roots` has no intermediate route format. If the edge is ever replaced, `roots` is replaced.
 

@@ -137,10 +137,17 @@ kill_arg=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '--signal=KILL "$SU
 # never named, fails here rather than in the next occurrence.
 grep -qE '^APT_LOCK_WAIT=\$\{GUARDEN_LXC_APT_LOCK_WAIT:-' "$runner" \
     || _fail "the runner no longer takes its apt-lock budget from GUARDEN_LXC_APT_LOCK_WAIT"
+grep -qE '^GOLDEN_APT_LOCK_WAIT=\$\{GUARDEN_LXC_GOLDEN_APT_LOCK_WAIT:-' "$runner" \
+    || _fail "the runner no longer gives the golden an overridable apt-lock budget of its own"
 grep -qE '^CLOUD_INIT_WAIT=\$\{GUARDEN_LXC_CLOUD_INIT_WAIT:-' "$runner" \
     || _fail "the runner no longer bounds cloud-init's status wait from GUARDEN_LXC_CLOUD_INIT_WAIT"
-deadline=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '-lt "$APT_LOCK_WAIT"' || true)
-[ "$deadline" -ge 1 ] || _fail "the runner's lock wait no longer polls until the APT_LOCK_WAIT clock runs out"
+# 737e1c5 made the clock a parameter: a cut takes APT_LOCK_WAIT, the golden GOLDEN_APT_LOCK_WAIT.
+budget=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'local budget=${2:-$APT_LOCK_WAIT}' || true)
+[ "$budget" = 1 ] || _fail "the runner's lock wait no longer takes the caller's budget, defaulting to APT_LOCK_WAIT"
+deadline=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '-lt "$budget"' || true)
+[ "$deadline" = 1 ] || _fail "the runner's lock wait no longer polls until the budget its caller named runs out"
+named=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '_wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT"' || true)
+[ "$named" -ge 1 ] || _fail "no caller names a budget of its own, so the golden's longer wait is unreachable"
 guest=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'tests/aptlock.sh' || true)
 [ "$guest" -ge 1 ] || _fail "the runner no longer reads the guest half of the wait from tests/aptlock.sh"
 for verb in probe evidence; do
