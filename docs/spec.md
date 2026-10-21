@@ -2583,6 +2583,12 @@ the repository's own entrypoint composes its URL from them. A value that hard-co
 port dials a port nothing binds, and that is a fact about the repository, visible in the
 repository's own source.
 
+`<NAME>` is the container's name with every dash replaced by an underscore and the whole upper-cased:
+`api` gives `API_HOST` and `API_PORT`, `my-api` gives `MY_API_HOST` and `MY_API_PORT`. Two
+containers whose names give the same variable are refused, because the environment file would carry
+that variable twice and the second row would win — a silent failure with no diagnostic anywhere. A
+container declared twice under `siblings:` is refused for the same reason and with the same shape.
+
 **The manifest says which container and which port**, because the unit source declares neither
 where guarden reads it:
 
@@ -2598,13 +2604,19 @@ and it is the only thing the renderer does with the entry. A sibling's publicati
 own allocation, in its own registry record, so a sibling needs no new grant and no new number
 beyond the allocation the mutator already makes.
 
-**What is still refused.** A name that is **not** a container of this unit source resolves to
-nothing: the only names guarden resolves are a service's own providers (through an edge) and the
-containers of the source the unit came from. A container of this source that the manifest did not
-declare under `siblings:` is refused too, because guarden cannot allocate a publication for a
-container whose port it was never told, so the name would still be dead. The repository's own host
-entry is refused: the key is the renderer's, and the renderer writes these names itself. A container
-declaring itself as its own sibling is refused, as a self-edge is.
+**What is still refused.** A container of this source that the manifest did not declare under
+`siblings:` is refused, because guarden cannot allocate a publication for a container whose port it
+was never told, so the name would still be dead; the diagnostic names the declaration that fixes
+it. The repository's own host entry is refused: the key is the renderer's, and the renderer writes
+these names itself. A value naming a container's **own** name is refused, as a self-edge is —
+though a container *declared* under `siblings:` is not a self-reference, because the block names
+the containers of this source that others may dial and a container that is both the dialer and the
+dialled is a fact about the topology.
+
+**A name that is not a container of this unit source is the repository's own business.** Guarden
+resolves a service's providers and the containers of the source the unit came from; a value naming
+an external host is neither, and refusing it would be guarden policing a name it cannot know and
+does not resolve.
 
 **Nothing is granted.** A sibling's publication is reachable by the service's own uid, which the
 accept set (§7.6) already carries for every publication that service holds, and the name never

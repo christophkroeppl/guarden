@@ -94,16 +94,26 @@ allocation, in the same service's record. One writer, one place.
 
 ### What is refused
 
-- **A name from another source.** A value naming a container that is not in
-  this unit source is still refused, with 285's line. The refusal now names
-  the difference: a name inside the source resolves, and a name outside it
-  resolves to nothing.
+- **A name from another source is not guarden's business.** The rule is about
+  a name that is a container of **this** unit source, because that is a name
+  guarden knows and a name it can therefore give an address to. A value
+  naming an external host is the repository's own, and guarden neither
+  resolves it nor knows it. What is refused is the half guarden can speak
+  about: **a container of this source that the manifest did not declare
+  under `siblings:`.** Guarden cannot allocate a publication for a container
+  whose port it was never told, so the name would still be dead — and the
+  diagnostic says so and names the declaration that fixes it.
 - **`extra_hosts` and a repository's own `AddHost=`.** The key is the
   renderer's (spec 6.3), and the renderer writes the sibling names itself. A
   repository writing `AddHost=api:10.0.0.1` is still refused: it would
   overwrite the renderer's own entry, and the address it names is not one
   guarden owns.
-- **A self-reference.** A container naming itself is refused.
+- **A self-reference.** A value naming a container's **own** name is refused:
+  a container dialling itself is a copy-paste, and there is nothing to
+  translate, because it is the one being addressed. A container *declared*
+  under `siblings:` is not a self-reference — the block names the containers
+  of this source that others may dial, and a container that is both the
+  dialer and the dialled is a fact about the topology.
 
 ### The manifest's half
 
@@ -121,8 +131,17 @@ siblings:
 This is a new top-level manifest key, and it is the only one. It names a
 container of **this** service — the same vocabulary `routes:` and `ports:` use
 — and the port is the container's own port. The renderer turns it into a
-publication and writes `<CONTAINER>_HOST`/`<CONTAINER>_PORT` into the
-environment file, next to the edges' variables.
+publication and writes `<NAME>_HOST`/`<NAME>_PORT` into the environment file,
+next to the edges' variables. `<NAME>` is the container's name with every dash
+replaced by an underscore and the whole upper-cased, so `api` gives `API_HOST`
+and `API_PORT` and `my-api` gives `MY_API_HOST` and `MY_API_PORT`.
+
+**Two containers whose names give the same variable are refused.** `my-api` and
+`my_api` are two containers and one variable, because a variable name cannot
+carry a dash: the environment file would carry `MY_API_HOST` twice and the
+second row would win — a silent failure with no diagnostic anywhere. A
+container declared twice under `siblings:` is refused for the same reason and
+with the same shape.
 
 **The port in the manifest is the container's port, and the port in the
 environment file is the publication.** The two are different numbers, and the
@@ -156,8 +175,33 @@ that service holds. The grant surface is exactly what it was — an operator's
 
 Ticket 316's secondary item: `rustfs-production` is a provider of the `secret`
 kind, and no template for it exists. It is added as `src/guarden/templates/
-services/rustfs/`, in the same shape as the two shipped templates, and it
-carries the `provides: secret` declaration the provider's registry needs —
-which, for a template-created service, means the operator writes the manifest
-the template does not ship (a template ships quadlet files and no manifest,
-spec 4), exactly as the postgres provider does.
+services/rustfs/`, in the same shape as the two shipped templates.
+
+**A template carries no `provides:`** — a template ships quadlet files and no
+manifest (spec 4), so there is nothing for the mutator to read a `provides`
+from. A template-created service therefore holds no `provides` kind until a
+manifest arrives, and a consumer's edge to it is refused until then, because
+the kinds live in the provider's **registry** and the mutator writes them from
+the manifest (spec 7.3).
+
+So the operator writes the provider's manifest after creating the service, and
+`weedr service add <name> --from <name>` reconciles it in — exactly as the
+postgres provider does:
+
+```yaml
+project: rustfs
+units: .guarden/quadlet/
+provides:
+  - secret
+ports:
+  - container: rustfs
+    port: 9000
+```
+
+**The vendor's own credentials are not the edge's value.** The template carries
+`RUSTFS_ACCESS_KEY` and `RUSTFS_SECRET_KEY`, because the container reads them
+to start and to authenticate an S3 client, and they are the provider's own.
+The edge's value is minted by guarden when a consumer declares `auth: secret`,
+planted in both stores, and read by the consumer as `<AS>_SECRET` — a different
+secret with a different name. The two are not interchangeable, and the
+template says so where an operator would look.
