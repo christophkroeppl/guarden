@@ -714,6 +714,50 @@ assert_no_snapper_config() {
     fi
 }
 
+# snapper_configs_of <service>...: the configuration files whose SUBVOLUME is in
+# those trees — `snapper list-configs` named none of them when they existed as files.
+snapper_configs_of() {
+    local path name subvolume service
+    for path in /etc/snapper/configs/*; do
+        [ -f "$path" ] || continue
+        name=${path##*/}
+        if ! subvolume=$(snapper --no-dbus -c "$name" get-config 2>/dev/null \
+            | awk -F'|' 'tolower($1) ~ /subvolume/ {gsub(/[[:space:]]/, "", $2); print $2}'); then
+            return 1
+        fi
+        [ -n "$subvolume" ] || continue
+        for service in "$@"; do
+            case "$subvolume" in
+                "/var/lib/guarden/services/$service/"*)
+                    printf '%s\n' "$name"
+                    break
+                    ;;
+            esac
+        done
+    done
+}
+
+# remove_snapper_configs <service>...: before the trees, because `delete-config`
+# refuses once the subvolume is gone. It also stops at the file after a `set-config`
+# (measured: rc=0, `.snapshots` and the daemon's entry gone, the file left), and
+# removing the file alone leaves the daemon naming it — so both halves, in this order.
+remove_snapper_configs() {
+    local names config
+    names=$(snapper_configs_of "$@") || return 1
+    for config in $names; do
+        snapper --config "$config" delete-config >/dev/null 2>&1 || :
+        rm -f "/etc/snapper/configs/$config"
+    done
+}
+
+# assert_no_snapper_configs <service>...: the teardown's promise.
+assert_no_snapper_configs() {
+    local names
+    names=$(snapper_configs_of "$@") \
+        || _fail "snapper could not be asked, so no configuration can be ruled out for: $*"
+    [ -z "$names" ] || _fail "snapper configuration(s) left after the purge: $(printf '%s ' $names)"
+}
+
 # assert_dpkg <pkg> / assert_no_dpkg <pkg>: what a converge actually installed.
 assert_dpkg() {
     local state
