@@ -131,6 +131,12 @@ Configuration is read from the root-owned files, and never written by us.
       inside it** (`50-guarden-keepid.conf`, the keep-id pin), and **the admin's own
       `90-admin.conf` beside it is never written and never deleted**, not on a re-render
       and not on a removal of the service
+- [ ] **There is no staging copy of the admin's units, and nothing creates one**
+      (ADR-0024). The admin path above is the ONLY path to them: the mutator never
+      copies an admin's file in from elsewhere and never stages one for itself to
+      install, so the old `/etc/guarden/services/<name>/units.d/` is not a second way
+      in — and that path is not created by any program. `tests/t306-admin-units-path.sh`
+      asserts the absence on a host where the mutator has run
 - [ ] `weedr service list` prints uid, track, publications with their allocated ports, granted
       ports with pending marked, volumes with snapshot counts and effective retention, the
       deployed sha, the snapper configuration names, instances, the generated values, and the two
