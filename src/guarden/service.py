@@ -59,7 +59,7 @@ from guarden import manifest as manifest_mod
 from guarden import modules as modules_mod
 from guarden import overrides as overrides_mod
 
-TREE_MODE = 0o700
+TREE_MODE = paths.TREE_MODE
 
 
 def _in_podman_store(path: Path, root: Path) -> bool:
@@ -357,6 +357,18 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     if existing is not None and _converged(existing, resolved, manifest, project, source_hash):
         outcome.converged = True
         outcome.uid = existing.uid
+        # **A converged create still REPAIRS the tree (ticket 334).** The
+        # convergence check answers "the deploy is what the record says it is",
+        # and it says nothing about the host's modes: a host that ran an older
+        # guarden carries unit directories that are root-owned with the
+        # mutator's umask, and the create that reconciles the service is the
+        # only thing that runs on every deploy.
+        #
+        # **The repair runs here and not at the end of the create**, because
+        # the end of the create is where the units are INSTALLED, and a
+        # converged deploy installs nothing — so a repair placed there would
+        # never run on the deploy it is for.
+        outcome.notes += _repair(existing, resolved)
         return outcome
 
     fresh = bool(resolved.escaped_ref) and (
@@ -842,6 +854,46 @@ def _converged(
         record.volumes[vol].config == paths.snapper_config(resolved.name, vol, resolved.escaped_ref)
         for vol in manifest.state
     )
+
+
+def _repair(record, resolved) -> list[str]:
+    """The tree of a service that is already converged, converged to the
+    tree's rule (ticket 334).
+
+    **What is repaired is the UNIT DIRECTORIES: the service's own and every
+    instance's.** Those are the directories the INSTALLER made — the quadlet
+    directory, the levels above it, and the drop-in directory under it — and it
+    made them by `conf.write_file`'s `mkdir(parents=True)`, so they carry the
+    mutator's umask and root's ownership. A host that ran an older guarden
+    carries them that way, and nothing else repairs them: `_make_tree`'s walk
+    owns the rest of the tree, and it runs on a create that is not converged.
+
+    **Why not the whole tree.** The walk already owns the whole tree, and it
+    reaches the unit directories too — so a repair that walked the whole tree
+    would be a second statement of the tree's rule in a second place, and the
+    two would drift. The repair is narrow because the INSTALLER is the only
+    writer that made a directory wrong.
+
+    **Why not the files.** A unit file's mode is ticket 320's question — two
+    writers disagree about it and suites pin the answer it has not yet been
+    given. A repair that re-moded the files would settle that question by side
+    effect, and this is not that ticket.
+
+    **Whose mode wins: the tree's.** The tree's rule is `0700` to the service
+    user (spec 2.1), and it is a rule about the ISOLATION BOUNDARY rather than
+    about a convenience: `0700` on the service's tree is what stops every
+    service user reading every other service's state volumes off the host
+    filesystem. An operator who widened a directory under the home has widened
+    the boundary, and a repair that did not put it back would leave the hole
+    open — so the tree's rule wins, and the repair says what it changed so an
+    operator who meant it can say so in a place guarden reads.
+
+    The lines are NOTES and not warnings: a repair is the verb doing what it
+    says, so the deploy exits `0` and the operator sees what was corrected.
+    """
+    owner = units.owner_of(record)
+    repaired = units.repair_unit_dirs(record.service, owner, sorted(record.instances))
+    return [f"repaired {path} to the service's own" for path in repaired]
 
 
 def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None) -> None:
