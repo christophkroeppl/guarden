@@ -17,7 +17,7 @@
 #
 # machine: shared
 # `guarden_prefix` stages the host; every registry row, staged manifest and
-# rendered `.volume` unit is under `$GUARDEN_PREFIX` or `$GUARDEN_FIXTURES`.
+# rendered unit is under `$GUARDEN_PREFIX` or `$GUARDEN_FIXTURES`.
 # The paths this file asserts are the *rendered strings*, not directories
 # that exist, so no subvolume is created and `btrfs` is never called.
 # `install_pinned_converter` reaches real apt and the machine's apt timers;
