@@ -204,11 +204,16 @@ IP_UNPRIVILEGED_PORT_START = "1024"
 SNAPPER_CONFIG_DIR = ("etc", "snapper", "configs")
 
 # The host's own configuration and the subvolume it is for. `root` is the whole
-# of it: spec 6.1's layout is `@` for `/` and `@var` for `/var`, and `/home` is
-# inside `@` rather than a subvolume of its own. snapper snapshots a subvolume,
-# so a configuration for `/home` could not be created on that layout at all, and
-# `_btrfs_layout_holds()` accepting it is what let that go unnoticed until a
-# real machine ran the phase.
+# of it: spec 6.1's layout is `@` for `/`, `@var` for `/var` and `@tmp` for
+# `/tmp`, and `/home` is inside `@` rather than a subvolume of its own. snapper
+# snapshots a subvolume, so a configuration for `/home` could not be created on
+# that layout at all, and `_btrfs_layout_holds()` accepting it is what let that
+# go unnoticed until a real machine ran the phase.
+#
+# `/tmp` is the third subvolume and it is the one with **no** configuration:
+# the operator's requirement is that `/tmp` is volatile data with no ladder, so
+# the host's configurations are `root` alone and `storage_items`' check that no
+# configuration for `/tmp` exists is what makes that a verified property.
 HOST_CONFIGURATIONS = {"root": "/"}
 
 # spec 8.1's canonical set, in the order the table gives them. A `None` is a
@@ -900,7 +905,29 @@ def _subvolumes() -> list[str]:
 
 def _btrfs_layout_holds() -> bool:
     layout = _subvolumes()
-    return "@" in layout and "@var" in layout
+    return "@" in layout and "@var" in layout and "@tmp" in layout
+
+
+def _tmp_configuration() -> str | None:
+    """The snapper configuration whose subvolume is /tmp, if one exists.
+
+    "`/tmp` is volatile data and not to be snapshotted" is a property guarden
+    holds by never creating the configuration, and this is what makes it a
+    verified fact rather than an accident of nobody having added one:
+    `snapper list-configs` names every configuration and the subvolume it is
+    for, so a configuration whose subvolume is /tmp is one that would give
+    /tmp a ladder whatever guarden did or did not write. The configuration is
+    not guarden's to remove -- spec 8.1 leaves what guarden did not create
+    alone -- so the item reports it and cannot correct it.
+    """
+    result = h.run("snapper", "list-configs")
+    if not result.ok:
+        return None
+    for line in result.out.splitlines():
+        name, separator, subvolume = line.partition("|")
+        if separator and subvolume.strip() == "/tmp":
+            return name.strip()
+    return None
 
 
 def _boot_is_ext4() -> bool:
@@ -1164,7 +1191,7 @@ def _conversion_step() -> None:
 
     The script is a state machine across reboots: on an ext4 root it schedules
     the offline conversion and asks for the first reboot; on a flat btrfs root
-    it migrates into `@` and `@var` and asks for the second. `75` is the
+    it migrates into `@`, `@var` and `@tmp` and asks for the second. `75` is the
     machinery's "a reboot is required" — a state of the host, not a failure —
     and the phase reports it by naming the marker that `--check` reports too.
     Anything else is reported with the script's own first stderr line, because
@@ -1214,9 +1241,20 @@ def storage_items() -> list[Item]:
     config = h.read_config(h.config_path()) or h.shipped_config()
     items: list[Item] = [
         Item(
-            "btrfs with the @ and @var subvolumes",
+            "btrfs with the @, @var and @tmp subvolumes",
             _btrfs_layout_holds,
             _conversion_step,
+        ),
+        Item(
+            "no snapper configuration exists for /tmp, so no ladder governs it",
+            lambda: _tmp_configuration() is None,
+            lambda: h.error(
+                f"the snapper configuration {_tmp_configuration()} is for /tmp, and /tmp "
+                "is volatile data that is not snapshotted: `snapper -c "
+                f"{_tmp_configuration()} delete-config`, and remove any unit that "
+                "references it"
+            ),
+            correctable=False,
         ),
         Item(
             "/boot is on ext4, so the kernel keeps booting after a btrfs conversion",

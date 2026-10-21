@@ -106,6 +106,10 @@ PROC_SYS = PREFIX / "proc" / "sys"
 # podman's uid-scoped rootless quadlet search path, which is also where admin
 # units and drop-ins go (ADR-0003): the home's own directory is searched first,
 # so a root-owned drop-in here survives a regeneration.
+#
+# **It is the ONLY path to an admin's own configuration** (ADR-0024). There is
+# no staging copy of it: no program reads an admin's file from somewhere else
+# and copies it in, and no program stages one for the mutator to install.
 QUADLET = Path(".config/containers/systemd")
 # podman's own store inside a service's home. Root-relative, the way QUADLET is:
 # a walk of the service tree must leave it exactly as podman made it.

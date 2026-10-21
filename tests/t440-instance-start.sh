@@ -70,18 +70,25 @@ run weedr service ingest routed-preview/feature/x --from poke routed@9f2c1ab
 assert_exit 0
 assert_stderr_empty
 assert_file_exists /var/lib/guarden/registry/routed-preview.toml
-# `units.install` writes an instance's quadlet files UNIT_MODE (0640) as the
-# service uid, and this is where that is true: the SECOND instance's create
-# walks the whole service tree (`_make_tree`, `0700` to the tree, spec §2.1)
-# and re-modes this file, so a mode asserted later would be asserting whichever
-# write ran last (ticket 320).
-assert_mode "$instance_quadlet/web.container" 640
+# `units.install` writes an instance's quadlet files the tree's own mode —
+# `0700` to the service user, like every other file under the tree (spec §2.1)
+# — so this file is the same mode whether the install wrote it or
+# `_make_tree`'s walk last touched it (ticket 320).
+assert_mode "$instance_quadlet/web.container" 700
 
 # The second instance is the whole point of the block below: one service, two
 # refs, two renders, and neither render may erase the other's.
 run weedr service ingest routed-preview/plain --from poke routed@9f2c1ab
 assert_exit 0
 assert_stderr_empty
+
+# The FIRST instance's file after the SECOND instance's create: unchanged. The
+# walk that owns the tree and the install that writes a unit state one mode
+# (spec §2.1), so no operation can re-mode a file another one wrote. Before
+# ticket 320 this read `0640` here and `0700` after the walk, and the next
+# redeploy of the first instance flipped it back — the mode was whichever
+# writer ran last.
+assert_mode "$instance_quadlet/web.container" 700
 
 # --- neither instance's route slice clobbers the other's ----------------------
 # Before the fix `units.install` copied every instance's `out/shared/` into
@@ -152,11 +159,9 @@ assert_file_has "$instance_quadlet_b/web.container" "ContainerName=routed-previe
 # --- where the render had to land for a start to find it -----------------------
 assert_file_exists "$instance_quadlet/web.container"
 assert_file_exists "$instance_quadlet_b/web.container"
-assert_mode "$instance_quadlet_b/web.container" 640
-# Instance A's unit was 0640 after ITS install (asserted above) and the second
-# instance's create re-moded it to 0700 with the rest of the tree (ticket 320).
-# What must hold either way is the property the entry exists for: the service
-# user — the uid podman's generator runs as — still reads the declaration.
+assert_mode "$instance_quadlet_b/web.container" 700
+# And the property the mode exists for: the service user — the uid podman's
+# generator runs as — reads the declaration.
 run_in /tmp runuser -u routed-preview -- test -r "$instance_quadlet/web.container"
 assert_exit 0
 # The shared slot is where the render used to land, and the service's own `web`

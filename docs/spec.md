@@ -160,7 +160,8 @@ to it.
   allow-gated-drop  present only if a poke may drop a service in a
   gated track
 /etc/containers/systemd/users/<uid>/  podman's uid-scoped rootless quadlet path: the admin
-  injection point for a service's own units and drop-ins.
+  injection point for a service's own units and drop-ins, and the ONLY path
+  to them (ADR-0024). There is no staging copy of them anywhere.
   <unit>.container.d/  one directory per unit, holding the drop-ins
   that are merged into that unit's base file. **The mutator writes
   exactly one file in it** — `50-guarden-keepid.conf`, the keep-id
@@ -225,9 +226,19 @@ exists, and keeping a snapshotted tree and an unsnapshotted one in one directory
 above happened in the first place.
 
 Nothing root-owned lives inside a service's home, and **admin units are not copied into
-one**: they live in `/etc/guarden/services/<name>/units.d/` until the mutator installs them
-into `/etc/containers/systemd/users/<uid>/`. Generated units live in the home's quadlet
-directory and are rewritten on regeneration.
+one**: they are drop-ins in `/etc/containers/systemd/users/<uid>/<unit>.container.d/`, which
+the generator reads for a unit whose base file lives in the home (§6.3). Generated units live
+in the home's quadlet directory and are rewritten on regeneration.
+
+**There is no staging copy of an admin's units, and there is no second path to them**
+(ADR-0024). The admin path above is the whole of it: the admin writes the file where the
+generator reads it, the renderer reads it back and merges it into the rendered unit, and the
+mutator writes exactly one file beside it — `50-guarden-keepid.conf`, the keep-id pin
+(§6.3). **A path a document names is a path a program implements**, so this paragraph is the
+answer to the question §2.1's mode table asks: the promised
+`/etc/guarden/services/<name>/units.d/` is not in the table because no program ever read or
+wrote it, and adding the copy would give the admin's own configuration two ways to reach a
+unit — the thing ADR-0019's one-writer-per-file model exists to prevent.
 
 **An instance's units are installed in two places.** The declaration itself lives in the
 instance's own quadlet directory (§5.2), and one entry named `<unit>-<escaped-ref>` — plus
@@ -287,7 +298,8 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/etc/containers/systemd/users/<uid>/` | `0755` | `root:root` | `weedr service add`/`ingest`. The same traverse grant, one level down: the generator reads it as the service user |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/` | `0755` | `root:root` | the mutator, installing the keep-id drop-in. One directory per unit, and the admin's own file in it is never touched |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | `0644` | `root:root` | the mutator, on the install that renders the pin. **World-readable, and that is the point**: the generator reads this path as the service user, and a root-owned `0600` file there yields NO generated unit at all (measured: `probe-quadlet-dropins.md` row 10). Nothing secret is in it — a `UserNS=` line names a uid and a gid — and root alone writes it |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3) |
+| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3). **The renderer READS it** — `render._dropins` merges every `*.conf` in this directory into the unit before generation, which is what makes an operator's `MemoryMax=` survive a regeneration (§6.3, ADR-0024) |
+| `/tmp` | `1777` | `root:root` | **not the conversion's**: `systemd-tmpfiles`, through `q /tmp 1777 root root 10d` in the distribution's `/usr/lib/tmpfiles.d/tmp.conf`, applied to the `@tmp` subvolume the conversion mounts at it. `btrfs subvolume create` makes `@tmp` `0755` and nothing guarden does would change that, because the mode is the distribution's row and its owner is tmpfiles — the conversion that created the subvolume is not the thing that owns the mode on it |
 
 `/run/guarden/locks/` is `2770 root:guarden` because `guarden` and root both take these locks
 — `queue` and `deploy-*` are taken by `furrow` as the `guarden` user, and the remaining names
@@ -316,6 +328,13 @@ the same reason the pin store is separate from the state volumes in the first pl
 The `0700` on a service's tree is load-bearing. Without it any service user can read every
 other service's state volumes directly from the host filesystem, which would make every
 per-consumer credential and every uid-matched firewall rule decorative.
+
+**A unit file inside a service's tree is `0700`, the tree's own mode.** The install that writes
+one and the walk that owns the tree state that one mode, so a file's mode cannot depend on which
+operation ran last — which it did while a second constant said `0640`: a second instance's create
+re-moded the first instance's units to `0700` without reinstalling them, and the first instance's
+next deploy put them back. The service user, whose podman generator reads the file, holds read
+and write either way; what two statements cost was a canonical answer, not an access.
 
 Three carve-outs from `0640 root:guarden`, each for a specific reader:
 
@@ -643,12 +662,6 @@ allow = ["/dev/dri"]  # host paths this service's units may bind-mount
 [expose]
 tunnel = ["web"]  # route labels published through the tunnel instead of the service's
   # resolved destination; a loopback record still wins (§3.3)
-
-[ownership]
-volumes = { "data" = 999 }  # the uid that owns a volume's tree, when the image's own
-  # uid cannot. A GRANT, like every other table here: the
-  # manifest names the volume and the admin names the uid, and
-  # a uid the host does not already have is refused. ADR-0021
 ```
 
 `keep_last` and `free_limit` override the track's defaults. `groups.add` gives the service
@@ -670,10 +683,19 @@ a posture to be private. `edge` is a value a track states and `public` is the re
 for the same position (§3.4, §6.2 `weedr expose set`).
 
 Nothing else is overridable. Routes, edges, state volumes, the unit source and the credential
-schema are the repository's, and this file does not touch them. The one exception is
-`[ownership]`, and it is an exception with a reason: ADR-0021 decided that a volume shared by
-two image uids needs an owner the admin names, and that the grant belongs in this file
-because this file is what an operator reads to know every way the host has been widened.
+schema are the repository's, and this file does not touch them.
+
+**`[ownership]` is DECIDED and NOT YET IMPLEMENTED, and a file carrying it is REFUSED.** It
+is not in the sample above for that reason: the sample is what an operator copies into a file,
+and a table the program refuses has no place in it. ADR-0021 decided that a volume shared by
+two image uids needs an owner the admin names, and that the grant belongs in this file because
+this file is what an operator reads to know every way the host has been widened; the ADR holds
+the shape. **The table does not exist in the program yet**, so
+`overrides.load()` refuses the key `ownership` by name and the verb that read it exits `1`
+(spec 1.2: the host is not in the state the request assumed). The implementation is ticket
+308's item 2. **Until it lands, the answer to "a volume is owned by the service uid and the
+container runs as another" is not this table** — it is the keep-id pin (ADR-0019), which maps
+the image's uid onto the service identity and leaves the volume owned by the service uid.
 
 ### 3.4 `/var/lib/guarden/registry/<name>.toml`
 
@@ -1115,6 +1137,17 @@ Validation rules:
   name. `ports:` is a request and is legitimate; a key that records an open host port is not.
   `firewall:` is the same shape of thing and for the same reason: it records nothing that is in
   force, and the only file that does is the root-owned `overrides.toml` (§7.7).
+
+  The rule is not the manifest's own vocabulary's alone. A `compose.yaml` that states a resource
+  cap or a weight — `mem_limit:`, `mem_reservation:`, `memswap_limit:`, `mem_swappiness:`,
+  `cpus:`, `cpu_quota:`, `cpu_period:`, `cpu_rt_runtime:`, `cpu_rt_period:`, `cpuset:`,
+  `pids_limit:`, `ulimits:`, `oom_kill_disable:`, `oom_score_adj:`, the `cpu_shares:` weight, or
+  a non-empty `deploy.resources.limits` / `deploy.resources.reservations` — is refused by name
+  with exit `2` before the converter is driven, because the two vocabularies state one thing and
+  a rule that held only one of them would be a rule a repository says in the other. A cap an
+  operator *grants* is written in the admin's own drop-in,
+  `/etc/containers/systemd/users/<uid>/<unit>.container.d/`; a weight is the track's, in the
+  root-owned `guarden.toml`.
 - **There is no range form** for a port, in a manifest or in a grant: a service that wants a
   block of ports lists them. A range would make the manifest harder to read than the firewall it
   produces, and a service needing a hundred ports is a signal that it should be reached over an
@@ -1421,9 +1454,10 @@ deploy it is for.
 **What is repaired is the unit directories — the service's own and every instance's — and the
 levels above them.** Those are the directories the INSTALLER made, by `mkdir(parents=True)`, and
 every other directory in the tree is made and owned by the tree walk, which runs on every create
-that is not converged. **The FILES are not repaired**: a unit file's mode is a separate question
-(§2.1's `0640` against the tree's `0700`), and a repair that re-moded them would settle it by
-side effect.
+that is not converged. **The FILES are not repaired**: a unit file's mode is the tree's `0700`
+(§2.1), and the install that writes one states it, so there is no second answer for a repair to
+impose. A host that ran an older guarden keeps `0640` unit files until the next install rewrites
+them, and the directory's `0700` is the boundary either way.
 
 **Whose mode wins is the tree's**, and the spec is silent on a deliberate widening, so it says
 so: the `0700` is not a convenience but the isolation boundary that stops one service user
@@ -1559,18 +1593,24 @@ still converge and the run still exits `1`.
   that needs it — after the disable — so the *first* `packages` run on a host whose timers are
   still armed meets them only in the window before its own first item: the disable is what
   closes that window.
-- `storage` verifies btrfs with `@` and `@var` subvolumes, installs
+- `storage` verifies btrfs with `@`, `@var` and `@tmp` subvolumes, installs
   `/etc/apt/apt.conf.d/80guarden-snapper` with a `DPkg::Pre-Invoke` that snapshots `root`
   before every package transaction, converges the canonical value set into every snapper
-  configuration it can see — a service's configurations, and the host's own `root` and `home`,
-  and nothing else (§8.1) — creates `root` and `home` where they are absent, and installs
-  `/var/lib/guarden/soil/`. It creates **no** service volume. **A root that is not yet btrfs,
+  configuration it can see — a service's configurations, and the host's own `root`,
+  and nothing else (§8.1) — creates `root` where it is absent, and installs
+  `/var/lib/guarden/soil/`. It creates **no** service volume, and **no configuration for
+  `/tmp`**: the layout's third subvolume is the one with no ladder, because `/tmp` is volatile
+  data that is not to be snapshotted, and the phase asks `snapper list-configs` for that
+  rather than asserting it about itself (§8.1). **A root that is not yet btrfs,
   or that is btrfs without the subvolumes, is converted**: the phase drives a staged offline
   conversion — `--apply` schedules it, a reboot runs it in the initramfs, and the phase is run
-  again after each reboot (twice in all: the conversion, then the `@`/`@var` migration) — and
+  again after each reboot (twice in all: the conversion, then the `@`/`@var`/`@tmp` migration) — and
   while a reboot is outstanding it reports the marker it wrote at
   `/var/lib/guarden/soil/reboot-required` and stays unmet, which is the one drift a `storage`
-  run is expected to carry between reboots. It also **disables the
+  run is expected to carry between reboots. **A host already on `@` and `@var` with no `@tmp` is
+  finished, not converted again**: the phase creates the missing subvolume at the top level and
+  writes its `/tmp` fstab line, which is one subvolume and one line, then asks for the same
+  reboot — re-running the `@` migration instead would rsync `/` onto itself. It also **disables the
   distribution's packaged snapper cleanup timer** and installs the replacement that takes the
   `snapshots` lock (§8.5). A snapper configuration belonging to a service is created by the mutator and is
   never recreated here.
@@ -1923,6 +1963,15 @@ rendering would give a repository the host's whole network namespace, and a past
 that survived would let a repository remove the host mapping the connectivity model rests on.
 A unit source naming a backend other than `pasta` is refused with the key named.
 
+**A `networks:` declaration is refused, and this is where it differs from a backend.** The
+renderer replaces a backend and a published port because it can regenerate each from host state;
+there is nothing to regenerate for a network. A guarden host has no shared podman network (§7.1),
+so a document-level `networks:` table names one that does not exist, and a service's `networks:`
+list is the membership claim that network would carry (§7.3). Both are refused by name with exit
+`2` on the repository's own declaration, before the converter is driven — a service naming a
+network it did not declare would otherwise reach the converter and come back as the converter's
+exit `1` for what is a rejected input (§1.2).
+
 **The renderer owns the published-port set completely.** It strips every `PublishPort` line
 found in the unit source, from Compose or from hand-written quadlet, and regenerates the
 whole set from the grants and the allocations. Without this the grant model is advisory,
@@ -1986,6 +2035,14 @@ three writers, and no file with two of them:
 | the base unit, in the service's own quadlet directory | the renderer, on every install | **no `UserNS=` line at all** — the pin is not in it |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | the mutator, and nobody else | the `UserNS=keep-id:uid=…,gid=…` line |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | **the admin, and nobody else** | whatever the admin wants; a `UserNS=` line in it **overrides** guarden's pin |
+
+**There is no fourth file, and no staging copy of the third** (ADR-0024). The admin's
+configuration reaches a unit by exactly one path — this directory — and the renderer reads
+it there: `render._dropins` merges every `*.conf` in the unit's drop-in directory into the
+unit before generation, so an operator's `[Service] MemoryMax=` lands in the rendered unit.
+A copy of the admin's file staged elsewhere would give that configuration two ways to reach
+a unit, two files that could disagree, and two answers to "which one is the record" — and
+none of it buys anything the generator does not already do (ADR-0019).
 
 The reasons are measured, and they are the whole of the design. **The base unit carries no
 line** because a base unit that carried it would carry it twice over once the generator
@@ -3078,18 +3135,30 @@ operator owns:
 
 - **A service's configuration** — the name matches a registry entry, so the track is read from the
   registry and the retention values come from that track.
-- **`root` and `home`**, the host's own. These are converged with the **fixed set only** —
-  `EMPTY_PRE_POST_CLEANUP`, `NUMBER_MIN_AGE`, `NUMBER_CLEANUP`, `TIMELINE_CLEANUP` — and **no
-  ladder value and no `FREE_LIMIT` is written for them**, because no track owns them and there is
-  no track to read a default from. Their ladder is left as the distribution shipped it. Nothing
-  snapshots them on a schedule, so their limits govern only what a human gets who runs `snapper`
-  by hand there, and that is a human's own housekeeping rather than a policy guarden owns. An
-  earlier revision applied the skip rule to these two as well, which meant every
-  `soil storage --apply` emitted two warnings and never converged the host at all.
+- **`root`**, the host's own, and the only one. `/home` is **not** among them: it is a directory
+  inside `@` rather than a subvolume of its own, and snapper snapshots a subvolume, so a
+  configuration for `/home` could not be created on this layout at all. It is converged with the
+  **fixed set only** — `EMPTY_PRE_POST_CLEANUP`, `NUMBER_MIN_AGE`, `NUMBER_CLEANUP`,
+  `TIMELINE_CLEANUP` — and **no ladder value and no `FREE_LIMIT` is written for it**, because no
+  track owns it and there is no track to read a default from. Its ladder is left as the
+  distribution shipped it. Nothing snapshots it on a schedule, so its limits govern only what a
+  human gets who runs `snapper` by hand there, and that is a human's own housekeeping rather than
+  a policy guarden owns. An earlier revision applied the skip rule to the host's configurations
+  as well, which meant every `soil storage --apply` emitted two warnings and never converged the
+  host at all.
 - **Anything else** is a configuration guarden did not create, so it is **skipped with a
   `warning:` line naming it** and left byte-for-byte alone. This is the "every configuration it
   can see" in the phase description, and "can see" is doing the work: seeing means a name that
-  either matches a registry entry or is one of the host's two.
+  either matches a registry entry or is `root`.
+
+**The layout's third subvolume is not a configuration case at all.** `/tmp` is mounted from
+`@tmp` and carries **no snapper configuration**, because `/tmp` is volatile data that is not to
+be snapshotted: there is no `TIMELINE_LIMIT_*` value that governs it, no cleanup algorithm, and
+nothing that would roll it back. The phase verifies that rather than assuming it — `snapper
+list-configs` names every configuration and the subvolume it is for, so a configuration whose
+subvolume is `/tmp` is one that would give `/tmp` a ladder whatever the phase did or did not
+write. guarden creates no configuration for `/tmp`, and a configuration that appeared there
+anyway is not guarden's to remove.
 
 A configuration for a **removed** service is the case that matters most, and it is the second
 branch: `weedr service remove` deletes the service's `state` subvolumes, and `soil storage` is
@@ -3478,6 +3547,17 @@ next ordinary run can inherit what the gate observed. The cache lives outside th
   `dpkg-query`, `systemctl`, `groupadd` and `useradd` take no prefix. Whether a suite needs a
   machine of its own is therefore a fact about which verbs it drives and not about whether it
   called `guarden_prefix`.
+
+**A suite is `tests/t[0-9]*.sh`, and every one of them runs in a cut machine.** The runner
+carries no allowlist that can skip one: a suite whose subject a machine cannot see fails
+there rather than disappearing from a run, because an unrun check that the summary does not
+mention reads as a green one (ADR-0025). **A claim about the checkout itself is a unit
+test** — `tests/test_*.py`, run by `just unit` on the checkout — and it exists for what a
+machine cannot answer: a function's answer, and the checkout's own files. The root
+`.env.schema` is tracked only as far as this repository's `.git` can say, and a cut carries
+no repository metadata, so that claim is a unit test and not a suite. It executes no
+guarden program, writes nothing, and drives a command line the way every other test does.
+`just test` says nothing about those claims; `just ci` is the run that covers both tiers.
 
 `just test` runs the whole suite in a throwaway VM and exits `0`; `just test-one <file>` runs one
 suite in one VM, and that is the command for work in progress. There is no suite that runs
