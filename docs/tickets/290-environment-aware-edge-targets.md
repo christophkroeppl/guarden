@@ -133,6 +133,28 @@ that reads it fails rather than only the ones that wanted the mapping. That is
 a deliberate fail-closed choice and the spec says so; it is recorded here
 because it is the cost of the rule, not a free strictness.
 
+A second review confirmed both MUST FIXes closed and found that the rule the
+first review had refuted had been **moved rather than removed** — it survived
+in the function's own docstring, in the test's docstring, and in this ticket,
+three copies contradicting the code twenty lines below them. A fourth
+paragraph in the spec's `[edge_overrides]` section closed the last gap: that
+section stated no name rule at all, so a reader would generalize the
+`[providers]` pattern-only rule to the table that takes precedence over it.
+The two tables share one key space, the override wins, and the override's
+rule is the stricter one — both sides a service name in full. The spec now
+says so and says what it costs.
+
+**A third review did not answer.** It was dispatched on the closing commit and
+timed out with an empty file — no verdict line and no findings — so it is
+recorded as *not run* rather than as an approval. The three questions it was
+asked were then settled by reading the tree: the two stale copies are gone and
+rewritten (`src/guarden/config.py:453-477` and `tests/t30-parsers.py:413-429`),
+the spec's `[edge_overrides]` paragraph states both the rule and the precedence
+(`docs/spec.md:517`) and both are true of the code (`edgeresolve.resolve` reads
+the override table first, `src/guarden/edgeresolve.py:52-55`), and the test's
+expected exit code is named per case against the code path each one exercises
+(`tests/t30-parsers.py:493-510` against `src/guarden/config.py:483-512`).
+
 ## The RED and the GREEN, as measured
 
 Both on a real LXD cut, on the tree named, with the same runner.
@@ -177,3 +199,29 @@ five assertions the providers table's file carried and nothing collected
 before. The two errors in the run are the `podman`-is-not-installed pair in
 `tests/test_creator.py`, and they are identical on `develop`.
 
+**The suites that must not move** — each on its own fresh cut, on the final
+tree:
+
+```
+$ GUARDEN_LXC_RUNNER=guarden-run-t290b tests/lxc.sh run t30-parsers --fresh --no-cache
+ok   t30-parsers.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290b tests/lxc.sh run t80-edges --fresh --no-cache
+ok   t80-edges.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290b tests/lxc.sh run t40-edges --fresh --no-cache
+ok   t40-edges.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290b tests/lxc.sh run t40-render --fresh --no-cache
+ok   t40-render.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290b tests/lxc.sh run t20-install --fresh --no-cache
+ok   t20-install.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290b tests/lxc.sh run t30-create --fresh --no-cache
+ok   t30-create.sh
+```
+
+`ruff check src tools/check-deps tests` passes, and the diff adds no comment
+lines to the source.
+
+**One run in this series failed and it was not a defect.** A `t80-edges.sh` run
+died with exit `129` (SIGHUP) because a foreground run and a background run
+shared one runner name — the documented collision, where `_reset` deletes the
+instance underneath the other run. Re-run alone on its own runner, the suite
+is green, and that is the run quoted above.
