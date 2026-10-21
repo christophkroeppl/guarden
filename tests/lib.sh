@@ -358,17 +358,22 @@ assert_rule_count() {
 # captured filter passes vacuously; exit 2 means it could not be searched.
 assert_file_lacks() {
     [ -e "$1" ] || return 0
-    [ -f "$1" ] || _fail "$1 is not a regular file, so it cannot be searched for $2"
+    if [ ! -f "$1" ]; then
+        _fail "$1 is not a regular file, so it cannot be searched for $2"
+        return 1
+    fi
     local filtered status=0
     filtered=$(mktemp)
     grep -a -vE '^[[:space:]]*(#|;)' -- "$1" >"$filtered" || status=$?
     if [ "$status" -gt 1 ]; then
         rm -f "$filtered"
         _fail "$1 could not be searched for $2 (grep exit $status)"
+        return 1
     fi
     if grep -aqF -- "$2" "$filtered"; then
         rm -f "$filtered"
         _fail "$1 names $2 and should not"
+        return 1
     fi
     rm -f "$filtered"
 }
