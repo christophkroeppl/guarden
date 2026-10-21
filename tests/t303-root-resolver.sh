@@ -142,7 +142,13 @@ assert_file_has "$conf" \
 resolver_uids=$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
     | sed -n 's/^[[:space:]]*mod owner uid-owner \([0-9][0-9]*\) daddr 127\.0\.0\.53 .*/\1/p' \
     | sort -u | tr '\n' ' ')
-expected_uids="$svc_uid 0 "
+# **The expected set is sorted the same way the measured one is.** The measured
+# set comes out of `sort -u`, so it is in ascending order — and uid 0 sorts
+# BEFORE a service uid, not after it. An expected string written in the order
+# the rule is *thought about* ("the service uid, and root") is not the order
+# `sort` produces, and the comparison would be RED on a correct render for a
+# reason that has nothing to do with the claim.
+expected_uids=$(printf '%s\n0\n' "$svc_uid" | sort -u | tr '\n' ' ')
 [ "$resolver_uids" = "$expected_uids" ] \
     || _fail "the resolver's uid set is [$resolver_uids], expected [$expected_uids]"
 
