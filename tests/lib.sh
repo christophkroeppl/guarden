@@ -254,6 +254,14 @@ assert_file_exists() {
     [ -e "$1" ] || _fail "$1 did not appear"
 }
 
+# assert_dir_exists <dir>: the directory is there. The pair to
+# `assert_file_exists` for a directory a program creates — the payload
+# directory inside a `state` volume is one (ADR-0020), and "the file exists"
+# would answer a different question than "the directory is there".
+assert_dir_exists() {
+    [ -d "$1" ] || _fail "$1 is not a directory"
+}
+
 assert_file_missing() {
     if [ -e "$1" ]; then
         _fail "$1 is still there"

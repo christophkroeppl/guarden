@@ -651,6 +651,12 @@ else moves data aside.
 ```
 /var/lib/guarden/services/<name>/home/          its home; units, image store, instances
 /var/lib/guarden/services/<name>/state/<vol>/   a subvolume, with snapper config <name>-<vol>
+/var/lib/guarden/services/<name>/state/<vol>/data/
+                                             the volume's data, one level down inside
+                                             the subvolume, and what the container
+                                             mounts: snapper's .snapshots/ is the
+                                             payload's sibling, so a container never
+                                             sees it (ADR-0020)
 /var/lib/guarden/registry/<name>.toml           the record
 /etc/guarden/services/<name>/overrides.toml     admin grants
 /etc/containers/systemd/users/<uid>/            admin units and drop-ins, uid-scoped
@@ -659,6 +665,35 @@ else moves data aside.
     and your own `90-admin.conf`
 /var/lib/guarden/removed/<service>/<time>/<vol>/   moved, not deleted, by service remove
 ```
+
+**A `state` volume's data is one level down, and an existing volume whose data is at the
+root is refused rather than moved.** A `state` volume is a btrfs subvolume and snapper puts
+its own root-owned `0750` `.snapshots/` inside it; the container is rootless, so its `uid 0`
+is the service uid and it cannot chown a directory owned by the real host root. Every image
+whose entrypoint chowns its data directory — `postgres`, `mariadb`, `mysql`,
+`elasticsearch` — therefore fails against a `state` volume whose data is at the root, with
+
+    chown: changing ownership of '/var/lib/postgresql/data/.snapshots': Operation not permitted
+
+**The payload directory is the fix**: the container mounts `state/<vol>/data/`, the payload's
+sibling is `.snapshots/`, and the image's chown walks the payload only.
+
+**Guarden does not migrate a volume that already has its data at the root.** The mutator and
+`weedr service start` both refuse with one line naming the service, the volume, the payload
+directory and the work, and they change nothing. To move the data across:
+
+    weedr service stop <service>
+    mkdir -p /var/lib/guarden/services/<svc>/state/<vol>/data
+    find /var/lib/guarden/services/<svc>/state/<vol> -mindepth 1 -maxdepth 1 \
+        ! -name .snapshots -exec mv -t /var/lib/guarden/services/<svc>/state/<vol>/data {} +
+    chown -R <svc>:<svc> /var/lib/guarden/services/<svc>/state/<vol>/data
+    weedr service start <service>
+
+**The start asks the same question again**, so a move that missed something is refused rather
+than started against a half-moved volume.
+
+**The move is the operator's, deliberately**, and it is the same rule guarden already states
+for a newly declared volume: the volume starts EMPTY and the data does not follow the change.
 
 Nothing root-owned lives under `home`. If a file you expected to be protected is inside `home`,
 it is not — that is the rule, and the fix is to move it.
@@ -1752,6 +1787,30 @@ is only ever created here. A host with no edge module has no `edge` group, and
 A route on a track whose `expose` is `tunnel` is reached through the tunnel and
 is not public on the edge. Getting somebody to it is a **grant**, and a grant is
 an issuance that always expires.
+
+**A tunnel route carries no middleware, and the edge's basic-auth login does not follow it
+there.** The tunnel is a *different terminator*: cloudflared dials the service's publication
+directly (`http://<name>:<publication>` in `/var/lib/guarden/tunnel/config.yml`), so traefik
+is never in that path and the per-service `basicAuth` login is never in it either. The
+protection on a tunnel route is **Cloudflare's Access policy**, and `weedr share issue` is
+guarden's own instrument for it.
+
+`weedr expose set <name> tunnel` says so on stdout, in one line, whenever the service carries
+the default edge login:
+
+```sh
+weedr expose set myapp-staging tunnel
+myapp-staging exposure tunnel
+myapp-staging is reached through the tunnel, and the tunnel is a different terminator: its
+route carries no middleware at all — the edge's basic auth login and its forward-auth are
+both in front of the edge's own routes. A tunnel route is protected by the vendor's Access
+policy, and `weedr share issue` is guarden's own instrument for that policy.
+```
+
+**Read that line as the answer to "what is in front of this route".** A service with no
+login — one created before the gate module's policy was in force — prints no such line,
+because there is no credential that could have followed it. Promoting a service to the
+tunnel and reading nothing is not a contradiction: the service has no login to lose.
 
 ```sh
 weedr share issue routed-staging alice@example.com --until 7d

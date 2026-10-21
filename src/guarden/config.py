@@ -32,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from guarden import conf, durations, errors, paths, zram
+from guarden import conf, durations, errors, names, paths, zram
 
 SLOT = "slot"
 INSTANCE = "instance"
@@ -311,7 +311,7 @@ def load(path: Any = None) -> Config:
     tracks = _tracks(document.get("environments", []), where_file)
     return Config(
         path=str(where_file),
-        providers=_providers(document.get("providers", {}), where_file),
+        providers=_providers(document.get("providers", {}), where_file, tracks),
         domain=_str(host, "domain", f"{where_file} [host]"),
         interface=_str(host, "interface", f"{where_file} [host]"),
         admin_user=_str(host, "admin_user", f"{where_file} [host]"),
@@ -450,19 +450,64 @@ def _unpinned_pasta(where_file: Any, piece: str) -> errors.GuardenError:
     )
 
 
-def _providers(table: Any, where_file: Any) -> dict[str, dict[str, str]]:
+def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, dict[str, str]]:
+    """The `[providers.<track>]` tables: a logical name and the service it names.
+
+    **The two sides are not checked by the same rule, and the difference is
+    load-bearing.** The concrete name becomes a Linux user name, so it is a
+    service name in full — the pattern, the 31-character limit and no `..`; the
+    logical name is the manifest's own token and a lookup key that becomes
+    nothing, so it carries only the pattern, which is the rule the manifest's
+    `needs:` entry is held to (`manifest._needs`). A logical name of forty
+    characters is legal in a manifest, and a table that refused to map it would
+    refuse a mapping the manifest is asking for.
+
+    A concrete name that is not a service name resolves to a service that does
+    not exist — so the consumer is refused at the render with a name no
+    provider can be connected to, and the operator is hunting a line the
+    diagnostic never describes. The track is validated too: a mapping nothing
+    reads is a mapping an operator believes is in effect.
+
+    **The exit codes follow this module's own split.** A name that breaks a
+    rule is a rule violation in a well-formed file, so it is exit `2` — the
+    default `GuardenError` carries, and the same code the track table's own
+    `kind`/`cap`/`fork_from` rules use. A type that is wrong is exit `1`
+    (`_type_error`). A table naming a track the host does not have is the same
+    shape as a `fork_from` naming no track — a name in this file that names no
+    track — so it is exit `2` as well, and it names the tracks the host does
+    have.
+    """
     if not isinstance(table, dict):
         raise _type_error(str(where_file), "providers", "a table")
+    known = {track.name for track in tracks}
     out: dict[str, dict[str, str]] = {}
     for track, mapping in table.items():
+        if not isinstance(track, str) or track not in known:
+            raise errors.GuardenError(
+                f"{where_file}: [providers] names a track {track!r}, and the tracks are: "
+                f"{', '.join(sorted(known)) or 'none'}"
+            )
         if not isinstance(mapping, dict):
             raise _type_error(str(where_file), f"providers.{track}", "a table")
         resolved: dict[str, str] = {}
         for logical, concrete in mapping.items():
-            if not isinstance(concrete, str) or not concrete:
+            if not isinstance(concrete, str):
                 raise _type_error(
                     str(where_file), f"providers.{track}.{logical}", "a service name"
                 )
+            if not isinstance(logical, str) or not names.NAME_RE.match(logical):
+                raise errors.GuardenError(
+                    f"{where_file}: [providers.{track}] maps a logical provider name to a "
+                    f"service name: the logical name {logical!r} must match "
+                    f"{names.NAME_RE.pattern}"
+                )
+            try:
+                names.validate(concrete, f"the service name {logical!r} resolves to")
+            except errors.GuardenError as exc:
+                raise errors.GuardenError(
+                    f"{where_file}: [providers.{track}] maps a logical provider name to "
+                    f"a service name: {exc.message}"
+                ) from None
             resolved[logical] = concrete
         out[track] = resolved
     return out
