@@ -1212,11 +1212,12 @@ post-processes its output, and owns every field the design has an opinion about:
   *security* decisions unprivileged, not to re-derive a converter.
 - **`loom` owns, on the output**: the refusal list (§6.3), the whole `PublishPort` set, the
   `Network=pasta:` line from `[network] pasta_options`, `AddHost=` per edge, the credential
-  requests, the `.volume` units, the `After=guarden-order.target` drop-in, and the
-  `<name>.target` start-order edges. **Every one of those overwrites or removes something
-  podlet emitted**, which is why running podlet is not the same as trusting it: it is a
-  translator for the fields guarden has no opinion about, and not a security boundary for
-  the fields it does.
+  requests, the `Volume=` lines — podlet's `<name>.volume` suffix stripped, and each declared
+  volume rewritten to the path the mutator made (§6.3) — the `After=guarden-order.target`
+  drop-in, and the `<name>.target` start-order edges. **Every one of those overwrites or
+  removes something podlet emitted**, which is why running podlet is not the same as trusting
+  it: it is a translator for the fields guarden has no opinion about, and not a security
+  boundary for the fields it does.
 
 So `loom` invoking `podlet` does not weaken the rule that the mutator never runs a program over repository input — the mutator runs no program at all over repository input, and podlet runs as the unprivileged renderer, which is exactly where that rule puts the conversion.
 
@@ -2009,7 +2010,12 @@ rendered slices that the mutator installs into `/var/lib/guarden/shared/<name>/`
 **A declared volume is mounted by its own path, and there is no `.volume` unit.** The mutator
 makes the subvolume before the unit is installed, so the `Volume=` line names the path the
 mutator made and the container binds it directly; a `.volume` unit would be a second thing
-saying the same fact, and the one that could go stale.
+saying the same fact, and the one that could go stale. A `state` volume's path is its payload
+directory, `state/<vol>/data/` (§8.1, ADR-0020); a `bulk` volume's is the subvolume itself.
+podlet's `<name>.volume` spelling is its name for a Compose volume, so the renderer strips the
+suffix and matches what remains to a declared volume, while a `Mount=` source ending in
+`.volume` — `.image` and `.network` likewise — is refused, because quadlet resolves such a name
+to a podman object rather than a host path.
 
 `loom` **must** refuse rather than guess, with the code §1.2 gives each case.
 
