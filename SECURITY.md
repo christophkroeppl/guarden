@@ -319,6 +319,18 @@ and nothing else on loopback (ADR-0015). The claim survived because the runbook 
 operator that `iptables -S` could not see the firewall because the files were ferm source.
 Ferm compiles to iptables. The live rules are always inspectable.
 
+**Root is in that set, beside the service uids (ADR-0023).** Root's absence from it was a
+side effect of where the uid list came from — the registry's service uids — and it broke the
+host: `/etc/resolv.conf` names `127.0.0.53`, so **every** name lookup on the host is a
+loopback packet *before* any outbound packet exists, and the deny was on that lookup. On a
+converged host root's `getent hosts <name>` exited 2 and `curl <url>` exited 6, and
+`apt-get update` reported *"Temporary failure resolving archive.ubuntu.com"* **while still
+exiting 0** — a host whose package index silently stopped refreshing reads as a host with an
+unreachable mirror. Root already holds a broader exemption on the same chain (every TCP port
+on `127.0.0.1`, for the operator's shell), so the resolver accept is one address, one port
+and one added protocol, not a class-wide exemption. **The deny itself is unchanged**: still
+`127.0.0.0/8`, still carrying no owner match, still the last rule of the chain.
+
 **There is no `[loopback] allow` table.** A table whose whole content is a destination would be a
 second way to grant one beside the publication set, and two ways to grant a thing are two ways
 for it to be wrong. `overrides.toml` is `[ports]`, `[firewall]`, `[retention]`, `[groups]` and
