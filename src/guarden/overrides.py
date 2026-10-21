@@ -1,21 +1,36 @@
 """`/etc/guarden/services/<name>/overrides.toml`: the admin's grant surface, and
 the whole of it (spec 3.3).
 
-Five tables and nothing else. `[ports] open` is a public port the admin granted;
+Seven tables and nothing else. `[ports] open` is a public port the admin granted;
 `[retention] keep_last` and `[retention] free_limit` override the track's
 defaults; `[groups] add` gives the service user supplementary groups, which is
 how a hardware-transcoding service reaches `/dev/dri` without the renderer
-knowing anything about video; and `[mounts] allow` is the only way a host path
-outside the service's own volumes and `/etc/guarden` becomes bind-mountable.
-`[expose] tunnel` names route LABELS published through the tunnel INSTEAD of
-the edge. There is deliberately no `[expose] edge` because "not through the
-tunnel" is what the track's `expose` already says.
+knowing anything about video; `[mounts] allow` is the only way a host path
+outside the service's own volumes and `/etc/guarden` becomes bind-mountable;
+`[firewall] allow` names the requested firewall rules the admin agreed to
+install; `[expose] tunnel` names route LABELS published through the tunnel
+INSTEAD of the edge; and `[basicauth] required` is the operator's per-service
+opt-out from the default basic-auth middleware (ADR-0024). There is deliberately
+no `[expose] edge` because "not through the tunnel" is what the track's `expose`
+already says.
+
+`[basicauth] required` is the one table here that takes a default AWAY rather
+than granting more of one, and it is in this file for the same reason the rest
+are: the file an operator reads to know every way the host has been widened is
+the file that has to name the way it was narrowed. `required` absent is the
+default and means the middleware is ON, so a service whose file says nothing
+renders exactly what it rendered before the table existed.
 
 **Nothing else is overridable.** Routes, edges, state volumes, the unit source
 and the credential schema are the repository's, and this file does not touch
-them — so a key here that is not one of the eight is refused by name rather than
-ignored, because a silently ignored grant is a grant an operator believes is in
-effect.
+them — so a key here that is not one of the seven tables is refused by name
+rather than ignored, because a silently ignored grant is a grant an operator
+believes is in effect.
+
+**`[ownership]` is the eighth, and it is DECIDED and NOT YET IMPLEMENTED**
+(ADR-0021; ticket 308's item 2). A file carrying it is refused by name here
+rather than read and ignored, and the refusal is the honest answer until the
+table lands. The spec's §3.3 says so where an operator reads it.
 
 `keep_last` is the ladder's **daily bucket maximum** and nothing else (spec 8.1):
 it is not a mark count, and it does not move `NUMBER_LIMIT_IMPORTANT`. The other
@@ -36,13 +51,14 @@ from guarden import conf, errors, paths
 
 OVERRIDES_MODE = 0o640
 
-KEYS = {"ports", "retention", "groups", "mounts", "firewall", "expose"}
+KEYS = {"ports", "retention", "groups", "mounts", "firewall", "expose", "basicauth"}
 PORT_KEYS = {"open"}
 RETENTION_KEYS = {"keep_last", "free_limit", "weekly", "monthly", "quarterly"}
 GROUP_KEYS = {"add"}
 MOUNT_KEYS = {"allow"}
 FIREWALL_KEYS = {"allow"}
 EXPOSE_KEYS = {"tunnel"}
+BASICAUTH_KEYS = {"required"}
 
 WEEKLY = 4
 MONTHLY = 6
@@ -61,6 +77,7 @@ class Overrides:
     mounts: list[str] = field(default_factory=list)
     firewall: list[str] = field(default_factory=list)
     expose_tunnel: list[str] = field(default_factory=list)
+    basicauth_required: bool | None = None
 
     def to_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {}
@@ -87,6 +104,8 @@ class Overrides:
             document["firewall"] = {"allow": list(self.firewall)}
         if self.expose_tunnel:
             document["expose"] = {"tunnel": list(self.expose_tunnel)}
+        if self.basicauth_required is not None:
+            document["basicauth"] = {"required": self.basicauth_required}
         return document
 
     def keep_last_or(self, track_default: int) -> int:
@@ -137,6 +156,24 @@ def _float(table: dict, key: str, where: str) -> float | None:
     return float(value)
 
 
+def _bool(table: dict, key: str, where: str) -> bool | None:
+    """A boolean setting, and `None` when the key is absent.
+
+    **Absent is a value here and a different one from `false`.** `[basicauth]
+    required` is the only key that uses this, and its absence is the default
+    (the middleware is on) while `false` is the operator's opt-out. A truthy
+    string is not a boolean: the file is root-owned and read by unprivileged
+    programs, so a `required = "no"` is a host that is not in the state the
+    reader assumed rather than an opt-out nobody can see.
+    """
+    if key not in table:
+        return None
+    value = table[key]
+    if not isinstance(value, bool):
+        raise errors.GuardenError(f"{where}: {key} is not a boolean", errors.HOST_NOT_AS_ASSUMED)
+    return value
+
+
 def load(service: str) -> Overrides:
     """An absent file is an empty grant surface: nothing has been granted yet."""
     where = paths.overrides(service)
@@ -169,6 +206,7 @@ def load(service: str) -> Overrides:
         ("mounts", MOUNT_KEYS),
         ("firewall", FIREWALL_KEYS),
         ("expose", EXPOSE_KEYS),
+        ("basicauth", BASICAUTH_KEYS),
     ):
         section = document.get(table, {})
         if not isinstance(section, dict):
@@ -195,6 +233,9 @@ def load(service: str) -> Overrides:
         ),
         expose_tunnel=_string_list(
             document.get("expose", {}), "tunnel", EXPOSE_KEYS, f"{where} [expose]"
+        ),
+        basicauth_required=_bool(
+            document.get("basicauth", {}), "required", f"{where} [basicauth]"
         ),
     )
 

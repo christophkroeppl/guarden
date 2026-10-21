@@ -110,6 +110,10 @@ REFUSED_KEYS = {
     "exposure": "exposure is an operator's act, recorded per service per "
                 "environment with `weedr expose set` on the root-owned registry; "
                 "the host decides it and a manifest cannot request it",
+    "basicauth": "the default basic-auth middleware is on for every service, and turning it "
+                 "off is the operator's per-service act: `weedr basicauth off <name>` records "
+                 "it in the root-owned overrides.toml. A repository cannot remove the login in "
+                 "front of its own route",
     "public": "public exposure is an operator's act recorded with `weedr expose "
               "set`, selectable only on a gated track; a manifest cannot place "
               "itself on the internet",

@@ -6,14 +6,23 @@ Image=docker.io/library/postgres:17
 # The volume the manifest declares (spec 4). A `db` provider that declared no
 # volume kept its data in podman's anonymous volume, and the collector removed
 # it on the next re-ingest (ticket 326).
+#
+# **The mount target is the image's own data path and nothing else is set.**
+# A `state` volume's data lives in its payload, one level down inside the
+# subvolume, and the container mounts THAT (ADR-0020) — so the container never
+# sees snapper's root-owned `.snapshots` subtree, and the image's entrypoint's
+# recursive `chown $PGDATA` never reaches it.
+#
+# **No `PGDATA` is set, and that is the point.** The image's default `PGDATA`
+# is `/var/lib/postgresql/data`, which is where this line mounts the payload,
+# so the default is already correct: the image's convention wins and guarden's
+# layout makes room for it.
 Volume=pgdata:/var/lib/postgresql/data
+
 # The bulk volume the manifest declares: the landing area the snapshot-clone
 # chain writes a dump into (ticket 327, ADR-0025).
 Volume=bulk:/var/lib/guarden/bulk
-# PGDATA is a subdirectory of the mount and not the mount itself: the image's
-# own entrypoint chowns $PGDATA recursively, and a `state` volume carries
-# snapper's root-owned `.snapshots` subtree inside it (tickets 273 and 277).
-Environment=PGDATA=/var/lib/postgresql/data/pgdata
+
 # A fixture's superuser password, in the clear on purpose. The image refuses to
 # initialise a cluster with neither POSTGRES_PASSWORD nor
 # POSTGRES_HOST_AUTH_METHOD set, and a fixture that had to plant a credential to

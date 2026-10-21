@@ -13,7 +13,7 @@
 . "$(dirname "$0")/lib.sh"
 
 assert_verbs soil packages storage sysctl firewall install units list
-assert_verbs weedr service secret port pin module project firewall share expose clone
+assert_verbs weedr service secret port pin module project firewall share expose basicauth clone
 assert_verbs loom render check
 assert_verbs roots sync
 assert_verbs twig sync
@@ -28,6 +28,7 @@ assert_subcommands weedr pin sync
 assert_subcommands weedr clone snapshot dump transform load remove
 assert_subcommands weedr share issue revoke list reconcile
 assert_subcommands weedr expose set unset list
+assert_subcommands weedr basicauth off on list
 assert_subcommands weedr module list add remove
 assert_subcommands weedr project list add remove keys grant revoke
 assert_subcommands furrow preview drop

@@ -101,6 +101,17 @@ def resolve(record, track, modules: Iterable[str] | None) -> str:
     return _tunnel_or_loopback(modules)
 
 
+def tunnel_credential_note(service: str) -> str:
+    """The line `weedr expose set … tunnel` adds for a service with an edge login (ADR-0024)."""
+    return (
+        f"{service} is reached through the tunnel, and the tunnel is a different terminator: "
+        f"its route carries no middleware at all — the edge's basic auth login and its "
+        f"forward-auth are both in front of the edge's own routes. A tunnel route is protected "
+        f"by the vendor's Access policy, and `weedr share issue` is guarden's own instrument "
+        f"for that policy."
+    )
+
+
 def destinations(
     record,
     track,
