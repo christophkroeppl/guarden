@@ -74,7 +74,12 @@ assert_stderr_empty
 # Two files, one in a `state` volume and one in a `bulk` volume, written by the
 # service's own uid. Which of the two instance volumes ends up holding which is
 # the whole subject of the next block.
-run runuser -u myapp-staging -- touch /var/lib/guarden/services/myapp-staging/state/data/staged
+#
+# **A `state` volume's data lives in its payload, one level down inside the
+# subvolume** (ADR-0020), so the file goes there and not at the subvolume's
+# root: the root carries snapper's `.snapshots` subtree, which the container
+# cannot chown and which is therefore not part of what a container sees.
+run runuser -u myapp-staging -- touch /var/lib/guarden/services/myapp-staging/state/data/data/staged
 assert_exit 0
 run runuser -u myapp-staging -- touch \
     /var/lib/guarden/services/myapp-staging/bulk/chainstate/scratch
@@ -99,7 +104,7 @@ assert_subvolume "$instance_a/bulk/chainstate"
 
 # The state volume is a clone of the source's live volume, read back as the
 # instance's own uid: one trust domain, one home, and each other's directories.
-run runuser -u myapp-preview -- cat "$instance_a/state/data/staged"
+run runuser -u myapp-preview -- cat "$instance_a/state/data/data/staged"
 assert_exit 0
 
 # The bulk volume is a subvolume and it is empty. A copy of it would be data no

@@ -322,43 +322,41 @@ assert_file_has "$render/system/guarden-order.target" "Wants=pgprov-staging.targ
 assert_file_lacks "$render/system/guarden-order.target" "Requires="
 
 # An edge on a port the provider names no container for. There is no bind, so there
-# is no publication to dial and no credential to plant: the edge is recorded with an
-# empty list and the mutator says which container is missing. The render is what
-# refuses it, because the manifest was fine and the answer came from the host.
+# is no publication to dial, and the render — which runs in the same ingest — refuses
+# the consumer's units. So the mutator refuses the edge before identity: no user, no
+# home, no volume and no registry record, and the one line names the port, the
+# provider and the consumer (ticket 289).
 run weedr service ingest unpublished-staging --from poke unpublished@9f2c1ab
 assert_exit 1
+assert_one_diagnostic "error:"
 assert_stderr_has "9999"
 assert_stderr_has "pgprov-staging"
-assert_file_has "$registry/unpublished-staging.toml" 'publications = []'
-# `auth: none` plants nothing, so the claim is that the service holds NO credential
-# — stated over the directory rather than one file name, so it does not depend on
-# how a key is spelled.
-assert_file_missing "$creds/unpublished-staging/DB_PASSWORD_9999.cred"
-leftover=$(ls -A "$creds/unpublished-staging" 2>/dev/null || true)
-[ -z "$leftover" ] || _fail "auth: none left credentials behind: $leftover"
-assert_file_missing "$creds/unpublished-staging/BOTH_SECRET.cred"
-run loom render /var/lib/guarden/services/unpublished-staging/home \
-    --service unpublished-staging --out "$GUARDEN_FIXTURES/unpublished"
-assert_exit 1
-assert_stderr_has "publication"
+assert_stderr_has "unpublished-staging"
+assert_no_passwd unpublished-staging
+assert_file_missing "$registry/unpublished-staging.toml"
+assert_file_missing "/var/lib/guarden/services/unpublished-staging"
 
-# An edge to a service this host has never heard of. A poke creates services in
-# dependency order and a manifest may name one a later deploy brings into being, so
-# this is a warning and the consumer is created with the edge incomplete — not a
-# refusal, which would make every poke that outruns its own dependency fail.
+# An edge to a service this host has never heard of. A provider has to exist before
+# its consumer: the edge dials the provider's own allocated publication, the render
+# refuses an edge it cannot dial, and the ingest renders the consumer in the same
+# command — so the mutator refuses the edge before identity and nothing of the
+# consumer is created (ticket 289). A poke creates services in dependency order.
 nowhere=$GUARDEN_PREFIX/var/lib/guarden/staging/nowhere/9f2c1ab
 mkdir -p "$nowhere/.guarden/quadlet"
 seed "$nowhere/.guarden/service.yml" "project: nowhere" "units: .guarden/quadlet/" \
-    "needs:" "  - service: nowhere-staging" "    as: db" "    port: 5432" \
+    "needs:" "  - service: absent-staging" "    as: db" "    port: 5432" \
     "    auth: database"
 seed "$nowhere/.guarden/quadlet/web.container" "[Container]" \
     "Image=docker.io/library/nginx:1.27"
 run weedr service ingest nowhere-staging --from poke nowhere@9f2c1ab
 assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "absent-staging"
 assert_stderr_has "nowhere-staging"
-assert_file_has "$registry/nowhere-staging.toml" 'publications = []'
-assert_file_missing "$creds/nowhere-staging/DB_PASSWORD.cred"
-purge nowhere-staging
+assert_stderr_has "no registry entry"
+assert_no_passwd nowhere-staging
+assert_file_missing "$registry/nowhere-staging.toml"
+assert_file_missing "/var/lib/guarden/services/nowhere-staging"
 
 # A provider that exists and does not offer the kind. Both services and both kinds
 # are named, because "the edge is wrong" is not an answer a person can act on, and

@@ -55,6 +55,7 @@ from guarden import (
     users,
     volumes,
 )
+from guarden import config as config_mod
 from guarden import manifest as manifest_mod
 from guarden import modules as modules_mod
 from guarden import overrides as overrides_mod
@@ -364,13 +365,17 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     outcome = Outcome(resolved=resolved)
 
     # Before identity, before the volumes, before the home: an edge the provider
-    # does not offer, and a route host another service already holds, are the two
-    # things in this ordering that would otherwise leave a system user and a
-    # subvolume behind on the way out.
-    edges.check(resolved.name, manifest, resolved.track.name, config)
-    check_hosts(resolved.name, manifest, resolved.track)
-
+    # does not offer, a route host another service already holds, and a tunnel
+    # route with no zone to name it in, are the things in this ordering that
+    # would otherwise leave a system user and a subvolume behind on the way out.
+    # The hosts come back from the check because they are what the record has to
+    # carry: a name an older guarden allocated without the tunnel's zone makes a
+    # re-ingest deploy rather than converge, which is the only way such a record
+    # is ever repaired.
     existing = registry.load(resolved.name)
+    edges.check(resolved.name, manifest, resolved.track.name, config)
+    destinations = _destinations(existing, resolved.track, manifest, config, resolved.name)
+    hosts = check_hosts(resolved.name, manifest, resolved.track, config, destinations)
     # spec 5.3: "`add` requires `--from`, and is also the reconcile command: run
     # either again to apply an edited manifest", so the hash that makes an edit
     # visible to the convergence check is computed for `add` as well as for a
@@ -382,7 +387,9 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # field was a value an instance's ingest wrote over the service's own
     # (review finding 1).
     source_hash = _source_hash(directory) if source.kind in ("poke", "service", "tree") else ""
-    if existing is not None and _converged(existing, resolved, manifest, project, source_hash):
+    if existing is not None and _converged(
+        existing, resolved, manifest, project, source_hash, hosts
+    ):
         outcome.converged = True
         outcome.uid = existing.uid
         # **A converged create still REPAIRS the tree (ticket 334).** The
@@ -436,8 +443,23 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     _make_tree(resolved.name, owner, resolved.escaped_ref)
     _copy_source(directory, resolved.name, owner)
 
-    granted = overrides_mod.seeded(resolved.track, overrides_mod.load(resolved.name))
-    overrides_mod.save(resolved.name, granted, root_owner)
+    # **The read, the seed and the write are one act under the `overrides`
+    # lock.** Every other writer of this file takes it — `weedr port open`,
+    # `weedr port close`, `weedr firewall open`, `weedr firewall close`,
+    # `weedr basicauth on/off` and `units.allow_mounts` — and this one did not,
+    # so a deploy that read the file before an operator's verb wrote it and
+    # saved after installed a document seeded from its own stale read: the
+    # setting is gone, silently, and the one whose loss turns a login back on
+    # is `[basicauth] required = false`.
+    #
+    # It is legal under `conf.LOCK_ORDER`: `overrides` is rank 2 and is taken
+    # here while nothing is held, and the `registry` lock below is rank 3 and
+    # is taken after this `with` has closed. Nothing earlier on this path holds
+    # a lock at all — `previews.admit`'s `preview-cap` is for an instance and
+    # the `deploy-<service>` locks are elsewhere and later (spec 5.3 step 12).
+    with conf.lock("overrides"):
+        granted = overrides_mod.seeded(resolved.track, overrides_mod.load(resolved.name))
+        overrides_mod.save(resolved.name, granted, root_owner)
     # **The group warnings JOIN the label's and are not a replacement for
     # them.** This line assigned `outcome.warnings` outright, so a warning
     # raised before it — the label's, on a host whose projects configuration
@@ -500,7 +522,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
         # spec 5.3's idempotency).
         record.instances[resolved.escaped_ref].source_hash = source_hash
 
-    _allocate(resolved, record, manifest, config, source)
+    _allocate(resolved, record, manifest, config, source, destinations)
 
     # spec 5.3 step 9: on an ungated track every `@sensitive` key nothing has been
     # planted for gets a value minted once, so a poke is never blocked on a human.
@@ -753,14 +775,21 @@ def _wanted(manifest: manifest_mod.Manifest, source: Source) -> list[str]:
     return out
 
 
-def _allocate(resolved, record, manifest, config, source: Source) -> None:
+def _allocate(resolved, record, manifest, config, source: Source,
+              destinations: dict[str, str]) -> None:
     """Publications and route hosts, from the ranges the host declares.
 
     spec 7.4 and 4. One publication per container that gets one, allocated
     from `ingress.publication_range` and refused rather than shared, and one
-    full host name per route label with the track's own prefix in front of it.
+    full host name per route label with the track's own prefix in front of it —
+    and the tunnel's zone in front of that when the route's destination is the
+    tunnel (ticket 324).
     An instance's publications are its own, so two previews of one service are
     both routable at once.
+
+    `destinations` is what `check_hosts` resolved before identity was touched:
+    the same answer, asked once, so the name a route is allocated cannot
+    disagree with the posture the record carries.
     """
     records = _others(record.service)
     wanted = _wanted(manifest, source)
@@ -773,45 +802,24 @@ def _allocate(resolved, record, manifest, config, source: Source) -> None:
     record.publication = publications.allocate(
         wanted, record.publication, taken, config.publication_range, record.service,
     )
-    holders = publications.host_holders(records)
     # A label the manifest dropped stops being claimed — and stops being
-    # carried. `route_hosts` is keyed to the manifest's routes, so this
-    # record, the expose verbs and the drift item (all of which key off it)
-    # compute over one host set rather than an accumulating one that is a
-    # second place to be wrong (tickets 293/294).
-    claimed = {route.host for route in manifest.routes}
-    record.route_hosts = {
-        label: full for label, full in record.route_hosts.items() if label in claimed
-    }
-    for route in manifest.routes:
-        record.route_hosts[route.host] = publications.claim_host(
-            route.host, resolved.track.host_prefix, holders, record.service
-        )
-    # Ticket 293/294: destinations are resolved here and written into the
+    # carried. The table is rebuilt from the destinations, which are keyed to
+    # the manifest's routes, so this record, the expose verbs and the drift item
+    # (all of which key off `route_hosts`) compute over one host set rather than
+    # an accumulating one that is a second place to be wrong (tickets 293/294).
+    claim_route_hosts(
+        record, resolved.track, destinations, config,
+        holders=publications.host_holders(records),
+    )
+    # Ticket 293/294: the destinations are resolved and written into the
     # registry, and the slice and the firewall both read that record — one
     # answer, one writer (spec 3.4: only what cannot be derived is stored, and
     # once stored it is the record). The first answer **stands**: a host the
     # record already holds keeps the posture it was created under, so
     # installing a module or editing a track re-postures services that do not
     # exist yet and never a running fleet. A label the manifest dropped stops
-    # being claimed, because the rebuild is over the manifest's hosts.
-    granted = overrides_mod.load(resolved.name) if resolved.name else None
-    tunnel_labels = set(granted.expose_tunnel) if granted else set()
-    resolved_destinations = exposure.destinations(
-        record,
-        resolved.track,
-        config.modules,
-        tunnel_labels,
-        [route.host for route in manifest.routes],
-    )
-    record.route_destinations = {
-        **resolved_destinations,
-        **{
-            host: record.route_destinations[host]
-            for host in resolved_destinations
-            if host in record.route_destinations
-        },
-    }
+    # being carried, because the answer is over the manifest's hosts.
+    record.route_destinations = dict(destinations)
 
     if resolved.escaped_ref:
         instance = record.instances.get(resolved.escaped_ref)
@@ -837,16 +845,137 @@ def _instance_publications(record) -> set[int]:
     }
 
 
-def check_hosts(name: str, manifest: manifest_mod.Manifest, track) -> None:
+def _destinations(
+    record, track, manifest: manifest_mod.Manifest, config, name: str
+) -> dict[str, str]:
+    """Every route label's destination, resolved once, by the resolver.
+
+    `exposure.destinations` is the one function the mutator, the renderer's
+    slice, the firewall's accept set and `soil --check`'s drift item ask, so the
+    name a route is allocated and the posture the record carries cannot be two
+    answers. `record` may be `None` — a service that does not exist yet has no
+    record, and the derived default is the answer there.
+
+    **The first answer STANDS** (tickets 293/294): a label the record already
+    carries keeps the destination it was created under, so installing a module
+    or editing a track re-postures services that do not exist yet and never a
+    running fleet. It matters here and not only in the record, because the NAME
+    is derived from the destination: a grandfathered loopback route that now
+    resolves to the tunnel must keep its bare name — qualifying it would put a
+    tunnel-zone name on a route the edge serves.
+    """
+    granted = overrides_mod.load(name)
+    resolved = exposure.destinations(
+        record,
+        track,
+        config.modules,
+        set(granted.expose_tunnel) if granted else set(),
+        [route.host for route in manifest.routes],
+    )
+    recorded = getattr(record, "route_destinations", None) or {}
+    return {host: recorded.get(host, destination) for host, destination in resolved.items()}
+
+
+def _zone(track, destination: str, tunnel_domain: str, service: str) -> str:
+    """The zone a route's allocated name is published in: `""` or `.`+domain.
+
+    **A tunnel route is a name in the TUNNEL's zone, and nothing else puts it
+    there** (ticket 324). `roots` publishes a tunnel route at the name the
+    record holds, and the record held a bare label — `web` — which is a name in
+    no zone at all, so no DNS could answer it, no edge file served it and
+    nothing said so. `[ingress] tunnel_domain` is the zone the tunnel serves,
+    and it was consulted for previews only.
+
+    **A preview instance is the exception, and it is spec 9's.** Every preview
+    of every project shares one host — `preview.<tunnel_domain>` — and the ref
+    is a path on it, so an instance's own name is never zone-qualified: it is
+    `preview.web`, and the tunnel publishes the shared host with the ref's path.
+    Qualifying it would give every preview a hostname of its own and undo the
+    one host the design spends spec 9 on.
+
+    **An empty `tunnel_domain` with a tunnel route is a refusal** rather than a
+    name in no zone: the same defect, arrived at by configuration rather than
+    by the allocator. It is exit `1` — the host is not in the state the request
+    assumed — and it names the key an operator has to set, which is the "or the
+    host says why it cannot" half of ticket 324's acceptance.
+    """
+    if destination != exposure.TUNNEL:
+        return ""
+    if not tunnel_domain:
+        raise errors.GuardenError(
+            f"{service}: the route is published through the tunnel, and [ingress] "
+            f"tunnel_domain is empty in {paths.GUARDEN_TOML}, so the name it would be "
+            f"allocated is in no zone and no DNS could answer it; set tunnel_domain to "
+            f"the zone the tunnel's provider serves",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if getattr(track, "kind", "") == config_mod.INSTANCE:
+        return ""
+    return f".{tunnel_domain}"
+
+
+def check_hosts(
+    name: str, manifest: manifest_mod.Manifest, track, config, destinations: dict[str, str]
+) -> dict[str, str]:
     """Every route host this manifest would claim, checked before identity.
 
     Same reason `edges.check` runs where it does: a claim refused after the user
     and the tree exist leaves a system account and a home behind on the way out,
-    and the diagnostic the caller gets is the same either way.
+    and the diagnostic the caller gets is the same either way. The empty
+    `tunnel_domain` refusal is here for exactly that reason — a service that
+    cannot be named is not a service to create half of.
+
+    The names are RETURNED, not merely tried: `_converged` compares the record
+    against them, so a record whose route host an older guarden allocated
+    without the tunnel's zone is repaired by the next ingest rather than
+    republished bare at every sync.
     """
     holders = publications.host_holders(_others(name))
+    hosts: dict[str, str] = {}
     for route in manifest.routes:
-        publications.claim_host(route.host, track.host_prefix, holders, name)
+        hosts[route.host] = publications.claim_host(
+            route.host,
+            track.host_prefix,
+            _zone(track, destinations[route.host], config.tunnel_domain, name),
+            holders,
+            name,
+        )
+    return hosts
+
+
+def claim_route_hosts(
+    record, track, destinations: dict[str, str], config, holders: dict[str, str] | None = None
+) -> None:
+    """Allocate every route host the record's destinations imply, in place.
+
+    **One writer for the name.** The record is the authority (spec 3.4): it is
+    what `roots` renders, what `weedr share issue` grants, what `weedr service
+    list` reports and what `twig` links to. A name derived at render time would
+    be a second answer, and a grant could name a hostname the tunnel does not
+    serve.
+
+    The table is REPLACED rather than merged, because `destinations` is keyed to
+    the manifest's routes: a label the manifest dropped stops being claimed and
+    stops being carried, so the record, the expose verbs and the drift item
+    compute over one host set rather than an accumulating one (tickets
+    293/294).
+
+    `weedr expose set` calls this too: the act moves a route between the
+    tunnel's zone and the bare name, and the name has to move in the same act
+    or the grant and the tunnel disagree until the next render.
+    """
+    if holders is None:
+        holders = publications.host_holders(_others(record.service))
+    record.route_hosts = {
+        label: publications.claim_host(
+            label,
+            track.host_prefix,
+            _zone(track, destination, config.tunnel_domain, record.service),
+            holders,
+            record.service,
+        )
+        for label, destination in destinations.items()
+    }
 
 
 def _project_from(source: Source) -> str:
@@ -894,12 +1023,20 @@ def _converged(
     manifest: manifest_mod.Manifest,
     project: str,
     source_hash: str = "",
+    hosts: dict[str, str] | None = None,
 ) -> bool:
     if record.project != project or record.environment != resolved.track.name:
         return False
     if source_hash and _deployed_hash(record, resolved.escaped_ref) != source_hash:
         return False
     if resolved.escaped_ref and resolved.escaped_ref not in record.instances:
+        return False
+    # The route host is an ALLOCATION, like a publication, and a record that
+    # holds a name this manifest would no longer be allocated is not converged:
+    # the slice is rendered from the record, so without this the record keeps a
+    # name in no zone forever and a re-ingest answers "converged" while the
+    # tunnel publishes a hostname no DNS can answer (ticket 324).
+    if hosts is not None and dict(record.route_hosts) != hosts:
         return False
     declared = dict.fromkeys(manifest.state, "state")
     declared.update(dict.fromkeys(manifest.bulk, "bulk"))
@@ -1462,6 +1599,31 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
     if not directory.is_dir():
         return []
     return sorted(path.stem for path in directory.glob("*.container"))
+
+
+def refuse_legacy_volumes(name: str, escaped_ref: str | None = None) -> None:
+    """Refuse a `state` volume whose data is at the root, at the START and not
+    only at the ingest (ADR-0020).
+
+    **Why the start needs it too.** The mutator refuses at ingest, so a fresh
+    deployment never carries the wrong shape. But a service deployed before
+    this change has a volume with its data at the root, and the operator who
+    re-runs `weedr service start` on it gets the container's own answer: the
+    image's chown error, in a container's log, naming nothing that can be
+    acted on. The refusal here is the same one the mutator makes, and it
+    names the volume, the payload directory and the work.
+
+    **The volumes are the service's own, read from its registry.** A service
+    that declares no `state` volume has nothing to refuse, and a service whose
+    registry entry is gone has nothing to read and nothing to refuse.
+    """
+    record = registry.load(name)
+    if record is None:
+        return
+    for vol in record.volumes.values():
+        if vol.kind != "state":
+            continue
+        volumes.refuse_root_data(name, vol.name, escaped_ref)
 
 
 def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
