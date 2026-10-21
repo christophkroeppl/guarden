@@ -233,7 +233,7 @@ shared one runner name — the documented collision, where `_reset` deletes the
 instance underneath the other run. Re-run alone on its own runner, the suite
 is green, and that is the run quoted above.
 
-## The increment the reviews asked for, measured on `14f896a`
+## The increment the reviews asked for, and its RED and GREEN
 
 `c6c658c` fixed three of the five places that can name a provider; two were left
 on the logical name, and a `[providers.<track>]` for a track the host does not
@@ -269,21 +269,26 @@ FAIL t83-provider-diagnostics.sh
 1 suites: 1 ran, 0 inherited, 1 failures, 1 machines cut
 ```
 
-**GREEN, and the suites that must not move** — `14f896a`, the change merged with
-`develop`, one run each on a machine of its own:
+**GREEN, and the suites that must not move** — `8d32485`, the change merged with
+`develop`. There are two merges in it: the second brought develop's
+`compose.refuse_document` and the unit-mode change, so the four suites that read the
+render were re-run on that tree rather than inherited from the first. One run each, on
+a machine of its own:
 
 ```
-$ GUARDEN_LXC_RUNNER=guarden-run-t290h tests/lxc.sh run t84-provider-diagnostics-mutator --no-cache
+$ GUARDEN_LXC_RUNNER=guarden-run-t290n tests/lxc.sh run t84-provider-diagnostics-mutator --no-cache
 ok   t84-provider-diagnostics-mutator.sh
-$ GUARDEN_LXC_RUNNER=guarden-run-t290i tests/lxc.sh run t83 --no-cache
+$ GUARDEN_LXC_RUNNER=guarden-run-t290o tests/lxc.sh run t83 --no-cache
 ok   t83-provider-diagnostics.sh
-$ GUARDEN_LXC_RUNNER=guarden-run-t290j tests/lxc.sh run t30-parsers --no-cache
-ok   t30-parsers.sh
-$ GUARDEN_LXC_RUNNER=guarden-run-t290k tests/lxc.sh run t40-edges --no-cache
+$ GUARDEN_LXC_RUNNER=guarden-run-t290p tests/lxc.sh run t40-edges --no-cache
 ok   t40-edges.sh
-$ GUARDEN_LXC_RUNNER=guarden-run-t290l tests/lxc.sh run t80-edges --no-cache
+$ GUARDEN_LXC_RUNNER=guarden-run-t290q tests/lxc.sh run t80-edges --no-cache
 ok   t80-edges.sh
 ```
+
+`t30-parsers` is the fifth, and it was measured on `14f896a`, the first merge:
+`git diff 14f896a 8d32485 -- src/guarden/config.py` is empty, so the parser suite's
+subject did not move between the two trees.
 
 `t40-edges` is on the list because it asserts the self-edge refusal's words, and
 it passed with its assertions unchanged: the new wording is a clarification that
