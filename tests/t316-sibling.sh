@@ -174,10 +174,13 @@ assert_stderr_has "nuxt"
 # not the same check as the one above: `my-api` and `my_api` are two
 # containers and one variable, because a variable name cannot carry a dash.
 # The environment file would carry MY_API_HOST twice and the second row would
-# win — a silent failure with no diagnostic anywhere.
+# win — a silent failure with no diagnostic anywhere. The unit source is
+# re-seeded, because the self-reference from the case above would fire first.
 seed "$project/.guarden/quadlet/my-api.container" "[Container]" \
     "Image=docker.io/library/alpine:3.20"
 seed "$project/.guarden/quadlet/my_api.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20"
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
     "Image=docker.io/library/alpine:3.20"
 seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
     "siblings:" "  - container: my-api" "    port: 3000" "  - container: my_api" "    port: 3001"
@@ -187,7 +190,10 @@ assert_one_diagnostic "error:"
 assert_stderr_has "MY_API"
 
 # A container declared twice under `siblings:` is refused too: the generated
-# variables would be written twice with two different ports.
+# variables would be written twice with two different ports. The unit source is
+# re-seeded for the same reason as the case above.
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20"
 seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
     "siblings:" "  - container: api" "    port: 3000" "  - container: api" "    port: 3001"
 run loom check "$project"
