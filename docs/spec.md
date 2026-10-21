@@ -684,8 +684,10 @@ is written only by `weedr basicauth off <name>` and `weedr basicauth on <name>` 
 **no manifest key reaches it** — a `basicauth:` key in a repository is refused by name (§4).
 **The credential is not destroyed by it**: the blob and the htpasswd entry stay, and turning
 the middleware back on re-attaches the same login, because the mint is a fact (§3.4) and the
-opt-out is a setting. The setting takes effect at the **next render** of that service, which
-is when the slice carries it.
+opt-out is a setting. The setting takes effect where the middleware is attached: `roots` reads
+it from this file each time it writes the edge's own configuration for the service (§6.4), so
+`weedr basicauth off` writes it and syncs in the same act, and a later sync reaches the same
+answer. The route slice carries the **mint** and never this setting.
 
 ### 3.4 `/var/lib/guarden/registry/<name>.toml`
 
@@ -1255,6 +1257,7 @@ flag therefore do not have one, and each capability is a separate verb instead:
 | fork, with a chosen source | `weedr service fork` | **no** |
 | grant a public port | `weedr port open` | **no** |
 | install a requested firewall rule | `weedr firewall open` | **no** |
+| drop the default basic-auth login from one service's routes | `weedr basicauth off` | **no** |
 | destroy a service's volumes | `weedr service purge` | **no** |
 | roll a service back to a snapshot | `weedr service rollback` | **no** |
 
@@ -1725,10 +1728,10 @@ weedr basicauth off <name>  # the operator's per-service opt-out: this service's
   # routers carry NO basic-auth middleware (ADR-0024, §3.3
   # `[basicauth] required = false`). The credential is NOT
   # destroyed — the blob and the htpasswd entry stay — and the
-  # setting takes effect at the service's next render. A service
-  # that was never minted one (grandfathered, or with no routes)
-  # is already in that state: exit 0, and it says so. Not on any
-  # sudoers rule.
+  # setting takes effect at the edge's next `roots sync`, which
+  # this act performs itself. A service that was never minted one
+  # (grandfathered, or with no routes) is already in that state:
+  # exit 0, and it says so. Not on any sudoers rule.
 weedr basicauth on <name>  # the middleware back; the same login is re-attached
 weedr basicauth list [--json]  # every service's basic-auth posture
 
@@ -2096,6 +2099,16 @@ longer accepted on. `roots` renders from the record for the same reason the fire
 from it: one authority, read by both, and no window in which the two disagree. A label the
 record does not name keeps the slice's answer — a service created before the field existed has
 no entry, and its slice is the only answer there is.
+
+**The basic-auth middleware is attached here, from two facts that are asked separately.** The
+slice's `basicauth` flag is the **mint** (§3.4) and never changes; whether the login is attached
+is the operator's setting in the service's root-owned `overrides.toml` (§3.3 `[basicauth]`,
+ADR-0024), read on every sync. So `weedr basicauth off` takes effect at the next `roots sync`
+rather than at the service's next full render, and a slice that predates the table keeps the
+middleware it was rendered with — absent is the default, which is *on*. A setting that cannot be
+read is not guessed at and is not silently obeyed: the middleware stays and one `warning:` line
+names the service, because the failure a malformed root-owned file must not produce is a route
+that quietly lost its login.
 
 With the auth-authelia module installed, a route declaring `auth: true` gets the forward-auth rule aimed
 at the service named in `/etc/guarden/edge/auth-provider`, which must be the name of an

@@ -62,11 +62,14 @@ amended to name it, exactly as ADR-0021 amended it for `[ownership]`.
 
 ## The load-bearing consequences
 
-**The middleware is decided at render time, from the file, not at creation.**
-The flag travels `overrides.toml -> loom -> shared/routes.toml -> roots -> the
-edge's file provider`, the same path the minted credential's flag already
-travels. So the opt-out takes effect on the **next render** of that service,
-and the act says so rather than leaving the operator to guess.
+**The middleware is decided where the edge's own file is written, and not at
+creation.** The registry's `basicauth` is the mint, and the slice carries it
+unchanged; what the operator decided travels `overrides.toml -> roots -> the
+edge's file provider`, and `roots` asks the file every time it syncs. So the
+opt-out takes effect on the **next `roots sync`** — the act writes the setting
+and syncs in the same breath, and a later sync reaches the same answer from the
+same two files, so the two can never disagree — and the act says so rather than
+leaving the operator to guess.
 
 **A repository cannot reach it.** The manifest's key set is closed (§4), and a
 `basicauth:` key in a manifest is refused **by name**, with a message naming

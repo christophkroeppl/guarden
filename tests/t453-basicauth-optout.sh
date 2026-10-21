@@ -47,6 +47,36 @@ assert_not_rejected
 run soil install --apply
 assert_not_rejected
 
+# --- a service created before the policy was in force ------------------------
+#
+# A service created BEFORE the policy holds no login and carries no middleware:
+# it is grandfathered, because the registry records nothing for it and no record
+# means no middleware (spec 3.4). The act cannot turn off something that was
+# never on, and it says so rather than claiming a change it did not make: the
+# state is already the requested one, which is exit 0.
+#
+# This runs BEFORE `weedr module add gate-traefik`, which is the whole of the
+# claim: minting happens at creation, for a new service, while the policy is in
+# force — so a service created after the marker would carry a login like any
+# other, and creating one here afterwards would assert the opposite of what
+# ticket 292 does.
+oldapp=$GUARDEN_PREFIX/var/lib/guarden/staging/oldopt/9f2c1ab
+mkdir -p "$oldapp/.guarden/quadlet"
+seed "$oldapp/.guarden/service.yml" "project: oldopt" "units: .guarden/quadlet/" \
+    "routes:" "  - container: web" "    port: 8080" "    host: web"
+seed "$oldapp/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27"
+run weedr service ingest oldopt-staging --from poke oldopt@9f2c1ab
+assert_exit 0
+assert_file_lacks /var/lib/guarden/registry/oldopt-staging.toml "basicauth"
+
+run weedr basicauth off oldopt-staging
+assert_exit 0
+assert_stdout_has "no basic-auth login"
+# And it wrote nothing: a service with no login has no middleware to turn
+# off, and a file claiming otherwise would be a lie an operator reads.
+assert_file_lacks /etc/guarden/services/oldopt-staging/overrides.toml "required"
+
 # Installing the gate generates the basic-auth policy, and from that moment
 # every service created with `routes:` carries a login of its own.
 run weedr module add gate-traefik
@@ -115,8 +145,11 @@ assert_file_lacks "$reg" "required"
 assert_file_exists "$blob"
 assert_file_exists "$htpasswd"
 
-# The middleware comes off at the NEXT RENDER, and it comes off of the EDGE's
-# own file — which is the file the edge reads.
+# The middleware comes off at the EDGE's next sync, and it comes off of the
+# EDGE's own file — which is the file the edge reads. `weedr basicauth off`
+# already synced once (a verb that writes the setting and leaves the edge
+# serving the old file would report a change it had not made), and this is the
+# same answer reached again from the same two files.
 run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 assert_file_lacks "$rendered" "basicAuth"
@@ -203,26 +236,12 @@ assert_file_missing /var/lib/guarden/registry/refused2-staging.toml
 
 # --- a service that was never minted one ------------------------------------
 #
-# A service created BEFORE the policy was in force holds no login and carries
-# no middleware. The act cannot turn off something that was never on, and it
-# says so rather than claiming a change it did not make: the state is already
-# the requested one, which is exit 0.
-oldapp=$GUARDEN_PREFIX/var/lib/guarden/staging/oldopt/9f2c1ab
-mkdir -p "$oldapp/.guarden/quadlet"
-seed "$oldapp/.guarden/service.yml" "project: oldopt" "units: .guarden/quadlet/" \
-    "routes:" "  - container: web" "    port: 8080" "    host: web"
-seed "$oldapp/.guarden/quadlet/web.container" "[Container]" \
-    "Image=docker.io/library/nginx:1.27"
-run weedr service ingest oldopt-staging --from poke oldopt@9f2c1ab
-assert_exit 0
-assert_file_lacks /var/lib/guarden/registry/oldopt-staging.toml "basicauth"
-
-run weedr basicauth off oldopt-staging
-assert_exit 0
-assert_stdout_has "no basic-auth login"
-# And it wrote nothing: a service with no login has no middleware to turn
-# off, and a file claiming otherwise would be a lie an operator reads.
-assert_file_lacks /etc/guarden/services/oldopt-staging/overrides.toml "required"
+# The act is refused nothing and claims nothing: `oldopt-staging` was created
+# before the policy was in force, has no login and no middleware, and
+# `weedr basicauth off` said so and wrote nothing (the block at the top of this
+# file). The same answers hold for a service created with no routes: it was
+# never minted anything either, and `mint` is only reached by a manifest that
+# declares `routes:` (spec 5.3 step 4).
 
 # --- the act is off the guarden sudoers rule ---------------------------------
 #
