@@ -1722,6 +1722,24 @@ prefers a TPM2 key when it finds one, so a box with a TPM would silently encrypt
 different key than the runbook describes. `weedr secret list` prints key names and whether each
 is set, never a value.
 
+**A credential may have an output besides its blob, and the verb writes every half of it.**
+The basic-auth login is the one that exists today: the edge's `basicAuth` middleware reads the
+htpasswd **file** the mutator wrote (`usersFile: /etc/guarden/basicauth/<service>.htpasswd`) and
+never the podman secret, so the blob and the entry are two halves of one credential and the
+entry is the half in front of the edge. A `weedr secret set` on that key therefore re-derives the
+entry from the same value it encrypts into the blob, in the same act: **the halves are written
+together or not at all.** The module that owns an output answers for itself — the credential
+module knows only that a key may have an owner — and a key no owner claims is untouched, so the
+verb behaves exactly as before for every ordinary credential.
+
+A rotation that cannot write the output **is a failure, and it leaves the credential as it was.**
+The blob is written first and the derived half second, so a refused write undoes the blob rather
+than leaving one half advanced and the other behind, and the diagnostic names the service. The
+operator is left holding the credential they had; the value they typed never reached the host.
+**Nothing rotates on its own.** There is no expiry, no schedule and no policy that changes a
+credential's value — the only rotation is the manual act an operator performs, and what this
+paragraph says is that the act is consistent.
+
 `weedr port open` takes a public port that the manifest must already have requested, and
 refuses anything else with exit `2` naming the request it would have to be — an admin cannot
 open a port the repository never asked for, because a grant with no manifest request has no
