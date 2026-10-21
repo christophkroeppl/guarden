@@ -172,8 +172,23 @@ def _converge(path: Path, owner: tuple[int, int], home: Path) -> bool:
         return False
     if (info.st_uid, info.st_gid) == owner and (info.st_mode & 0o7777) == paths.TREE_MODE:
         return False
-    conf.set_owner(path, owner)
-    os.chmod(path, paths.TREE_MODE)
+    try:
+        conf.set_owner(path, owner)
+        os.chmod(path, paths.TREE_MODE)
+    except OSError as exc:
+        # **A repair that CANNOT correct a directory says so, and it says it
+        # as a diagnostic.** `weedr.main` catches `errors.GuardenError` and
+        # nothing else, so an `OSError` here escapes as a traceback — which is
+        # not a diagnostic, and a stack trace is not something an operator can
+        # act on. The `stat` above is swallowed because a path that cannot be
+        # read is a path that cannot be corrected and there is nothing to
+        # say; a path that CAN be read and cannot be CHANGED is a fact about
+        # the host, and it is exit `1` with the path named (spec 1.2).
+        raise errors.GuardenError(
+            f"{path} could not be brought to the tree's own mode and owner: "
+            f"{exc.strerror or exc}",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from exc
     return True
 
 
