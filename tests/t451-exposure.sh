@@ -59,6 +59,56 @@ d0=$(destination_of "$slice")
 [ -n "$d0" ] || _fail "the fresh service's slice carries no destination at all"
 assert_file_lacks "$reg" "exposure"
 
+# **"In EVERY environment" is a claim about three tracks, and two of them are
+# the slot tracks.** The third is the INSTANCE track, and it is the one this
+# suite had not covered: a preview is a service on a track of its own, and its
+# slice is the instance's own file — a different path, a different render, and
+# a different answer to "where does this route go".
+#
+# The track's `expose` row is REMOVED rather than pinned, because the claim is
+# about the **derived** default: no record, no `cloudflared` module, no
+# configuration — loopback-only, and that is the whole of it. The instance's
+# own slice is at `shared/<service>/instances/<escaped-ref>/routes.toml`, and
+# the ref is escaped the way `systemd-escape` escapes it.
+#
+# The removal is addressed to the preview table and nothing else: the address
+# is the range from the preview's `name` to its `kind`, and the command is a
+# plain `d` on the `expose` line inside it. A `sed` command may not carry a
+# second address — `/a/ /b/d` is a syntax error, not a filter.
+sed -i '/^name = "preview"$/,/^kind =/ { /^expose = "edge"$/d }' \
+    "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+# The count is checked rather than the absence of a line: the file carries an
+# `expose` row per track, and the preview's is the one that must be gone.
+# `grep -c` exits 1 on zero matches, so the `|| true` keeps `set -e` from
+# firing on a count of zero — which is the answer this check is looking for.
+exposerows=$(grep -c '^expose = ' "$GUARDEN_PREFIX/etc/guarden/guarden.toml" || true)
+[ "$exposerows" = 2 ] || _fail "the preview track's expose row was not removed"
+preview=$GUARDEN_PREFIX/var/lib/guarden/staging/routed/cc33dd44
+mkdir -p "$preview/.guarden/quadlet"
+seed "$preview/.guarden/service.yml" "project: routed" "units: .guarden/quadlet/" \
+    "routes:" "  - container: web" "    port: 8080" "    host: web"
+seed "$preview/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27"
+run weedr service ingest routed-preview/feature/x --from poke routed@cc33dd44
+assert_exit 0
+previewreg=$GUARDEN_PREFIX/var/lib/guarden/registry/routed-preview.toml
+assert_file_lacks "$previewreg" "exposure"
+previewslice=$GUARDEN_PREFIX/var/lib/guarden/shared/routed-preview/instances/feature\\x2fx/routes.toml
+assert_file_exists "$previewslice"
+[ "$(destination_of "$previewslice")" = "loopback" ] \
+    || _fail "a preview on a track with no posture rendered destination $(destination_of "$previewslice"), not loopback"
+# The instance track's row goes back, so the rest of the suite measures what
+# it was written to measure. The row is RE-ADDED after the `kind` line it
+# followed in the fixture, so the table is the fixture's table again.
+#
+# The append carries ONE address: `kind = "instance"` names the instance
+# track and nothing else on the box, and a `sed` command may not carry two
+# addresses (`/a/ /b/a` is a syntax error, not a filter).
+sed -i '/^kind = "instance"$/a expose = "edge"' \
+    "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
+exposerows=$(grep -c '^expose = ' "$GUARDEN_PREFIX/etc/guarden/guarden.toml" || true)
+[ "$exposerows" = 3 ] || _fail "the preview track's expose row was not restored"
+
 # A manifest that asks for public exposure is refused with one guarden line
 # naming where the decision is recorded, and the refusal happens before a
 # system account exists — a repository cannot even leave the request behind.
@@ -310,28 +360,31 @@ assert_file_lacks "$reg" "exposure"
 # underneath a service is the DEFAULT it was minted under — the track's
 # `expose`, the enabled module set — and that is what the item compares.
 #
-# So the service under test here is `routed2-production`: it was created under
-# a track that said `loopback` and it holds no record, so the track — restored
-# to `edge` above — now says something the service's own recorded destination
-# does not. Its recorded destination says `loopback`, the current resolution
-# says `edge`, and the two disagree. The check names the service, so an
-# operator can act on it — a drift nobody can attribute to a service is a drift
-# nobody acts on — and the check changes NOTHING: the way back is the act, not
-# a converge.
+# So the services under test here are the two that hold no record and were
+# minted under a `loopback` track: `routed2-production` and `routed-preview`.
+# The track is restored to `edge` above, so the current resolution says `edge`
+# while each service's own recorded destination says `loopback`, and the two
+# disagree. The check names the services, so an operator can act on them — a
+# drift nobody can attribute to a service is a drift nobody acts on — and the
+# check changes NOTHING: the way back is the act, not a converge.
 run soil firewall --check
 assert_exit 1
 assert_stderr_has "drift"
 # The offenders are named in the line itself, in parentheses after the item's
-# sentence. The whole parenthesised list is asserted, so the line that names
-# the service is the exposure item's and not some other drift that happens to
-# mention it.
-assert_stderr_has "(off: routed2-production)"
-# The check changed nothing: the service's posture is still the one its record
-# was minted under, and the way back is the act.
+# sentence, and the WHOLE list is asserted — sorted, comma-separated, every
+# name in it. A bare service name would pass on any other drift that happened
+# to mention it, and a partial list would pass on a check that reported one
+# offender and missed the other.
+assert_stderr_has "(off: routed-preview, routed2-production)"
+# The check changed nothing: the services' postures are still the ones their
+# records were minted under, and the way back is the act.
 assert_file_lacks "$otherreg" "exposure"
-# The act is the way back: recording what the service already holds makes the
+assert_file_lacks "$previewreg" "exposure"
+# The act is the way back: recording what each service already holds makes the
 # host clean again, and the check says so.
 run weedr expose set routed2-production loopback
+assert_exit 0
+run weedr expose set routed-preview loopback
 assert_exit 0
 run soil firewall --check
 assert_exit 0
