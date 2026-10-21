@@ -98,7 +98,22 @@ _wait() {
     local instance=$1 out rc
     while :; do
         rc=0
-        out=$("$lxc" exec -T "$instance" -- sh -c "$state_script" 2>/dev/null) || rc=$?
+        # **The poll itself is bounded, so a wedged `lxc exec` cannot hold the
+        # loop past a single pass.** Without this the budget below is consulted
+        # only after the exec returns, and a guest agent that stops answering
+        # while LXD still reports RUNNING makes this loop hang rather than
+        # expire — measured 2026-10-21 as `Context ID not set in
+        # volatile.vsock_id` for 40+ minutes. A 124 from `timeout` leaves `out`
+        # empty, so it falls through the `*)` case and is retried like any other
+        # unmeasured pass, which is exactly what it is.
+        #
+        # **`--foreground` is as load-bearing here as it is in
+        # `_wait_cloud_init`** (tests/lxc.sh:516-524): without it `timeout` puts
+        # the child in a new process group, `lxc exec`'s session does not survive
+        # that, and the client waits on a session nobody will close — so the
+        # bound would reintroduce the wedge it is here to cap.
+        out=$(timeout --foreground --signal=KILL 20 "$lxc" exec -T "$instance" \
+            -- sh -c "$state_script" 2>/dev/null) || rc=$?
         case $out in
             state=*)
                 evidence=$out
