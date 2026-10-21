@@ -1136,6 +1136,15 @@ def _start(args) -> int:
             "nothing was installed for it and there is nothing that could be running",
             errors.HOST_NOT_AS_ASSUMED,
         )
+    # **A `state` volume whose data is at the root is refused here too**, and
+    # the start is where the operator meets it. The mutator refuses at ingest,
+    # but a service that was deployed before this change carries a volume with
+    # its data at the root, and the operator who re-runs `weedr service start`
+    # on it gets podman's own answer — the image's chown error, in a
+    # container's log, naming nothing that can be acted on. The refusal here
+    # names the volume, the payload directory and the work, and it is the same
+    # refusal the mutator makes (ADR-0020).
+    service.refuse_legacy_volumes(resolved.name, resolved.escaped_ref)
     # ADR-0019: the probe, the record and guarden's own `UserNS=keep-id` line
     # come before the units are handed to systemctl — the line has to be in
     # the file the generator reads, and `start_units` reloads the manager

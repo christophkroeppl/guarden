@@ -246,7 +246,11 @@ run_in "$home" setpriv --reuid=kid-staging --regid=kid-staging --clear-groups \
     podman exec "$container" sh -c 'id -u > /data/written-by'
 assert_exit 0
 
-written=/var/lib/guarden/services/kid-staging/state/data/written-by
+# **The file lands in the volume's PAYLOAD, one level down inside the
+# subvolume** (ADR-0020): the unit mounts `state/data/data`, so a write at
+# `/data` inside the container is a write into the payload and never into the
+# subvolume root that carries snapper's root-owned `.snapshots` subtree.
+written=/var/lib/guarden/services/kid-staging/state/data/data/written-by
 assert_file_exists "$written"
 inside=$(cat "$written")
 [ "$inside" = "10001" ] \

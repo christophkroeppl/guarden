@@ -182,9 +182,13 @@ to it.
   services/<name>/home/<escaped-ref>/  one instance's unit directory, on an instance track
   services/<name>/state/<vol>/  a volume: a btrfs subvolume. A `state` volume has a
   snapper configuration named <service>-<vol>; a `bulk`
-  volume has none
+  volume has none. A `state` volume's DATA lives in
+  `state/<vol>/data/`, and that is what the container mounts —
+  see ADR-0020 and §8.1
   services/<name>/bulk/<vol>/  the same for a `bulk` volume, split out so the `state/`
-  tree contains nothing but snapshotted subvolumes
+  tree contains nothing but snapshotted subvolumes. A `bulk` volume is
+  mounted from the subvolume itself: it has no snapper configuration and
+  therefore no `.snapshots` subtree to keep out of the way
   services/<name>/instances/<escaped-ref>/  an instance's OWN tree, on an instance track.
   A sibling of `state/`, never a child of it — see below.
   Its `state/<vol>` has a snapper configuration named
@@ -1996,10 +2000,16 @@ loom check <source-dir>
 
 Unprivileged and pure: the same manifest, the same registry, the same overrides and the same
 configuration always produce the same bytes. It reads the manifest, the registry, the
-referenced overrides and the environment table, and writes quadlet units, a `.volume` unit for
-every declared volume — `state` and `bulk` alike, since a container must be able to mount
-either — an environment file, the host entries, the credential requests, and the rendered
-slices that the mutator installs into `/var/lib/guarden/shared/<name>/` for `roots` and `twig`.
+referenced overrides and the environment table, and writes quadlet units — each with the
+`Volume=` line of every declared volume, `state` and `bulk` alike, since a container must be
+able to mount either — an environment file, the host entries, the credential requests, and the
+rendered slices that the mutator installs into `/var/lib/guarden/shared/<name>/` for `roots` and
+`twig`.
+
+**A declared volume is mounted by its own path, and there is no `.volume` unit.** The mutator
+makes the subvolume before the unit is installed, so the `Volume=` line names the path the
+mutator made and the container binds it directly; a `.volume` unit would be a second thing
+saying the same fact, and the one that could go stale.
 
 `loom` **must** refuse rather than guess, with the code §1.2 gives each case.
 
@@ -3151,6 +3161,42 @@ Every declared volume, `state` or `bulk`, is a btrfs subvolume owned by the serv
 track, `<service>-<escaped-ref>-<volume>`. A `bulk` volume
 has none, is never snapshotted, is never a fork or rollback source, and is created empty by a
 fork.
+
+**A `state` volume's data lives one level down, in `state/<vol>/data/`, and that is what the
+container mounts** (ADR-0020). The subvolume is still the volume — it is what snapper snapshots
+and what the configuration owns — and the payload directory is inside it.
+
+**Why the data is not at the subvolume's root.** snapper puts its own `.snapshots` directory
+**inside** the subvolume it owns, `0750 root:root`, and the container is rootless: its `uid 0`
+is the *service* uid through `/etc/subuid`, so it cannot chown a directory owned by the real
+host root. Every image whose entrypoint runs `chown -R` over its data directory therefore fails
+against a `state` volume — the stock `postgres` image among them, and with it `mariadb`,
+`mysql` and `elasticsearch` — and the failure is structural rather than a race, because the
+volume always carries snapper's root-owned subtree.
+
+**So the container never sees `.snapshots` at all**: what it mounts is the payload, and
+`.snapshots` is the payload's *sibling*, not its child. The image's own data path lands inside
+the payload, so **the image's convention wins and guarden's layout makes room for it**: the
+repository's mount target is unchanged and no environment value has to be set.
+
+**A `bulk` volume has no payload directory and is mounted from the subvolume itself**, because
+it carries no snapper configuration and therefore no `.snapshots` subtree to keep out of the
+way. The decision changes only `state` volumes, and a rule that changed every volume would be a
+rule about a problem only `state` has.
+
+**Guarden does not move the data down a level, and a volume whose data is at the root is
+refused.** A move renames live data under a running process, it cannot skip `.snapshots`
+without a second rule, and it is not atomic across a service's several volumes. So the mutator
+refuses with one line, naming the service, the volume, the payload directory and the work,
+and it changes nothing: **the volume starts EMPTY and the operator moves the data across
+deliberately** — the same rule as for a newly declared volume, below. The refusal is exit `1`
+(the host is not in the state the request assumed) and not `2`.
+
+**`weedr service start` asks the same question and answers with the same line**, because a
+service deployed before this change carries a volume with its data at the root and the start is
+the operator's way out of that: without the check they meet the image's own chown error in a
+container's log instead of a line naming the volume and the work. The check is the mutator's
+own function, so the two answers cannot drift apart.
 
 **A volume is what makes a service's data durable, and a service that keeps data declares
 one.** A container that mounts no declared volume keeps its data in **podman's anonymous
