@@ -6,8 +6,8 @@
 # **The chain the operator named, as one suite.** "pinning a snapshot from pg
 # and clone prod odoo db on staging pg and spin it up with staging odoo (spin up
 # prod pg snapshot with tmp pg container, dump and push to staging pg)" — the
-# Phase A testrun did every step by hand and needed twelve guarden verbs it did
-# not have (phase-a-snapshot-clone-testrun.md, §9).
+# The Phase A testrun did every step by hand and needed twelve manual steps
+# guarden had no verb for (phase-a-snapshot-clone-testrun.md, §9).
 #
 # So this file is the chain, and it is the WHOLE chain: a snapshot pinned, a
 # throwaway container cut from it, a dump out of that container, a scrub of the
@@ -266,12 +266,14 @@ state=$(systemctl --user --machine pgdual-staging@ is-active db.service 2>/dev/n
 
 # --- the verbs are root-only, and no sudoers rule carries them --------------
 #
-# A clone reads production data and a load writes it. Neither is reachable from a
-# deploy, and the mutator's own list of verbs the `guarden` account may run does
-# not carry them.
-run weedr project list
-assert_exit 0
-assert_stdout_has "projects"
+# A clone reads production data and a load writes it, so a poke must not reach
+# them. The rule `soil install` writes names the granted deploy verbs whole, and
+# the mutator's own rule names no verb at all — it refuses everything outside
+# `GUARDEN_MAY` when the caller is `guarden`. Both halves are read off the
+# installed file: the positive half first, or an empty file would satisfy the
+# negative one.
+assert_file_has /etc/sudoers.d/guarden "weedr service ingest *"
+assert_file_lacks /etc/sudoers.d/guarden "weedr clone"
 
 # --- a refusal that changes nothing ------------------------------------------
 #
