@@ -88,6 +88,21 @@ OLD=$(systemd-creds decrypt --with-key=host "$blob")
 NEW=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
 [ -n "$NEW" ] || _fail "the rotated basic-auth value was not generated"
 
+# --- the entry, read the way the edge reads it ------------------------------
+#
+# **The hash is computed HERE, not by the product.** The suite asserts against
+# an independent implementation of the htpasswd format, so a product whose
+# `basicauth.digest` were wrong could not make this assertion pass by being
+# wrong in the same way twice. The shape is t450-basicauth.sh's, and the
+# reason is the same: no test imports a program's internals (AGENTS.md, "Test
+# seam"), and the only exception is a parser — this is not one.
+htpasswd_digest() {
+    python3 -c "
+import base64, hashlib, sys
+print('{SHA}' + base64.b64encode(hashlib.sha1(sys.argv[1].encode()).digest()).decode())
+" "$1"
+}
+
 # --- the blast radius: an ordinary credential is unaffected ------------------
 #
 # `weedr secret set` is the general verb for EVERY credential and the hook
@@ -129,38 +144,35 @@ assert_stdout_has "planted GUARDEN_BASICAUTH"
 assert_stdout_lacks "$NEW"
 
 # **The new entry verifies against the new blob.** The entry the edge would
-# read is compared with a hash of the value the operator rotated to, and with
-# the hash the product's own `basicauth.digest` produces, and the blob is
-# decrypted to prove the two are the same value. The third comparison is the
-# independent one: a test that checked the entry against the product's own
-# digest alone could not tell a correct entry from a digest that was wrong in
-# the same way twice.
+# read is compared with an INDEPENDENT hash of the value the operator rotated
+# to, and the blob is decrypted to prove the two are the same value. The
+# independence is the point: a test that checked the entry against the
+# product's own digest alone could not tell a correct entry from a digest
+# that was wrong in the same way twice.
+EXPECT=$(htpasswd_digest "$NEW")
 run python3 -c "
-import base64, hashlib, subprocess, sys
-from guarden import basicauth
-blob, path, user, password = sys.argv[1:5]
+import subprocess, sys
+blob, path, user, expect, password = sys.argv[1:6]
 stored = subprocess.run(
     ['systemd-creds', 'decrypt', '--with-key=host', blob],
     capture_output=True, text=True, check=True,
 ).stdout.rstrip('\n')
 name, found = open(path, encoding='utf-8').read().strip().split(':', 1)
-expect = basicauth.digest(password)
-independent = '{SHA}' + base64.b64encode(hashlib.sha1(password.encode()).digest()).decode()
-ok = stored == password and name == user and found == expect and expect == independent
+ok = stored == password and name == user and found == expect
 sys.exit(0 if ok else 1)
-" "$blob" "$entry" rotapp-staging "$NEW"
+" "$blob" "$entry" rotapp-staging "$EXPECT" "$NEW"
 assert_exit 0
 echo "MEASURE: the entry verifies against the rotated value"
 
 # **The old password stops working.** The entry is the new one, so the old
 # value's hash is not in it.
+OLDHASH=$(htpasswd_digest "$OLD")
 run python3 -c "
 import sys
-from guarden import basicauth
 path, old = sys.argv[1:3]
 name, found = open(path, encoding='utf-8').read().strip().split(':', 1)
-sys.exit(0 if found != basicauth.digest(old) else 1)
-" "$entry" "$OLD"
+sys.exit(0 if found != old else 1)
+" "$entry" "$OLDHASH"
 assert_exit 0
 echo "MEASURE: the old value no longer verifies against the entry"
 
@@ -170,10 +182,9 @@ entries_held=$(grep -c ':' "$entry")
     || _fail "the htpasswd entry holds $entries_held lines, not one"
 run python3 -c "
 import sys
-from guarden import basicauth
 path, old = sys.argv[1:3]
-sys.exit(0 if basicauth.digest(old) not in open(path, encoding='utf-8').read() else 1)
-" "$entry" "$OLD"
+sys.exit(0 if old not in open(path, encoding='utf-8').read() else 1)
+" "$entry" "$OLDHASH"
 assert_exit 0
 
 # **No value leaks.** `weedr secret list` prints names and booleans, the
@@ -216,19 +227,19 @@ chattr -i "$entries"
 # **Neither half advanced.** The blob is back to the value that was in front
 # of the edge, and the entry still verifies that same value — so the service
 # is not half-rotated, and the value the operator typed the second time never
-# reached the host at all.
+# reached the host at all. The expectation is the INDEPENDENT hash of the
+# value the successful rotation put in, computed before the failed one.
 run python3 -c "
 import subprocess, sys
-from guarden import basicauth
-blob, path, user, password = sys.argv[1:5]
+blob, path, user, expect, password = sys.argv[1:6]
 stored = subprocess.run(
     ['systemd-creds', 'decrypt', '--with-key=host', blob],
     capture_output=True, text=True, check=True,
 ).stdout.rstrip('\n')
 name, found = open(path, encoding='utf-8').read().strip().split(':', 1)
-ok = stored == password and name == user and found == basicauth.digest(password)
+ok = stored == password and name == user and found == expect
 sys.exit(0 if ok else 1)
-" "$blob" "$entry" rotapp-staging "$NEW"
+" "$blob" "$entry" rotapp-staging "$EXPECT" "$NEW"
 assert_exit 0
 echo "MEASURE: the failed rotation left the blob and the entry in step"
 
