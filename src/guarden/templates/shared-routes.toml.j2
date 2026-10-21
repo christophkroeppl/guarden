@@ -8,6 +8,10 @@
   cannot claim a name outside host.domain: it only ever gets a label.
   `destination` is `edge` or `tunnel` — where this route is published.
   `ref` is the instance ref for preview instances, empty for slot tracks.
+  `basicauth` is the LOGIN MINTED for this service at creation (spec 3.4), a
+  fact about the past. Whether the edge attaches the middleware that asks for it
+  is the operator's setting in the service's root-owned `overrides.toml` (§3.3,
+  ADR-0024), which `roots` reads beside this flag; the slice does not carry it.
 #}
 # Rendered by loom. The mutator installs this read-only; `roots` reads it.
 service = "{{ service }}"
