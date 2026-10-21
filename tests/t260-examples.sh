@@ -117,9 +117,10 @@ assert_file_missing /var/lib/guarden/registry/promptapp-staging.toml
 # --- create from the postgres example -----------------------------------------
 #
 # The three promises: an account, a registry record, and the template's quadlet
-# file in the service's own unit directory — `0640` under the service uid, the
-# way a rendered unit lands, because a copy that kept `root:root 0644` would be
-# a file the service's own podman generator cannot read.
+# file in the service's own unit directory — the tree's own `0700` under the
+# service uid, the way a rendered unit lands (spec 2.1), because a copy that
+# kept `root:root 0644` would be a file the service's own podman generator
+# cannot read.
 run weedr service create pgexample --env staging --template postgres
 assert_exit 0
 assert_stdout_has "created pgexample-staging"
@@ -136,7 +137,7 @@ assert_owner /var/lib/guarden/services/pgexample-staging \
 pg_unit=/var/lib/guarden/services/pgexample-staging/home/.config/containers/systemd/postgres.container
 assert_file_exists "$pg_unit"
 assert_owner "$pg_unit" "pgexample-staging:$(id -gn pgexample-staging)"
-assert_mode "$pg_unit" 640
+assert_mode "$pg_unit" 700
 assert_file_has "$pg_unit" "Image=docker.io/library/postgres:17-alpine"
 assert_file_exists "/etc/containers/systemd/users/$pg_uid"
 
@@ -169,7 +170,7 @@ assert_passwd vwexample-staging
 vw_unit=/var/lib/guarden/services/vwexample-staging/home/.config/containers/systemd/vaultwarden.container
 assert_file_exists "$vw_unit"
 assert_owner "$vw_unit" "vwexample-staging:$(id -gn vwexample-staging)"
-assert_mode "$vw_unit" 640
+assert_mode "$vw_unit" 700
 assert_file_has /var/lib/guarden/registry/vwexample-staging.toml 'source = "manual"'
 
 run weedr service list

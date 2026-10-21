@@ -286,8 +286,9 @@ rmdir /usr/lib/guarden/templates/services/staged
 # asserted here because a copy that keeps the template's `root:root 0644` is a
 # file the service's own podman generator cannot read -- and a service's home is
 # `0700` to its owner (spec 2.1), so nothing root-owned belongs in it
-# (AGENTS.md). `units.install` installs every rendered unit `0640` under the
-# record's uid, and a template's copy has to land the same way.
+# (AGENTS.md). `units.install` installs every rendered unit at the tree's own
+# `0700` under the record's uid (spec 2.1), and a template's copy has to land
+# the same way.
 
 install -d -m 0755 /usr/lib/guarden/templates/services/probe
 seed /usr/lib/guarden/templates/services/probe/probe.container \
@@ -305,7 +306,7 @@ assert_file_exists /var/lib/guarden/registry/probeapp-staging.toml
 assert_file_has /var/lib/guarden/registry/probeapp-staging.toml 'source = "manual"'
 assert_file_exists "$unit"
 assert_owner "$unit" "probeapp-staging:$(id -gn probeapp-staging)"
-assert_mode "$unit" 640
+assert_mode "$unit" 700
 run weedr service list
 assert_exit 0
 assert_stdout_has "probeapp-staging"
@@ -356,7 +357,7 @@ cmp -s /var/lib/guarden/registry/probeapp-staging.toml \
     "$GUARDEN_FIXTURES/probeapp-staging.toml" \
     || _fail "the second create rewrote the record it was meant to refuse"
 assert_owner "$unit" "probeapp-staging:$(id -gn probeapp-staging)"
-assert_mode "$unit" 640
+assert_mode "$unit" 700
 
 # The whole `--env` list is asked **before** any of them is created (spec 5.1):
 # one name in the list that the registry already holds refuses the request and
