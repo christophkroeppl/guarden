@@ -347,14 +347,15 @@ _wait_cloud_init() {
     timeout --foreground --signal=KILL "$CLOUD_INIT_WAIT" \
         $LXC exec -T "$instance" -- cloud-init status --wait >/dev/null 2>&1 || :
     # **`fuser` may be absent, and its absence would make this a silent no-op.**
-    # It comes from `psmisc`, which is NOT in the cloud-init package list below —
-    # it is present on the golden only because `ubuntu-standard` pulls it in
-    # (measured: `apt-cache rdepends --installed psmisc` lists ubuntu-standard).
-    # A minimal image that drops that metapackage would lose it, and the wait
-    # below would then spend its whole budget answering `unmeasured` before
-    # failing: a slow failure where an immediate, named one is what a
-    # host this broken deserves. That is why the check exists, and why it is
-    # checked rather than assumed.
+    # It comes from `psmisc`, which the package list's harness role and this
+    # file's cut list both install — it was present on the golden only
+    # because `ubuntu-standard` pulls it in (measured: `apt-cache rdepends
+    # --installed psmisc` lists ubuntu-standard; `procps` only Recommends
+    # it), and a minimal image that drops that metapackage would lose it,
+    # and the wait below would then spend its whole budget answering
+    # `unmeasured` before failing: a slow failure where an immediate, named
+    # one is what a host this broken deserves. That is why the check exists,
+    # and why it is checked rather than assumed.
     #
     # **`sh -c` is load-bearing.** `command -v` is a shell BUILTIN, not a binary,
     # so `lxc exec … -- command -v fuser` tries to exec a file called `command`
@@ -376,12 +377,14 @@ _wait_cloud_init() {
     # silent success" is false, because the exit code IS the contract and 0 says
     # the wait succeeded. A caller cannot see stderr and a code at once. Every
     # path that did not wait must say so with its status, or the caller proceeds
-    # into the race believing it was protected.
+    # into the race believing it is protected.
     if ! $LXC exec -T "$instance" -- sh -c 'command -v fuser' >/dev/null 2>&1; then
         printf 'error: fuser is not on %s, so the apt lock wait cannot run; ' \
             "$instance" >&2
-        printf 'install psmisc on the golden, or a suite that calls `soil packages` ' >&2
-        printf 'early will lose the lock race\n' >&2
+        printf 'psmisc provides fuser and is in the harness package list in ' >&2
+        printf 'packages/packages.toml, but this image does not have it; ' >&2
+        printf 'a suite that calls `soil packages` early will lose the ' >&2
+        printf 'lock race\n' >&2
         return 1
     fi
     # **The lock files themselves are checked for the same reason `fuser` is,
@@ -567,6 +570,17 @@ packages:
   - fail2ban
   - podman
   - python3-pip
+  # **`psmisc` is here because the harness's apt-lock wait needs `fuser`,
+  # which comes from it.** The wait is what closes the race between
+  # cloud-init's own `apt-get` and the `soil packages` a suite runs in its
+  # first seconds, and without `fuser` the wait cannot run at all — the
+  # runner then refuses to cut rather than enter the race believing it was
+  # protected. The golden carries the package today only because
+  # `ubuntu-standard` pulls it in (measured: `apt-cache rdepends --installed
+  # psmisc` lists ubuntu-standard; `procps` only Recommends it), so an image
+  # without that metapackage lost the wait entirely. It is a harness tool
+  # and not a host dependency: no program under `src/guarden` calls fuser.
+  - psmisc
 CLOUD
 }
 
