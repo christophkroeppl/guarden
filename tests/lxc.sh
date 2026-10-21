@@ -714,8 +714,15 @@ _prove() {
     local instance=$1
     vm_exec_t "$instance" 'python3 -c "import yaml, jinja2"' \
         || die "$instance lacks python3-yaml or python3-jinja2"
-    vm_exec_t "$instance" 'btrfs subvolume show / >/dev/null && btrfs subvolume list / | grep -q "@var"' \
-        || die "$instance has no btrfs root with @ and @var; soil storage will never converge on it"
+    # `@tmp` is named here as well: the gate is what proves the machine the
+    # suites ride was built by a conversion that produced all three subvolumes,
+    # and a golden whose conversion predates the third one would otherwise be
+    # snapshotted and served to the suites with the layout check failing on it.
+    # It runs at provisioning, which is the only moment the answer can change.
+    vm_exec_t "$instance" 'btrfs subvolume show / >/dev/null &&
+        btrfs subvolume list / | grep -q "path @var" &&
+        btrfs subvolume list / | grep -q "path @tmp"' \
+        || die "$instance has no btrfs root with @, @var and @tmp; soil storage will never converge on it"
     vm_exec_t "$instance" 'btrfs subvolume create /var/lib/guarden/.probe >/dev/null 2>&1 &&
         btrfs subvolume delete /var/lib/guarden/.probe >/dev/null 2>&1' \
         || die "$instance cannot create a btrfs subvolume under /var/lib/guarden"
