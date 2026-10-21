@@ -3,10 +3,15 @@
 **Blocked by:** nothing. **Blocks:** nothing today; it makes `just test` red, so it blocks
 any release gate that runs the whole suite.
 
-**Status: OPEN (2026-10-20) — criterion 1 and criterion 3 are met; criterion 2 is
-NOT.** An earlier version of this ticket said DONE. It was wrong, and the
-correction is recorded here rather than in the git history alone, because the
-mistake is the ticket's subject.
+**Status: DONE (2026-10-20) — all three criteria are met, and the way the
+second one is met is the substance of this ticket.**
+
+This ticket has been closed twice and opened once, and the history is kept
+because the mistake is the subject. The first closure claimed criterion 2 was
+met on the strength of a measurement taken on a quiet machine
+(`DENY_DROP=0->0`); it was not met, and the closure was wrong. The second
+closure was made after the criterion was met properly, with the measurement
+that proves it.
 
 - *Criterion 1 — the suite names the command that failed.* **MET.**
   `tests/lib.sh` carries an `ERR` trap that prints
@@ -14,28 +19,46 @@ mistake is the ticket's subject.
   `tests/t10-failure-messages.sh` asserts the runner's failure text every way a
   gate can read it — `t10-failure-messages.sh: green`.
 - *Criterion 2 — the deny assertion cannot be moved by concurrent traffic.*
-  **NOT MET.** `src/guarden/firewall.py:488` renders
-  `daddr 127.0.0.0/8 jump DROP;` as **one rule with no owner match**, in the
-  `guarden-svc` chain. It is a **host-wide counter**: any service uid's loopback
-  traffic moves it. So neither of the suite's two deny assertions satisfies
-  either half of the criterion — `deny_after == deny_before` does not prove the
-  packet it sent is the one counted and is not immune to traffic, and
-  `other_after > other_before` is unattributable in the other direction, since a
-  concurrent drop makes it pass spuriously.
+  **MET.** The defect was real and the fix is in the tree.
 
-  The measurement that was taken to close this criterion,
-  `STUB_ACCEPT=14->15 DENY_DROP=0->0` and `OTHER_DENY=0->1`, is a **true
-  reading of a quiet machine** and is not evidence of soundness. The ticket's
+  `src/guarden/firewall.py:488` renders `daddr 127.0.0.0/8 jump DROP;` as
+  **one rule with no owner match**, in the `guarden-svc` chain. It is a
+  **host-wide counter**: any service uid's loopback traffic moves it. So
+  neither of the suite's old deny assertions satisfied either half of the
+  criterion — `deny_after == deny_before` did not prove the packet it sent
+  was the one counted and was not immune to traffic, and
+  `other_after > other_before` was unattributable in the other direction.
+
+  The measurement that was taken to close this criterion the first time,
+  `STUB_ACCEPT=14->15 DENY_DROP=0->0` and `OTHER_DENY=0->1`, was a **true
+  reading of a quiet machine** and was not evidence of soundness. The ticket's
   own history records the same assertion failing under load on the ticket-240
   branch (`0->4` → "the stub was dropped, so the accept is not above the deny"),
   which is the same race in the same place.
 
-  **The fix is to assert on the rendered RULES, not on a counter**: that the
-  DROP on `127.0.0.0/8` exists, that the stub accept for the service uid
-  renders above it, and that no accept matches all of `127.0.0.0/8`. Those are
-  facts about the file and traffic cannot move them. The behavioural check is
-  sound only where the counter is attributable — the stub accept's counter can
-  only be moved by a stub query.
+  **What replaced it is a fact about the RULES, and traffic cannot move a
+  rule.** Three properties, read from **one** snapshot of the live chain — the
+  rules the kernel is enforcing, not the file guarden intends:
+
+  1. the single deny on `127.0.0.0/8` exists, and is the chain's **last** rule;
+  2. the stub accept **for that service's uid** is rendered **above** that deny;
+  3. **no** accept anywhere in the chain matches the whole of `127.0.0.0/8`.
+
+  The stub accept's counter is kept, because that accept names one address,
+  one port, owner-matched — so it *is* attributable.
+
+  **The concurrent traffic stays in the suite, so the immunity is measured
+  rather than asserted.** Measured in the VM:
+
+  ```
+  CONCURRENT_LOOPBACK_TRAFFIC=movable SHARED_DENY=0->1
+  OLD_SHAPE_VERDICT='the stub was dropped' BUT_NO_STUB_PACKET_WAS_SENT
+  UNDER_CONCURRENT_TRAFFIC deny=9 stub_accept=5 last=9
+  ```
+
+  The old shape's wrong verdict is reproduced **deterministically** — the
+  count moved by a stranger's one packet, not by anything the suite sent —
+  and the rule-based measurement is stable under the same traffic.
 - *Criterion 3 — `t50-slice.sh` is green on `develop` with no branch applied.*
   **MET.** `t50-slice.sh: ok`, one machine cut.
 
@@ -43,12 +66,10 @@ The third criterion is the one that was false when this ticket was written: the
 suite was red on `develop` itself. It is green now, and the two faults below are
 fixed in the tree.
 
-**This ticket is a work list again.** It was closed as DONE on the strength of a
-measurement taken on a quiet machine, and the closure was wrong: criterion 2 is
-still open, and the fix is to assert on the rendered rules rather than on a
-shared host-wide counter. The history is kept because it is why the criteria are
-shaped the way they are, and because a closure that was wrong on a quiet
-machine is worth recording.
+**This ticket is a RECORD now, not a work list** — the work it describes is done,
+and the record is kept because the mistake is the subject: a closure that was
+wrong on a quiet machine, and then the closure that fixed it, with the
+measurement that proves it.
 
 **What to build:** The three things in `## Acceptance` below, in `tests/t50-slice.sh` and
 `tests/lib.sh`: the suite must name the command that failed, the deny assertion must prove

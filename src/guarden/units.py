@@ -138,6 +138,50 @@ def allow_mounts(source: Path, service: str) -> list[str]:
     return missing
 
 
+def own_directory(path: Path, owner: tuple[int, int]) -> None:
+    """A directory inside a service's home, owned by that service's user.
+
+    `conf.write_file` creates the parent with `mkdir(parents=True)` and
+    nothing else, so a directory it creates is root-owned with the mutator's
+    umask — and the mode depends on who invoked the mutator. That is wrong
+    for a directory inside a service's home: the spec says nothing root-owned
+    lives there, and the service cannot write its own quadlet tree without it.
+
+    **Only a directory this call creates is touched.** The quadlet directory
+    itself is made by `_make_tree` — `0700` to the service user, like the rest
+    of the tree — and re-moding it here would be a second statement of that
+    mode, and one that disagrees with the walk that owns it. What is created
+    here is the **drop-in directory** (`<unit>.container.d`), which nothing
+    else makes.
+
+    The mode is `0700`, the tree's own mode: the drop-in directory holds one
+    file the service owns, inside a directory only the service can enter.
+
+    **Every directory this call creates is owned, and not only the leaf.** The
+    leaf's own parent may be missing too — `home/.config/containers` is
+    created by the same `mkdir` — and `mkdir(parents=True)` gives every level
+    it makes the mutator's umask and root's ownership. A helper that owned
+    the leaf and left the levels above it root-owned inside a `0700` home
+    would be the defect it exists to prevent, one level up. So the chain is
+    walked up to the first directory that already exists, and each level this
+    call makes is created, owned and moded in turn.
+
+    **A directory that already exists is left alone.** Not repaired and not
+    re-moded: the walk that owns a service's tree is `_make_tree`'s, and a
+    second statement of the same mode here would be two places to keep
+    agreeing.
+    """
+    missing: list[Path] = []
+    probe = path
+    while not probe.exists():
+        missing.append(probe)
+        probe = probe.parent
+    for directory in reversed(missing):
+        directory.mkdir(parents=True, exist_ok=True)
+        conf.set_owner(directory, owner)
+        os.chmod(directory, 0o700)
+
+
 def install(source: Path, service: str, escaped_ref: str | None = None) -> list[str]:
     """Render, then copy into place: units, the order target, the shared slice."""
     out = render_units(source, service, escaped_ref)
@@ -157,11 +201,13 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
         relative = path.relative_to(out / "units")
         body = path.read_text(encoding="utf-8")
         target = unit_dir(service, escaped_ref) / relative
+        own_directory(target.parent, owner)
         conf.write_file(target, body, UNIT_MODE, owner)
         written.append(str(target))
         entry = search_entry(relative, escaped_ref)
         if entry is not None:
             mirror = unit_dir(service) / entry
+            own_directory(mirror.parent, owner)
             conf.write_file(mirror, body, UNIT_MODE, owner)
             written.append(str(mirror))
 

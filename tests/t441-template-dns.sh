@@ -49,8 +49,16 @@ services=/etc/guarden/firewall/50-services.conf
 
 # The runbook's own install of the example set (docs/sysadmin.md): the set does
 # not ship, and a template-created service needs one to be created at all.
+#
+# **The templates live under `src/guarden/templates/services/`,** and the
+# install phase copies that tree. This suite used to copy
+# `examples/services/vaultwarden`, and ticket 330 moved the tree -- so the
+# path here named a directory that does not exist, and the suite failed on
+# the copy before it reached a single assertion of its own. The path is the
+# one the install phase uses, and t260-examples.sh asserts the same tree is
+# installed by default.
 install -d -m 0755 /usr/lib/guarden/templates/services
-cp -r "$GUARDEN_ROOT/examples/services/vaultwarden" /usr/lib/guarden/templates/services/
+cp -r "$GUARDEN_ROOT/src/guarden/templates/services/vaultwarden" /usr/lib/guarden/templates/services/
 
 stage_poke routed 9f2c1ab
 

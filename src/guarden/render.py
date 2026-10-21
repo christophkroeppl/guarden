@@ -1342,7 +1342,21 @@ def _container_unit(
                 [f"{name}:{context.config.alias}" for name in hosts],
             )
         if edge_ports:
-            unit.put("Container", "EnvironmentFile", [str(context.unit_dir() / ENV_FILE)])
+            # **The value is escaped, and the path on disk is not.** Quadlet
+            # reads `EnvironmentFile=` by C-unescaping its value, and the
+            # instance's directory is named by the escaped ref — `feature/x` is
+            # `feature\x2fx` — so an unescaped value names a path that does not
+            # exist and podman refuses the container with
+            # `parsing file "...": no such file or directory` (ticket 315).
+            # `unitsource.escape_path` is the rule, and its docstring carries
+            # the measurement: the value has to survive quadlet's unescape
+            # AND systemd's, so it carries a doubled backslash and the
+            # directory on disk keeps its one.
+            unit.put(
+                "Container",
+                "EnvironmentFile",
+                [unitsource.escape_path(str(context.unit_dir() / ENV_FILE))],
+            )
     volume_keys = _volume_lines(document, source, container, context)
     if volume_keys:
         unit.put("Container", "Volume", volume_keys)
@@ -1730,7 +1744,14 @@ def load_manifest(directory: Path) -> manifest_mod.Manifest:
             f"the manifest {path} does not exist; a project's manifest is "
             f"{manifest_mod.MANIFEST_REL} at its root"
         )
-    return manifest_mod.read(path)
+    # **`accept()` and not `read()`, because this is where the render is asked
+    # whether a tree is renderable** — and the `db`-provider rule is about the
+    # DECLARATION rather than about the document (spec 4). `accept()` applies
+    # the rule for the trees that are declarations; for the staged copy of an
+    # installed service's home — the same document under another name, staged
+    # because the renderer cannot enter a `0700` home (ADR-0012) — the rule
+    # does not fire, and the re-render of an installed service keeps working.
+    return manifest_mod.accept(path)
 
 
 def resolve_context(service: str, instance: str | None) -> Context:

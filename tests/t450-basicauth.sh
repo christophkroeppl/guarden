@@ -269,7 +269,16 @@ assert_exit 0
 # slice is the only place the flag travels to the edge.
 prevreg=$GUARDEN_PREFIX/var/lib/guarden/registry/prevapp-preview.toml
 assert_file_has "$prevreg" "basicauth = true"
-prevescaped=feature-a
+#
+# **The directory is named by the ESCAPED ref, not by the raw one.**
+# `systemd_escape("feature-a")` is `feature\x2da` — the `-` is escaped, because
+# a `-` is not safe in a systemd unit name's path component. The instance's
+# directory carries the escaped form, and so does the slice under it. This
+# suite used to use the raw `feature-a` and looked for a slice that the
+# product never writes, so the assertion failed on a path that was never
+# wrong. t440-instance-start.sh uses the escaped form for the same reason,
+# and it is green.
+prevescaped=feature\\x2da
 prevslice=$GUARDEN_PREFIX/var/lib/guarden/shared/prevapp-preview/instances/$prevescaped/routes.toml
 assert_file_exists "$prevslice"
 assert_file_has "$prevslice" "basicauth = true"

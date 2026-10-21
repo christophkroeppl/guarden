@@ -11,6 +11,12 @@ units: .guarden/quadlet/
 provides:
   - db
   - secret
+# A `db` provider declares a volume (spec 4). Without one the data lives in
+# podman's anonymous volume and the collector takes it on the next re-ingest —
+# which is what the operator measured on 2026-10-19 (ticket 326). The volume
+# is declared here and mounted by the container below, so the two halves agree.
+state:
+  - pgdata
 ports:
   - container: db
     port: 5432

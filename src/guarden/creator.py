@@ -686,8 +686,15 @@ def stage_tree(tree: Path) -> Path:
     and the world may read, exactly as a poke's staging tree has always been
     (`hose.py:unpack` writes `0755` and `0644` for the same reason).
 
-    The copy holds only the render inputs — `.guarden/` and the build
-    context — and it is the invocation's own: the caller removes it.
+    The copy holds the whole tree, and it is the invocation's own: the caller
+    removes it.
+
+    **The whole tree, and not only the render inputs, because the tree is
+    also the build's context** (spec 6.6): the home the staged tree is copied
+    into is what `podman build` reads, and a Containerfile that COPYs a source
+    file needs that file in the context. A staged copy holding four files
+    would put a four-file context in the home, and the build would die with
+    `125` on a `COPY` of a file the tree carried (ticket 317).
 
     **A link inside the tree is refused, and the copy does not dereference
     one.** `shutil.copytree` follows symlinks by default, so a tree holding
@@ -703,14 +710,20 @@ def stage_tree(tree: Path) -> Path:
     os.chmod(staging.parent, 0o755)
     os.chmod(staging, 0o755)
     stage = Path(tempfile.mkdtemp(prefix=f"{os.getpid()}-", dir=staging))
-    for relative in (".guarden", "compose.yaml", "Containerfile", ".dockerignore"):
-        source = tree / relative
+    for path in sorted(tree.rglob("*")):
+        relative = path.relative_to(tree)
         target = stage / relative
-        if source.is_dir():
-            shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
-        elif source.is_file():
+        if path.is_symlink():
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target, follow_symlinks=False)
+            shutil.copy2(path, target, follow_symlinks=False)
+            continue
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        if not path.is_file():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target, follow_symlinks=False)
     for path in [stage, *sorted(stage.rglob("*"))]:
         os.chmod(path, 0o755 if path.is_dir() else 0o644)
     return stage

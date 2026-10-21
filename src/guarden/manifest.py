@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from guarden import errors, names, rules
+from guarden import errors, names, paths, rules
 
 MANIFEST_REL = Path(".guarden") / "service.yml"
 
@@ -280,7 +280,24 @@ def _yaml():
 
 
 def read(path: Path) -> Manifest:
-    """Read one manifest. A repository that ships a broken one is rejected input."""
+    """Read one manifest. A repository that ships a broken one is rejected input.
+
+    **This reads the DOCUMENT, and it does not judge the DECLARATION.** The
+    document's own shape is validated here — the closed key sets, the volume
+    names, the `provides:` kinds — and those are properties of the file, so
+    they hold wherever the file is read from.
+
+    The one rule that is about the *declaration* rather than the document — a
+    `db` provider declares a volume or it is refused — is in `accept()`, and
+    the two are different things: §4 governs "`.guarden/service.yml` at the
+    repository root", and §1.2 puts "the installed services" on the **host**
+    side of the dividing line. A rule that fired on every read would refuse to
+    read back the operator's own running service — `start`, `gate`, `build`,
+    `secret list` and the firewall render all read the manifest in a service's
+    home — so it would break the box it was written to protect. The operator's
+    staging postgres, the very service ticket 326 is about, is such an
+    installed service.
+    """
     yaml = _yaml()
     try:
         text = path.read_text()
@@ -320,19 +337,163 @@ def read(path: Path) -> Manifest:
             f"the manifest {path} lists {both[0]!r} as both a state and a bulk volume"
         )
 
+    provides = _provides(document.get("provides", []), path)
+
     return Manifest(
         source=path,
         project=_project(document.get("project"), path),
         units=_units(document.get("units"), path),
         state=state,
         bulk=bulk,
-        provides=_provides(document.get("provides", []), path),
+        provides=provides,
         needs=_needs(document.get("needs", []), path),
         ports=_publications(document.get("ports", []), path),
         routes=_routes(document.get("routes", []), path),
         widgets=_widgets(document.get("widgets", []), path),
         firewall=_firewall(document.get("firewall", []), path),
         schema=_schema(document.get("schema"), path),
+    )
+
+
+def _is_declaration(path: Path) -> bool:
+    """Whether this manifest is a repository's DECLARATION or a document guarden holds.
+
+    **The two are different documents, and the difference is the whole scope of
+    the `db`-provider rule.** A declaration is a manifest guarden is being asked
+    to take as the shape of a service. A held document is the copy guarden keeps
+    in an installed service's home — and the staged copy of one, which is the
+    same document under another name.
+
+    The rule is on the declaration, and the reason is the spec's own shape:
+    §4 governs "`.guarden/service.yml` at the repository root", and §1.2 puts
+    "the installed services" on the **host** side of the dividing line between
+    input and host. A rule that fired on a held document would refuse to read
+    back the operator's own running service — `start`, `gate`, `build`,
+    `secret list` and the firewall render all read that copy — so it would
+    break the box it was written to protect. The operator's staging postgres,
+    the very service ticket 326 is about, is such an installed service.
+
+    **The test is the tree the document is in**, and not the caller's intent,
+    because the caller is not always able to say: the same read happens for a
+    repository tree and for an installed service's home, and the two are told
+    apart by where they live. `/var/lib/guarden/services/<name>/` is the
+    installed services' tree, and everything under it is a document guarden
+    holds. `/var/lib/guarden/staging/` is a poke's tree.
+
+    **The staged copy of a held document is under `render-source/<service>/`,
+    and the guided creator's staged DECLARATION is under `render-source/guided/`.**
+    They are told apart by the directory under `render-source`, because they are
+    different documents: one is the copy of a manifest guarden already holds,
+    and the other is a tree the operator wrote and guarden is about to accept.
+    A rule that reached the guided tree would never fire on it — the guided
+    creator asks for the volumes separately from `provides:`, so a `db` service
+    created that way is exactly the declaration the rule is for.
+
+    A manifest anywhere else — a repository tree, an operator's own tree, a
+    template — is a declaration.
+    """
+    try:
+        resolved = path.resolve()
+    except OSError:  # pragma: no cover - a resolve that cannot answer
+        return True
+    if _under(resolved, paths.SERVICES):
+        return False
+    if _under(resolved, paths.LIB / "render-source"):
+        # `render-source/guided/` is the operator's own tree, staged for the
+        # renderer to read; `render-source/<service>/` is the copy of a document
+        # guarden already holds. Only the second one is a held document.
+        relative = resolved.relative_to(paths.LIB / "render-source")
+        return bool(relative.parts) and relative.parts[0] == "guided"
+    return True
+
+
+def accept(path: Path, held: bool = False) -> Manifest:
+    """Read a manifest as a repository's DECLARATION, and refuse one that breaks the rule.
+
+    **This is the acceptance, and it is the only place the `db`-provider rule
+    fires for a document guarden already holds.** A caller that is taking a
+    manifest as the shape of a service calls this; a caller that is reading
+    back a document guarden already holds calls `read()`.
+
+    The difference is not cosmetic, and the reason is the spec's own shape:
+    §4 governs "`.guarden/service.yml` at the repository root", and §1.2 puts
+    "the installed services" on the **host** side of the dividing line. A rule
+    that fired on every read would refuse to read back the operator's own
+    running service — `start`, `gate`, `build`, `secret list` and the firewall
+    render all read the manifest in a service's home — so it would break the
+    box it was written to protect. The operator's staging postgres, the very
+    service ticket 326 is about, is such an installed service.
+
+    **`held` says the document is a held one being taken as a declaration.**
+    `weedr service add --from <service>` copies the source's manifest into a
+    new service, and that copy IS the new service's declaration: a `db`
+    provider that declares no volume is a new service with ephemeral data,
+    which is the whole of what this rule is for. The path cannot say so — the
+    source's home is under the installed services' tree, and so is the copy the
+    new service gets — so the caller says it, because the caller knows which of
+    the two it is doing.
+
+    **The staged copy of a held document is not a declaration**, and the path
+    says so: it is under `render-source/<service>/` and not
+    `render-source/guided/`. A re-render of an installed service reads that
+    copy, and it must keep working — or every re-render of every installed
+    service would fail.
+    """
+    document = read(path)
+    if held or _is_declaration(path):
+        _check_provider_volume(document.provides, document.state, document.bulk, path)
+    return document
+
+
+def _under(path: Path, root: Path) -> bool:
+    """Whether `path` is `root` or is under it."""
+    try:
+        return path == root or root in path.parents
+    except OSError:  # pragma: no cover - a resolve that cannot answer
+        return False
+
+
+def _check_provider_volume(
+    provides: list[str], state: list[str], bulk: list[str], path: Path
+) -> None:
+    """A `db` provider that declares no volume is refused (spec 4).
+
+    The rule, its reasons and its limits are in the spec, and this is the
+    check that carries it: **a manifest that provides the `db` kind declares
+    a volume or it is refused.** The `db` kind is the one guarden writes into
+    itself — the role and the database a consumer's edge asks for are created
+    in the provider's own engine — and a container with no declared volume
+    keeps its data in podman's anonymous volume, which podman's garbage
+    collector removes when the container is recreated.
+
+    The check is on the **declaration** and not on the path, because the path
+    is often the image's own `VOLUME` and guarden cannot read an image: the
+    renderer is unprivileged and pure, and the image is not pulled until a
+    start. A repository that names no path at all is refused by this same
+    line as one that names a path it did not declare.
+
+    `state:` and `bulk:` both satisfy it: a `bulk` volume is a subvolume the
+    collector never touches, and `state:` adds the rollback on top.
+
+    **It runs on an ACCEPTANCE and not on every read.** `read()` calls it only
+    when the caller says the document is being accepted, and the reason is the
+    difference between a repository's declaration and the host: the copy of a
+    manifest in an installed service's home is a document guarden has already
+    accepted, and refusing to read it back would make the operator's own
+    running service unstartable and unmanageable — which is a rule that breaks
+    the box it was written to protect. The scope is in the spec (spec 4).
+    """
+    if "db" not in provides:
+        return
+    if state or bulk:
+        return
+    raise errors.GuardenError(
+        f"the manifest {path} provides the kind 'db' and declares no volume: a container with no "
+        f"volume keeps its data in an anonymous volume in the service's image store, which podman "
+        f"removes when the container is recreated, so the data is gone after a re-ingest and "
+        f"nothing says so. Declare a `state:` volume (snapshotted, and what `weedr service "
+        f"rollback` restores from) or a `bulk:` volume (not snapshotted) and mount that name in "
+        f"the unit source. The new volume starts EMPTY: move the data across yourself"
     )
 
 

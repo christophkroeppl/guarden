@@ -3,3 +3,11 @@ Description=the providers-table database container
 
 [Container]
 Image=docker.io/library/postgres:17
+# The volume the manifest declares (spec 4). A `db` provider that declared no
+# volume kept its data in podman's anonymous volume, and the collector removed
+# it on the next re-ingest (ticket 326).
+Volume=pgdata:/var/lib/postgresql/data
+# PGDATA is a subdirectory of the mount and not the mount itself: the image's
+# own entrypoint chowns $PGDATA recursively, and a `state` volume carries
+# snapper's root-owned `.snapshots` subtree inside it (tickets 273 and 277).
+Environment=PGDATA=/var/lib/postgresql/data/pgdata

@@ -78,18 +78,65 @@ def _in_podman_store(path: Path, root: Path) -> bool:
 ADMIN_UNITS_MODE = 0o755
 GUARDEN_GROUP = "guarden"
 
-# The build context: the files `podman build` reads besides the unit source.
+# The files a RENDER reads besides the unit source.
 #
-# A Containerfile is the thing `weedr service build` exists to read, and it is
-# not the unit source, so a home that copies only `.guarden/` and
-# `compose.yaml` has no build context at all — `podman build .` in it answers
-# `125` (no such file or directory) on every run. The file's own name is the
-# one podman resolves when no `-f` is given, so it is the entry in this list.
-# A `.dockerignore` is listed too, because a build that copies the whole home
-# needs it to leave the rootless image store and the secret database out of the
-# context — those are the two things in the home that are large and not the
-# build's.
+# `_render_source` stages a tree the renderer (`loom`, running as `guarden`)
+# can read, and it stages only what the renderer reads: the unit source, the
+# compose file, and the two files a build needs. The Containerfile is the
+# thing `weedr service build` exists to read and it is not the unit source,
+# so a staged tree without it has no build context at all — `podman build .`
+# in it answers `125` (no such file or directory) on every run. The file's own
+# name is the one podman resolves when no `-f` is given, so it is the entry in
+# this list. A `.dockerignore` is listed too, because a build that copies the
+# whole home needs it to leave the rootless image store and the secret
+# database out of the context — those are the two things in the home that are
+# large and not the build's.
+#
+# **This is the RENDER's list and not the COPY's.** The build's context is the
+# whole staged tree (spec 6.6), and the copy carries all of it — see
+# `_copy_tree`. The two are different questions: the renderer reads a named
+# few, and the build reads everything.
 BUILD_INPUTS = (Path("Containerfile"), Path(".dockerignore"))
+
+# **The two names podman reads a context's ignore rules from, and the
+# exclusion guarden writes into them.**
+#
+# Measured on podman 5.7.0 (2026-10-20, `probe-t317`): buildah reads
+# `.containerignore` **in preference to** `.dockerignore` — a context holding
+# both is filtered by the `.containerignore` alone and the `.dockerignore` is
+# never consulted. So an exclusion written to only one of the two names is
+# read only when the repository shipped the other, and a repository that
+# ships `.containerignore` would put the podman store into the context. Both
+# names therefore carry guarden's exclusion, and the list is in the order
+# podman reads them.
+#
+# The patterns are the ones that name the store, and the store holds the
+# per-user secret database in cleartext
+# (`<home>/.local/share/containers/storage/secrets/secrets.json`, measured),
+# so one exclusion covers both of the things spec 6.6 names as never in the
+# context. The rendered units are named too: they are the service's own
+# declarations, not the build's, and `COPY .` would otherwise carry them into
+# the image.
+#
+# **The patterns are appended LAST, and the last matching pattern wins**
+# (measured: `*.txt` then `!plain.txt` re-includes the file; `!plain.txt` then
+# `*.txt` excludes it). Guarden's lines are therefore last, so a source-side
+# `!` negation cannot re-include the store — and because podman reads the
+# context's own file rather than one named by `--ignorefile`, the source's
+# own narrowing is honoured in the same file.
+BUILD_EXCLUSIONS = (
+    ".local/share/containers",
+    ".config/containers",
+)
+# The names the exclusion is written under. Both, because podman reads the
+# first that is present, and the order is podman's own preference.
+BUILD_IGNORE_NAMES = (".containerignore", ".dockerignore")
+# The line that separates the source's own patterns from guarden's, so a
+# merge is idempotent and the source's part is recognisable as the source's.
+BUILD_MARKER = "# guarden: the podman store and the rendered units are never in the build context"
+# The mode the context's ignore file carries: the build runs as the service
+# user, so it has to read it.
+IGNORE_MODE = 0o644
 
 
 @dataclass(frozen=True)
@@ -270,7 +317,21 @@ def _source_label(source: Source) -> str:
 
 def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcome:
     directory = _manifest_directory(source, resolved.name)
-    manifest = manifest_mod.read(_manifest_in(directory))
+    # **The ACCEPTANCE, and it is `accept()` and not `read()`.** This is where
+    # guarden takes a manifest as the shape of a service, and the `db`-provider
+    # rule is about the declaration rather than about the document (spec 4):
+    # a `db` provider declares a volume or it is refused. `read()` alone would
+    # skip the rule here, because the directory is the source's home when the
+    # source is another service (`weedr service add --from <service>`) or when
+    # the poke's staging tree is gone — and both are acceptances, not
+    # read-backs of a document guarden holds.
+    #
+    # **`held` is that case exactly**: the document is a held one, and it is
+    # being taken as the declaration of a new service. A poke's staging tree
+    # and a tree an operator wrote are declarations by where they live, and
+    # the path says so.
+    held = source.kind == "service"
+    manifest = manifest_mod.accept(_manifest_in(directory), held=held)
     project = manifest.project or _project_from(source)
     outcome = Outcome(resolved=resolved)
 
@@ -564,11 +625,19 @@ def create_service(
     # service's own podman generator, which is the process that has to read it
     # (AGENTS.md: nothing root-owned inside a service's home). This copy is what
     # `weedr service start` finds.
+    #
+    # **The directory each file lands in is owned too.** A template that ships
+    # `<unit>.container.d/<file>` has a directory in it, and `conf.write_file`
+    # would create that directory with the mutator's umask and root's
+    # ownership — the same defect the install path closes, in the one place
+    # that writes a template's tree. The shipped templates are flat today, so
+    # this is latent, and a latent hole in the same class is still the hole.
     quadlet_dir = units_dir(resolved.name, resolved.escaped_ref)
     quadlet_dir.mkdir(parents=True, exist_ok=True)
     for path in sorted(template_dir.rglob("*")):
         if path.is_file():
             target = quadlet_dir / path.relative_to(template_dir)
+            units.own_directory(target.parent, owner)
             conf.write_file(target, path.read_text(encoding="utf-8"), units.UNIT_MODE, owner)
 
     record = registry.Registry(
@@ -797,8 +866,18 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
         # An instance's unit directory lives under the service's home and its
         # volumes under `instances/`, a sibling of the service's own and never a
         # child of them (spec 2 and 5.2).
+        #
+        # **The instance's own quadlet directory is created here, and it is
+        # the service's own user who owns it.** Without this the directory was
+        # created by the first `units.install` — by `conf.write_file`'s
+        # `path.parent.mkdir` — so it was root-owned with the mutator's umask
+        # (0755, typically) inside a `0700` home, and the spec's "nothing
+        # root-owned lives inside a service's home" was false for it. The
+        # service could not write its own unit directory, and the mode depended
+        # on who invoked the mutator.
         directories += [
             paths.instance_home(name, escaped_ref),
+            paths.instance_home(name, escaped_ref) / paths.QUADLET,
             paths.instance_tree(name, escaped_ref) / volumes.SUBVOLUME,
             paths.instance_tree(name, escaped_ref) / volumes.BULK,
         ]
@@ -849,78 +928,76 @@ def _source_hash(directory: Path) -> str:
     """The content hash of everything that determines the render, for the
     convergence check.
 
-    `_copy_source` copies exactly these things out of a staging tree:
-    `.guarden/`, `compose.yaml`, and the build context (`Containerfile` and
-    `.dockerignore`). Those are the only inputs the renderer and the build
-    verb read, so a hash over them is the exact predicate for "would the
-    rendered units be the same as last time". Compare **source, not output**:
-    a Containerfile build produces an image — hash the Containerfile content,
-    not the built image. A compose render produces quadlets — hash the compose
-    content, not the rendered quadlets.
+    **The whole staged tree, because the whole staged tree is the build's
+    context.** `_copy_source` copies the tree into the home and `podman build`
+    reads the home, so every file in the tree is a build input and not only
+    the four the renderer reads: a Containerfile that COPYs `Cargo.toml` is
+    changed by an edit to `Cargo.toml`, and a hash that did not see it would
+    answer "converged" and skip the rebuild — the image would go on being the
+    old one while the source had moved.
+
+    Compare **source, not output**: a Containerfile build produces an image —
+    hash the source files, not the built image. A compose render produces
+    quadlets — hash the compose content, not the rendered quadlets.
 
     `deployed_sha` (the poke commit) is not: re-ingesting the same commit
     after editing the compose file is a change the operator made and the
     convergence check must see it.
+
+    **The hash walks the tree the way the copy walks it**, and it skips the
+    same things the copy skips: the podman store (which is in the home of a
+    service the tree was read from, and is podman's rather than the source's),
+    the snapper subtree, and the secret database the store holds.
     """
     import hashlib
 
     h = hashlib.sha256()
-    # Every file _copy_source copies — the full set of render inputs.
-    for rel in [".guarden", "compose.yaml", *BUILD_INPUTS]:
-        path = directory / rel
-        if path.is_dir():
-            for f in sorted(path.rglob("*")):
-                if f.is_file() and paths.SNAPSHOTS not in f.parts:
-                    h.update(f.relative_to(directory).as_posix().encode())
-                    h.update(f.read_bytes())
-        elif path.is_file():
-            # `rel` is a name and not only a string: the build inputs are
-            # `Path`s, and a Containerfile that is present would have reached
-            # here as one and ended the create with an AttributeError rather
-            # than a hash (measured: t250, after the Containerfile was seeded).
-            h.update(str(rel).encode())
-            h.update(path.read_bytes())
+    for path in sorted(directory.rglob("*")):
+        if _excluded_from_source(path.relative_to(directory)):
+            continue
+        if not path.is_file():
+            continue
+        h.update(path.relative_to(directory).as_posix().encode())
+        h.update(path.read_bytes())
     return h.hexdigest()
 
 
 def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
-    """The repository's `.guarden/`, compose file and build context into a home.
+    """The repository's whole staged tree into a home.
 
     A repository ships either `compose.yaml` at its root or `.guarden/quadlet/`
     and exactly one of them, and this is the copy that makes
     `add --from <service>` a copy of that service's manifest and unit source
     rather than a re-derivation of them.
 
-    **The whole tree, not the two files, because the build verb reads it.** A
-    home that holds only `.guarden/` and `compose.yaml` is a home with no
-    Containerfile, and `weedr service build` runs `podman build` with that home
-    as its context — so a service whose unit source declares a build would fail
-    with `125` (no such file or directory) on every run. The Containerfile is a
-    build input and it lives beside the unit source, so the context is copied
-    with them; the tree's own layout is unchanged, and the renderer still reads
-    exactly what it read before.
+    **The whole tree, not four files, because the build verb reads it.** The
+    home is `podman build`'s context (spec 6.6), and a `COPY` resolves
+    against the context directory: a Containerfile that says
+    `COPY Cargo.toml Cargo.lock ./` needs those files IN the context, and a
+    context of four files cannot satisfy it — the build died with `125` and
+    `"/Cargo.toml": no such file or directory` (measured, ticket 317). So the
+    tree is copied whole, and the tree's own layout is unchanged.
 
-    **What is not copied: the snapper subtree and anything root-owned.** The
-    guard below walks the same `.snapshots` the service walk skips, because the
-    home is not snapshotted today and a build context that carried snapper's
-    read-only subvolume would be a context `podman build` cannot copy.
+    **What is not copied: the podman store, the podman configuration directory
+    and the snapper subtree.** The store is podman's — it holds the image
+    layers and the per-user secret database in cleartext, and a source read
+    from another service's home (`add --from <service>`) carries that
+    service's store, so copying it whole would copy another service's
+    credential material into the new one. The configuration directory holds
+    the RENDERED units of the service the tree was read from, which are that
+    service's own and not its source's. The guard below walks the same
+    `.snapshots` the service walk skips, because the home is not snapshotted
+    today and a build context that carried snapper's read-only subvolume
+    would be a context `podman build` cannot copy.
+
+    **A file that is not copied is not in the context, and that is not the
+    same as being excluded from it.** The exclusion in the context's own
+    ignore file is a second thing and is written at BUILD time
+    (`weedr._build`), because the home's store grows after this copy and a
+    copy-time exclusion would be a statement about the past.
     """
     home = paths.service_home(name)
-    if (directory / ".guarden").is_dir():
-        # **A link is not dereferenced.** The source is a tree a POKE brought
-        # in, so it is untrusted, and `copytree` follows links by default —
-        # which would copy a target's bytes into the service's home. The copy
-        # carries the link instead.
-        shutil.copytree(
-            directory / ".guarden", home / ".guarden", dirs_exist_ok=True, symlinks=True
-        )
-    for relative in ("compose.yaml", *BUILD_INPUTS):
-        source = directory / relative
-        target = home / relative
-        if source.is_dir():
-            shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
-        elif source.is_file():
-            shutil.copy2(source, target, follow_symlinks=False)
+    _copy_tree(directory, home)
     for path in [home, *sorted(home.rglob("*"))]:
         if paths.SNAPSHOTS in path.parts:
             # The same snapper subtree the service walk skips: read-only, and
@@ -942,6 +1019,157 @@ def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
             conf.set_owner(path, owner, follow=False)
             continue
         conf.set_owner(path, owner)
+
+
+# The paths in a service's home that are guarden's or podman's and not the
+# source's. They are the paths a tree read from a service's OWN home carries
+# and a poke's staging tree does not.
+#
+# **The parts, and not the paths, because a path is not a sequence of parts.**
+# `Path(".config/containers") in (".config", "containers", "systemd")` is
+# False — a `Path` is never equal to a string — so a check written that way
+# matched nothing and the exclusion was silently inert. The comparison is
+# against the tuple of the path's own parts.
+_PODMAN_STORE_PARTS = paths.PODMAN_STORE.parts
+_PODMAN_CONFIG_PARTS = paths.QUADLET.parts[:2]
+
+
+def _excluded_from_source(relative: Path) -> bool:
+    """Whether a path in the source tree is the host's and not the source's.
+
+    The podman store holds the image layers and the per-user secret database
+    in cleartext, and the podman configuration directory holds the RENDERED
+    units of the service the tree was read from. Neither is the source's, and
+    a tree read from a service's own home carries both.
+    """
+    parts = relative.parts
+    if paths.SNAPSHOTS in parts:
+        return True
+    if parts[: len(_PODMAN_STORE_PARTS)] == _PODMAN_STORE_PARTS:
+        return True
+    if parts[: len(_PODMAN_CONFIG_PARTS)] == _PODMAN_CONFIG_PARTS:
+        return True
+    return False
+
+
+def _copy_tree(directory: Path, home: Path) -> None:
+    """The source tree into the home, minus the subtrees that are not the
+    source's.
+
+    **A link is not dereferenced, and one is carried rather than copied.** The
+    source is a tree a POKE brought in, so it is untrusted, and `copytree`
+    follows links by default — which would copy a target's bytes into the
+    service's home. The copy carries the link instead.
+
+    **The podman store and the podman configuration are not copied.** The
+    store is podman's own (it holds the image layers and the per-user secret
+    database), and the configuration directory holds the RENDERED units of
+    the service the tree was read from — neither is the source's, and a tree
+    read from a service's own home carries both.
+
+    **The `.snapshots` subtree is not copied**, for the reason the service
+    walk skips it: snapper's subvolumes are read-only, and a build context
+    that carried one is a context `podman build` cannot copy.
+    """
+    for path in sorted(directory.rglob("*")):
+        relative = path.relative_to(directory)
+        if _excluded_from_source(relative):
+            continue
+        target = home / relative
+        if path.is_symlink():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target, follow_symlinks=False)
+            continue
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        if not path.is_file():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target, follow_symlinks=False)
+
+
+def write_build_exclusions(home: Path, owner: tuple[int, int]) -> None:
+    """Guarden's exclusion into the context's own ignore file, for both of the
+    names podman reads.
+
+    **The exclusion is written at BUILD time and not at copy time**, because
+    the home's podman store grows after the copy — the store is podman's, it
+    holds the image layers, and a copy-time statement about it would be a
+    statement about the past. The build is the moment the context is read.
+
+    **The source's own patterns are kept, and guarden's come after them.**
+    The source owns what the build does not see (spec 6.6), so its patterns
+    are the context's own; and the LAST matching pattern wins (measured on
+    podman 5.7.0: `*.txt` then `!plain.txt` re-includes the file), so guarden's
+    lines last means a source-side `!` negation cannot re-include the store.
+
+    **Both names carry BOTH halves, and that is the whole subtlety.** Podman
+    reads `.containerignore` in preference to `.dockerignore` and never
+    consults the second when the first is present (measured). So:
+
+    - guarden writes **both** names, because a source that ships only
+      `.containerignore` would otherwise have guarden's `.dockerignore`
+      ignored entirely, and the store would go into the image;
+    - and **the source's patterns go into BOTH**, because writing guarden's
+      block alone into `.containerignore` would silently DROP the source's
+      narrowing — the `.dockerignore` would never be read at all, and the
+      source's own exclusion would stop holding. Measured: a context whose
+      `.dockerignore` excluded `Cargo.toml` and whose `.containerignore` held
+      only guarden's block built the image WITH `Cargo.toml` in it.
+
+    So each name is written with the source's patterns of BOTH names first and
+    guarden's block last. A source that ships one of them therefore keeps its
+    narrowing under either name, and the union of the two is what the build
+    sees.
+
+    **The merge is idempotent.** A build that runs twice, or a home that was
+    copied from another service's home, must not accumulate guarden's block
+    twice: the marker line is where guarden's part begins, and everything from
+    there on is replaced.
+
+    **The file is written by root and made readable by the service user**,
+    which is the uid the build runs as. The home is `0700` to that user, so
+    the mode that matters is the file's own.
+    """
+    guarden_lines = [BUILD_MARKER, *BUILD_EXCLUSIONS]
+    source_lines: list[str] = []
+    seen: set[str] = set()
+    for name in BUILD_IGNORE_NAMES:
+        path = home / name
+        if not path.is_file():
+            continue
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for line in _source_ignore_lines(body):
+            if line not in seen:
+                seen.add(line)
+                source_lines.append(line)
+    for name in BUILD_IGNORE_NAMES:
+        body = "\n".join([*source_lines, *guarden_lines]) + "\n"
+        conf.write_file(home / name, body, IGNORE_MODE, owner)
+
+
+def _source_ignore_lines(body: str) -> list[str]:
+    """The source's own patterns, with guarden's previous block removed.
+
+    The marker is where guarden's part begins, so a file that already carries
+    one is truncated there and the source's part is kept — which is what makes
+    the merge idempotent and what keeps a service that edits its own home's
+    ignore file from accumulating guarden's block on every build.
+    """
+    lines: list[str] = []
+    for line in body.splitlines():
+        if line.strip() == BUILD_MARKER:
+            break
+        lines.append(line)
+    # A trailing blank line is the source's own spacing; it is dropped so the
+    # marker is the one thing between the two halves.
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
 
 
 def _reap_staging(parent: Path) -> None:
