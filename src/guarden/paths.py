@@ -123,6 +123,12 @@ PODMAN_STORE = Path(".local/share/containers")
 # rather than in a template — so it widens no authority.
 TEMPLATES = Path(os.environ.get("GUARDEN_TEMPLATES") or (PREFIX / "usr/lib/guarden/templates"))
 
+# The checkout a host's programs are installed FROM, and the tree `soil install`
+# converges a stale copy from. `GUARDEN_REPO_DIR` is the variable
+# `tools/install.sh` already takes, so a host whose checkout is elsewhere
+# converges from the tree it cloned.
+CHECKOUT = Path(os.environ.get("GUARDEN_REPO_DIR") or (PREFIX / "usr/local/src/guarden"))
+
 
 def overrides(service: str) -> Path:
     return ETC_SERVICES / service / "overrides.toml"
@@ -229,6 +235,65 @@ def removed(service: str, when: str, vol: str) -> Path:
 # 2026-10-12) and snapper's subtree is never the service's to own.
 SNAPSHOTS = ".snapshots"
 
+# A `state` volume's DATA lives one level down inside the subvolume, in this
+# directory, and the container mounts THAT rather than the subvolume root
+# (ADR-0020).
+#
+# **Why the data is not at the subvolume's root.** snapper puts its own
+# `.snapshots` subtree inside the subvolume it owns, `0750 root:root`, and the
+# container is rootless: its `uid 0` is the *service* uid through
+# `/etc/subuid`, so it cannot chown a directory owned by the real host root.
+# Every image whose entrypoint runs `chown -R` over its data directory
+# therefore fails against a `state` volume -- the stock `postgres` image among
+# them, and with it `mariadb`, `mysql` and `elasticsearch`. The failure is
+# structural rather than a race: the volume always carries snapper's
+# root-owned subtree.
+#
+# **So the container never sees `.snapshots` at all**, because what it mounts is
+# the payload directory and `.snapshots` is its SIBLING, not its child. The
+# image's own data path lands inside the payload, so the image's convention
+# wins and guarden's layout makes room for it: the repository's mount target
+# is unchanged and no environment value has to be set.
+#
+# **A `bulk` volume has no payload directory**, because it carries no snapper
+# configuration and therefore no `.snapshots` subtree to keep out of the way.
+# Its mount source is the subvolume itself. ADR-0020 says so, and the rule
+# that changed every volume would be a rule about a problem only `state` has.
+DATA = "data"
+
+
+def payload_at(tree: Path, kind: str) -> Path:
+    """The path inside a volume's own tree that its container mounts (ADR-0020).
+
+    **A `state` volume is mounted from its PAYLOAD, one level down inside the
+    subvolume.** The subvolume is snapper's volume and it carries snapper's
+    `.snapshots` subtree, which is root-owned and which the container's root
+    cannot chown; the payload is the subvolume's data without that subtree, and
+    it is what the container sees. A `bulk` volume is mounted from the tree
+    itself, because it carries no snapper configuration and therefore no such
+    subtree.
+
+    **The rule is stated once and asked from two places.** The renderer writes
+    this path into every `Volume=` line, and `weedr clone` mounts a clone of one
+    volume root at the same point in the container; a caller that derived the
+    path itself would be a second statement of ADR-0020, which is how `clone`
+    fell behind the render in the first place.
+    """
+    return tree / DATA if kind == STATE else tree
+
+
+def mount_source_at(base: Path, kind: str, vol: str) -> Path:
+    """The path a declared volume is mounted from, under `base` (ADR-0020)."""
+    return payload_at(base / kind / vol, kind)
+
+
+def mount_source(
+    name: str, kind: str, vol: str, escaped_ref: str | None = None
+) -> Path:
+    """The host path a declared volume is mounted from (ADR-0020)."""
+    base = instance_tree(name, escaped_ref) if escaped_ref else service_tree(name)
+    return mount_source_at(base, kind, vol)
+
 
 def snapshot(name: str, vol: str, number: int, escaped_ref: str | None = None) -> Path:
     """The subvolume a snapshot is, inside the configuration's own layout.
@@ -265,3 +330,16 @@ TREE_MODE = 0o700
 # never a parent of an unsnapshotted one.
 STATE = "state"
 BULK = "bulk"
+
+# The clone's own directory, beside `state/` and `bulk/` (ADR-0025).
+#
+# **It is not under `state/`, and that is the point.** `state/` holds nothing
+# but snapshotted subvolumes — that is why it is split from `bulk/` at all —
+# and a clone has no snapper configuration, so a clone under `state/` would be
+# an unsnapshotted tree in the snapshotted one, which is the mistake the split
+# exists to prevent.
+#
+# **It is under the service's own tree**, because the clone holds the service's
+# data and the tree is `0700` to the service user. A clone under a shared
+# directory would be readable by whoever holds that directory.
+CLONES = "clones"

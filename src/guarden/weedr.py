@@ -20,6 +20,7 @@ from pathlib import Path
 from guarden import (
     basicauth,
     cli,
+    clone,
     conf,
     creator,
     credentials,
@@ -113,6 +114,12 @@ EXPOSE = (
     ("list", "every service's recorded exposure and what it resolves to"),
 )
 
+BASICAUTH = (
+    ("off", "turn the default basic-auth middleware off for one service"),
+    ("on", "put the middleware back; the same login is re-attached"),
+    ("list", "every service's basic-auth posture: the mint and the operator's setting"),
+)
+
 PORT = (
     ("list", "requested, granted and pending, per service"),
     ("open", "grant a public port the manifest requested"),
@@ -126,6 +133,21 @@ FIREWALL = (
 )
 
 PIN = (("sync", "recompute the snapper marks from the pin files and the registries"),)
+
+# The snapshot-clone chain (ticket 327, ADR-0025).
+#
+# **A separate group, and not four more verbs on `weedr service`.** A `service`
+# verb acts on a service; these act on a SNAPSHOT (a `<service>:<volume>@<n>`
+# id), on a DATABASE inside a service, and on a DUMP file. The chain crosses
+# services — the snapshot belongs to one, the load happens in another — and no
+# single one of the four steps has "a service" as its subject.
+CLONE = (
+    ("snapshot", "a throwaway container cut from a snapshot"),
+    ("dump", "a dump out of a service's running database"),
+    ("transform", "the scrub, and what it removed"),
+    ("load", "a dump into a service's own database"),
+    ("remove", "the throwaway container and the clone it runs against"),
+)
 
 SHARE = (
     ("issue", "record a time-bounded grant to reach a tunnel route"),
@@ -154,10 +176,13 @@ GROUPS = (
     ("secret", "the values a service's containers are given", SECRET),
     ("port", "the public ports an admin has granted", PORT),
     ("pin", "the privileged bridge into snapper", PIN),
+    ("clone", "the snapshot-clone chain: a tmp container, a dump, a scrub and a load", CLONE),
     ("share", "the time-bounded grants that reach a tunnel route", SHARE),
     ("module", "the shipped bundles of services and shared programs", MODULE),
     ("firewall", "the firewall rules a service asks for", FIREWALL),
     ("expose", "the per-service exposure record: loopback, tunnel or public", EXPOSE),
+    ("basicauth", "the per-service opt-out from the default basic-auth middleware",
+     BASICAUTH),
     ("project", "repositories, their refs and their poke keys", PROJECT),
 )
 
@@ -170,10 +195,13 @@ Not on the guarden sudoers rule, and not reachable from a deploy:
 `weedr firewall close`, `weedr service purge`,
 `weedr service rollback`, `weedr service add`, `weedr service create`,
 `weedr module add`, `weedr expose set`, `weedr expose unset`,
+`weedr basicauth off`, `weedr basicauth on`,
 `weedr project add`,
-`weedr project grant`, `weedr project revoke`, and every `weedr share`
-verb. A customer-facing grant is safe to have precisely because a poke
-can deploy to a preview and cannot mint, extend or revoke access to one.
+`weedr project grant`, `weedr project revoke`, every `weedr share` verb,
+and every `weedr clone` verb: a clone reads production data and a load
+writes it, so neither is reachable from a poke. A customer-facing grant is
+safe to have precisely because a poke can deploy to a preview and cannot
+mint, extend or revoke access to one.
 """
 
 
@@ -331,6 +359,86 @@ def build_parser() -> argparse.ArgumentParser:
         verb_parser.add_argument("name", metavar="NAME", help="the service")
         verb_parser.add_argument("public_port", metavar="PUBLIC_PORT", help="the public port")
 
+    # --- the snapshot-clone chain (ticket 327, ADR-0025) --------------------
+    clone_snapshot = top["clone"]["verbs"]["snapshot"]
+    clone_snapshot.add_argument(
+        "id", metavar="SNAPSHOT", help="<service>:<volume>@<number>, the clone's source"
+    )
+    clone_snapshot.add_argument(
+        "--as",
+        dest="as_name",
+        metavar="NAME",
+        required=True,
+        help="the throwaway container's name, and the clone's directory below the service",
+    )
+
+    clone_remove = top["clone"]["verbs"]["remove"]
+    cli.add_name(clone_remove, "the service whose clone is removed")
+    clone_remove.add_argument(
+        "--as",
+        dest="as_name",
+        metavar="NAME",
+        required=True,
+        help="the clone's name, as `weedr clone snapshot --as` gave it",
+    )
+
+    for verb, help_text in (
+        ("dump", "the service whose database is dumped"),
+        ("load", "the service whose database is loaded"),
+    ):
+        verb_parser = top["clone"]["verbs"][verb]
+        cli.add_name(verb_parser, help_text)
+        verb_parser.add_argument(
+            "--db",
+            dest="database",
+            metavar="DATABASE",
+            required=True,
+            help="the database inside the service",
+        )
+
+    top["clone"]["verbs"]["dump"].add_argument(
+        "--out",
+        dest="out",
+        metavar="FILE",
+        required=True,
+        help="the dump's name, inside the service's own bulk volume",
+    )
+    top["clone"]["verbs"]["dump"].add_argument(
+        "--from",
+        dest="source",
+        metavar="SERVICE:CONTAINER",
+        default=None,
+        help="the source service and container to dump from, as `<service>:<container>`; the "
+        "service's own database container when omitted, and the throwaway clone as "
+        "`<source-service>:<as-name>` in the chain's own first step. The container runs in the "
+        "SOURCE service's podman store, so the service it belongs to is part of the name",
+    )
+
+    clone_transform = top["clone"]["verbs"]["transform"]
+    cli.add_name(clone_transform, "the service whose `scrub:` rule is applied")
+    clone_transform.add_argument(
+        "--from",
+        dest="source",
+        metavar="FILE",
+        required=True,
+        help="the dump to transform, inside the service's own bulk volume",
+    )
+    clone_transform.add_argument(
+        "--out",
+        dest="out",
+        metavar="FILE",
+        required=True,
+        help="the scrubbed dump's name, inside the service's own bulk volume",
+    )
+
+    top["clone"]["verbs"]["load"].add_argument(
+        "--from",
+        dest="source",
+        metavar="FILE",
+        required=True,
+        help="the dump to load, inside the service's own bulk volume",
+    )
+
     cli.add_json(top["firewall"]["verbs"]["list"])
     for verb in ("open", "close"):
         verb_parser = top["firewall"]["verbs"][verb]
@@ -348,6 +456,13 @@ def build_parser() -> argparse.ArgumentParser:
         top["expose"]["verbs"]["unset"], "the service returned to its default exposure"
     )
     cli.add_json(top["expose"]["verbs"]["list"])
+
+    for verb, help_text in (
+        ("off", "the service whose edge routers lose the middleware"),
+        ("on", "the service whose middleware comes back"),
+    ):
+        _add_service_name(top["basicauth"]["verbs"][verb], help_text)
+    cli.add_json(top["basicauth"]["verbs"]["list"])
 
     cli.add_json(top["module"]["verbs"]["list"])
     for verb in ("add", "remove"):
@@ -1120,6 +1235,15 @@ def _start(args) -> int:
             "nothing was installed for it and there is nothing that could be running",
             errors.HOST_NOT_AS_ASSUMED,
         )
+    # **A `state` volume whose data is at the root is refused here too**, and
+    # the start is where the operator meets it. The mutator refuses at ingest,
+    # but a service that was deployed before this change carries a volume with
+    # its data at the root, and the operator who re-runs `weedr service start`
+    # on it gets podman's own answer — the image's chown error, in a
+    # container's log, naming nothing that can be acted on. The refusal here
+    # names the volume, the payload directory and the work, and it is the same
+    # refusal the mutator makes (ADR-0020).
+    service.refuse_legacy_volumes(resolved.name, resolved.escaped_ref)
     # ADR-0019: the probe, the record and guarden's own `UserNS=keep-id` line
     # come before the units are handed to systemctl — the line has to be in
     # the file the generator reads, and `start_units` reloads the manager
@@ -1546,6 +1670,60 @@ def _mutable(args) -> int:
 
 def _pin_sync(args) -> int:
     for line in reconcile.run():
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# the snapshot-clone chain (ticket 327, ADR-0025)
+# --------------------------------------------------------------------------
+
+
+def _clone_snapshot(args) -> int:
+    snapshot = snapshotid.parse(args.id)
+    config = config_mod.load()
+    for line in clone.snapshot(snapshot, args.as_name, list(config.tracks)):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+def _clone_remove(args) -> int:
+    config = config_mod.load()
+    for line in clone.remove(args.name, args.as_name, list(config.tracks)):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+def _clone_dump(args) -> int:
+    config = config_mod.load()
+    service = clone.resolve(args.name, list(config.tracks))
+    source = None
+    if args.source is not None:
+        name, separator, container = args.source.partition(":")
+        if not separator or not name.strip() or not container.strip():
+            raise errors.GuardenError(
+                f"--from is {args.source!r}, and it is `<service>:<container>`: the service whose "
+                f"podman store the container lives in, and the container's name",
+                errors.REJECTED_INPUT,
+            )
+        source = (name.strip(), container.strip())
+    for line in clone.dump(service, args.database, args.out, source, list(config.tracks)):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+def _clone_transform(args) -> int:
+    config = config_mod.load()
+    service = clone.resolve(args.name, list(config.tracks))
+    for line in clone.transform(service, args.source, args.out):
+        sys.stdout.write(f"{line}\n")
+    return 0
+
+
+def _clone_load(args) -> int:
+    config = config_mod.load()
+    service = clone.resolve(args.name, list(config.tracks))
+    for line in clone.load(service, args.database, args.source):
         sys.stdout.write(f"{line}\n")
     return 0
 
@@ -2103,11 +2281,14 @@ def _write_exposure(config, record, track, value: str | None) -> None:
     """One record written, and every decision it makes re-resolved with it.
 
     The destinations are rewritten in the same act as the record so the
-    registry never carries a record and a stale answer beside it; the firewall
-    re-renders for the same reason `weedr port open` re-renders — the accept
-    set is a consequence of the record, and a consequence that lags is drift
-    the check would then report. The rendered slice is the *next render*'s
-    (ticket 294): this verb changes one record and nothing a repository owns.
+    registry never carries a record and a stale answer beside it; the route
+    hosts are re-allocated in the same act for the same reason — the name is
+    derived from the destination, so a route moving between the tunnel's zone
+    and the bare name has to move its name with it or the grant and the tunnel
+    disagree (ticket 324). The firewall re-renders because the accept set is a
+    consequence of the record, and a consequence that lags is drift the check
+    would then report. The rendered slice is the *next render*'s (ticket 294):
+    this verb changes one record and nothing a repository owns.
     """
     record.exposure = value
     granted = overrides.load(record.service)
@@ -2118,6 +2299,7 @@ def _write_exposure(config, record, track, value: str | None) -> None:
         set(granted.expose_tunnel) if granted else set(),
         list(record.route_hosts),
     )
+    service.claim_route_hosts(record, track, record.route_destinations, config)
     with conf.lock("registry"):
         registry.save(record, (0, users.group_id(PROGRAM_GROUP)))
     firewall.print_diff(firewall.install(config))
@@ -2147,6 +2329,8 @@ def _expose_set(args) -> int:
         )
     _write_exposure(config, record, track, args.value)
     sys.stdout.write(f"{record.service} exposure {args.value}\n")
+    if args.value == exposure.TUNNEL and record.basicauth:
+        sys.stdout.write(exposure.tunnel_credential_note(record.service) + "\n")
     return 0
 
 
@@ -2184,6 +2368,119 @@ def _expose_list(args) -> int:
     return 0
 
 
+def _basicauth_record(name: str):
+    """The service's registry record, or the refusal naming what is missing.
+
+    A name with no record has no posture to report and no middleware to turn
+    off: the record IS the mint (spec 3.4), so an absent one is the host not
+    being in the state the verb assumed rather than a service awaiting a
+    setting.
+    """
+    record = registry.load(name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{name} has no registry entry, so it has no basic-auth posture to report; "
+            f"`weedr service list` reports the services that exist",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return record
+
+
+def _basicauth_set(args, required: bool) -> int:
+    """`weedr basicauth off|on`: one setting, into the root-owned file.
+
+    **The setting goes into `overrides.toml` and nothing else is written.** The
+    credential is not un-minted and no htpasswd entry is touched: the mint is a
+    fact about the past (spec 3.4) and the opt-out is a decision about the
+    present (ADR-0024), so turning the middleware off leaves the operator's
+    login where it is and turning it back on re-attaches the same one.
+
+    **A service that was never minted one is already in the requested state.**
+    It was created before the policy was in force, or it declares no routes, so
+    there is no middleware to switch — exit `0`, and nothing is written. A file
+    that gained a setting would be a file claiming a posture the service never
+    had.
+
+    **The edge is synced in the same act**, because the setting is read where
+    the edge's own file is written (`roots`, spec 6.4): a verb that wrote the
+    file and left the edge serving the old one would report a change it had not
+    made yet.
+    """
+    record = _basicauth_record(args.name)
+    posture = "on" if required else "off"
+    if not record.basicauth:
+        sys.stdout.write(
+            f"{record.service} has no basic-auth login: it was created before the policy was "
+            f"in force, or it declares no routes, so there is no middleware to turn "
+            f"{posture}; the state is already the requested one\n"
+        )
+        return 0
+
+    path = paths.overrides(record.service)
+    with conf.lock("overrides"):
+        granted = overrides.load(record.service)
+        opted_out = granted.basicauth_required is False
+        already = opted_out if not required else not opted_out
+        if not already:
+            granted.basicauth_required = required
+            overrides.save(record.service, granted, (0, users.group_id(PROGRAM_GROUP)))
+
+    if already:
+        sys.stdout.write(f"{record.service} basic-auth middleware is already {posture}\n")
+        return 0
+    _sync_routes()
+    sys.stdout.write(
+        f"{record.service} basic-auth middleware {posture}; the setting is in {path}, and the "
+        f"edge has been asked to re-sync\n"
+    )
+    return 0
+
+
+def _basicauth_off(args) -> int:
+    return _basicauth_set(args, False)
+
+
+def _basicauth_on(args) -> int:
+    return _basicauth_set(args, True)
+
+
+def _basicauth_list(args) -> int:
+    """The two facts, reported separately because they are separate.
+
+    `minted` is the record's (was a login ever minted here) and `opt_out` is the
+    operator's setting. A service that was never minted one has no middleware
+    and no opt-out, and a service whose middleware is off by the setting still
+    holds its login — so `middleware` is derived from both, and neither fact is
+    folded into the other.
+    """
+    rows = []
+    for name in registry.names():
+        record = registry.load(name)
+        if record is None:
+            continue
+        minted = bool(record.basicauth)
+        opted_out = minted and basicauth.opted_out(record.service)
+        rows.append(
+            {
+                "service": record.service,
+                "middleware": "off" if not minted or opted_out else "on",
+                "minted": minted,
+                "opt_out": opted_out,
+            }
+        )
+    if args.json:
+        sys.stdout.write(json.dumps({"services": rows}) + "\n")
+        return 0
+    for row in rows:
+        note = ""
+        if not row["minted"]:
+            note = " (no login minted)"
+        elif row["opt_out"]:
+            note = " (opted out; the login is still there)"
+        sys.stdout.write(f"{row['service']} {row['middleware']}{note}\n")
+    return 0
+
+
 HANDLERS = {
     "weedr project list": projects.list_json,
     "weedr project add": projects.do_add,
@@ -2197,6 +2494,9 @@ HANDLERS = {
     "weedr expose set": _expose_set,
     "weedr expose unset": _expose_unset,
     "weedr expose list": _expose_list,
+    "weedr basicauth off": _basicauth_off,
+    "weedr basicauth on": _basicauth_on,
+    "weedr basicauth list": _basicauth_list,
     "weedr service ingest": _ingest,
     "weedr service add": _add,
     "weedr service create": _create_service,
@@ -2223,6 +2523,11 @@ HANDLERS = {
     "weedr module add": _module_add,
     "weedr module remove": _module_remove,
     "weedr pin sync": _pin_sync,
+    "weedr clone snapshot": _clone_snapshot,
+    "weedr clone remove": _clone_remove,
+    "weedr clone dump": _clone_dump,
+    "weedr clone transform": _clone_transform,
+    "weedr clone load": _clone_load,
     "weedr share issue": _share_issue,
     "weedr share revoke": _share_revoke,
     "weedr share list": _share_list,

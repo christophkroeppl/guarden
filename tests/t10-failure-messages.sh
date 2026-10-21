@@ -73,11 +73,11 @@ echo "$line" | grep -qF 'exceeded 456s' || _fail "a configured wall clock does n
 unset SUITE_TIMEOUT
 
 # **The runner calls this function twice, every `error:` line in it is one of
-# six known, and every bound it runs is the measured shape.** `_push`
+# seven known, and every bound it runs is the measured shape.** `_push`
 # delivers tests/lxc.sh into the machine, so the drift the extraction could
 # grow is greppable from here, and each pin spans spellings rather than one of
-# them: the count moves on any seventh line naming `error:` in any form (an
-# `echo`, a format variable, a continuation line); the six signatures pin
+# them: the count moves on any eighth line naming `error:` in any form (an
+# `echo`, a format variable, a continuation line); the seven signatures pin
 # each line's leading literal over the comment-stripped stream, so a site that
 # changed or went away fails — while a reword confined to a continuation
 # line's tail beyond that literal is not caught, and the pins catch presence,
@@ -96,11 +96,12 @@ unset SUITE_TIMEOUT
 # which no in-machine suite can do to a host process. That boundary is ticket
 # 266's; what is asserted here is every literal the chain is built from, each
 # pinned by its own measured mutation.
-# Every pin reads the comment-stripped stream — the timeout assignment anchor
-# and the two adjacency pins read the raw file, adjacency being about the
+# Every pin reads the comment-stripped stream except the whole-line assignment
+# anchors and the two adjacency pins below, which read the raw file — an
+# anchor is a whole line prose cannot forge, and adjacency is about the
 # physical next line, which stripping would destroy — so prose quoting a pin
-# cannot break the pin, and a commented-out call cannot satisfy one; a
-# trailing `# …` naming a token would still count.
+# cannot break it, and a commented-out call cannot satisfy one; a trailing
+# `# …` naming a token would still count.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
 calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c '_failure_message "' || true)
@@ -110,17 +111,18 @@ marker_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_failure_message 
 plain_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_failure_message "\$name" "\$rc"[[:space:]]*$' || true)
 [ "$plain_calls" = 1 ] || _fail "the plain call is gone, duplicated, or silenced; it must end its line exactly once"
 sites=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'error:' || true)
-[ "$sites" = 6 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of six is the enumeration"
+[ "$sites" = 7 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of seven is the enumeration"
 # (ticket 271 split one line into two: a lock that was held and a lock that
 # could not be measured were printed as the same failure, and the ticket's
 # whole complaint is that the message could not tell them apart.)
-for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after %ss (held by %s; last answer: %s); '" "printf 'error: the apt locks on %s could not be shown free after %ss (last answer: %s); '" "printf 'error: cannot cut a clean %s\\n'"; do
+# (the seventh is the cache-key refusal: a key not computed runs the suite and records nothing.)
+for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after %ss (held by %s; last answer: %s); '" "printf 'error: the apt locks on %s could not be shown free after %ss (last answer: %s); '" "printf 'error: cannot compute the cache key for %s; it runs and nothing is recorded for it\\n'" "printf 'error: cannot cut a clean %s\\n'"; do
     # `grep -c`, not `grep -q`: a `grep -q` that exits on its first match sends
     # SIGPIPE to the `grep -vE` still writing upstream, and under `pipefail`
     # the pipeline then reads as a failed match — measured here as a race that
     # failed a different signature on each of two identical runs.
     n=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- "$sig" || true)
-    [ "$n" -ge 1 ] || _fail "the runner lost one of its six known error lines: $sig"
+    [ "$n" -ge 1 ] || _fail "the runner lost one of its seven known error lines: $sig"
 done
 kills=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c -- '--foreground --signal=KILL' || true)
 [ "$kills" = 6 ] || _fail "the runner carries $kills '--foreground --signal=KILL' uses; six is the measured set (lock-file check, probe poll, cloud-init status, evidence, the suite's marker, the suite itself)"
@@ -137,20 +139,21 @@ kill_arg=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '--signal=KILL "$SU
 # never named, fails here rather than in the next occurrence.
 grep -qE '^APT_LOCK_WAIT=\$\{GUARDEN_LXC_APT_LOCK_WAIT:-' "$runner" \
     || _fail "the runner no longer takes its apt-lock budget from GUARDEN_LXC_APT_LOCK_WAIT"
-grep -qE '^CLOUD_INIT_WAIT=\$\{GUARDEN_LXC_CLOUD_INIT_WAIT:-' "$runner" \
-    || _fail "the runner no longer bounds cloud-init's status wait from GUARDEN_LXC_CLOUD_INIT_WAIT"
-# The deadline is a CLOCK and its budget is a PARAMETER: a cut takes
-# `APT_LOCK_WAIT`, the golden takes `GOLDEN_APT_LOCK_WAIT`, because a fresh
-# golden's first boot installs the whole package set and needs longer than a cut
-# over a machine that already has it. The pin therefore reads the parameter and
-# its default, not the name of one of its two callers — pinning
-# `-lt "$APT_LOCK_WAIT"` failed the moment the golden got a budget of its own,
-# while the property the line exists for (a wall clock, not a count of polls)
-# was intact.
+grep -qE '^GOLDEN_APT_LOCK_WAIT=\$\{GUARDEN_LXC_GOLDEN_APT_LOCK_WAIT:-' "$runner" \
+    || _fail "the runner no longer gives the golden an overridable apt-lock budget of its own"
+# **One budget per caller, and no second knob.** 737e1c5 made the wait take its
+# budget from the caller; a `CLOUD_INIT_WAIT` assignment beside it bounds nothing.
+status_wait=$(grep -vE '^[[:space:]]*#' "$runner" | grep -B1 -F -- 'cloud-init status --wait' | grep -cF -- '--signal=KILL "$budget"' || true)
+[ "$status_wait" = 1 ] || _fail "cloud-init's status wait is no longer bounded by the budget its caller named"
+knob=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'CLOUD_INIT_WAIT' || true)
+[ "$knob" = 0 ] || _fail "the runner names a CLOUD_INIT_WAIT bound on $knob lines; the status wait takes the caller's budget, and a knob nothing reads is a bound it does not apply"
+# 737e1c5 made the clock a parameter: a cut takes APT_LOCK_WAIT, the golden GOLDEN_APT_LOCK_WAIT.
 budget=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'local budget=${2:-$APT_LOCK_WAIT}' || true)
-[ "$budget" -ge 1 ] || _fail "the runner's lock wait no longer takes its budget as a parameter defaulting to APT_LOCK_WAIT"
+[ "$budget" = 1 ] || _fail "the runner's lock wait no longer takes the caller's budget, defaulting to APT_LOCK_WAIT"
 deadline=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '-lt "$budget"' || true)
-[ "$deadline" -ge 1 ] || _fail "the runner's lock wait no longer polls until the clock it was given runs out"
+[ "$deadline" = 1 ] || _fail "the runner's lock wait no longer polls until the budget its caller named runs out"
+named=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '_wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT"' || true)
+[ "$named" -ge 1 ] || _fail "no caller names a budget of its own, so the golden's longer wait is unreachable"
 guest=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'tests/aptlock.sh' || true)
 [ "$guest" -ge 1 ] || _fail "the runner no longer reads the guest half of the wait from tests/aptlock.sh"
 for verb in probe evidence; do

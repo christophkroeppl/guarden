@@ -14,7 +14,7 @@ and the order is the argument: the opinionated pass runs *after* the source is
 read and *before* anything is emitted, so a converter that passes a field through
 and a repository that writes one by hand are treated identically. The owned fields
 are the refusal list, the whole `PublishPort` set, `Network=pasta:`, `AddHost=`,
-the credential requests, the `.volume` units and the start-order edges. What is
+the credential requests and the start-order edges. What is
 left — image, command, entrypoint, environment, user, working directory, labels —
 belongs to the repository, and podlet owns the translation of those.
 
@@ -125,6 +125,88 @@ REFUSED_DIRECTIVES = (
     "Privileged",
     "Sysctl",
 )
+
+# **A resource cap or a weight is the operator's in this vocabulary too**
+# (spec 4, spec 6.3, ticket 350). The Compose spelling is refused on the
+# repository's own declaration in `compose._refuse_caps`; these are the same
+# statement written in quadlet's tables, and until ticket 350 neither table had a
+# refusal — every key below reached the generated unit verbatim, because none is
+# a key the renderer owns.
+#
+# **The lists are measured against the machine, not transcribed** (the ticket's
+# point 3: a list written from memory during ticket 272 carried manager-level
+# names — `DefaultMemoryLow=`, `DefaultStartupMemoryLow=`, `MemoryPressureWatch=`,
+# `DefaultTasksMax=` — that are not per-unit settings at all, so it refused
+# nothing while reading like a refusal).
+#
+# - `[Container]`: `podman-systemd.unit(5)` (podman 5.7.0) documents `Memory=`,
+#   `PidsLimit=` and `Ulimit=` as the table's resource-carrying keys, and no
+#   other; quadlet has no CPU or IO weight spelling at all, so those are reached
+#   only through `PodmanArgs=`, refused above.
+# - `[Service]`: `systemd.resource-control(5)`'s per-unit directives and
+#   `systemd.exec(5)`'s `Limit…=` set, each of them accepted in a `[Service]`
+#   section by the machine's own parser (`systemd-analyze verify`), which is the
+#   check a remembered list fails. The `Default…` prefix and
+#   `MemoryPressureWatch=` are left out: the parser accepts them in a
+#   `[Service]` section, but they default settings for a unit's *children* and a
+#   service has none, so refusing them would refuse nothing and claim to.
+#
+# **`CPUWeight=` and `IOWeight=` are NOT here, and the exemption is the model**:
+# `_service_keys` overwrites both with the track's weight before the unit is
+# emitted, so a source's value never reaches it. A key is refused where it would
+# otherwise arrive — `StartupCPUWeight=` and `StartupIOWeight=` are the same
+# statement that does survive, so they are refused.
+CONTAINER_CAPS = ("Memory", "PidsLimit", "Ulimit")
+
+SERVICE_CAPS = (
+    "CPUQuota",
+    "CPUQuotaPeriodSec",
+    "AllowedCPUs",
+    "StartupAllowedCPUs",
+    "AllowedMemoryNodes",
+    "StartupAllowedMemoryNodes",
+    "IODeviceWeight",
+    "IODeviceLatencyTargetSec",
+    "IOReadBandwidthMax",
+    "IOWriteBandwidthMax",
+    "IOReadIOPSMax",
+    "IOWriteIOPSMax",
+    "MemoryMin",
+    "MemoryLow",
+    "StartupMemoryLow",
+    "MemoryHigh",
+    "StartupMemoryHigh",
+    "MemoryMax",
+    "StartupMemoryMax",
+    "MemorySwapMax",
+    "StartupMemorySwapMax",
+    "MemoryZSwapMax",
+    "StartupMemoryZSwapMax",
+    "MemoryZSwapWriteback",
+    "TasksMax",
+    "LimitAS",
+    "LimitCORE",
+    "LimitCPU",
+    "LimitDATA",
+    "LimitFSIZE",
+    "LimitLOCKS",
+    "LimitMEMLOCK",
+    "LimitMSGQUEUE",
+    "LimitNICE",
+    "LimitNOFILE",
+    "LimitNPROC",
+    "LimitRSS",
+    "LimitRTPRIO",
+    "LimitRTTIME",
+    "LimitSIGPENDING",
+    "LimitSTACK",
+)
+
+SERVICE_WEIGHTS = ("StartupCPUWeight", "StartupIOWeight")
+
+# `oom_score_adj:` in the Compose vocabulary, and the same statement about
+# whether a container may outlive a host under memory pressure.
+SERVICE_OOM = ("OOMScoreAdjust",)
 
 LOOPBACK = "127.0.0.1"
 ALLOWED_ROOT = "/etc/guarden"
@@ -286,7 +368,15 @@ class Context:
         return home / paths.QUADLET
 
     def volume_path(self, kind: str, volume: str) -> Path:
-        return paths.volume(self.service, kind, volume, self.instance)
+        """The host path a declared volume is mounted from.
+
+        **A `state` volume is mounted from its PAYLOAD, one level down inside
+        the subvolume** (ADR-0020), so the container never sees snapper's
+        `.snapshots` subtree and the image's own recursive chown never reaches
+        it. A `bulk` volume is mounted from the subvolume itself, because it
+        carries no snapper configuration and therefore no such subtree.
+        """
+        return paths.mount_source(self.service, kind, volume, self.instance)
 
     def volume_root(self) -> Path:
         """The tree `volume_root()` paths live under, for this unit.
@@ -446,6 +536,10 @@ def _check_declared(document: manifest_mod.Manifest, present: Path) -> None:
 
 def _compose_source(path: Path, known: set[str] | None = None) -> Source:
     document = compose.document(path)
+    # The document-level tables are checked before the services are, because a
+    # `networks:` table is a claim about the whole document and not about one
+    # container (spec 6.3, ticket 272).
+    compose.refuse_document(document, path)
     declared = compose.services(document, path)
     warnings: list[str] = []
     mounts: dict[str, list[Mount]] = {}
@@ -658,6 +752,21 @@ def refuse_directives(source: Source) -> None:
     files in its own home. What actually holds is the per-service uid and the
     `0700` on its tree (ADR-0003).
 
+    **A resource cap or a weight is refused here as well as in the Compose
+    vocabulary** (spec 4's one statement, ticket 350), which is why
+    `CONTAINER_CAPS` and `SERVICE_CAPS` are checked beside the directive list:
+    `[Container] Memory=` and `[Service] MemoryMax=` state the same thing as
+    `mem_limit:` and `deploy.resources.limits.memory:`, and a rule that held
+    only one vocabulary would be a rule the repository states in the other.
+
+    **The admin's drop-in is not refused, and the ORDER is load-bearing.**
+    `_dropins` merges `/etc/containers/systemd/users/<uid>/<unit>.container.d/`
+    into the unit *after* this runs, and on the copy, so a `[Service]
+    MemoryMax=` there reaches the generated unit — that drop-in is the only way
+    an operator grants a cap (spec 6.3). This function reads the repository's
+    own source and nothing else; a refusal that walked the drop-in too would
+    take away the answer it points at.
+
     **A translated Compose file is not refused here.** Its refusals are on the
     repository's own declaration, in the vocabulary it was written in
     (`compose.refuse`), because `network_mode: host` is *replaced* rather than
@@ -681,6 +790,23 @@ def refuse_directives(source: Source) -> None:
                     f"the unit source {unit.path}: the container {container!r} sets "
                     f"{key}={value!r}, and a guarden service does not get it"
                 )
+        for key in CONTAINER_CAPS:
+            for value in unit.get("Container", key):
+                raise errors.GuardenError(
+                    f"the unit source {unit.path}: the container {container!r} sets "
+                    f"{key}={value!r}, and {compose.CAP_OWNER}"
+                )
+        for keys, why in (
+            (SERVICE_CAPS, compose.CAP_OWNER),
+            (SERVICE_WEIGHTS, compose.WEIGHT_OWNER),
+            (SERVICE_OOM, compose.OOM_OWNER),
+        ):
+            for key in keys:
+                for value in unit.get("Service", key):
+                    raise errors.GuardenError(
+                        f"the unit source {unit.path}: the container {container!r} sets "
+                        f"{key}={value!r}, and {why}"
+                    )
         for value in unit.get("Container", "Network"):
             if not value.startswith(BACKEND):
                 raise errors.GuardenError(
@@ -871,17 +997,17 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
         concrete = context.provider(edge.service)
         if concrete == context.service:
             raise errors.GuardenError(
-                f"the manifest {document.source} needs {edge.service!r}, which is the service "
-                f"that declared it: a self-edge has no consumer and is nearly always a "
-                f"copy-paste"
+                f"the manifest {document.source} needs {edge.service!r}, which resolves to "
+                f"{concrete!r} — the service that declared it: a self-edge has no consumer "
+                f"and is nearly always a copy-paste"
             )
         provider = registry.load(concrete)
         if provider is None:
             raise errors.GuardenError(
                 f"{context.service} needs {edge.service!r} as {edge.prefix!r}, and there is "
-                f"no registry entry for it; a service that does not exist yet is created by a "
-                f"later deploy, and one that never is names a service this host has never "
-                f"heard of",
+                f"no registry entry for {concrete}; a service that does not exist yet is "
+                f"created by a later deploy, and one that never is names a service this host "
+                f"has never heard of",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         if edge.prefix not in provider.provides:
@@ -937,10 +1063,10 @@ def edge_publications(
         ]
         if not numbers:
             raise errors.GuardenError(
-                f"{context.service} needs {edge.service!r} on port {edge.port} and its "
-                f"registry entry names no allocated publication for that edge; the mutator "
-                f"allocates one when it installs the edge, and the renderer does not guess "
-                f"a loopback port",
+                f"{context.service} needs {edge.service!r} on port {edge.port}, which "
+                f"resolves to {concrete!r}, and that provider's registry entry names no "
+                f"allocated publication for the edge; the mutator allocates one when it "
+                f"installs the edge, and the renderer does not guess a loopback port",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         out.append((edge.service, concrete, min(numbers)))
@@ -1534,7 +1660,13 @@ def _volume_lines(
             if context is not None:
                 path = context.volume_path(declared[mount.source], mount.source)
             else:
-                path = ABSENT / declared[mount.source] / mount.source
+                # No host to read, so the path is the one the host would hold:
+                # the same rule, applied to a tree that does not exist. The
+                # `state` volume's mount source is its payload (ADR-0020) and
+                # the `bulk` volume's is the subvolume itself.
+                path = paths.mount_source_at(
+                    ABSENT, declared[mount.source], mount.source
+                )
             out.append(f"{path}:{mount.target}{mode}")
     return out
 
@@ -1719,11 +1851,13 @@ def _routes(
         service=context.service if context else "",
         project=context.record.project if context else "",
         track=context.track.name if context else "",
-        # Ticket 292: the basic-auth policy the mutator recorded at creation
-        # (registry `basicauth`), carried to `roots` in the slice so the
-        # renderer — never the renderer re-reading a manifest — is what places
-        # the middleware. Absent/false is a grandfathered service, and it
-        # renders byte for byte what it rendered before.
+        # Ticket 292: the basic-auth login MINTED for this service at creation
+        # (registry `basicauth`), carried to `roots` in the slice. It is the
+        # fact about the past and it never changes. Whether the middleware that
+        # asks for the login is attached is the operator's setting in the
+        # root-owned `overrides.toml` (ADR-0024), which `roots` reads beside
+        # this flag — so neither half is a manifest key, and a slice that
+        # predates the table renders byte for byte what it rendered before.
         basicauth=bool(context.record.basicauth) if context else False,
         rows=rows,
     )

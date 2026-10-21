@@ -51,8 +51,9 @@ instances of one preview service share their service's single user.
 _Avoid_: ref, slot, sandbox
 
 **unit**:
-A systemd unit. Rootless quadlet generates one per container plus `.volume` units for
-declared volumes.
+A systemd unit. Rootless quadlet generates one per container; a declared volume is not a
+unit of its own, and the container's unit carries a `Volume=` line naming the path the
+mutator made (spec §6.3).
 _Avoid_: container, unit file (when you mean one container's unit)
 
 **publication**:
@@ -125,8 +126,8 @@ _Avoid_: key, token, env var (when you mean the secret's value)
 
 **manifest**:
 `.guarden/service.yml` in a project repository. The only thing a project declares about
-itself: units, state, declared edges, requested ports, routes, widgets, and the shape of its
-secrets.
+itself: units, state, declared edges, requested ports, routes, widgets, the shape of its
+secrets, and the rule for a cloned copy of its data (`scrub:`).
 _Avoid_:  config, spec
 
 **state volume**:
@@ -144,7 +145,8 @@ configuration, is never snapshotted, is never a fork or rollback source, and is 
 subvolume after a fork**: a bulk volume is never cloned from a live volume, because a copy as of
 an instant is not reproducible afterwards and two targets that quietly disagreed would be worse
 than two empty ones. It is a subvolume on every path, the fork included — never a plain
-directory. It still gets a `.volume` unit so a container can mount it. Size is not what makes a
+directory. A container mounts it from the subvolume itself: the unit carries a `Volume=` line
+naming that path, and there is no `.volume` unit (spec §6.3). Size is not what makes a
 volume bulk: a two-terabyte media library is a state volume, because a film somebody deleted has
 to come back. The point of the second word is that "never snapshotted" is a name rather than a
 flag somebody forgets.
@@ -153,10 +155,27 @@ _Avoid_: state volume, scratch, cache
 **snapshot**:
 A point-in-time copy of one state volume, taken atomically while the service runs. A service
 with several state volumes has one snapshot per volume, individually consistent and possibly
-microseconds apart; btrfs cannot do better. A clone of a snapshot is a fork. Two kinds, tagged
+microseconds apart; btrfs cannot do better. A clone of a snapshot becomes a **fork** when it
+replaces a service's state volume; the clone the snapshot-clone chain cuts is the same
+copy-on-write subvolume with no service behind it, and is not a fork. Two kinds, tagged
 differently because two different mechanisms govern them: a **routine** snapshot is
 `timeline`-tagged and lives by the ladder, and an **on-demand** snapshot — a fork source or an
 operator's own — is `number`-tagged and is what the marks protect.
+
+**clone**:
+A copy-on-write subvolume made from a snapshot, never a copy of its data. A **fork** is a clone
+that becomes a service's live volume; `weedr clone snapshot` makes the other kind — a throwaway
+clone under the source service's own `clones/` tree, with a container running against it, no
+unit, no publication, no registry entry, and no snapper configuration. It is writable, carries
+no `.snapshots` of its own, and `weedr clone remove` is what deletes it.
+_Avoid_: fork (that is the service-making kind), copy
+
+**scrub**:
+The `scrub:` rule in a manifest: what a cloned database must not carry. A `tables:` entry empties
+a table; a `keys:` entry removes the rows whose named column starts with a prefix or equals one
+value. `weedr clone transform` applies it to a plain dump, never to a live database, and reports
+every removal. It is a policy, not SQL, and it cannot name a row by a value it was not given.
+_Avoid_: transform script, anonymisation
 
 **ladder**:
 A state volume's retention schedule: how many snapshots to keep per time bucket, aged between
