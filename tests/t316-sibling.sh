@@ -72,17 +72,28 @@ assert_file_lacks "$render/units/guarden.env" "API_PORT=3000"
 # container `api` cannot collide.
 assert_file_lacks "$render/units/nuxt.container" "AddHost=myapp-staging:"
 
-# --- the boundary: a name from ANOTHER source still refuses -------------------
+# --- the boundary: a container of the source that is NOT declared ------------
 #
-# The refusal survives, and it is the one thing this change must not have
-# softened: a name that is not in this unit source resolves to nothing.
+# The refusal survives for a container of THIS source that the manifest did
+# not declare under `siblings:`. Guarden cannot allocate a publication for a
+# container whose port it was never told, so the name would still be dead —
+# and the diagnostic carries the remedy.
 seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
-    "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://elsewhere:3000"
+    "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://api:3000"
 run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "elsewhere"
-assert_stderr_lacks "AddHost="
+assert_stderr_has "api"
+assert_stderr_has "siblings:"
+
+# A name that is NOT a container of this source is not guarden's business: an
+# external host is the repository's own, and a value naming one is a fact
+# about the repository rather than a dead name inside a unit source.
+seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://elsewhere:3000"
+run loom check "$project"
+assert_exit 0
+assert_stderr_empty
 
 # --- the repository's own AddHost= is still refused ---------------------------
 #

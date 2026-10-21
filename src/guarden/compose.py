@@ -285,15 +285,6 @@ def check_siblings(
     resolved = set(known or ())
     for container in sorted(declared):
         for where, text, bare in _host_values(declared[container]):
-            if where.startswith("extra_hosts"):
-                raise errors.GuardenError(
-                    f"the unit source {path}: the service {container!r} writes {where} "
-                    f"({text!r}), and the host entries are the renderer's: it writes "
-                    f"AddHost= for the containers this manifest declares under "
-                    f"`siblings:` and for the declared edges (spec 6.3, 7.3), so an "
-                    f"entry written here is dropped and the name in it resolves to "
-                    f"nothing"
-                )
             if _dials(text, container, bare):
                 raise errors.GuardenError(
                     f"the unit source {path}: the service {container!r} names itself as a "
@@ -306,6 +297,15 @@ def check_siblings(
                     continue
                 if not _dials(text, sibling, bare):
                     continue
+                if where.startswith("extra_hosts"):
+                    raise errors.GuardenError(
+                        f"the unit source {path}: the service {container!r} writes {where} "
+                        f"({text!r}), and the host entries are the renderer's: it writes "
+                        f"AddHost= for the containers this manifest declares under "
+                        f"`siblings:` and for the declared edges (spec 6.3, 7.3), so an "
+                        f"entry written here is dropped and the name in it resolves to "
+                        f"nothing"
+                    )
                 if sibling in resolved:
                     continue
                 raise errors.GuardenError(
