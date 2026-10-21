@@ -94,6 +94,12 @@ APT_LOCK_SH=$REPO/tests/aptlock.sh
 APT_LOCK_GUEST=''
 [ -r "$APT_LOCK_SH" ] && APT_LOCK_GUEST=$(<"$APT_LOCK_SH")
 
+# The host half of the probe cut's storage check (ticket 352), named here for the
+# reason `tests/aptlock.sh` is: a checkout without it is refused before a machine
+# is cut, and not after a conversion has already spent forty-five minutes. The
+# wait itself, and why it is a wait, are in that file's header.
+PROBE_CUT=$REPO/tests/probecut.sh
+
 # **Every suite in the selection runs in a cut machine, and there is no list
 # that can skip one** (ADR-0025). A suite whose subject a machine cannot see
 # fails there rather than vanishing from a run: the host-only allowlist this
@@ -747,6 +753,11 @@ cmd_provision() {
     # failure as that one machine's and would skip suites instead of the run.
     [ -n "$APT_LOCK_GUEST" ] \
         || die "$APT_LOCK_SH is unreadable; a cut cannot wait for apt's locks without it"
+    # The probe cut's check, refused the same way and for the same reason: it is
+    # the last step of a rebuild, and a checkout that cannot perform it should
+    # say so before the golden is deleted rather than after the conversion.
+    [ -x "$PROBE_CUT" ] \
+        || die "$PROBE_CUT is missing, so provision cannot verify the probe cut's storage"
     _ensure_pool
 
     # The rebuild decision needs the machine's own conversion state, which needs
@@ -954,38 +965,17 @@ cmd_provision() {
     # carried the state before its final apply, and only a cut could tell.
     # This cut reads the premises the suites ride: the conversion state, the
     # marker, and the snapper configuration the apt hook needs.
-    local probe="${GOLDEN}-probe"
-    $LXC delete "$probe" --force >/dev/null 2>&1 || true
-    $LXC copy "$GOLDEN/$SNAPSHOT" "$probe" >/dev/null 2>&1 \
-        || die "cannot cut a probe from $GOLDEN/$SNAPSHOT"
-    $LXC start "$probe" >/dev/null 2>&1 || die "the probe cut did not start"
-    for ((i = 0; i < 60; i++)); do
-        $LXC exec -T "$probe" -- true >/dev/null 2>&1 && break
-        sleep 3
-    done
-    # **The readiness loop's outcome is checked, because the assertion after it
-    # is about the STORAGE and not about the machine.** Measured 2026-10-21:
-    # the probe was cut from a golden whose conversion had just converged, and
-    # the provision died with "a cut from guarden-golden/base does not carry
-    # the converged storage state" -- while the cut's own storage was perfect
-    # (btrfs root, no reboot marker, a working `snapper -c root get-config`).
-    # The probe had simply not finished booting: the loop gave up, the
-    # assertion then ran against a machine that was not up, and the report
-    # blamed the storage.
     #
-    # **So the wait is a wait, and its failure is its own failure.** A cut that
-    # cannot answer is not a cut with drifted storage, and saying so is the
-    # difference between "reboot the probe and look again" and "the golden's
-    # snapshot is wrong".
-    $LXC exec -T "$probe" -- true >/dev/null 2>&1 \
-        || die "the probe cut did not come up, so its storage state was never read"
-    $LXC exec -T "$probe" -- bash -lc '
-        test "$(cat /var/lib/guarden/soil/state 2>/dev/null)" = done &&
-        test ! -e /var/lib/guarden/soil/reboot-required &&
-        snapper -c root get-config >/dev/null 2>&1' >/dev/null 2>&1 \
-        || die "a cut from $GOLDEN/$SNAPSHOT does not carry the converged storage state"
-    $LXC delete "$probe" --force >/dev/null 2>&1 || true
-    printf '  the probe cut carries the converged state\n'
+    # **The check is a file of its own because the condition test is the wait**
+    # (ticket 352). It used to be `lxc exec … true` as a gate and one test behind
+    # it; `true` answers as soon as the guest agent is up, while the three
+    # conditions settle after that, so a machine that was merely still booting
+    # was reported as a snapshot with drifted storage. `tests/probecut.sh` cuts
+    # the probe, retries the conditions on a bounded loop, and keeps "never
+    # answered" apart from "answered and wrong" — its header carries the
+    # measurement — and `tests/probestate.sh` is the three conditions themselves,
+    # shipped into the machine so the host's question and a suite's are one file.
+    "$PROBE_CUT" cut "$LXC" "$GOLDEN/$SNAPSHOT" "${GOLDEN}-probe" || exit 1
 
     printf 'provisioned %s on pool %s (snapshot %s)\n' "$GOLDEN" "$POOL" "$SNAPSHOT"
 }
