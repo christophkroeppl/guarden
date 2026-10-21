@@ -437,6 +437,10 @@ def _check_declared(document: manifest_mod.Manifest, present: Path) -> None:
 
 def _compose_source(path: Path) -> Source:
     document = compose.document(path)
+    # The document-level tables are checked before the services are, because a
+    # `networks:` table is a claim about the whole document and not about one
+    # container (spec 6.3, ticket 272).
+    compose.refuse_document(document, path)
     declared = compose.services(document, path)
     warnings: list[str] = []
     mounts: dict[str, list[Mount]] = {}
@@ -1168,6 +1172,11 @@ def _dropins(context: Context | None, source: Source) -> dict[str, Unit]:
     the mutator writes it under, so a hand-written drop-in that happens to
     carry a `UserNS=` line is refused by the base unit's own filter instead
     (the `UserNS` entry in `OWNED_KEYS`).
+
+    **This directory is the only path to the admin's own configuration**
+    (ADR-0024). There is no staging copy of it anywhere: guarden never
+    stages the admin's file and never copies it in, so what the admin writes
+    here is what the generator reads, and what this merge reads.
     """
     out: dict[str, Unit] = {}
     if context is None or not context.record.uid:
@@ -1597,11 +1606,13 @@ def _routes(
         service=context.service if context else "",
         project=context.record.project if context else "",
         track=context.track.name if context else "",
-        # Ticket 292: the basic-auth policy the mutator recorded at creation
-        # (registry `basicauth`), carried to `roots` in the slice so the
-        # renderer — never the renderer re-reading a manifest — is what places
-        # the middleware. Absent/false is a grandfathered service, and it
-        # renders byte for byte what it rendered before.
+        # Ticket 292: the basic-auth login MINTED for this service at creation
+        # (registry `basicauth`), carried to `roots` in the slice. It is the
+        # fact about the past and it never changes. Whether the middleware that
+        # asks for the login is attached is the operator's setting in the
+        # root-owned `overrides.toml` (ADR-0024), which `roots` reads beside
+        # this flag — so neither half is a manifest key, and a slice that
+        # predates the table renders byte for byte what it rendered before.
         basicauth=bool(context.record.basicauth) if context else False,
         rows=rows,
     )

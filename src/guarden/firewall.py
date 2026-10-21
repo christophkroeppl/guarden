@@ -479,7 +479,9 @@ def render(config, grants: list[Grant]) -> str:
         # single default deny last. `service_uids()` is the registry's uids and
         # nothing else: `users.passwd_entries()` would sweep in `guarden`, `hose`,
         # `operator` and every package's system user, and a rule meant for a service
-        # would become a host-wide one.
+        # would become a host-wide one. Root is not one of them: it is added inside
+        # `rules.resolver_lines`, beside the service uids and not as one of them
+        # (ADR-0023), so the resolver's uid set is the service uids and root.
         *rules.resolver_lines(service_uids()),
         # A granted rule renders ABOVE the deny and never after it: position is
         # guarden's, and a grant that landed below a default deny would be

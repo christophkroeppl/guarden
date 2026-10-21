@@ -17,7 +17,7 @@ because a grant is a grant and the boundary is the whole of it.
 
 ## The decision
 
-**`overrides.toml` gains a sixth table, `[ownership]`, and it is the only new surface.
+**`overrides.toml` gains a seventh table, `[ownership]`, and it is the only new surface.
 It is a grant, and it is refused in every way the other grants are refused.**
 
 ```toml

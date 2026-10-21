@@ -86,7 +86,7 @@ ic_convert() {
 
   # The next boot runs a flat btrfs (no subvolumes yet) while the image's fstab
   # still names ext4 for /; rewrite that line for the flat boot. Userspace
-  # rewrites it again for subvol=@ and subvol=@var.
+  # rewrites it again for subvol=@, subvol=@var and subvol=@tmp.
   mkdir -p /guarden-root
   if mount -t btrfs "$ic_dev" /guarden-root; then
     ic_log "patching / in fstab for the flat btrfs boot"
