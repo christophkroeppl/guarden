@@ -463,8 +463,8 @@ def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, di
     refuse a mapping the manifest is asking for.
 
     A concrete name that is not a service name resolves to a service that does
-    not exist — so the consumer is refused at the render with a name no
-    provider can be connected to, and the operator is hunting a line the
+    not exist — so the consumer is refused before anything is created, with a
+    name no provider can be connected to, and the operator is hunting a line the
     diagnostic never describes. The track is validated too: a mapping nothing
     reads is a mapping an operator believes is in effect.
 
