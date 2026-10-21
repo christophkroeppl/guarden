@@ -18,3 +18,14 @@ Image=docker.io/library/postgres:17
 # so the default is already correct: the image's convention wins and guarden's
 # layout makes room for it.
 Volume=pgdata:/var/lib/postgresql/data
+
+# The bulk volume the manifest declares: the landing area the snapshot-clone
+# chain writes a dump into (ticket 327, ADR-0025).
+Volume=bulk:/var/lib/guarden/bulk
+
+# A fixture's superuser password, in the clear on purpose. The image refuses to
+# initialise a cluster with neither POSTGRES_PASSWORD nor
+# POSTGRES_HOST_AUTH_METHOD set, and a fixture that had to plant a credential to
+# be startable would be testing the credential path in every suite that starts
+# it. Nothing here is a secret and nothing on the host reads it.
+Environment=POSTGRES_PASSWORD=guarden-fixture

@@ -189,6 +189,11 @@ to it.
   tree contains nothing but snapshotted subvolumes. A `bulk` volume is
   mounted from the subvolume itself: it has no snapper configuration and
   therefore no `.snapshots` subtree to keep out of the way
+  services/<name>/clones/<name>/  a throwaway clone of one snapshot, made by
+  `weedr clone snapshot` (ADR-0025). It has no
+  snapper configuration and is never snapshotted;
+  it holds the clone's data and is owned by the
+  service user, and a `weedr clone remove` deletes it
   services/<name>/instances/<escaped-ref>/  an instance's OWN tree, on an instance track.
   A sibling of `state/`, never a child of it — see below.
   Its `state/<vol>` has a snapper configuration named
@@ -527,7 +532,7 @@ postgres = "postgres-production"
 
 Each `[providers.<track>]` table maps a logical provider name to the concrete service that serves it in that track. `Config.resolve_provider(track, logical)` returns the concrete name, or `logical` unchanged when there is no mapping — so a manifest that names a full service name (`postgres-production`) keeps working, and a host with no `[providers]` table behaves exactly as before. The resolution runs in the mutator and the renderer, at every point a `needs:` entry becomes a provider lookup, an edge key, a hostname or a `Wants=` edge; both sides resolve from the same table, so the key the mutator writes is the key the renderer reads.
 
-**The two sides of a row are not held to the same rule.** The **concrete** name becomes a Linux user name, so it is a service name in full: the pattern, the 31-character limit and no `..`. The **logical** name is the manifest's own token and a lookup key that becomes nothing, so it is held to the pattern alone — the same rule the manifest's `needs:` entry is held to, and a forty-character logical name is legal in a manifest. A key that is not a name at all can never match a `needs:` entry, and a concrete name that is not one resolves to a service that does not exist — so the consumer is refused at the render with a name no provider can be connected to, and the operator is hunting a line the diagnostic never describes. A name that breaks either rule is **exit `2`**, the same code the track table's own `kind`/`cap`/`fork_from` mistakes carry, and a value of the wrong type is exit `1`.
+**The two sides of a row are not held to the same rule.** The **concrete** name becomes a Linux user name, so it is a service name in full: the pattern, the 31-character limit and no `..`. The **logical** name is the manifest's own token and a lookup key that becomes nothing, so it is held to the pattern alone — the same rule the manifest's `needs:` entry is held to, and a forty-character logical name is legal in a manifest. A key that is not a name at all can never match a `needs:` entry, and a concrete name that is not one resolves to a service that does not exist — so the consumer is refused before anything is created, with a name no provider can be connected to, and the operator is hunting a line the diagnostic never describes. A name that breaks either rule is **exit `2`**, the same code the track table's own `kind`/`cap`/`fork_from` mistakes carry, and a value of the wrong type is exit `1`.
 
 A `[providers.<track>]` for a track the host does not have is **exit `2`** and names the tracks the host does have: it is the same shape as a `fork_from` naming no track, which is a name in this file that names no track, and it is a rule this file states. A mapping nothing reads is a mapping an operator believes is in effect.
 
@@ -1012,6 +1017,17 @@ widgets:
   file: .guarden/widgets/web.yml
 
 schema: .guarden/.env.schema  # names, types, examples; never values
+
+scrub:  # the operator's policy for a CLONED copy of this database (ADR-0025).
+  # `weedr clone transform` reads it and nothing else does. Every row of
+  # a `tables:` entry goes; a `keys:` entry removes the rows whose named
+  # column matches a prefix or one exact value. It is not SQL.
+  tables:
+    - name: ir_mail_server
+  keys:
+    - table: ir_config_parameter
+      column: key
+      prefix: "mail."
 ```
 
 `service:` names a guarden service; `container:` names a container inside this service. A
@@ -1036,7 +1052,10 @@ Validation rules:
   `databases` and nothing else; a `routes` or `ports` entry takes `container` and `port`; a `firewall` entry
   takes `name`, `chain` and `rule` and nothing else; a
   `widgets` entry
-  takes `container` and `file`; a `provides` entry is a **single string naming a kind** — `db`,
+  takes `container` and `file`; a `scrub:` entry takes `tables` and `keys` and nothing else, a
+  `tables` entry takes `name` and nothing else, and a `keys` entry takes `table`, `column` and
+  **exactly one** of `prefix` and `equals` — a rule that named neither would match every row of
+  the table, which is what a `tables` entry is for; a `provides` entry is a **single string naming a kind** — `db`,
   `secret` — and nothing else, because a `provides` entry carries no value and no structure; a
   `state`/`bulk` entry is a string. An unknown key inside one
   of them is refused **by name**, the same as an unknown top-level key. This was a gap: the
@@ -1095,9 +1114,18 @@ Validation rules:
   - **A `state:` volume and a `bulk:` volume both satisfy it.** What the rule protects is the
     data being *gone*; `state:` adds the rollback on top, and a provider that wants that
     declares `state:`.
-- `needs` entries must name a service that exists **or will exist**, carry an `as:` kind, and a
-  port in range. A service that does not exist *yet* is not an error: a poke creates services in
-  dependency order and a manifest may name a service a later deploy brings into being.
+- `needs` entries must name a service this host already has, carry an `as:` kind, and a port in
+  range. **A provider has to exist before its consumer, and the edge is refused before anything is
+  created.** An edge dials the provider's own allocated publication (§7.4), which lives in the
+  provider's registry entry and nowhere else, so a consumer whose provider is absent, whose
+  provider's manifest names no container on that port, or whose provider's registry entry
+  allocates no publication for that container has no port to dial — and every creation path
+  renders the consumer in the same command (`service.create`, and `module add` immediately after
+  it), where that edge is refused. So the mutator makes the same refusal first, before the system
+  user, the home and the volumes, and the refused service leaves nothing behind: no registry
+  record, no units and no tree. A poke creates services in dependency order: the provider first.
+  The one refusal that is `2` rather than `1` is a self-edge — a `needs:` entry that resolves to
+  the service declaring it has no consumer, and the manifest named it itself.
 - **The provider's `provides:` is read from the provider's registry, never from its manifest.** A
   manifest that declared both sides of every edge would be one document the renderer cannot
   reach: the consumer's tree is `0700` to the consumer and `loom` runs as `guarden`, so the
@@ -1106,8 +1134,7 @@ Validation rules:
   code for it rather than two: a provider with no registry entry, or one whose `[provides]
   kinds` does not include the consumer's `as:`, is **exit `1`** with the kind and both service
   names in the diagnostic. There is no case where the disagreement is visible from two manifests
-  alone, so §1.2 has no `2` row for it.
-  check no program could have performed.
+  alone, so §1.2 has no `2` row for it — a check no program could have performed.
 - **`as:` is the variable name, uppercased.** `as: db` gives the consumer `DB_HOST` and
   `DB_PORT`; `as: cache` gives `CACHE_HOST` and `CACHE_PORT`. There is no mapping table to keep in
   step, and no per-edge exception: the manifest names the prefix, so a service that wants
@@ -1235,11 +1262,12 @@ post-processes its output, and owns every field the design has an opinion about:
   *security* decisions unprivileged, not to re-derive a converter.
 - **`loom` owns, on the output**: the refusal list (§6.3), the whole `PublishPort` set, the
   `Network=pasta:` line from `[network] pasta_options`, `AddHost=` per edge, the credential
-  requests, the `.volume` units, the `After=guarden-order.target` drop-in, and the
-  `<name>.target` start-order edges. **Every one of those overwrites or removes something
-  podlet emitted**, which is why running podlet is not the same as trusting it: it is a
-  translator for the fields guarden has no opinion about, and not a security boundary for
-  the fields it does.
+  requests, the `Volume=` lines — podlet's `<name>.volume` suffix stripped, and each declared
+  volume rewritten to the path the mutator made (§6.3) — the `After=guarden-order.target`
+  drop-in, and the `<name>.target` start-order edges. **Every one of those overwrites or
+  removes something podlet emitted**, which is why running podlet is not the same as trusting
+  it: it is a translator for the fields guarden has no opinion about, and not a security
+  boundary for the fields it does.
 
 So `loom` invoking `podlet` does not weaken the rule that the mutator never runs a program over repository input — the mutator runs no program at all over repository input, and podlet runs as the unprivileged renderer, which is exactly where that rule puts the conversion.
 
@@ -1811,6 +1839,21 @@ against one shape.
 
 weedr pin sync  # the privileged bridge into snapper 
 
+weedr clone snapshot <service>:<volume>@<number> --as <name>  # a throwaway container cut from
+  # a snapshot. It is NOT a service: no unit,
+  # no publication, no registry entry and no
+  # track, and it runs in the SOURCE service's
+  # own podman store as that service's user
+weedr clone dump <service> --db <database> --out <file> [--from <service>:<container>]
+  # a plain SQL dump. Without `--from` it is the
+  # service's own database container; the file is
+  # written into the TARGET's bulk volume
+weedr clone transform <service> --from <file> --out <file>  # the service's `scrub:` rule, and
+  # what it removed
+weedr clone load <service> --db <database> --from <file>  # a dump into a database that must
+  # already exist
+weedr clone remove <service> --as <name>  # the container and the clone's subvolume
+
 weedr share issue <name[/ref]> <email> --until <duration>  # record a time-bounded grant to a
   # tunnel route. --until is required and there is no
   # spelling of "never"; a value above [share] max is
@@ -1873,6 +1916,31 @@ weedr project revoke <name> <pubkey>
 
 There is no `weedr redeploy`: deploying is `furrow deploy`, and a mutator that also deploys is
 two programs wearing one name. `remove` has the alias `rm`; nothing else does.
+
+**`weedr clone` is the snapshot-clone chain, and it is a group because the chain crosses
+services** (ADR-0025). A `service` verb acts on a service; these act on a snapshot id, on a
+database inside a service, and on a file in a service's bulk volume, and the four steps belong to
+different services: the snapshot is the source's, the dump lands in the target's bulk volume, the
+scrub rule is the target's manifest, and the load happens in the target. A service that does not
+provide the `db` kind is refused. The chain is postgres's, and `ENGINE` names it in `clone` as it
+does in `edges`.
+
+**The tmp container is not a service and has no lifecycle guarden owns.** It has no unit, no
+publication and no registry entry, and `weedr clone remove` is what ends it. A subvolume under
+`services/<name>/clones/` is guarden's by construction; nothing else is deleted.
+
+**The dump is written into the target's bulk volume and never into `/tmp`.** The operator's own
+step was "staging pg (bulk volume)": a bulk volume is never snapshotted, so a dump in it enters
+no snapshot and no fork. `--out` and `--from` are names inside that volume, and an absolute name
+or one carrying `..` is refused.
+
+**The load restores into a database that already exists and refuses one that does not.** The role
+and the database are the edge's to create (`edges.provision`), and a load that created them would
+make the dump's password the role's password. Re-provisioning an edge's credential after a
+provider's data was recreated is a separate defect and not a verb here.
+
+**A clone is root's and is on no sudoers rule.** It reads production data and a load writes it,
+so neither is reachable from a poke.
 
 `weedr service list` is the status command: name, track, uid, publications with their
 allocated ports, granted public ports with anything pending marked `pending`, volumes with
@@ -2054,7 +2122,12 @@ rendered slices that the mutator installs into `/var/lib/guarden/shared/<name>/`
 **A declared volume is mounted by its own path, and there is no `.volume` unit.** The mutator
 makes the subvolume before the unit is installed, so the `Volume=` line names the path the
 mutator made and the container binds it directly; a `.volume` unit would be a second thing
-saying the same fact, and the one that could go stale.
+saying the same fact, and the one that could go stale. A `state` volume's path is its payload
+directory, `state/<vol>/data/` (§8.1, ADR-0020); a `bulk` volume's is the subvolume itself.
+podlet's `<name>.volume` spelling is its name for a Compose volume, so the renderer strips the
+suffix and matches what remains to a declared volume, while a `Mount=` source ending in
+`.volume` — `.image` and `.network` likewise — is refused, because quadlet resolves such a name
+to a podman object rather than a host path.
 
 `loom` **must** refuse rather than guess, with the code §1.2 gives each case.
 
@@ -2087,6 +2160,20 @@ The renderer refuses, with the directive named: `PodmanArgs=`, `--privileged`, `
 `cap_drop`, `devices`, `network_mode: host`, `pid: host`, `userns_mode`,
 `network_mode: container:`, and any host-path bind outside the service's own volumes,
 `/etc/guarden`, and the paths the admin listed in `mounts.allow`.
+
+**A resource cap or a weight is refused in this vocabulary too, and §4 is the one statement of
+the rule** (ticket 350). A repository that ships units rather than a `compose.yaml` writes
+`[Container] Memory=`, `PidsLimit=` or `Ulimit=`, or `[Service] MemoryMax=`, `CPUQuota=`,
+`TasksMax=`, `LimitNOFILE=` and their neighbours from `systemd.resource-control(5)` and
+`systemd.exec(5)`; none of those is a key the renderer owns, so each reached the generated unit
+verbatim and really capped the container. Each is refused by name on the repository's own unit
+source, with exit `2`, before the unit is generated — and the list is measured against the
+machine's own man pages and parser rather than remembered, because a name that is not a
+per-unit setting refuses nothing while reading like a refusal. `[Service] CPUWeight=` and
+`IOWeight=` are not refused: `_service_keys` overwrites both with the track's weight, so a
+source's value never reaches the unit, and a key is refused where it would otherwise arrive.
+**The admin's drop-in is not part of this refusal** — it is merged into the unit after the
+source's refusals have run, and it is the only way an operator grants a cap.
 
 **The user-namespace directive is refused as repository input, and it is guarden's own line
 to write.** The refusal covers it in both vocabularies and in both of quadlet's spellings —

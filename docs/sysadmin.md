@@ -1443,11 +1443,12 @@ somebody forgot.
 A service may declare as many `state` volumes as it needs, and one snapshot covers all of them.
 Each is a subvolume with its own snapper configuration named `<service>-<volume>`.
 
-A `bulk` volume is a btrfs subvolume like any other and gets a `.volume` unit so a container can
-mount it, but it has no snapper configuration, is never a fork or rollback source, and **is an
-empty subvolume after a fork**. It is a subvolume on every path, the fork included — never a plain
-directory, because the `.volume` unit has to resolve to the same kind of thing either way. It is
-never cloned from a live volume: a copy as of an instant is not reproducible
+A `bulk` volume is a btrfs subvolume like any other and a container mounts it by its own path —
+the subvolume itself — in a `Volume=` line, not a `.volume` unit (spec §6.3). It has no snapper
+configuration, is never a fork or rollback source, and **is an empty subvolume after a fork**. It
+is a subvolume on every path, the fork included — never a plain directory, because the path the
+`Volume=` line names has to resolve to the same kind of thing on a fresh deployment and after a
+fork. It is never cloned from a live volume: a copy as of an instant is not reproducible
 afterwards, and a fork that quietly produced different data on two targets would be worse than an
 empty one. Rebuild it instead, which is what the declaration promises.
 

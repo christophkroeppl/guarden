@@ -155,7 +155,8 @@ a new ADR that supersedes it. The short version:
   which never is. A bulk volume **is** a btrfs subvolume with no snapper configuration, is never
   a fork or rollback source, is never cloned from a live volume, and is **an empty subvolume**
   after a fork. It is a subvolume on every path, the fork included; it is never a plain
-  directory. It still gets a `.volume` unit so a container can mount it. A mounted named volume
+  directory. A container mounts it from the subvolume itself: the unit carries a `Volume=` line
+  naming that path, and there is no `.volume` unit (spec §6.3). A mounted named volume
   in neither list is refused. A service's **home** is not snapshotted and carries no snapper configuration: it holds the image
   store, the per-user podman secret database and build staging. Every declared `state` volume is
   a subvolume with a snapper configuration of its own, a service may declare as many as it needs,
@@ -463,7 +464,7 @@ Rules that hold for every test:
 - **`loom` drives the pinned `podlet` for Compose translation, and treats its output as untrusted
   input.** podlet owns the fields guarden has no opinion about; `loom` overwrites or removes every
   field it does — the refusal list, the whole `PublishPort` set, `Network=pasta:`, `AddHost=`, the
-  credential requests, the `.volume` units, the start-order edges. Running a converter is not
+  credential requests, the `Volume=` lines, the start-order edges. Running a converter is not
   trusting its output. It runs unprivileged, which is what satisfies the rule that
   who runs the converter, not about whether the renderer writes it itself.
 - **The programs are Python console scripts, with no shell entry point.** Each is

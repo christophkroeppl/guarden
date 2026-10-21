@@ -20,3 +20,10 @@ Image=docker.io/library/postgres:17
 # would move the data one level further down for no gain, and it would make
 # the repository carry a value that has to be right for every image.
 Volume=pgdata:/var/lib/postgresql/data
+
+# A fixture's superuser password, in the clear on purpose. The image refuses to
+# initialise a cluster with neither POSTGRES_PASSWORD nor
+# POSTGRES_HOST_AUTH_METHOD set, and a fixture that had to plant a credential to
+# be startable would be testing the credential path in every suite that starts
+# it. Nothing here is a secret and nothing on the host reads it.
+Environment=POSTGRES_PASSWORD=guarden-fixture

@@ -123,6 +123,12 @@ PODMAN_STORE = Path(".local/share/containers")
 # rather than in a template — so it widens no authority.
 TEMPLATES = Path(os.environ.get("GUARDEN_TEMPLATES") or (PREFIX / "usr/lib/guarden/templates"))
 
+# The checkout a host's programs are installed FROM, and the tree `soil install`
+# converges a stale copy from. `GUARDEN_REPO_DIR` is the variable
+# `tools/install.sh` already takes, so a host whose checkout is elsewhere
+# converges from the tree it cloned.
+CHECKOUT = Path(os.environ.get("GUARDEN_REPO_DIR") or (PREFIX / "usr/local/src/guarden"))
+
 
 def overrides(service: str) -> Path:
     return ETC_SERVICES / service / "overrides.toml"
@@ -256,19 +262,29 @@ SNAPSHOTS = ".snapshots"
 DATA = "data"
 
 
-def mount_source_at(base: Path, kind: str, vol: str) -> Path:
-    """The path a declared volume is mounted from, under `base` (ADR-0020).
+def payload_at(tree: Path, kind: str) -> Path:
+    """The path inside a volume's own tree that its container mounts (ADR-0020).
 
     **A `state` volume is mounted from its PAYLOAD, one level down inside the
     subvolume.** The subvolume is snapper's volume and it carries snapper's
     `.snapshots` subtree, which is root-owned and which the container's root
-    cannot chown; the payload is the subvolume's data without that subtree,
-    and it is what the container sees. A `bulk` volume is mounted from the
-    subvolume itself, because it carries no snapper configuration and
-    therefore no such subtree.
+    cannot chown; the payload is the subvolume's data without that subtree, and
+    it is what the container sees. A `bulk` volume is mounted from the tree
+    itself, because it carries no snapper configuration and therefore no such
+    subtree.
+
+    **The rule is stated once and asked from two places.** The renderer writes
+    this path into every `Volume=` line, and `weedr clone` mounts a clone of one
+    volume root at the same point in the container; a caller that derived the
+    path itself would be a second statement of ADR-0020, which is how `clone`
+    fell behind the render in the first place.
     """
-    root = base / kind / vol
-    return root / DATA if kind == STATE else root
+    return tree / DATA if kind == STATE else tree
+
+
+def mount_source_at(base: Path, kind: str, vol: str) -> Path:
+    """The path a declared volume is mounted from, under `base` (ADR-0020)."""
+    return payload_at(base / kind / vol, kind)
 
 
 def mount_source(
@@ -314,3 +330,16 @@ TREE_MODE = 0o700
 # never a parent of an unsnapshotted one.
 STATE = "state"
 BULK = "bulk"
+
+# The clone's own directory, beside `state/` and `bulk/` (ADR-0025).
+#
+# **It is not under `state/`, and that is the point.** `state/` holds nothing
+# but snapshotted subvolumes — that is why it is split from `bulk/` at all —
+# and a clone has no snapper configuration, so a clone under `state/` would be
+# an unsnapshotted tree in the snapshotted one, which is the mistake the split
+# exists to prevent.
+#
+# **It is under the service's own tree**, because the clone holds the service's
+# data and the tree is `0700` to the service user. A clone under a shared
+# directory would be readable by whoever holds that directory.
+CLONES = "clones"
