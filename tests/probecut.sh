@@ -137,6 +137,11 @@ case $verb in
         "$lxc" copy "$source" "$probe" >/dev/null 2>&1 \
             || die "cannot cut a probe from $source"
         "$lxc" start "$probe" >/dev/null 2>&1 || die "the probe cut did not start"
+        # **The budget's clock starts at the wait**, not at the script: the copy
+        # and the start are the cut's cost and not the machine's settling time,
+        # and a wall clock that counted them would report a budget it did not
+        # spend on waiting.
+        SECONDS=0
         rc=0
         _wait "$probe" || rc=$?
         [ "$rc" -eq 0 ] || fail_wait "$rc" "$source"
@@ -144,6 +149,7 @@ case $verb in
         printf '  the probe cut carries the converged state\n'
         ;;
     check)
+        SECONDS=0
         rc=0
         _wait "$instance" || rc=$?
         [ "$rc" -eq 0 ] || fail_wait "$rc" "$instance"
