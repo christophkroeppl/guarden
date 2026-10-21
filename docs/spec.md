@@ -1092,9 +1092,18 @@ Validation rules:
   - **A `state:` volume and a `bulk:` volume both satisfy it.** What the rule protects is the
     data being *gone*; `state:` adds the rollback on top, and a provider that wants that
     declares `state:`.
-- `needs` entries must name a service that exists **or will exist**, carry an `as:` kind, and a
-  port in range. A service that does not exist *yet* is not an error: a poke creates services in
-  dependency order and a manifest may name a service a later deploy brings into being.
+- `needs` entries must name a service this host already has, carry an `as:` kind, and a port in
+  range. **A provider has to exist before its consumer, and the edge is refused before anything is
+  created.** An edge dials the provider's own allocated publication (§7.4), which lives in the
+  provider's registry entry and nowhere else, so a consumer whose provider is absent, whose
+  provider's manifest names no container on that port, or whose provider's registry entry
+  allocates no publication for that container has no port to dial — and every creation path
+  renders the consumer in the same command (`service.create`, and `module add` immediately after
+  it), where that edge is refused. So the mutator makes the same refusal first, before the system
+  user, the home and the volumes, and **no service is left on the box with a registry record and
+  no units.** A poke creates services in dependency order: the provider first. The one refusal
+  that is `2` rather than `1` is a self-edge — a `needs:` entry that resolves to the service
+  declaring it has no consumer, and the manifest named it itself.
 - **The provider's `provides:` is read from the provider's registry, never from its manifest.** A
   manifest that declared both sides of every edge would be one document the renderer cannot
   reach: the consumer's tree is `0700` to the consumer and `loom` runs as `guarden`, so the
