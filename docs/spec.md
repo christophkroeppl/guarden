@@ -1100,10 +1100,10 @@ Validation rules:
   allocates no publication for that container has no port to dial — and every creation path
   renders the consumer in the same command (`service.create`, and `module add` immediately after
   it), where that edge is refused. So the mutator makes the same refusal first, before the system
-  user, the home and the volumes, and **no service is left on the box with a registry record and
-  no units.** A poke creates services in dependency order: the provider first. The one refusal
-  that is `2` rather than `1` is a self-edge — a `needs:` entry that resolves to the service
-  declaring it has no consumer, and the manifest named it itself.
+  user, the home and the volumes, and the refused service leaves nothing behind: no registry
+  record, no units and no tree. A poke creates services in dependency order: the provider first.
+  The one refusal that is `2` rather than `1` is a self-edge — a `needs:` entry that resolves to
+  the service declaring it has no consumer, and the manifest named it itself.
 - **The provider's `provides:` is read from the provider's registry, never from its manifest.** A
   manifest that declared both sides of every edge would be one document the renderer cannot
   reach: the consumer's tree is `0700` to the consumer and `loom` runs as `guarden`, so the
@@ -1112,8 +1112,7 @@ Validation rules:
   code for it rather than two: a provider with no registry entry, or one whose `[provides]
   kinds` does not include the consumer's `as:`, is **exit `1`** with the kind and both service
   names in the diagnostic. There is no case where the disagreement is visible from two manifests
-  alone, so §1.2 has no `2` row for it.
-  check no program could have performed.
+  alone, so §1.2 has no `2` row for it — a check no program could have performed.
 - **`as:` is the variable name, uppercased.** `as: db` gives the consumer `DB_HOST` and
   `DB_PORT`; `as: cache` gives `CACHE_HOST` and `CACHE_PORT`. There is no mapping table to keep in
   step, and no per-edge exception: the manifest names the prefix, so a service that wants
