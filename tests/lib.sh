@@ -352,15 +352,30 @@ assert_rule_count() {
 # Measured: `t160-grants.sh` failed at this line with
 # `error: failed at line 311: grep -vE … (exit 1)` and named no assertion at
 # all, because the assertion never ran. **An empty filter is not an error and
-# it is not a match**, so `|| true` says so; the `if` below is what decides
-# whether the string is present.
+# it is not a match**, so exit 1 is tolerated below and exit >1 is not.
+#
+# `-a` into a scratch file: a binary's `grep -v` answer is stderr-only, so a
+# captured filter passes vacuously; exit 2 means it could not be searched.
 assert_file_lacks() {
     [ -e "$1" ] || return 0
-    local filtered
-    filtered=$(grep -vE '^[[:space:]]*(#|;)' "$1" || true)
-    if printf '%s\n' "$filtered" | grep -qF -- "$2"; then
-        _fail "$1 names $2 and should not"
+    if [ ! -f "$1" ]; then
+        _fail "$1 is not a regular file, so it cannot be searched for $2"
+        return 1
     fi
+    local filtered status=0
+    filtered=$(mktemp)
+    grep -a -vE '^[[:space:]]*(#|;)' -- "$1" >"$filtered" || status=$?
+    if [ "$status" -gt 1 ]; then
+        rm -f "$filtered"
+        _fail "$1 could not be searched for $2 (grep exit $status)"
+        return 1
+    fi
+    if grep -aqF -- "$2" "$filtered"; then
+        rm -f "$filtered"
+        _fail "$1 names $2 and should not"
+        return 1
+    fi
+    rm -f "$filtered"
 }
 
 assert_executable() {
