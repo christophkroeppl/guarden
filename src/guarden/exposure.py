@@ -102,26 +102,7 @@ def resolve(record, track, modules: Iterable[str] | None) -> str:
 
 
 def tunnel_credential_note(service: str) -> str:
-    """What protects a tunnel route, and what does not (ADR-0024, ticket 323).
-
-    **The edge's basic-auth login does not travel to the tunnel.** The
-    middleware lives in traefik's file provider at the edge, and cloudflared
-    dials the service's publication directly — `http://<name>:<publication>` in
-    the tunnel ingress `roots` renders — so the edge is never in that path and
-    the edge's middleware is never in it either.
-
-    A tunnel route's protection is the **vendor's** Access policy, and
-    guarden's own instrument for it is `weedr share issue`: a time-bounded
-    issuance projected onto the vendor's `Allow` policy (spec 6.2). So the act
-    that promotes a service to the tunnel says both halves — what protects the
-    route, and the credential that does not follow it — because the split
-    between the two terminators is invisible from the guarden side: an
-    operator who promoted a service and saw only `exposure tunnel` would
-    reasonably believe the login came with it.
-
-    The line is one line and it names the service, the route's new posture and
-    the verb that is the answer, so it can be read on its own.
-    """
+    """The line `weedr expose set … tunnel` adds for a service with an edge login (ADR-0024)."""
     return (
         f"{service} is reached through the tunnel, and the tunnel is a different terminator: "
         f"its route carries no middleware at all — the edge's basic auth login and its "

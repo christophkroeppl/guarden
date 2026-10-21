@@ -2147,14 +2147,6 @@ def _expose_set(args) -> int:
         )
     _write_exposure(config, record, track, args.value)
     sys.stdout.write(f"{record.service} exposure {args.value}\n")
-    # Ticket 323: a tunnel route is a different terminator, and the edge's
-    # basic-auth login does not travel to it. The act is the only place an
-    # operator decides this, so it is the only place the split can be read —
-    # and the split is invisible from the guarden side otherwise.
-    #
-    # The line is written only for a service that HAS a login. A service with
-    # no login has no credential that could have followed it, and a line about
-    # nothing is noise.
     if args.value == exposure.TUNNEL and record.basicauth:
         sys.stdout.write(exposure.tunnel_credential_note(record.service) + "\n")
     return 0

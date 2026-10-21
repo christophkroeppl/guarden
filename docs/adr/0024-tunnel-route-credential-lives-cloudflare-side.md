@@ -18,7 +18,7 @@ Amends spec §6.2 and §6.4.
 ## Status
 
 accepted (2026-10-21) — implemented on `fix/t323-work`. The test is
-`tests/t453-tunnel-credential.sh`.
+`tests/t454-tunnel-credential.sh`.
 
 ## The decision
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# t453-tunnel-credential.sh — ticket 323: a tunnel route carries no middleware,
+# t454-tunnel-credential.sh — ticket 323: a tunnel route carries no middleware,
 # so the credential that covers it is the vendor's, and the act that promotes a
 # service to the tunnel says so.
 #
@@ -105,6 +105,12 @@ stage_podlet_release
 run soil packages --apply
 assert_not_rejected
 run soil install --apply
+assert_not_rejected
+# The firewall phase installs the unit that loads a rendered set, so the act's
+# own stderr carries nothing but the act's diagnostics: an uninstalled unit is
+# a warning `weedr expose set` is right to print, and it would be measured here
+# as if it were the note's own.
+run soil firewall --apply
 assert_not_rejected
 
 # A service created BEFORE the gate module's policy exists is grandfathered: it
@@ -250,10 +256,12 @@ assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging
 # refusal proves the route is the tunnel's.
 run weedr share issue routed-staging alice@example.com --until 1h
 assert_exit 0
-assert_stdout_has "routed-staging"
+# The verb names the route it granted, and the route is the service's own
+# allocated host — the service name is not what a host answers on.
+assert_stdout_has "staging.web"
 run weedr share list
 assert_exit 0
-assert_stdout_has "routed-staging"
+assert_stdout_has "alice@example.com"
 
 # A route that is NOT on the tunnel is refused by the grant — which is the
 # vendor-side half of the split, measured: the edge's route is the edge's and
