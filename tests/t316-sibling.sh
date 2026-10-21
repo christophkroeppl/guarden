@@ -77,7 +77,9 @@ assert_file_lacks "$render/units/nuxt.container" "AddHost=myapp-staging:"
 # The refusal survives for a container of THIS source that the manifest did
 # not declare under `siblings:`. Guarden cannot allocate a publication for a
 # container whose port it was never told, so the name would still be dead —
-# and the diagnostic carries the remedy.
+# and the diagnostic carries the remedy. The manifest is re-seeded WITHOUT the
+# `siblings:` block, which is what makes this the undeclared case.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet"
 seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
     "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://api:3000"
 run loom check "$project"
@@ -98,19 +100,28 @@ assert_stderr_empty
 # --- the repository's own AddHost= is still refused ---------------------------
 #
 # The key is the renderer's (spec 6.3) and the renderer writes the sibling
-# names itself. A repository writing one would overwrite the renderer's own
-# entry, and the address it names is not one guarden owns.
+# names itself. A repository writing one would have it dropped, so the
+# repository would believe in an address guarden does not carry — and the
+# `siblings:` block is re-seeded so the refusal is THIS one and not the
+# undeclared-sibling one.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
+    "siblings:" "  - container: api" "    port: 3000"
 seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
     "Image=docker.io/library/alpine:3.20" "AddHost=api:10.0.0.1"
 run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "api"
+assert_stderr_has "renderer's"
 
 # And a name that only looks like the sibling's is not a reference: the
 # authority after `//` runs until the next delimiter of a hostname, so
 # `apiary` is a different host and a value mentioning one is text. Refusing it
-# would be a check that fires on its own shadow.
+# would be a check that fires on its own shadow. The `siblings:` block is
+# re-seeded, so the file is otherwise renderable and the value is the only
+# thing that could fire.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
+    "siblings:" "  - container: api" "    port: 3000"
 seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
     "Image=docker.io/library/alpine:3.20" "Environment=API_DOCS=https://apiary.example.com/docs"
 run loom check "$project"
@@ -146,6 +157,8 @@ assert_stderr_has "nowhere"
 # manifest declaring the container under `siblings:` is NOT that — the block
 # names the containers of this source that others may dial, and a container
 # that is both the dialer and the dialled is a fact about the topology.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
+    "siblings:" "  - container: api" "    port: 3000"
 seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
     "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://nuxt:3000"
 run loom check "$project"
@@ -181,9 +194,15 @@ assert_stderr_has "declared twice"
 # --- a service with no siblings renders as it always did ---------------------
 #
 # The absence of the block is the absence of the mechanism, not a refusal, and
-# the rendered unit carries no sibling entry at all.
+# the rendered unit carries no sibling entry at all. The unit source here has
+# ONE container, so there is no sibling of it to name and the value naming
+# `api` is a name outside the source — the repository's own business.
 seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet"
-seed "$project/.guarden/quadlet/nuxt.container" "[Container]" \
+rm -f "$project/.guarden/quadlet/api.container"
+rm -f "$project/.guarden/quadlet/nuxt.container"
+rm -f "$project/.guarden/quadlet/my-api.container"
+rm -f "$project/.guarden/quadlet/my_api.container"
+seed "$project/.guarden/quadlet/web.container" "[Container]" \
     "Image=docker.io/library/alpine:3.20" "Environment=API_URL=http://api:3000"
 run loom check "$project"
 assert_exit 0
