@@ -176,11 +176,19 @@ ruleset=$(cat "$GUARDEN_STDOUT")
     | grep -c -- "-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner $svc_uid ")" = 1 ] \
     || _fail "the service uid's stub accept is not in the enforced chain"
 
-# **The uid-0 publication accept is in the enforced chain too**, which is the
+# The uid-0 publication accept IS in the enforced chain too, which is the
 # other half of the non-vacuity argument: root still reaches the loopback, and
 # what is refused is the resolver and not the loopback.
+#
+# **The pattern is the KERNEL's spelling, read off `iptables-legacy -S`.** The
+# rendered file says `mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump
+# ACCEPT;` and the kernel says `-A guarden-svc -d 127.0.0.1/32 -p tcp -m owner
+# --uid-owner 0 -j ACCEPT` — the address carries its prefix length, the
+# protocol is named, and the module follows the match criteria. A pattern
+# written against the rendered file's spelling would not match, and a pattern
+# written against a guess would not either.
 [ "$(printf '%s\n' "$ruleset" \
-    | grep -c -- '-A guarden-svc -d 127.0.0.1 -m owner --uid-owner 0 ')" = 1 ] \
+    | grep -c -- '-A guarden-svc -d 127.0.0.1/32 -p tcp -m owner --uid-owner 0 -j ACCEPT')" = 1 ] \
     || _fail "root's publication accept is not in the enforced chain"
 
 # --- the decision, part 3: the DENY still refuses root's query --------------
@@ -245,6 +253,113 @@ after_service=$(deny_packets)
 printf 'MEASURE: SERVICE_RESOLVER_DENY_COUNTER=%s->%s\n' "$after" "$after_service" >&2
 [ "$after_service" = "$after" ] \
     || _fail "the service uid's resolver query met the deny, so the accepts are not above it"
+
+# --- the assertion is not vacuous: it FAILS under the other answer -----------
+
+# **A test that would pass under both answers proves nothing, and ticket 303
+# says so by name.** Every assertion above states the DECISION — root is not in
+# the resolver's accept set, and the deny refuses root's query — and the way to
+# show an assertion is not vacuous is to change the behaviour and watch it fail.
+#
+# **So this file changes the behaviour, on the running host, and asserts that
+# its own assertions go RED.** The other answer is implemented by hand: the
+# uid-0 resolver accept is added to the INSTALLED set, above the deny, exactly
+# as the renderer would have written it, and the firewall is reloaded. Then the
+# two measurements are repeated:
+#
+#   * root's datagram to the resolver must NOT move the deny's counter — it is
+#     ACCEPTED now, and this is what the file asserted it was NOT;
+#   * the enforced chain must now CARRY a uid-0 accept at the resolver.
+#
+# **Both must fail, and they are asserted to fail** — a demonstration that the
+# mutation did not take would leave the whole non-vacuity claim unproven. The
+# installed set is restored and reloaded afterwards, so the host is left as it
+# was found and the file's own closing assertions still hold.
+#
+# **This mutates the INSTALLED set and not the rendered one.** The rendered
+# file is what guarden intends and the installed set is what the box enforces;
+# the demonstration is about the box, and editing the rendered file would leave
+# the file and the kernel disagreeing for the rest of the run.
+backup="$GUARDEN_FIXTURES/50-services.conf.bak"
+cp "$conf" "$backup"
+cleanup_restore() {
+    cp "$backup" "$conf" 2>/dev/null || true
+    systemctl restart guarden-firewall.service >/dev/null 2>&1 || true
+}
+trap cleanup_restore EXIT
+
+# The other answer, in the renderer's own dialect: the two uid-0 accepts at
+# the resolver, above the deny, in the same place the service uid's pair sits.
+sed -i 's|^    mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;$|&\n    mod owner uid-owner 0 daddr 127.0.0.53 proto udp dport 53 jump ACCEPT;\n    mod owner uid-owner 0 daddr 127.0.0.53 proto tcp dport 53 jump ACCEPT;|' \
+    "$conf"
+[ "$(grep -c 'mod owner uid-owner 0 daddr 127.0.0.53' "$conf" || true)" = 2 ] \
+    || _fail "the demonstration did not take: the uid-0 resolver accepts are not in the set"
+
+run systemctl restart guarden-firewall.service
+assert_exit 0
+wait_settled guarden-firewall.service
+
+# The enforced chain now carries them, and this is the assertion from above,
+# which asserted their ABSENCE.
+run iptables-legacy -S guarden-svc
+assert_exit 0
+mutated=$(cat "$GUARDEN_STDOUT")
+[ "$(printf '%s\n' "$mutated" \
+    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner 0 ')" = 1 ] \
+    || _fail "the demonstration did not take: the enforced chain has no uid-0 resolver accept"
+
+# **And root's datagram is now ACCEPTED, so the deny's counter does NOT
+# move** — which is exactly what the assertion above required it to do. This
+# is the counter-assertion: the measurement is repeated under the other answer
+# and the answer is the opposite one.
+before_mutated=$(deny_packets)
+run nc -u -w1 127.0.0.53 53 || true
+after_mutated=$(deny_packets)
+printf 'MEASURE: UNDER_THE_OTHER_ANSWER_ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' \
+    "$before_mutated" "$after_mutated" >&2
+[ "$after_mutated" = "$before_mutated" ] \
+    || _fail "the demonstration did not take: root's datagram still met the deny with a uid-0 accept present"
+
+# **And the file's own absence assertion, evaluated against the mutated set,
+# is now FALSE.** This is the line that makes the non-vacuity claim checkable
+# rather than asserted: the condition asserted above — "the enforced chain
+# carries NO uid-0 accept at the resolver" — is evaluated against a host that
+# holds the other answer, and it does not hold. The count here is asserted to
+# be ONE where the file's own assertion demanded ZERO.
+#
+# **The shape is the one `t502-service-user-root.sh` uses for its RED
+# demonstration**: the mutation is asserted to have taken, and the assertion
+# below states the mutated state's answer rather than the original's. A
+# demonstration that did not take would leave the whole non-vacuity claim
+# unproven, so it fails loudly instead.
+[ "$(printf '%s\n' "$mutated" \
+    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner 0 ')" = 1 ] \
+    || _fail "the file's own absence assertion did not go red under the other answer, so it is vacuous"
+
+# The host is restored, and the restore is VERIFIED rather than assumed: a
+# restore that silently failed would leave the box holding the other answer and
+# every closing assertion below would be measuring that instead.
+cleanup_restore
+trap - EXIT
+run systemctl restart guarden-firewall.service
+assert_exit 0
+wait_settled guarden-firewall.service
+run iptables-legacy -S guarden-svc
+assert_exit 0
+restored=$(cat "$GUARDEN_STDOUT")
+[ "$(printf '%s\n' "$restored" \
+    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner 0 ')" = 0 ] \
+    || _fail "the restore did not take: the enforced chain still carries a uid-0 resolver accept"
+
+# **And the decision holds again on the restored host**, so the file ends where
+# it began: the deny refuses root's query.
+before_final=$(deny_packets)
+run nc -u -w1 127.0.0.53 53 || true
+after_final=$(deny_packets)
+printf 'MEASURE: RESTORED_ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' \
+    "$before_final" "$after_final" >&2
+[ "$after_final" != "$before_final" ] \
+    || _fail "after the restore the deny does not refuse root's resolver query"
 
 # --- what the decision does NOT change --------------------------------------
 
