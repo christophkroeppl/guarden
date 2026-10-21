@@ -23,23 +23,24 @@
 # is in the blob and not in the store is a credential nothing can use.
 #
 # **To tell "the mint asked" apart from "a watcher noticed", the watcher is
-# masked for this half.** `guarden-creds.path` watches `/etc/guarden/creds/`
+# stopped for this half.** `guarden-creds.path` watches `/etc/guarden/creds/`
 # and starts `guarden-creds-boot.service` when the tree changes, and it fires
 # on the blob's own write while the mutator is still working — measured, the
-# credential was in the store BEFORE the ingest returned, so an unmasked
-# assertion cannot tell the mint's ask from the watcher's timing. **With the
-# watcher masked, the mint's own ask is the ONLY thing that can deliver the
-# value**, so an assertion with no wait at all is a claim about the mint and
-# not about a race. Measured on the other side: with the watcher stopped, the
-# value never arrived — not immediately, not after fifteen seconds, and only
-# when `guarden-creds-boot.service` was started by hand.
+# credential was in the store BEFORE the ingest returned, so an assertion
+# with the watcher running cannot tell the mint's ask from the watcher's
+# timing. **With the watcher stopped, the mint's own ask is the ONLY thing
+# that can deliver the value**, so an assertion with no wait at all is a
+# claim about the mint and not about a race. Measured on the other side:
+# with the watcher stopped, the value never arrived — not immediately, not
+# after fifteen seconds, and only when `guarden-creds-boot.service` was
+# started by hand.
 #
-# **EVENTUALLY — the watcher still delivers.** The second half unmasks the
-# watcher and asks a question the mint cannot answer: a credential planted by
-# the gate's own generated-value path (`gate.mint_generated`, which plants and
-# does NOT ask) reaches the same store, through the watcher, within a bounded
-# wait. That is the path the `.path` unit exists for, and a regression in it
-# is a regression nobody else would see.
+# **EVENTUALLY — the watcher still delivers.** The second half starts the
+# watcher again and asks a question the mint cannot answer: a credential
+# planted by the gate's own generated-value path (`gate.mint_generated`,
+# which plants and does NOT ask) reaches the same store, through the
+# watcher, within a bounded wait. That is the path the `.path` unit exists
+# for, and a regression in it is a regression nobody else would see.
 #
 # **What is asserted is STATE, not intent**: the podman store under the
 # service's own home carries the key, and the value in it is the SAME value
@@ -82,13 +83,23 @@ run weedr module add gate-traefik
 assert_exit 0
 assert_file_exists /etc/guarden/edge/basicauth-policy
 
-# --- the watcher is masked, so the mint's own ask is the only delivery -------
+# --- the watcher is stopped, so the mint's own ask is the only delivery ------
 #
-# Stopped first, then masked: a masked unit cannot be started, and a stopped
-# one that something starts again is not the absence the first half needs.
+# **Stopped, not masked, and the reason is the unit's own file.** `guarden-
+# creds.path` is a real installed file at `/etc/systemd/system/`, and
+# `systemctl mask` refuses to replace a real file with its own symlink to
+# /dev/null: it answers "Failed to mask unit: File
+# '/etc/systemd/system/guarden-creds.path' already exists" and exits 1. So
+# the unit is stopped, and the stop is what the measurement rests on: the
+# path unit is not a socket or a timer and nothing else starts it, so a
+# stopped path unit watches nothing until something starts it again.
+#
+# **The boot oneshot is NOT affected by this.** `guarden-creds.path` and
+# `guarden-creds-boot.service` are two separate units, and the boot oneshot
+# is a plain `Type=oneshot` with no `[Install]` — the path unit's `Unit=`
+# line is what triggers it, and that trigger is now silent. The oneshot can
+# still be started, which is exactly what the mint's own ask does.
 run systemctl stop guarden-creds.path
-assert_exit 0
-run systemctl mask guarden-creds.path
 assert_exit 0
 assert_inactive guarden-creds.path
 
@@ -118,7 +129,7 @@ secrets_json=$containers/storage/secrets/secrets.json
 
 # **THE CLAIM, ASSERTED NOW.** No wait, no loop, no tolerance: the value is in
 # the store at the moment the creation returned, because the mint asked the
-# materialiser to run before it returned. The watcher is masked, so nothing
+# materialiser to run before it returned. The watcher is stopped, so nothing
 # else could have put it there.
 #
 # podman's `file` secret driver keeps each value base64-encoded in
@@ -205,8 +216,6 @@ after=$(cat "$htpasswd")
 # `.path` unit exists for. The service here declares a schema, so the gate
 # mints a generated value for its `@sensitive` key — and the gate's mint does
 # NOT ask the materialiser, so that value can only arrive by the watcher.
-run systemctl unmask guarden-creds.path
-assert_exit 0
 run systemctl start guarden-creds.path
 assert_exit 0
 

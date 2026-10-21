@@ -31,14 +31,20 @@ assert_not_rejected
 run weedr module add gate-traefik
 assert_exit 0
 
-# **The removal.** The watcher is stopped after the install converged it, so
+# **THE REMOVAL.** The watcher is stopped after the install converged it, so
 # nothing carries the blob into the service's store. Everything else is
 # untouched, and the ingest below is the real one.
+#
+# **Stopped, not masked.** `guarden-creds.path` is a real installed file, and
+# `systemctl mask` refuses to replace a real file with a symlink to
+# /dev/null — it answers "Failed to mask unit: File
+# '/etc/systemd/system/guarden-creds.path' already exists" and exits 1. The
+# stop is what the measurement rests on: the path unit watches nothing until
+# something starts it again, and the boot oneshot it triggers is a separate
+# unit that the mint's own ask can still start.
 run systemctl stop guarden-creds.path
 assert_exit 0
-run systemctl mask guarden-creds.path
-assert_exit 0
-printf 'PROBE watcher-active=%s\n' "$(systemctl is-active guarden-creds.path 2>&1)"
+assert_inactive guarden-creds.path
 
 app=$GUARDEN_PREFIX/var/lib/guarden/staging/basapp/9f2c1ab
 mkdir -p "$app/.guarden/quadlet"

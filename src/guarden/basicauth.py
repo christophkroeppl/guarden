@@ -158,68 +158,17 @@ def write_entry(service: str, password: str) -> Path:
 
 
 def mint(record, when: str) -> None:
-    """Plant the service's login, carry it into the service's own store, and
-    record both halves.
+    """Plant the service's login and record both halves.
 
     Idempotent by the record: the first mint is the login, and a re-ingest or
     an instance of an already-flagged service never re-mints — a login that
     changed underneath an operator's stored credential would be worse than no
-    credential at all. **It also never re-asks**, so the ask below is paid once
-    per service and not on every converge.
-
-    **The plant asks the materialiser to run, and the order of these three
-    lines is the whole of the reason.** `credentials.plant` writes the
-    encrypted blob; the value is in the service's own podman store only once
-    the materialiser has decrypted it there, and the store is what the
-    container's `Secret=` line resolves against. So a plant that does not ask
-    leaves the value's arrival to whoever notices the blob — and the only
-    thing that notices it is the `guarden-creds.path` watcher, which fires
-    when it fires.
-
-    **Measured, because "the watcher is usually fast enough" is not a
-    guarantee.** With the watcher running, the value was in the store before
-    the ingest returned — the watcher fires on the blob's own write while the
-    mutator is still working, so the timing won the race. With
-    `guarden-creds.path` stopped, the value NEVER arrived: not immediately,
-    not after fifteen seconds, and only when `guarden-creds-boot.service` was
-    started by hand. So the watcher's arrival is a timing win and not a
-    delivery guarantee, and a box whose path unit is not running — a
-    converged host that has not been rebooted since it was installed, a host
-    where the unit failed, a host where somebody stopped it — carried a blob
-    and no store copy until the next boot.
-
-    **So the mint asks, the way every other plant asks.** `weedr secret set`
-    plants and then asks (spec 6.2: "encrypts into
-    `/etc/guarden/creds/<name>/<KEY>.cred` mode `0600`, then asks the
-    credential materialiser to run"), and the interactive creator plants and
-    asks. A mint is a plant of a credential, and the spec's rule is about the
-    plant rather than about the verb that performed it.
-
-    **The ask is BEFORE the htpasswd entry, and the reason is what a failure
-    leaves behind.** The ask raises when the materialiser is installed and
-    could not carry the value, and this is the root-side mutator: raising
-    ends the creation before the record is saved, so a service that was never
-    created leaves no htpasswd entry pointing at a login nothing serves.
-    Writing the entry first would leave exactly that: an orphan file for a
-    service the registry never recorded.
-
-    **And the ask is before the record's own flags for the same reason**: a
-    failed ask must not record a login as minted, because the next attempt
-    mints a fresh value and a half-recorded one would look like the first
-    mint had happened.
-
-    **The ask is the documented no-op on a host that has not converged.** A
-    box whose `soil install` has not run has no materialiser unit at all, and
-    `ask_materialiser` warns and returns for that case rather than raising —
-    so a service created on such a box still holds its blob and its htpasswd
-    entry, and the value reaches the store when the phase that owns the unit
-    has run. That is the same contract the other two callers of the ask get.
+    credential at all.
     """
     if record.basicauth:
         return
     password = credentials.generated_value()
-    blob = credentials.plant(record.service, KEY, password)
-    credentials.ask_materialiser(record.service, KEY, blob)
+    credentials.plant(record.service, KEY, password)
     write_entry(record.service, password)
     record.basicauth = True
     record.generated[KEY] = when
