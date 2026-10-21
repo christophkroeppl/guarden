@@ -166,8 +166,59 @@ def plant(service: str, key: str, stored: str) -> Path:
     `/run/secrets/<KEY>` (spec 6.3). **The suffix belongs to the file the value
     was encrypted into and to nothing else**, so the embedded name and the
     secret's name are two different names, and only one of them carries `.cred`.
+
+    **The blob is one half of a credential, and a rotation writes both halves
+    or neither.** The basic-auth login is the other half: the edge reads the
+    htpasswd ENTRY and never the blob, so a rotation that replaced the blob
+    and left the entry behind would leave a login in front of the edge that is
+    not the one the operator just rotated to — and nothing would report it,
+    because each half looks correct on its own.
+
+    So the value's other half is written from the same value, and the blob is
+    put back when that write fails. **The blob is written FIRST and the
+    derived half SECOND**, and the order is the whole of the property.
+
+    The blob first, because a failure to write the blob is a failure of the
+    act that exists anyway — the encryption, the write — and it must leave
+    the host exactly as it was: nothing has been written and nothing has to be
+    put back. The derived half second, because that is the write that can be
+    refused by the host (the entry lives on a filesystem the edge's uid and
+    even root can be kept out of), and it is the one whose failure has to undo
+    the blob.
+
+    The undo re-encrypts the value the blob held before, rather than copying
+    the blob's bytes. **What the operator is left holding after a failed
+    rotation is the credential they had** — the old value in both halves —
+    and the value they typed never reached the host at all. The re-encryption
+    produces a blob that decrypts to the same value, which is what "put back"
+    means for a credential: the blob is a container for a value, and the
+    value is the thing that was there.
     """
     validate_key(key)
+    owners = [owner for owner in _owners() if owner.owns(service, key)]
+    blob = paths.cred_blob(service, key)
+    previous = value(service, key) if owners else None
+    _write_blob(service, key, stored)
+    try:
+        for owner in owners:
+            owner.rotate(service, key, stored)
+    except errors.GuardenError as exc:
+        undone = _restore_blob(service, key, previous, blob)
+        raise errors.GuardenError(
+            f"{service}: {key} was not rotated: {exc.message}; the value typed is not on the "
+            f"host, and {blob} "
+            + (
+                "holds the value it held before"
+                if undone
+                else "could NOT be put back, so it holds the value that was typed"
+            ),
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    return blob
+
+
+def _write_blob(service: str, key: str, stored: str) -> Path:
+    """Encrypt `stored` into the service's blob directory and write it."""
     directory = paths.creds(service)
     directory.mkdir(parents=True, exist_ok=True)
     os.chmod(directory, CREDS_MODE)
@@ -178,6 +229,55 @@ def plant(service: str, key: str, stored: str) -> Path:
     )
     conf.write_file(blob, encrypted.stdout, BLOB_MODE)
     return blob
+
+
+def _restore_blob(service: str, key: str, previous: str | None, blob: Path) -> bool:
+    """Put the value the blob held before back into the blob.
+
+    A blob that was not there before is taken away again, so a failed first
+    plant leaves no half of a credential behind — a blob holding a value
+    nothing else holds is a value nobody can log in with and nobody can
+    find.
+
+    **A rollback that fails does not replace the diagnostic that caused it.**
+    The caller is already reporting that the rotation failed and why; a
+    rollback that raises its own error would replace that with one about the
+    rollback, and the operator would be told about the second thing that went
+    wrong instead of the first. So the rollback is best effort and says
+    whether it worked, and the caller's message says which of the two states
+    the host is in — because "the value typed is on the host and the old one
+    is not" is a fact the operator has to be told, not one to leave implied.
+    """
+    try:
+        if previous is None:
+            blob.unlink(missing_ok=True)
+            return True
+        _write_blob(service, key, previous)
+    except (OSError, errors.GuardenError):
+        return False
+    return True
+
+
+def _owners() -> list:
+    """The modules that own an output beside a credential's blob.
+
+    Each one answers for itself: `owns` says whether this key is its, and
+    `rotate` rewrites the output from the value that was just planted.
+
+    **The list is here and the knowledge is not.** This module learns that a
+    key may have an owner and nothing about what that owner does — the key,
+    the file and the policy live in the owning module, which is the only
+    place that has to change when a credential grows a second output. A
+    branch here that named one credential's key would put that credential's
+    specialness into the module every other credential goes through.
+
+    The import is inside the function because the owner imports this module,
+    and a module-level import would be a cycle. It is the shape `previews`
+    uses for `service`.
+    """
+    from guarden import basicauth
+
+    return [basicauth]
 
 
 def materialise(service: str | None = None) -> list[str]:
