@@ -43,7 +43,7 @@ assert_file_exists "$templates"
 echo "MEASURE: the installed template set: $(ls "$templates" 2>/dev/null | tr '\n' ' ')"
 
 found=0
-for name in postgres vaultwarden; do
+for name in postgres vaultwarden rustfs; do
     if [ -d "$templates/$name" ]; then
         found=$((found + 1))
         echo "MEASURE: the $name template is installed"
@@ -51,17 +51,27 @@ for name in postgres vaultwarden; do
         _fail "the $name template is not installed, so \`weedr service create --template $name\` cannot work"
     fi
 done
-[ "$found" -eq 2 ] || _fail "the installed template set holds $found of the two shipped templates"
+[ "$found" -eq 3 ] || _fail "the installed template set holds $found of the three shipped templates"
 
 # The template's own unit file — a template directory with no unit in it is a
 # template that creates a service with no container.
-for name in postgres vaultwarden; do
+for name in postgres vaultwarden rustfs; do
     if ls "$templates/$name"/*.container >/dev/null 2>&1; then
         echo "MEASURE: the $name template carries a unit: $(ls "$templates/$name"/*.container | xargs -n1 basename | tr '\n' ' ')"
     else
         _fail "the $name template directory holds no .container file"
     fi
 done
+
+# **The rustfs template is a PROVIDER of the `secret` kind**, and the kind is
+# what a consumer's edge is checked against — so the template's own unit has
+# to name the vendor's S3 port, which is the port a consumer dials. A template
+# whose unit names no port gives the provider's edge nothing to land on.
+if grep -q 'PublishPort=127.0.0.1:9000:9000' "$templates/rustfs"/*.container; then
+    echo "MEASURE: the rustfs template publishes the S3 port a consumer dials"
+else
+    _fail "the rustfs template does not publish the S3 port, so a consumer's edge has nothing to land on"
+fi
 
 # --- the verb can choose from the set ---------------------------------------
 #

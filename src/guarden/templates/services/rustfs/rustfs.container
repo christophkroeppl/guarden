@@ -1,0 +1,73 @@
+# An S3-compatible object store from a vendor you do not build for:
+# `weedr service create <name> --template rustfs` copies this file into the
+# service's own quadlet directory, `0640` under the service uid.
+#
+# **This is a PROVIDER of the `secret` kind**, which is what a consumer edges
+# to with `auth: secret`: guarden mints one value for the edge, plants it in
+# both stores (the provider's and the consumer's), and the consumer reads it as
+# `<AS>_SECRET`. The provider is the side that can VERIFY it, so the credential
+# is planted in its store too.
+#
+# **The vendor's own credentials are a different thing from the edge's.** These
+# are what the container starts with; the edge's value is minted by guarden
+# when a consumer declares `auth: secret`, and it is a different secret with a
+# different name. The provider needs its own to start; the consumer needs the
+# edge's to authenticate.
+#
+# **A template declares nothing guarden reads** (spec 4): no `state:`, no
+# `bulk:`, no `ports:`, no `schema:`, and — the half that matters here — no
+# `provides:`. A template-created service therefore holds no `provides` kind
+# until a manifest arrives, and a consumer's edge to it is refused until then:
+# the kinds live in the provider's registry, and the mutator writes them from
+# the manifest (spec 7.3).
+#
+# So the operator writes the provider's manifest after creating the service.
+# The shape is:
+#
+#     project: rustfs
+#     units: .guarden/quadlet/
+#     provides:
+#       - secret
+#     ports:
+#       - container: rustfs
+#         port: 9000
+#
+# and `weedr service add <name> --from <name>` reconciles it in.
+
+[Unit]
+Description=rustfs from a guarden service template
+
+[Container]
+Image=docker.io/rustfs/rustfs:latest
+# The S3 API's own port inside the container, on loopback only. Nothing
+# forwards it until a manifest declares a route and an admin grants it — and
+# the publication it is reached on is the one an edge dials.
+PublishPort=127.0.0.1:9000:9000
+# The console is the vendor's own admin UI. It is on loopback and nothing
+# routes to it: a console is not a publication a consumer needs.
+PublishPort=127.0.0.1:9001:9001
+# The store's data directory: the buckets and the objects. A named podman
+# volume, so it is podman's and not a guarden subvolume — a template declares
+# no `state:`, so guarden creates no subvolume and no snapper configuration
+# for it. The state volume arrives with the first manifest that comes in
+# through `weedr service add`.
+Volume=rustfs-data:/data
+# The vendor's own access key and secret, which the container reads to start
+# and to authenticate an S3 client. **These are the provider's credentials and
+# not the edge's** — the edge's value is minted by guarden, planted in both
+# stores, and read by the consumer as `<AS>_SECRET`.
+#
+# The defaults are the vendor's own development values and they are a
+# credential in plaintext in a root-owned file. Change them before the service
+# carries anything, with:
+#
+#   weedr secret set <name> RUSTFS_ACCESS_KEY
+#   weedr secret set <name> RUSTFS_SECRET_KEY
+#
+# which plants the values into the encrypted blob; the unit then asks for them
+# by name and the materialiser delivers them.
+Environment=RUSTFS_ACCESS_KEY=rustfsadmin
+Environment=RUSTFS_SECRET_KEY=rustfsadmin
+# Where the store keeps its data, and the console's own switch.
+Environment=RUSTFS_VOLUMES=/data
+Environment=RUSTFS_CONSOLE_ENABLE=true
