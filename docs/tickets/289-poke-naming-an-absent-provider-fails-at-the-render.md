@@ -60,3 +60,73 @@ match what the mutator does. `t84-provider-diagnostics-mutator.sh` is the suite;
 its second scenario comes back when this is decided.
 
 **Status:** ready-for-agent
+
+## The decision, measured on the branch
+
+**Refuse before identity.** `edges.check` now makes every edge answer the
+renderer makes — an absent provider, a port the provider names no container for,
+a provider whose entry allocates no publication for that port, and a self-edge —
+before the system user exists; `edges.install` asks the same question through
+`_installable` and records the answer. The alternative was rejected: the renderer
+is also `loom render`, which must keep refusing, and it cannot invent a loopback
+port, so tolerating the edge for one caller would put the same rule in two places
+with two answers.
+
+`t84`'s absent-provider scenario comes back, with a self-edge one beside it, and
+`t80`'s two incomplete-edge scenarios change with them: both asserted the
+registry record the old path saved, which is the service this ticket is about.
+`t80`'s "nowhere" scenario was also not measuring what its comment said — it
+named the consumer itself (`nowhere-staging` needs `nowhere-staging`), so it was
+a self-edge whose exit `2` arrived as `1` through `tool.run`'s collapse; it now
+names a provider that is actually absent.
+
+**RED** — `2978ffa`, the tests with the source at its pre-fix state:
+
+```
+$ GUARDEN_LXC_RUNNER=guarden-run-t289 tests/lxc.sh run t84 --no-cache
+error: expected exit 2, got 1
+  stderr: error: runuser exited 2: error: the manifest /var/lib/guarden/staging/ghost/9f2c1ab/.guarden/service.yml needs 'ghost-staging', which resolves to 'ghost-staging' — the service that declared it: a self-edge has no consumer and is nearly always a copy-paste
+error: failed at line 103: return 1 (exit 1)
+FAIL t84-provider-diagnostics-mutator.sh
+1 suites: 1 ran, 0 inherited, 1 failures, 1 machines cut
+```
+
+The suite stops at its first failure, so the absent-provider scenario is not
+reached there. The same tree with the self-edge scenario set aside reaches it,
+and the failure is the half-created service itself:
+
+```
+$ GUARDEN_LXC_RUNNER=guarden-run-t289m tests/lxc.sh run t84 --no-cache
+error: passwd entry for nowhere-staging exists: nowhere-staging:x:994:981::/var/lib/guarden/services/nowhere-staging/home:/usr/sbin/nologin
+error: failed at line 567: return 1 (exit 1)
+FAIL t84-provider-diagnostics-mutator.sh
+1 suites: 1 ran, 0 inherited, 1 failures, 1 machines cut
+```
+
+**GREEN** — `d908801`:
+
+```
+$ GUARDEN_LXC_RUNNER=guarden-run-t289g tests/lxc.sh run t8 --no-cache
+ok   t80-edges.sh
+ok   t83-provider-diagnostics.sh
+ok   t84-provider-diagnostics-mutator.sh
+3 suites: 3 ran, 0 inherited, 0 failures, 3 machines cut
+
+$ GUARDEN_LXC_RUNNER=guarden-run-t289c tests/lxc.sh run t60-secrets --no-cache
+ok   t60-secrets.sh
+1 suites: 1 ran, 0 inherited, 0 failures, 1 machines cut
+
+$ GUARDEN_LXC_RUNNER=guarden-run-t289d tests/lxc.sh run t120-deploy --no-cache
+ok   t120-deploy.sh
+1 suites: 1 ran, 0 inherited, 0 failures, 1 machines cut
+```
+
+`t60-secrets` carried a stale assertion for the warning this ticket removes
+(`assert_stderr_lacks "the edge is recorded with no publication"`, which no
+longer names anything); it now asserts the record's own allocation, which is the
+fact the credential hangs on.
+
+**What this does not change.** The four `needs:` answers no longer reach the
+render. A refusal from the unit source itself — a duplicate `PublishPort`, a
+sibling host in an `Environment=`, a mount outside the allow list — is still made
+by the render after identity, and that ordering is untouched here.

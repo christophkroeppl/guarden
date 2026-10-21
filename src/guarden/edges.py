@@ -56,28 +56,24 @@ def resolve_name(config: config_mod.Config, environment: str, edge: manifest_mod
 
 def check(consumer: str, document: manifest_mod.Manifest, environment: str,
           config: config_mod.Config) -> None:
-    """Refuse an edge the provider does not offer, before anything is created.
+    """Refuse every edge the render would refuse, before anything is created.
 
-    Both service names and both kinds are in the diagnostic, because "the edge is
-    wrong" is not something a person can act on otherwise. The answer came from the
-    provider's registry rather than from the input, so it is exit `1` and not a
-    rejected input (spec 1.2, spec 4).
+    **The render runs in the same command that creates the service**, and it reads
+    an edge's publication from the consumer's registry record: the provider's own
+    allocation, copied in by `install`. It cannot invent one (§6.3), so an edge
+    whose provider is absent, serves no container on that port, or allocates no
+    publication for it has no unit the render can write. `service.create` renders
+    after identity and after the volumes, so that refusal would land on a service
+    that already exists on the box with a registry record and no units — hence this
+    check, before identity and before the volumes, making the same answer first.
 
-    This runs before identity and before the volumes, deliberately. `loom render`
-    refuses the same edge and always will, but a mutator that discovered it at the end
-    of its own ordering would leave a system user, a home and a subvolume behind on the
-    way out — a service that exists on the box and in no registry.
-
-    **A provider with no registry entry is not refused here.** A poke creates services
-    in dependency order and a manifest may name one a later deploy brings into being
-    (spec 4), so there is nothing to compare against, and the render is the right place
-    to say so.
+    A self-edge is the one refusal that is exit `2`: the manifest named the service
+    that declares the edge, which is visible from the consumer's own name and is
+    nearly always a copy-paste. Every other answer here came from the host's
+    registry, so it is exit `1` (spec 1.2, spec 4).
     """
     for edge in document.needs:
-        provider = registry.load(resolve_name(config, environment, edge))
-        if provider is None:
-            continue
-        _offered(consumer, edge, provider)
+        _installable(consumer, edge, environment, config)
 
 
 def edge_key(provider: str, port: int, as_: str = "") -> str:
@@ -123,78 +119,79 @@ def _offered(consumer: str, edge, provider) -> None:
     )
 
 
+def _installable(consumer: str, edge, environment: str, config: config_mod.Config,
+                 ) -> tuple[str, registry.Registry, str, int]:
+    """The concrete provider, the container serving the edge's port, and the
+    publication the consumer dials — or the refusal that says why it cannot.
+
+    One answer for the two callers that need it: `check` asks before anything is
+    created and discards it, `install` asks again because the answer is what the
+    edge's record has to carry. They are the same question, and a second copy of it
+    would be a second answer about which port an edge dials. The provider's own
+    manifest is readable here and nowhere else: its tree is `0700` to the provider
+    and the mutator is root.
+    """
+    name = resolve_name(config, environment, edge)
+    if name == consumer:
+        raise errors.GuardenError(
+            f"{consumer} needs {edge.service!r} as {edge.prefix!r} on port {edge.port}, which "
+            f"resolves to {name!r} — the service that declared it: a self-edge has no consumer "
+            f"and is nearly always a copy-paste"
+        )
+    provider = registry.load(name)
+    if provider is None:
+        raise errors.GuardenError(
+            f"{consumer} needs {edge.service!r} as {edge.prefix!r} on port {edge.port}, and there "
+            f"is no registry entry for {name}: an edge dials the provider's own allocated "
+            f"publication, so {name} has to exist before the service that dials it — a poke "
+            f"creates services in dependency order",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    _offered(consumer, edge, provider)
+    container = _serving(provider, edge.port)
+    if container is None:
+        raise errors.GuardenError(
+            f"the manifest of {provider.service} names no container on port {edge.port}, so "
+            f"{consumer} has nothing to dial: a provider has to name the container that serves "
+            f"that port before its consumer is created",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    publication = provider.publication.get(container)
+    if not isinstance(publication, int) or isinstance(publication, bool):
+        raise errors.GuardenError(
+            f"the registry entry for {provider.service} allocates no publication for the "
+            f"container {container!r} that serves port {edge.port}, so {consumer} has nothing to "
+            f"dial: a deploy of {provider.service} gives it one, and the consumer is created "
+            f"after that",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return name, provider, container, publication
+
+
 def install(entry: registry.Registry, document: manifest_mod.Manifest,
             config: config_mod.Config) -> list[str]:
     """Every `needs:` entry: the publication it dials, its registry record and its
     credential. Mutates `entry.edges` in memory; returns the warnings.
 
-    A provider with no registry entry is a warning, not a refusal: a poke creates
-    services in dependency order and a manifest may name one a later deploy brings
-    into being (spec 4). The edge is recorded with no publication, and `loom` is
-    what refuses it — the manifest was fine and the answer came from the host, so
-    the two answers stay in the two programs that own them.
+    `check` has already refused every edge that cannot be installed, and this asks
+    the same question again because its answer is what the record carries: the
+    provider's own allocation, which its registry entry holds and no manifest does.
+    The warning that survives is `_credential`'s — a provider whose container is not
+    running gets a credential planted and its role deferred.
     """
     warnings: list[str] = []
     for edge in document.needs:
-        provider_name = resolve_name(config, entry.environment, edge)
-        provider = registry.load(provider_name)
-        publication: int | None = None
-        if provider is None:
-            warnings.append(
-                errors.warn(
-                    f"{entry.service} needs {edge.service!r} as {edge.prefix!r}, and there is "
-                    f"no registry entry for {provider_name}; the edge is recorded with no "
-                    f"publication and no credential, and a deploy that creates the provider "
-                    f"completes it"
-                )
-            )
-        else:
-            _offered(entry.service, edge, provider)
-            container = _serving(provider, edge.port)
-            publication, said = _publication(entry.service, edge, provider, container)
-            warnings += said
-            if publication is not None:
-                warnings += _credential(entry, edge, provider, container, publication)
-        entry.edges[edge_key(provider_name, edge.port, edge.prefix)] = {
+        name, provider, container, publication = _installable(
+            entry.service, edge, entry.environment, config)
+        warnings += _credential(entry, edge, provider, container, publication)
+        entry.edges[edge_key(name, edge.port, edge.prefix)] = {
             "port": edge.port,
             "as": edge.prefix,
             "auth": edge.auth,
             "databases": list(edge.databases),
-            "publications": [] if publication is None else [publication],
+            "publications": [publication],
         }
     return warnings
-
-
-def _publication(
-    consumer: str, edge, provider, container: str | None
-) -> tuple[int | None, list[str]]:
-    """The loopback port this edge is served on, from the provider's own registry.
-
-    The provider names the container and the container's port in its own manifest,
-    and that entry is what gave the container its publication when the provider was
-    created (§7.4). Every reason the answer is `None` says itself, because a
-    consumer whose edge records no publication is refused by the render, and the
-    diagnostic here is the one that can still name the container.
-    """
-    if container is None:
-        return None, [
-            errors.warn(
-                f"the manifest of {provider.service} names no container on port {edge.port}, "
-                f"so {consumer} dials nothing: the edge is recorded with no publication, and "
-                f"`loom render` refuses it until the provider names the container and its port"
-            )
-        ]
-    held = provider.publication.get(container)
-    if isinstance(held, int):
-        return held, []
-    return None, [
-        errors.warn(
-            f"the registry entry for {provider.service} allocates no publication for the "
-            f"container {container!r} that serves port {edge.port}, so {consumer} dials "
-            f"nothing: the edge is recorded with no publication, and a deploy of the "
-            f"provider gives it one"
-        )
-    ]
 
 
 def _serving(provider: registry.Registry, port: int) -> str | None:

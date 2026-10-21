@@ -11,7 +11,7 @@
 # would send the operator looking for a service called `postgres`, which is not
 # a service on this host at all.
 #
-# The MUTATOR's two refusals are the same rule on the other side of the same
+# The MUTATOR's refusals are the same rule on the other side of the same
 # resolution, and they need a real host, so they live in
 # `t84-provider-diagnostics-mutator.sh`.
 #
