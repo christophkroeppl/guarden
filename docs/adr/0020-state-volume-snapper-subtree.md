@@ -91,7 +91,10 @@ close:
   the mutator refuses with one line, naming the service, the volume, the payload
   directory and the work, and it changes nothing: the volume starts EMPTY and the
   operator moves the data across deliberately. The exit is `1` — the host is not in the
-  state the request assumed.
+  state the request assumed. **`weedr service start` asks the same question through the
+  same function**, because a service deployed before this change carries the old shape
+  and the start is the operator's way out of it; the spec carries where the refusal is
+  enforced (§8.1).
 - **`bulk` volumes are unaffected** — they carry no snapper configuration and therefore
   no `.snapshots` subtree, and their mount source is still the subvolume itself. The
   decision changes only `state` volumes, and a rule that changed every volume would be
