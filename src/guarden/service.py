@@ -443,8 +443,23 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     _make_tree(resolved.name, owner, resolved.escaped_ref)
     _copy_source(directory, resolved.name, owner)
 
-    granted = overrides_mod.seeded(resolved.track, overrides_mod.load(resolved.name))
-    overrides_mod.save(resolved.name, granted, root_owner)
+    # **The read, the seed and the write are one act under the `overrides`
+    # lock.** Every other writer of this file takes it — `weedr port open`,
+    # `weedr port close`, `weedr firewall open`, `weedr firewall close`,
+    # `weedr basicauth on/off` and `units.allow_mounts` — and this one did not,
+    # so a deploy that read the file before an operator's verb wrote it and
+    # saved after installed a document seeded from its own stale read: the
+    # setting is gone, silently, and the one whose loss turns a login back on
+    # is `[basicauth] required = false`.
+    #
+    # It is legal under `conf.LOCK_ORDER`: `overrides` is rank 2 and is taken
+    # here while nothing is held, and the `registry` lock below is rank 3 and
+    # is taken after this `with` has closed. Nothing earlier on this path holds
+    # a lock at all — `previews.admit`'s `preview-cap` is for an instance and
+    # the `deploy-<service>` locks are elsewhere and later (spec 5.3 step 12).
+    with conf.lock("overrides"):
+        granted = overrides_mod.seeded(resolved.track, overrides_mod.load(resolved.name))
+        overrides_mod.save(resolved.name, granted, root_owner)
     # **The group warnings JOIN the label's and are not a replacement for
     # them.** This line assigned `outcome.warnings` outright, so a warning
     # raised before it — the label's, on a host whose projects configuration

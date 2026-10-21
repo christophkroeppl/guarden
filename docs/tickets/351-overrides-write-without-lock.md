@@ -58,7 +58,9 @@ holds `overrides` earlier on this path.
 
 ## Acceptance
 
-- The read-modify-write at `service.py:446-447` is inside `conf.lock("overrides")`.
+- The read-modify-write in `src/guarden/service.py`'s `create` — the one measured
+  at `:446-447` above, and moved down by the fix itself — is inside
+  `conf.lock("overrides")`.
 - A test that demonstrates the lost update: hold the `overrides` lock in one
   process (or interleave a load/save pair), run the re-ingest path, and assert
   the operator's key survives — RED against today's code, GREEN after. If a
@@ -67,6 +69,42 @@ holds `overrides` earlier on this path.
   claiming a race that was never observed.
 - The other three unlocked-or-locked writers listed above keep working: `ports`,
   `firewallrules`, `units` and the basicauth verb are unchanged.
+
+## What the suite pins, and what it does not
+
+**The interleaving that would DROP a key is not reachable from a suite, and
+`tests/t351-overrides-lock.sh` does not claim it.** The read and the save are
+two adjacent statements — `seeded(load(...))`, then `save(...)` — so the window
+an operator's write has to land in is microseconds wide and there is no seam to
+stop the process in. A test that slept "long enough" and then looked would
+report the machine's speed rather than the code, passing most runs and failing
+the rest.
+
+What the suite pins is the property that makes the loss impossible: **the deploy
+waits for the `overrides` lock**, and the document written while it waits is the
+one it reads and preserves.
+
+- An external process takes `/run/guarden/locks/overrides.lock` with `flock(1)`
+  and writes the document `weedr basicauth off` writes —
+  `[basicauth] required = false`. The verb itself cannot be used: it refuses a
+  service with no minted login, and the service in question does not exist yet.
+- `weedr service ingest` is started against a service that does not exist. It
+  creates the user, makes the tree and copies the source, all of them before the
+  write, and then the assertion is on what it has **not** done: `overrides.toml`
+  is still byte-for-byte the operator's document three seconds after that copy
+  landed, and no registry entry exists.
+- Measured RED on the unfixed code, the deploy's own document appeared inside
+  the held lock. Measured GREEN after, the write waits for the release.
+- After the release the file carries **both** halves: the operator's
+  `required = false` and the retention the seed writes, at the mode and owner
+  `overrides.save` states. That is the read happening after the operator's
+  write, which is what the lock buys. A file carrying only the first would be a
+  deploy that never saved; only the second, one that dropped the key.
+
+The one thing the RED run shows plainly is that in **that** interleaving the key
+survived: the deploy's read simply landed after the operator's write, and
+nothing in the code made that true. That is the honest report — the lock is what
+makes it true by construction.
 
 ## Not in scope
 
