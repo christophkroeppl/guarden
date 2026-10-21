@@ -437,6 +437,10 @@ def _check_declared(document: manifest_mod.Manifest, present: Path) -> None:
 
 def _compose_source(path: Path) -> Source:
     document = compose.document(path)
+    # The document-level tables are checked before the services are, because a
+    # `networks:` table is a claim about the whole document and not about one
+    # container (spec 6.3, ticket 272).
+    compose.refuse_document(document, path)
     declared = compose.services(document, path)
     warnings: list[str] = []
     mounts: dict[str, list[Mount]] = {}

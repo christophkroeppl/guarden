@@ -411,9 +411,17 @@ than where the renderer reads, and nothing would look at it. The file name is th
 and the user manager is per service uid, so two services created from one template do not
 share a unit.
 
-**No set ships.** `soil install` builds `/usr/lib/guarden/templates/` from
-`src/guarden/templates/`, and that tree has no `services/` subdirectory, so on a host that has
-just been installed `create` is refused before anything else is asked of it:
+**Two templates ship.** `soil install` copies `src/guarden/templates/` to
+`/usr/lib/guarden/templates/`, and that tree carries a `services/` subdirectory with `postgres`
+and `vaultwarden` in it, so a host that has just been installed already holds a set:
+
+```
+$ ls /usr/lib/guarden/templates/services/
+postgres  vaultwarden
+```
+
+**The set is empty only on a host whose templates were taken away**, and then `create` is
+refused before anything else is asked of it:
 
 ```
 weedr service create myapp --env staging --template postgres
@@ -430,7 +438,7 @@ rule, and then it is exit `2` whatever the host holds:
 
 ```
 weedr service create myapp --env staging --template ../x
-error: the template '../x' is not a template name; /usr/lib/guarden/templates/services holds none
+error: the template '../x' is not a template name; available templates: postgres, vaultwarden
 ```
 
 The same line with templates installed: a name that breaks no rule and a set that does not hold
@@ -493,12 +501,25 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   schema and answers `not-required` on an ungated track and `ready` on a gated one, so a
   `Secret=` naming a key nobody planted is refused by podman when the container starts and not
   by `[gate] reason`. There is no blocked state to look at — plant first, then start.
-* **Give the volume an owner the image accepts.** A volume is created `0700` under the service
-  uid, and an image that runs as its own uid cannot write it:
-  `mkdir: can't create directory '/var/lib/postgresql/data/pgdata': Permission denied`. The
-  step is `podman unshare chown -R <image uid>:<image uid> <volume>`, run as the service user
-  (tickets 273 and 277). Point the image's data directory at a *subdirectory* of the mount, or
-  it collides with snapper's root-owned `.snapshots`.
+* **Do not chown a volume to the image's uid.** A volume is created `0700` under the service
+  uid, and that is the right owner: guarden renders `UserNS=keep-id:uid=…,gid=…` for a unit
+  whose image declares a user (ADR-0019), and the line maps that uid **onto the service
+  identity** — so the container's uid 10001 *is* the service user on the host, and it writes
+  the 0700 volume with no chown anywhere. Chowning the volume's tree to the image's uid
+  instead — through the container's namespace, as the service user — moves the tree onto a
+  uid the container does not own under that mapping (the image's uid lands in the service's
+  subuid band), and the container loses the write it had. On a `state` volume it is worse
+  than that: the walk reaches snapper's root-owned `.snapshots` and fails, **having already
+  moved the volume's own owner**, so a command that reports failure leaves a broken
+  deployment behind it.
+  **Nothing to do here** — if a service's image cannot write its volume, the answer is the pair
+  the probe recorded, `owner_uid` and `owner_gid` in
+  `/var/lib/guarden/registry/<name>.toml`, and the `UserNS=keep-id:uid=…,gid=…` line
+  `weedr service start` writes into
+  `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf`. It is not a
+  chown. The one manual step that remains is pointing the image's data directory at a
+  *subdirectory* of the mount, so its entrypoint's recursive chown never reaches snapper's
+  root-owned `.snapshots` (ticket 273, ADR-0020).
 * **A re-ingest after an edit redeploys** (ticket 275). `source_hash` covers the whole staged
   tree — the unit source, the compose file, the Containerfile and the application's own files
   — because the whole tree is the build's context and every file in it is a build input (spec
