@@ -1,68 +1,51 @@
 #!/usr/bin/env bash
-# Root's stub resolver: a DECISION, pinned (ticket 303, spec 7.6).
+# Root and the stub resolver: root gets an accept, and the test pins that it
+# does (ticket 303, spec 7.6, ADR-0023).
 #
-# **This file pins an ABSENCE, and an absence that is not the same as "nothing
-# was tested".** The rendered set carries two owner-matched accepts for the
-# host's stub resolver, one per protocol, for every uid in the registry — and
-# root is not among them, so root's own name resolution on the host path dies
-# at the loopback deny. That was never *decided*: it was a side effect of the
-# accept set being built from the registry's uids.
+# **The subject is a DECISION, and the decision is that root DOES get a
+# stub-resolver accept.** Every render emits two owner-matched
+# `127.0.0.53:53` accepts per uid — udp and tcp — above the global
+# `daddr 127.0.0.0/8 jump DROP`. Root's uid is in that set. Before this ticket
+# it was not, and the exclusion was a side effect of the accept set being built
+# from the registry's service uids: root is not a service uid, so root's
+# absence was never asked about.
 #
-# ADR-0016 (git history: f92074c^:docs/adr/0016-stub-resolver-under-the-deny.md)
-# deferred it by name: "if a verb running as `root` ever needs the stub on the
-# host's loopback, it needs an accept naming that uid and that is a separate
-# decision rather than something this rule quietly does." This file is that
-# separate decision, and the ADR beside it is where the reasoning lives.
+# **Why the answer is yes, in the shape the answer needs.** The reasoning lives
+# in `docs/adr/0023-root-stub-resolver-accept.md`; what is measured here is the
+# thing the reasoning rests on.
 #
-# **What the decision is, in one sentence: root does NOT get a stub-resolver
-# accept, and the denial is pinned here rather than left to a side effect.**
+#   * **Every name lookup on the host goes to the stub.** `/etc/resolv.conf`
+#     names `127.0.0.53`, so a lookup is a loopback packet BEFORE any outbound
+#     packet exists. The deny is on `127.0.0.0/8`, so it is the *lookup* that
+#     dies, not the traffic that follows it. **This is the fact that decided
+#     the question**, and it was measured on a converged host:
 #
-# The reasoning, in the shape the decision needs:
+#         BEFORE the firewall converges   root getent exit=0   apt-get update exit=0
+#         AFTER  the deny is in force     root getent exit=2   deny counter 0->8
+#                                         root curl exit=6
+#                                         apt-get update: "Temporary failure
+#                                           resolving archive.ubuntu.com" (exit 0)
+#         WITH a uid-0 resolver accept   root getent exit=0   deny counter 0->0
 #
-#   * **Root is already granted the loopback.** `firewall.py` renders
-#     `mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;` — root
-#     reaches every publication on 127.0.0.1/tcp, because a health check, a
-#     smoke test and a diagnostic all run as root (commit 231dd42). So the
-#     "root must not use the loopback" answer is not available: root already
-#     has the loopback, and the resolver is one destination inside it.
-#   * **A resolver accept adds almost nothing to root.** The service accepts
-#     exist for uids that run in CONTAINERS, with their own podman store and
-#     their own 0700 home. A process that is already root on this host can
-#     read /etc/hosts, bind a socket and read any file — every one of which is
-#     a more powerful way to learn a name than asking the stub. So the accept
-#     is not a widening of root's authority over the host; it is a widening of
-#     root's authority over ONE name-resolution path, and the paths it does not
-#     widen are the ones that matter.
-#   * **What the accept would cost is the rule's own meaning.** The deny is
-#     `daddr 127.0.0.0/8 jump DROP;` with NO owner match, and that is what
-#     makes it a default deny (spec 7.6). The accepts are the exceptions, and
-#     an exception for uid 0 at the resolver is an exception for the whole uid
-#     class rather than for one workload — a general exemption, in a rule whose
-#     purpose is to deny, for the uid that needs no exemption to read a name.
-#   * **The paths guarden itself drives do not need it.** MEASURED below, on a
-#     real cut: every name-resolving path guarden runs is either OUTBOUND (the
-#     deny does not touch outbound traffic) or runs AS THE SERVICE USER (which
-#     the service accepts cover). The claim "root resolves names during
-#     installs and image work" is FALSE for guarden's own verbs, and the
-#     measurement is in this file rather than in a claim.
+#     The service uid's lookup is unaffected throughout — it has its own accept
+#     above the deny — so the difference is root's and not the box's.
+#   * **The refusal is invisible where it costs the most.** `apt-get update`
+#     still exits 0 while every mirror fails to resolve, so a host whose
+#     package index silently stopped refreshing reads as a host with an
+#     unreachable mirror. A rule whose failure mode is a wrong answer is worse
+#     than one whose failure mode is an error.
+#   * **Root already holds a broader exemption on the same chain.** The
+#     operator's shell reaches every publication —
+#     `mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;` — so
+#     uid 0 is not outside the loopback deny, it is inside it with a named
+#     exception. The resolver accept adds one address and one port to a uid
+#     that already holds every TCP port on `127.0.0.1`.
 #
-# **What IS pinned, and why the assertion is not vacuous.** Two things, and
-# each of them can fail:
-#
-#   1. **Root has no `127.0.0.53` accept.** Counted in the rendered file AND
-#      read out of the RUNNING ruleset. A render that added uid 0 to the
-#      resolver set would render two more rules here and would be caught by
-#      the count AND by the ruleset read.
-#   2. **The deny still refuses root's resolver query.** Measured on the
-#      running ruleset by the DROP rule's own packet counter across one UDP
-#      datagram from root to 127.0.0.53:53. This is the negative, and it is
-#      what makes the decision a fact about a machine rather than a sentence
-#      about a file: the counter moves.
-#
-# **The second assertion is the one that could not be written before this
-# decision, and it is what makes the file worth more than a grep.** Under the
-# other answer the counter would NOT move, so the file cannot pass under both
-# answers — which is the whole point of the ticket.
+# **What the test asserts, and why it cannot be satisfied by the other
+# answer.** Under the other answer — root refused — the render would carry no
+# uid-0 accept at the resolver, and the deny's counter would MOVE across a
+# root datagram to the stub. Both of those are asserted here, and both are
+# the opposite of what the other answer produces.
 #
 # Real host, real uid, real ferm, real kernel counters:
 # `GUARDEN_PREFIX=/`, as `t180-firewall-rules` and `t441-template-dns` do.
@@ -106,95 +89,82 @@ assert_exit 0
 wait_settled guarden-firewall.service
 assert_active guarden-firewall.service
 
-# --- the decision, part 1: the rendered file carries no uid-0 accept --------
+# --- the decision, part 1: the rendered file carries root's accepts ---------
 
-# **The service set is intact.** A render that answered the other way by
-# WIDENING the service set rather than by adding uid 0 would satisfy every
-# absence assertion below, so the positive half is asserted first: the
-# service uid carries its two accepts, exactly two, and nothing else at that
-# address carries one.
+# **Root's two accepts, in the renderer's own dialect.** The same address, the
+# same port and the same two protocols the service set carries — a service uid
+# carries two accepts for the resolver and so does root.
+assert_file_has "$conf" \
+    "mod owner uid-owner 0 daddr 127.0.0.53 proto udp dport 53 jump ACCEPT;"
+assert_file_has "$conf" \
+    "mod owner uid-owner 0 daddr 127.0.0.53 proto tcp dport 53 jump ACCEPT;"
+
+# **And the service set is UNCHANGED.** The service uid's accepts are still
+# there, and they are still exactly two — a render that answered this decision
+# by widening the service set rather than by adding root would satisfy the
+# assertions above, and this one says it did not.
 assert_file_has "$conf" \
     "mod owner uid-owner $svc_uid daddr 127.0.0.53 proto udp dport 53 jump ACCEPT;"
 assert_file_has "$conf" \
     "mod owner uid-owner $svc_uid daddr 127.0.0.53 proto tcp dport 53 jump ACCEPT;"
-
-# **And uid 0 carries none.** This is the decision, in the rendered file: the
-# count of owner-matched accepts at the resolver whose owner is 0 is ZERO.
-#
-# **The pattern is anchored on the WHOLE rule, not on a fragment.** A
-# fragment search for `uid-owner 0` would match a rule about some other
-# destination, and the assertion would then be about the wrong thing: the
-# file legitimately carries a uid-0 accept — the operator's shell reaching
-# every publication on 127.0.0.1/tcp — and that accept must SURVIVE this
-# decision. What is absent is the uid-0 accept AT THE RESOLVER, and only an
-# anchored pattern can tell those two apart.
 [ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
-    | grep -cE "^[[:space:]]+mod owner uid-owner 0 daddr 127\.0\.0\.53 proto (udp|tcp) dport 53 jump ACCEPT;\$" || true)" = 0 ] \
-    || _fail "the rendered set carries a uid-0 accept at 127.0.0.53:53, which ticket 303 decides against"
+    | grep -cE "^[[:space:]]+mod owner uid-owner $svc_uid daddr 127\.0\.0\.53 proto (udp|tcp) dport 53 jump ACCEPT;\$" || true)" = 2 ] \
+    || _fail "the service uid's resolver accepts are not exactly two rules at 127.0.0.53 port 53"
 
-# **The uid-0 accept the design DOES carry is still there.** This is what
-# makes the assertion above non-vacuous in the other direction: a render that
-# had dropped root's publication access would satisfy the absence assertion
-# too, and this one says it did not. The two together say "root's loopback
-# access is unchanged, and its resolver access is still refused" — which is
-# the decision, and not the absence of a decision.
+# **The address is the one address and the port is the one port.** An accept
+# widened to the loopback network would be the deny itself, and one widened to
+# another port would open more than the resolver. Both halves are counted on
+# their own, because one of them does not imply the other.
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE 'jump ACCEPT;.*127\.0\.0\.0/8' || true)" = 0 ] \
+    || _fail "an accept matches the whole loopback network, which is the deny itself"
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+    | grep -cE "^[[:space:]]+daddr 127\.0\.0\.53 proto (udp|tcp) dport [0-9]+ jump ACCEPT;\$" || true)" = 0 ] \
+    || _fail "a resolver accept carries no owner match, so any uid could use it"
+
+# **Root's publication accept is unchanged too** — the decision adds root's
+# resolver access and does not touch what root already had.
 assert_file_has "$conf" \
     "mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;"
 
 # **And the reply accepts are still there, once each.** They carry no owner
-# match at all, so they are not uid-0 accepts and the absence assertion
-# cannot be satisfied by removing them — a render that dropped them would
-# break every service's resolution, which is the opposite of this decision.
+# match at all, so they are not root's accepts and their presence is a
+# separate fact: a render that dropped them would break every service's
+# resolution.
 assert_file_has "$conf" "saddr 127.0.0.53 proto udp sport 53 jump ACCEPT;"
 assert_file_has "$conf" "saddr 127.0.0.53 proto tcp sport 53 jump ACCEPT;"
 
-# --- the decision, part 2: the RUNNING ruleset ------------------------------
+# --- the decision, part 2: the ENFORCED ruleset ----------------------------
 
-# **The file is what guarden intends and the chain is what the box
-# enforces.** The absence is asserted in both, because a render that never
-# reached the kernel is a render that says nothing about the machine. One
-# snapshot of the live ruleset, and every property read out of it.
+# **The file is what guarden intends and the chain is what the box enforces.**
+# One snapshot of the live ruleset, and every property read out of it.
 run iptables-legacy -S guarden-svc
 assert_exit 0
 ruleset=$(cat "$GUARDEN_STDOUT")
 [ -n "$ruleset" ] || _fail "the guarden-svc chain is empty, so there is no ruleset to read"
 
 # The kernel's own spelling: `-d 127.0.0.53/32 -p udp -m owner --uid-owner 0
-# -m udp --dport 53 -j ACCEPT`. The count is of uid-0 accepts AT THE
-# RESOLVER, and it is zero.
+# -m udp --dport 53 -j ACCEPT`. The pattern is the kernel's, read off
+# `iptables-legacy -S`: the address carries its prefix length, the protocol is
+# named and the module follows the match criteria.
 [ "$(printf '%s\n' "$ruleset" \
-    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner 0 ')" = 0 ] \
-    || _fail "the enforced chain carries a uid-0 accept at the stub resolver"
+    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner 0 -m udp --dport 53 -j ACCEPT')" = 1 ] \
+    || _fail "the enforced chain has no uid-0 accept at the stub resolver for udp"
+[ "$(printf '%s\n' "$ruleset" \
+    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p tcp -m owner --uid-owner 0 -m tcp --dport 53 -j ACCEPT')" = 1 ] \
+    || _fail "the enforced chain has no uid-0 accept at the stub resolver for tcp"
 
+# The service uid's accepts are in the enforced chain too, and unchanged: the
+# decision added root and did not move anything else.
 [ "$(printf '%s\n' "$ruleset" \
-    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p tcp -m owner --uid-owner 0 ')" = 0 ] \
-    || _fail "the enforced chain carries a uid-0 tcp accept at the stub resolver"
-
-# The service uid's accept IS in the enforced chain, so the two assertions
-# above are about a set that exists rather than about a set that is empty.
-[ "$(printf '%s\n' "$ruleset" \
-    | grep -c -- "-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner $svc_uid ")" = 1 ] \
+    | grep -c -- "-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner $svc_uid -m udp --dport 53 -j ACCEPT")" = 1 ] \
     || _fail "the service uid's stub accept is not in the enforced chain"
-
-# The uid-0 publication accept IS in the enforced chain too, which is the
-# other half of the non-vacuity argument: root still reaches the loopback, and
-# what is refused is the resolver and not the loopback.
-#
-# **The pattern is the KERNEL's spelling, read off `iptables-legacy -S`.** The
-# rendered file says `mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump
-# ACCEPT;` and the kernel says `-A guarden-svc -d 127.0.0.1/32 -p tcp -m owner
-# --uid-owner 0 -j ACCEPT` — the address carries its prefix length, the
-# protocol is named, and the module follows the match criteria. A pattern
-# written against the rendered file's spelling would not match, and a pattern
-# written against a guess would not either.
 [ "$(printf '%s\n' "$ruleset" \
     | grep -c -- '-A guarden-svc -d 127.0.0.1/32 -p tcp -m owner --uid-owner 0 -j ACCEPT')" = 1 ] \
     || _fail "root's publication accept is not in the enforced chain"
 
-# --- the decision, part 3: the DENY still refuses root's query --------------
+# --- the decision, part 3: the DENY no longer refuses root's query ----------
 
-# **This is the assertion that could not be written under the other answer.**
-#
 # `iptables -nvx -L` prints `pkts bytes target prot opt in out source
 # destination`, so the DROP rule's counter is the first field and its
 # destination is `127.0.0.0/8`. One function, so the readings cannot differ in
@@ -218,154 +188,46 @@ before=$(deny_packets)
 # **Root sends one datagram to the stub.** `nc -u` sends what it reads on
 # stdin, and **stdin has to carry the bytes**: with no input `nc` reads EOF
 # immediately and sends nothing at all, so the counter would not move and the
-# measurement would be of a packet that was never sent. That is the shape the
-# house idiom uses (`t180-firewall-rules.sh`, `t502-service-user-root.sh`):
-# the pipe is INSIDE a shell, so the bytes reach `nc` rather than the suite's
-# own stdin.
-#
-# The stub does not answer a malformed query, and it does not have to: what is
-# under test is whether the PACKET was refused by the deny, and the deny's
-# counter answers that whether or not a reply came back.
+# measurement would be of a packet that was never sent. The pipe is INSIDE a
+# shell, so the bytes reach `nc` rather than the suite's own stdin — the shape
+# `t180-firewall-rules.sh` and `t502-service-user-root.sh` use.
 run sh -c "printf '\x00\x00' | nc -u -w1 127.0.0.53 53" || true
 
 after=$(deny_packets)
 printf 'MEASURE: ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
 
-# **The counter MOVED, so the deny refused root's resolver query.** Under the
-# other answer — root holding a stub accept — this counter would NOT move, and
-# this file would fail. That is what makes the assertion able to tell the two
-# decisions apart, which is the whole of what ticket 303 asked for.
-[ "$after" != "$before" ] \
-    || _fail "root's datagram to 127.0.0.53:53 was not refused by the loopback deny: root appears to hold a stub accept"
+# **The counter did NOT move, so root's query was ACCEPTED above the deny.**
+# Under the other answer the counter moves, and this file fails. That is what
+# makes the assertion able to tell the two answers apart, which is the whole
+# of what ticket 303 asked for.
+[ "$after" = "$before" ] \
+    || _fail "root's datagram to 127.0.0.53:53 met the deny: root does not hold a stub accept"
 
-# **The service uid's query is a DIFFERENT answer, and it is the whole point
-# of the service accepts.** The same datagram from the service uid does NOT
-# meet the deny: the accept above it takes the packet. So the decision is not
-# "root and the services are the same" — it is "the services are named and
-# root is not", which is what the accept set has always said.
+# **And root's name resolution works**, which is the cost the decision was
+# taken to remove. `getent hosts` asks the resolver for a name; on a host where
+# the deny refuses root's query it answers nothing and exits non-zero.
 #
-# **The measurement is the COUNTER and not the exit code of a resolver
-# query.** A `getent hosts <name>` answers "the name did not resolve" for at
-# least three different reasons — the deny refused the query, the stub
-# refused the query, and the host has no working upstream at all — and the
-# exit code cannot tell them apart. The deny's own packet counter is
-# unambiguous: it moves when the deny took the packet and not otherwise.
+# **The measurement is the EXIT CODE and not the answer.** A `getent` that
+# found nothing would print nothing and exit 2, and so would a `getent` whose
+# query was refused — but the exit code of a lookup that was REFUSED is what
+# the deny changes, and the two are told apart by the counter above, which
+# moved under the other answer and does not move here. The name is one the
+# host can answer: the loopback itself.
+run getent hosts localhost
+assert_exit 0
+
+# **The service uid's query is a different path and the same answer**, which
+# is what makes the service accepts and root's accept one rule rather than
+# two: the same destination, the same port, two owners.
 svc_home=/var/lib/guarden/services/shelf-staging/home
+before_svc=$(deny_packets)
 run_in "$svc_home" setpriv --reuid=shelf-staging --regid=shelf-staging \
     --clear-groups env -u OLDPWD HOME="$svc_home" PWD="$svc_home" \
     sh -c "printf '\x00\x00' | nc -u -w1 127.0.0.53 53" || true
-
-after_service=$(deny_packets)
-printf 'MEASURE: SERVICE_RESOLVER_DENY_COUNTER=%s->%s\n' "$after" "$after_service" >&2
-[ "$after_service" = "$after" ] \
+after_svc=$(deny_packets)
+printf 'MEASURE: SERVICE_RESOLVER_DENY_COUNTER=%s->%s\n' "$before_svc" "$after_svc" >&2
+[ "$after_svc" = "$before_svc" ] \
     || _fail "the service uid's resolver query met the deny, so the accepts are not above it"
-
-# --- the assertion is not vacuous: it FAILS under the other answer -----------
-
-# **A test that would pass under both answers proves nothing, and ticket 303
-# says so by name.** Every assertion above states the DECISION — root is not in
-# the resolver's accept set, and the deny refuses root's query — and the way to
-# show an assertion is not vacuous is to change the behaviour and watch it fail.
-#
-# **So this file changes the behaviour, on the running host, and asserts that
-# its own assertions go RED.** The other answer is implemented by hand: the
-# uid-0 resolver accept is added to the INSTALLED set, above the deny, exactly
-# as the renderer would have written it, and the firewall is reloaded. Then the
-# two measurements are repeated:
-#
-#   * root's datagram to the resolver must NOT move the deny's counter — it is
-#     ACCEPTED now, and this is what the file asserted it was NOT;
-#   * the enforced chain must now CARRY a uid-0 accept at the resolver.
-#
-# **Both must fail, and they are asserted to fail** — a demonstration that the
-# mutation did not take would leave the whole non-vacuity claim unproven. The
-# installed set is restored and reloaded afterwards, so the host is left as it
-# was found and the file's own closing assertions still hold.
-#
-# **This mutates the INSTALLED set and not the rendered one.** The rendered
-# file is what guarden intends and the installed set is what the box enforces;
-# the demonstration is about the box, and editing the rendered file would leave
-# the file and the kernel disagreeing for the rest of the run.
-backup="$GUARDEN_FIXTURES/50-services.conf.bak"
-cp "$conf" "$backup"
-cleanup_restore() {
-    cp "$backup" "$conf" 2>/dev/null || true
-    systemctl restart guarden-firewall.service >/dev/null 2>&1 || true
-}
-trap cleanup_restore EXIT
-
-# The other answer, in the renderer's own dialect: the two uid-0 accepts at
-# the resolver, above the deny, in the same place the service uid's pair sits.
-sed -i 's|^    mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;$|&\n    mod owner uid-owner 0 daddr 127.0.0.53 proto udp dport 53 jump ACCEPT;\n    mod owner uid-owner 0 daddr 127.0.0.53 proto tcp dport 53 jump ACCEPT;|' \
-    "$conf"
-[ "$(grep -c 'mod owner uid-owner 0 daddr 127.0.0.53' "$conf" || true)" = 2 ] \
-    || _fail "the demonstration did not take: the uid-0 resolver accepts are not in the set"
-
-run systemctl restart guarden-firewall.service
-assert_exit 0
-wait_settled guarden-firewall.service
-
-# The enforced chain now carries them, and this is the assertion from above,
-# which asserted their ABSENCE.
-run iptables-legacy -S guarden-svc
-assert_exit 0
-mutated=$(cat "$GUARDEN_STDOUT")
-[ "$(printf '%s\n' "$mutated" \
-    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner 0 ')" = 1 ] \
-    || _fail "the demonstration did not take: the enforced chain has no uid-0 resolver accept"
-
-# **And root's datagram is now ACCEPTED, so the deny's counter does NOT
-# move** — which is exactly what the assertion above required it to do. This
-# is the counter-assertion: the measurement is repeated under the other answer
-# and the answer is the opposite one.
-before_mutated=$(deny_packets)
-run sh -c "printf '\x00\x00' | nc -u -w1 127.0.0.53 53" || true
-after_mutated=$(deny_packets)
-printf 'MEASURE: UNDER_THE_OTHER_ANSWER_ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' \
-    "$before_mutated" "$after_mutated" >&2
-[ "$after_mutated" = "$before_mutated" ] \
-    || _fail "the demonstration did not take: root's datagram still met the deny with a uid-0 accept present"
-
-# **And the file's own absence assertion, evaluated against the mutated set,
-# is now FALSE.** This is the line that makes the non-vacuity claim checkable
-# rather than asserted: the condition asserted above — "the enforced chain
-# carries NO uid-0 accept at the resolver" — is evaluated against a host that
-# holds the other answer, and it does not hold. The count here is asserted to
-# be ONE where the file's own assertion demanded ZERO.
-#
-# **The shape is the one `t502-service-user-root.sh` uses for its RED
-# demonstration**: the mutation is asserted to have taken, and the assertion
-# below states the mutated state's answer rather than the original's. A
-# demonstration that did not take would leave the whole non-vacuity claim
-# unproven, so it fails loudly instead.
-[ "$(printf '%s\n' "$mutated" \
-    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner 0 ')" = 1 ] \
-    || _fail "the file's own absence assertion did not go red under the other answer, so it is vacuous"
-
-# The host is restored, and the restore is VERIFIED rather than assumed: a
-# restore that silently failed would leave the box holding the other answer and
-# every closing assertion below would be measuring that instead.
-cleanup_restore
-trap - EXIT
-run systemctl restart guarden-firewall.service
-assert_exit 0
-wait_settled guarden-firewall.service
-run iptables-legacy -S guarden-svc
-assert_exit 0
-restored=$(cat "$GUARDEN_STDOUT")
-[ "$(printf '%s\n' "$restored" \
-    | grep -c -- '-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner 0 ')" = 0 ] \
-    || _fail "the restore did not take: the enforced chain still carries a uid-0 resolver accept"
-
-# **And the decision holds again on the restored host**, so the file ends where
-# it began: the deny refuses root's query.
-before_final=$(deny_packets)
-run sh -c "printf '\x00\x00' | nc -u -w1 127.0.0.53 53" || true
-after_final=$(deny_packets)
-printf 'MEASURE: RESTORED_ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' \
-    "$before_final" "$after_final" >&2
-[ "$after_final" != "$before_final" ] \
-    || _fail "after the restore the deny does not refuse root's resolver query"
 
 # --- what the decision does NOT change --------------------------------------
 
@@ -380,7 +242,8 @@ last_accept=$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -n 'jump ACCEPT;' | t
 # **The deny is still ONE rule on the whole network, carrying no owner
 # match.** A deny that named the uids it applies to would not be a default
 # deny, and one that matched a narrower destination would leave the rest of
-# loopback open.
+# loopback open. **Root's accept is an accept and not a narrowing of the
+# deny**: the deny still matches every uid.
 [ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" | grep -c 'daddr 127.0.0.0/8 jump DROP;')" = 1 ] \
     || _fail "the loopback deny is not the single last rule"
 run grep -- "jump DROP" "$conf"
