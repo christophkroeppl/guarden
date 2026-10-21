@@ -96,11 +96,12 @@ unset SUITE_TIMEOUT
 # which no in-machine suite can do to a host process. That boundary is ticket
 # 266's; what is asserted here is every literal the chain is built from, each
 # pinned by its own measured mutation.
-# Every pin reads the comment-stripped stream except the two adjacency pins
-# below, which read the raw file, adjacency being about the physical next line,
-# which stripping would destroy — so prose quoting a pin cannot break the pin,
-# and a commented-out call cannot satisfy one; a trailing `# …` naming a token
-# would still count.
+# Every pin reads the comment-stripped stream except the whole-line assignment
+# anchors and the two adjacency pins below, which read the raw file — an
+# anchor is a whole line prose cannot forge, and adjacency is about the
+# physical next line, which stripping would destroy — so prose quoting a pin
+# cannot break it, and a commented-out call cannot satisfy one; a trailing
+# `# …` naming a token would still count.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
 calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c '_failure_message "' || true)
