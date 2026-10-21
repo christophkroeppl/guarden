@@ -273,8 +273,10 @@ state=$(systemctl --user --machine pgdual-staging@ is-active db.service 2>/dev/n
 # is enforced inside the program, so nothing in the file can name a clone verb.
 assert_file_has /etc/sudoers.d/guarden \
     "hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy *"
-assert_file_lacks /etc/sudoers.d/guarden \
-    "hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/weedr"
+# The poke's rule names `weedr project list` and nothing else from `weedr`, so
+# the absence of a clone verb is a real absence rather than an empty file's.
+assert_file_has /etc/sudoers.d/guarden \
+    "hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/weedr project list *"
 assert_file_lacks /etc/sudoers.d/guarden "weedr clone"
 
 # --- a refusal that changes nothing ------------------------------------------
