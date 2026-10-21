@@ -2163,6 +2163,8 @@ def _expose_set(args) -> int:
         )
     _write_exposure(config, record, track, args.value)
     sys.stdout.write(f"{record.service} exposure {args.value}\n")
+    if args.value == exposure.TUNNEL and record.basicauth:
+        sys.stdout.write(exposure.tunnel_credential_note(record.service) + "\n")
     return 0
 
 

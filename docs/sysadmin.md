@@ -1753,6 +1753,30 @@ A route on a track whose `expose` is `tunnel` is reached through the tunnel and
 is not public on the edge. Getting somebody to it is a **grant**, and a grant is
 an issuance that always expires.
 
+**A tunnel route carries no middleware, and the edge's basic-auth login does not follow it
+there.** The tunnel is a *different terminator*: cloudflared dials the service's publication
+directly (`http://<name>:<publication>` in `/var/lib/guarden/tunnel/config.yml`), so traefik
+is never in that path and the per-service `basicAuth` login is never in it either. The
+protection on a tunnel route is **Cloudflare's Access policy**, and `weedr share issue` is
+guarden's own instrument for it.
+
+`weedr expose set <name> tunnel` says so on stdout, in one line, whenever the service carries
+the default edge login:
+
+```sh
+weedr expose set myapp-staging tunnel
+myapp-staging exposure tunnel
+myapp-staging is reached through the tunnel, and the tunnel is a different terminator: its
+route carries no middleware at all — the edge's basic auth login and its forward-auth are
+both in front of the edge's own routes. A tunnel route is protected by the vendor's Access
+policy, and `weedr share issue` is guarden's own instrument for that policy.
+```
+
+**Read that line as the answer to "what is in front of this route".** A service with no
+login — one created before the gate module's policy was in force — prints no such line,
+because there is no credential that could have followed it. Promoting a service to the
+tunnel and reading nothing is not a contradiction: the service has no login to lose.
+
 ```sh
 weedr share issue routed-staging alice@example.com --until 7d
 weedr share list [--json]
