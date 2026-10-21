@@ -287,6 +287,83 @@ and it is the most work; (b) is the cheapest and leaves hosts divergent.**
 The ticket must state which, because the golden is already converted and the
 harness cuts from it.
 
+## The decisions, answered
+
+**D1 — yes: the `/tmp` fstab line carries `nosuid,nodev`.** The tmpfs it
+replaces had both, and dropping them silently is a security regression rather
+than a simplification. The line is
+`subvol=@tmp,noatime,compress=zstd,nosuid,nodev`, and `tests/t20-storage.sh`
+asserts both on the mounted `/tmp` — read from `findmnt`, not from the fstab
+line, because the mount options are what the kernel was given.
+
+**D2 — the cap is dropped, and that is a fact the operator is told.** The
+tmpfs capped `/tmp` at ~4 GiB; a btrfs subvolume is bounded by the filesystem,
+and **no mount option bounds it** — there is no such option for btrfs. A bound
+would be a btrfs **qgroup limit** (`btrfs qgroup limit 1GiB`), which is a
+per-subvolume quota rather than a mount option. **guarden does not set one**:
+a quota is a policy decision about how much a host's scratch space is worth,
+and the ticket does not ask for it. The consequence is stated in
+`docs/sysadmin.md` in the operator's own terms: a process that fills `/tmp`
+fills the root filesystem. If the operator wants a bound, the qgroup limit is
+where it goes, and it is one line in the conversion.
+
+**D3 — "volatile" means the operator's own words: never snapshotted and never
+rolled back.** `/tmp` therefore **survives a reboot**, which is the one
+behavioural change and is stated in `docs/sysadmin.md`. Nothing clears it at
+boot: the distribution's `q /tmp 1777 root root 10d` still ages its contents
+out after ten days, and that is the only thing that does. The alternative
+reading — "volatile means empty at every boot" — would need a `tmpfiles.d`
+entry of guarden's own, and the operator's instruction says *not to be
+snapshotted*, which is about snapshots and not about emptying. **The decision
+the ticket flags as the one that changes the contract is therefore answered in
+the operator's favour and recorded in the runbook, not implemented as a
+clearing entry.**
+
+**D4 — (a): the phase grows a migration for the missing `@tmp`.** A host
+converted before this change has `@` and `@var` and no `@tmp`, and its state
+file says `done`, so the conversion script would never look at it again. The
+script's dispatch therefore gained a stage: when the two-subvolume layout
+holds and the three does not, it creates `@tmp` at the top level and writes the
+`/tmp` fstab line — **without** re-running the rsync of `/`, which is what
+stage 2 would do and which would copy the running system onto itself. The
+stage ends in a reboot request rather than a live mount, because `/tmp` holds
+live files on a running host and mounting the new subvolume over it would
+orphan them under processes that are not going away.
+
+This is the option that costs the most and it is the one a converged host
+needs: option (b) leaves every already-converted host — the golden among them
+— with two subvolumes and a `soil storage --check` that fails on the layout
+item, which is the whole suite going red for a reason that is not a defect.
+
+
+## The golden rebuild, named as its own act
+
+**The golden is not rebuilt by this ticket, and until it is, the suites that
+assert a converged `soil storage --check` are red on the layout item.** That
+is expected, and the fix is a rebuild — **not** an assertion change.
+
+The suites that go red are exactly the ones that assert a converged
+`soil storage --check`: `tests/t20-storage.sh` asserts exit 0 for it
+(`:182-187`), and an old golden reports the layout item as drift instead.
+
+The capability gate (`tests/lxc.sh`'s `_prove`) now also requires `path @tmp`
+in the subvolume list, so the **next** provisioning of the golden — the rebuild
+itself — is what fails if the conversion did not produce the third subvolume.
+The gate runs at provisioning and not per run (`cmd_provision` returns early
+for a golden that already has a snapshot, `:757-762`), so it does not refuse
+the suites on an old golden; the layout check inside `t20-storage.sh` does.
+
+The rebuild is a **separate, explicitly scheduled act**:
+`just provision` (`tests/lxc.sh provision`) deletes the golden and builds a
+new one, which converts its own root to btrfs and drives its own reboots — so
+the new golden arrives with `@tmp` because the conversion created it, not
+because anybody staged it. It takes about an hour, and every other worker
+depends on it, which is why it is not this ticket's work.
+
+**Until that act happens, a full `just test` run is red on the layout item and
+nowhere else.** The verification that does not depend on the rebuild is the
+**fresh, unconverted VM** round this ticket asks for.
+
 ## What to build
 
 ### The conversion machinery (`src/guarden/templates/convert/soil-storage-convert`)

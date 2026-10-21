@@ -714,10 +714,11 @@ _prove() {
     local instance=$1
     vm_exec_t "$instance" 'python3 -c "import yaml, jinja2"' \
         || die "$instance lacks python3-yaml or python3-jinja2"
-    # `@tmp` is named here as well, and a cut from a golden built before the
-    # third subvolume existed would otherwise pass this gate while failing the
-    # layout check: the gate is the place that says the host has the layout the
-    # suite's storage assertions depend on.
+    # `@tmp` is named here as well: the gate is what proves the machine the
+    # suites ride was built by a conversion that produced all three subvolumes,
+    # and a golden whose conversion predates the third one would otherwise be
+    # snapshotted and served to the suites with the layout check failing on it.
+    # It runs at provisioning, which is the only moment the answer can change.
     vm_exec_t "$instance" 'btrfs subvolume show / >/dev/null &&
         btrfs subvolume list / | grep -q "path @var" &&
         btrfs subvolume list / | grep -q "path @tmp"' \
