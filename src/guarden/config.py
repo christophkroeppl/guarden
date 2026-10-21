@@ -32,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from guarden import conf, durations, errors, paths, zram
+from guarden import conf, durations, errors, names, paths, zram
 
 SLOT = "slot"
 INSTANCE = "instance"
@@ -311,7 +311,7 @@ def load(path: Any = None) -> Config:
     tracks = _tracks(document.get("environments", []), where_file)
     return Config(
         path=str(where_file),
-        providers=_providers(document.get("providers", {}), where_file),
+        providers=_providers(document.get("providers", {}), where_file, tracks),
         domain=_str(host, "domain", f"{where_file} [host]"),
         interface=_str(host, "interface", f"{where_file} [host]"),
         admin_user=_str(host, "admin_user", f"{where_file} [host]"),
@@ -450,11 +450,29 @@ def _unpinned_pasta(where_file: Any, piece: str) -> errors.GuardenError:
     )
 
 
-def _providers(table: Any, where_file: Any) -> dict[str, dict[str, str]]:
+def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, dict[str, str]]:
+    """The `[providers.<track>]` tables: a logical name and the service it names.
+
+    Both sides are service names and both are validated as such, for the reason
+    `edgeresolve` gives for the override table: a key that is not one can never
+    match a manifest's `needs:` entry, and a value that is not one resolves to a
+    service that does not exist — so the consumer is refused at the render with a
+    name no provider can be connected to, and the operator is hunting a line the
+    diagnostic never describes. The track is validated too, for the same reason
+    the override table's unknown keys are refused: a mapping nothing reads is a
+    mapping an operator believes is in effect.
+    """
     if not isinstance(table, dict):
         raise _type_error(str(where_file), "providers", "a table")
+    known = {track.name for track in tracks}
     out: dict[str, dict[str, str]] = {}
     for track, mapping in table.items():
+        if not isinstance(track, str) or track not in known:
+            raise errors.GuardenError(
+                f"{where_file}: [providers] names a track {track!r}, and the tracks are: "
+                f"{', '.join(sorted(known))}",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
         if not isinstance(mapping, dict):
             raise _type_error(str(where_file), f"providers.{track}", "a table")
         resolved: dict[str, str] = {}
@@ -463,6 +481,18 @@ def _providers(table: Any, where_file: Any) -> dict[str, dict[str, str]]:
                 raise _type_error(
                     str(where_file), f"providers.{track}.{logical}", "a service name"
                 )
+            for name, what in (
+                (logical, "a logical provider name"),
+                (concrete, f"the service name {logical!r} resolves to"),
+            ):
+                try:
+                    names.validate(name, what)
+                except errors.GuardenError as exc:
+                    raise errors.GuardenError(
+                        f"{where_file}: [providers.{track}] maps a logical provider name to "
+                        f"a service name: {exc.message}",
+                        errors.HOST_NOT_AS_ASSUMED,
+                    ) from None
             resolved[logical] = concrete
         out[track] = resolved
     return out

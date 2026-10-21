@@ -499,6 +499,8 @@ postgres = "postgres-production"
 
 Each `[providers.<track>]` table maps a logical provider name to the concrete service that serves it in that track. `Config.resolve_provider(track, logical)` returns the concrete name, or `logical` unchanged when there is no mapping — so a manifest that names a full service name (`postgres-production`) keeps working, and a host with no `[providers]` table behaves exactly as before. The resolution runs in the mutator and the renderer, at every point a `needs:` entry becomes a provider lookup, an edge key, a hostname or a `Wants=` edge; both sides resolve from the same table, so the key the mutator writes is the key the renderer reads.
 
+**Both sides of a row are service names and both are validated as such, and so is the track.** A key that is not a service name can never match a manifest's `needs:` entry, and a value that is not one resolves to a service that does not exist — so the consumer is refused at the render with a name no provider can be connected to, and the operator is hunting a line the diagnostic never describes. A `[providers.<track>]` for a track the host does not have is refused by name for the same reason the `[edge_overrides]` table's unknown keys are: a mapping nothing reads is a mapping an operator believes is in effect.
+
 #### `[edge_overrides]` — the operator's pin
 
 `/etc/guarden/overrides.toml` is the host-level exception to the per-track default. It holds one table:
@@ -1392,6 +1394,10 @@ In order:
 10. For a `database` edge, a role and a database in the provider, a minted password planted as
   a podman secret in the **consumer's** store, and nothing in the provider's. For a `secret`
   edge, a minted secret planted in both, because the provider has to be able to verify it.
+  **The provider is the concrete service the consumer's track resolves the manifest's
+  logical name to** (§3.1): the role and the database are created in *that* provider, and
+  the edge's registry record is keyed by its name. A manifest that names no logical name
+  names the service itself, and nothing changes.
 11. Units, rendered by `loom` and installed by the mutator.
 12. **A fork, when the track forks — as an internal step of this command, from the track's
   `fork_from` field and nothing else.** §8.3 has the rules; the two that matter here are that
@@ -2609,6 +2615,15 @@ no alias — to the host's loopback alias. The edge's route target is
 `<provider-service>:<publication>`, resolved the same way inside the edge's own units. A
 generated environment variable per edge carries `DB_HOST` and `DB_PORT`, and for a database
 edge the credential arrives as `/run/secrets/DB_PASSWORD`.
+
+**The name is the concrete one, and the concrete one is what the consumer's track resolves
+the manifest's logical name to** (§3.1). A manifest that names `postgres` renders
+`AddHost=postgres-staging:…` in a staging consumer and `AddHost=postgres-production:…` in a
+production one, and the environment variable carries the same name. The manifest names one
+logical provider and the host says which service answers it per track; the repository cannot
+name the environment (§4), so the resolution is the host's and the host's alone. A name the
+table does not map is the name as written, so a manifest that names a full service name keeps
+working and a host with no `[providers]` table behaves exactly as it did before.
 
 **A name inside a unit source is not a name.** Every container of one service runs in its own
 pasta namespace and there is no shared network (§7.1), so the containers of one unit source
