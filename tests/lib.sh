@@ -737,25 +737,76 @@ snapper_configs_of() {
     done
 }
 
+# _snapper_registry: the file carrying SNAPPER_CONFIGS, whichever path the
+# distribution uses. Debian and Ubuntu keep it in /etc/default/snapper; Fedora
+# and Arch in /etc/sysconfig/snapper.
+_snapper_registry() {
+    local path
+    for path in /etc/default/snapper /etc/sysconfig/snapper; do
+        [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
+    done
+    return 1
+}
+
+# _snapper_unregister <name>: take a name out of SNAPPER_CONFIGS.
+#
+# **The directory is not the whole of the state.** Measured on this golden: a
+# name left in SNAPPER_CONFIGS with no file under /etc/snapper/configs is
+# invisible to `snapper list-configs`, and the NEXT `create-config` answers
+# "Creating config failed (config already exists)." — which is the exact failure
+# this teardown exists to prevent. So a name is always removed from the registry,
+# not merely from the directory.
+_snapper_unregister() {
+    local file kept name
+    file=$(_snapper_registry) || return 1
+    kept=''
+    for name in $(
+        sed -n 's/^SNAPPER_CONFIGS="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$file"
+    ); do
+        [ "$name" = "$1" ] || kept="${kept:+$kept }$name"
+    done
+    sed -i "s|^SNAPPER_CONFIGS=.*|SNAPPER_CONFIGS=\"${kept}\"|" "$file"
+}
+
 # remove_snapper_configs <service>...: before the trees, because `delete-config`
 # refuses once the subvolume is gone. It also stops at the file after a `set-config`
 # (measured: rc=0, `.snapshots` and the daemon's entry gone, the file left), and
 # removing the file alone leaves the daemon naming it — so both halves, in this order.
+#
+# **`delete-config` failing is not ignorable.** It fails when the subvolume is
+# already gone, and swallowing that left the name registered while the file was
+# removed — the divergence `assert_no_snapper_configs` could not see. The
+# registry is cleared for the name either way, so the teardown leaves one state
+# rather than two.
 remove_snapper_configs() {
     local names config
     names=$(snapper_configs_of "$@") || return 1
     for config in $names; do
         snapper --config "$config" delete-config >/dev/null 2>&1 || :
+        _snapper_unregister "$config" || :
         rm -f "/etc/snapper/configs/$config"
     done
 }
 
 # assert_no_snapper_configs <service>...: the teardown's promise.
+#
+# Two states, because one check cannot see the other. The directory walk catches
+# a configuration file that survived; the registry check catches a NAME that
+# survived with no file, which `list-configs` hides and `create-config` refuses.
 assert_no_snapper_configs() {
-    local names
+    local names file name orphan=''
     names=$(snapper_configs_of "$@") \
         || _fail "snapper could not be asked, so no configuration can be ruled out for: $*"
     [ -z "$names" ] || _fail "snapper configuration(s) left after the purge: $(printf '%s ' $names)"
+    if file=$(_snapper_registry); then
+        for name in $(
+            sed -n 's/^SNAPPER_CONFIGS="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$file"
+        ); do
+            [ -e "/etc/snapper/configs/$name" ] || orphan="${orphan:+$orphan }$name"
+        done
+        [ -z "$orphan" ] \
+            || _fail "snapper configuration name(s) still registered with no file, so a later create-config will refuse them: $orphan"
+    fi
 }
 
 # assert_dpkg <pkg> / assert_no_dpkg <pkg>: what a converge actually installed.
