@@ -230,11 +230,14 @@ def _unit_volume_sources(service: Service, unit: Path) -> list[tuple[str, str]]:
     """The (declared volume, mount point) pairs one container unit mounts.
 
     **The installed unit does not carry the volume's NAME.** The renderer
-    rewrites `Volume=<name>:<path>` into `Volume=<subvolume on disk>:<path>`
-    (`render._volume_lines`), so the name a manifest declared appears only in
-    the source; both spellings are resolved here, against the service's own
-    registry, because the question the verbs ask is "which container mounts the
-    volume my snapshot came from" and the answer must survive the render.
+    rewrites `Volume=<name>:<path>` into `Volume=<mounted path>:<path>`
+    (`render._volume_lines`), and the mounted path for a `state` volume is its
+    payload rather than the subvolume root (ADR-0020), so the name a manifest
+    declared appears only in the source. Both spellings are resolved here,
+    against the service's own registry and through the one derivation the
+    renderer also uses, because the question the verbs ask is "which container
+    mounts the volume my snapshot came from" and the answer must survive the
+    render.
     """
     from guarden import unitsource
 
@@ -247,8 +250,8 @@ def _unit_volume_sources(service: Service, unit: Path) -> list[tuple[str, str]]:
             continue
         source = parts[0]
         for name, volume in declared.items():
-            on_disk = paths.volume(service.name, volume.kind, name)
-            if source == name or Path(source) == on_disk:
+            mounted = paths.mount_source(service.name, volume.kind, name)
+            if source == name or Path(source) == mounted:
                 out.append((name, parts[1]))
     return out
 
@@ -386,8 +389,9 @@ def snapshot(snapshot_id: ids.SnapshotId, as_name: str, tracks) -> list[str]:
     target = _clone_path(source, container)
     _clone(paths.snapshot(snapshot_id.service, snapshot_id.volume, snapshot_id.number), target,
            source.owner)
+    data = paths.payload_at(target, volume.kind)
     try:
-        _run_container(source, container, image, mount, unit, target)
+        _run_container(source, container, image, mount, unit, data)
     except BaseException:
         _remove_clone(target)
         raise
@@ -515,7 +519,7 @@ def _environment(unit: Path) -> list[str]:
 
 
 def _run_container(
-    source: Service, container: str, image: str, mount: str, unit: Path, target: Path
+    source: Service, container: str, image: str, mount: str, unit: Path, data: Path
 ) -> None:
     """The throwaway container, running against the clone.
 
@@ -526,9 +530,17 @@ def _run_container(
     The operator reaches it with `podman exec`, which is how the operator's own
     run reached it.
 
-    **The clone is mounted at the path the source's own unit mounts the volume
-    at**, because the image's conventions are written for that path. A clone
-    mounted somewhere else would not be a postgres the image recognises.
+    **The clone's DATA is mounted, not the clone's own root.** A `state`
+    volume's data lives one level down inside its subvolume (ADR-0020), and the
+    clone of one volume root carries that same layout, so `data` is the payload
+    the renderer would have written for the volume. Mounting the root instead
+    would put the image's data path one level off — a postgres that initialises
+    an empty cluster beside the data it was cloned from — and would hand the
+    entrypoint's recursive chown snapper's root-owned `.snapshots` subtree.
+
+    **It is mounted at the path the source's own unit mounts the volume at**,
+    because the image's conventions are written for that path. A clone mounted
+    somewhere else would not be a postgres the image recognises.
 
     **The container carries the source unit's `UserNS=keep-id` pin, and without
     it the clone does not start.** The source runs its image's own user (999 in
@@ -548,7 +560,7 @@ def _run_container(
         "--network",
         _network(),
         "--volume",
-        f"{target}:{mount}:rw",
+        f"{data}:{mount}:rw",
     ]
     pin = _userns(source, unit, image)
     if pin is not None:
