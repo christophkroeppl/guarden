@@ -738,13 +738,15 @@ snapper_configs_of() {
 }
 
 # remove_snapper_configs <service>...: before the trees, because `delete-config`
-# refuses once the subvolume is gone (measured: errno:2, and it stays).
+# refuses once the subvolume is gone. It also stops at the file after a `set-config`
+# (measured: rc=0, `.snapshots` and the daemon's entry gone, the file left), and
+# removing the file alone leaves the daemon naming it — so both halves, in this order.
 remove_snapper_configs() {
     local names config
     names=$(snapper_configs_of "$@") || return 1
     for config in $names; do
-        snapper --config "$config" delete-config >/dev/null 2>&1 \
-            || snapper --no-dbus --config "$config" delete-config >/dev/null 2>&1 || :
+        snapper --config "$config" delete-config >/dev/null 2>&1 || :
+        rm -f "/etc/snapper/configs/$config"
     done
 }
 
