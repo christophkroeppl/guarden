@@ -453,22 +453,20 @@ def _unpinned_pasta(where_file: Any, piece: str) -> errors.GuardenError:
 def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, dict[str, str]]:
     """The `[providers.<track>]` tables: a logical name and the service it names.
 
-    Both sides are service names and both are validated as such, for the reason
-    `edgeresolve` gives for the override table: a key that is not one can never
-    match a manifest's `needs:` entry, and a value that is not one resolves to a
-    service that does not exist — so the consumer is refused at the render with a
-    name no provider can be connected to, and the operator is hunting a line the
-    diagnostic never describes. The track is validated too, for the same reason
-    the override table's unknown keys are refused: a mapping nothing reads is a
-    mapping an operator believes is in effect.
-
     **The two sides are not checked by the same rule, and the difference is
-    load-bearing.** The concrete name becomes a Linux user name, so it carries
-    the 31-character limit; the logical name is a lookup key that becomes
-    nothing, so it carries only the pattern — which is the same rule the
-    manifest's own `needs:` entry is held to (`manifest._needs`). A logical name
-    of forty characters is legal in a manifest, and a table that refused to map
-    it would refuse a mapping the manifest is asking for.
+    load-bearing.** The concrete name becomes a Linux user name, so it is a
+    service name in full — the pattern, the 31-character limit and no `..`; the
+    logical name is the manifest's own token and a lookup key that becomes
+    nothing, so it carries only the pattern, which is the rule the manifest's
+    `needs:` entry is held to (`manifest._needs`). A logical name of forty
+    characters is legal in a manifest, and a table that refused to map it would
+    refuse a mapping the manifest is asking for.
+
+    A concrete name that is not a service name resolves to a service that does
+    not exist — so the consumer is refused at the render with a name no
+    provider can be connected to, and the operator is hunting a line the
+    diagnostic never describes. The track is validated too: a mapping nothing
+    reads is a mapping an operator believes is in effect.
 
     **The exit codes follow this module's own split.** A name that breaks a
     rule is a rule violation in a well-formed file, so it is exit `2` — the

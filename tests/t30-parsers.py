@@ -413,10 +413,14 @@ def edge_overrides() -> None:
 def providers_table() -> None:
     """`[providers.<track>]`: the logical name, and the concrete name it names.
 
-    Both sides are service names and both are validated as such, for the reason
-    `edge_overrides` gives: a key that is not a service name can never match a
-    manifest, and a value that is not one resolves to a service that does not
-    exist — so the consumer is refused at the render with a name nobody can
+    **The two sides are not held to the same rule.** The concrete name becomes
+    a Linux user name, so it is a service name in full — the pattern, the
+    31-character limit and no `..`; the logical name is the manifest's own
+    token and a lookup key that becomes nothing, so it carries only the
+    pattern, which is the rule the manifest's `needs:` entry is held to too.
+
+    A concrete name that is not a service name resolves to a service that does
+    not exist — so the consumer is refused at the render with a name nobody can
     connect to a provider by, and the operator is hunting a line the diagnostic
     never describes.
 
@@ -486,12 +490,12 @@ def providers_table() -> None:
     else:
         FAILURES.append("an over-long concrete name was accepted")
 
-    for body, what in (
-        ('[providers.staging]\n"Not a name" = "postgres-staging"\n', "an invalid key"),
-        ('[providers.staging]\npostgres = "Not a name"\n', "an invalid value"),
-        ('[providers.staging]\npostgres = 5\n', "a non-string value"),
-        ('[providers.staging]\npostgres = ""\n', "an empty value"),
-        ('[providers.staging]\npostgres = ["a"]\n', "a list value"),
+    for body, what, wanted in (
+        ('[providers.staging]\n"Not a name" = "postgres-staging"\n', "an invalid key", 2),
+        ('[providers.staging]\npostgres = "Not a name"\n', "an invalid value", 2),
+        ('[providers.staging]\npostgres = 5\n', "a non-string value", 1),
+        ('[providers.staging]\npostgres = ""\n', "an empty value", 2),
+        ('[providers.staging]\npostgres = ["a"]\n', "a list value", 1),
     ):
         try:
             load(body)
@@ -500,7 +504,6 @@ def providers_table() -> None:
             # file, so it is exit 2 — the code the track table's own
             # `kind`/`cap`/`fork_from` rules carry. A value of the wrong TYPE
             # is the host, so it is exit 1.
-            wanted = 1 if what.startswith("a non-string") or what.startswith("a list") else 2
             check(exc.code == wanted, f"{what} is exit {exc.code}, expected {wanted}")
             check("providers" in exc.message, f"{what} is named")
         else:

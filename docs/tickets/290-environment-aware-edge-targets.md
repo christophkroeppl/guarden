@@ -87,13 +87,12 @@ on a machine or closed. What was missing was the tail of it, and the tail is
 where the ticket's own checklist pointed:
 
 - **The table validated its values as strings and nothing else.** A key that is
-  not a service name can never match a manifest's `needs:` entry, and a value
-  that is not one resolves to a service that does not exist — so the consumer is
-  refused at the render with a name no provider can be connected to, and the
-  operator is hunting a line the diagnostic never describes. A
+  not a name at all can never match a manifest's `needs:` entry, and a value
+  that is not a service name resolves to a service that does not exist — so the
+  consumer is refused at the render with a name no provider can be connected
+  to, and the operator is hunting a line the diagnostic never describes. A
   `[providers.<track>]` for a track the host does not have is the same defect
-  one level up. The override table validates both sides for exactly this
-  reason, and this table is the same shape, so it holds the same rule.
+  one level up.
 - **Spec 3.1 documented the table; spec 5.3 and 7.3 did not state the
   resolution.** §7.3 says the renderer writes `AddHost=<provider-service>` and
   that the name is "the provider's own service name", which is true and
@@ -104,6 +103,35 @@ where the ticket's own checklist pointed:
   `unittest discover`, which collects a `TestCase` and nothing else — so the
   five assertions reported "Ran 0 tests" and exited `0`. A green that measured
   nothing.
+
+## What the adversarial review found in the change above
+
+A review of the first version of this work returned `NEEDS_IMPROVEMENT` with two
+MUST FIX findings, and both were real:
+
+- **The exit codes contradicted the module's own convention.** `config.py`'s
+  docstring states the split — a wrong *type* is exit `1`, a well-formed file
+  breaking a stated *rule* is exit `2` — and the track table implements it:
+  `kind`/`cap`/`fork_from` mistakes raise `GuardenError` with the default code
+  (2) and type errors go through `_type_error` (1). The three new refusals all
+  used 1, so a name that breaks a rule was reported as a host-state fact. They
+  now carry 2, and the track-not-found case stays 1 because it is a host fact
+  and not a rule the file states.
+- **The spec said the opposite of the code.** It stated that both sides of a row
+  are service names and both are validated as such, while the code holds the
+  logical name to the pattern alone — and the rationale it gave ("a key that is
+  not a service name can never match a manifest's `needs:` entry") was false,
+  because the manifest holds that entry to the pattern alone too. A forty-
+  character logical provider name is legal in a manifest, and the table that
+  maps it must accept it. The section now states the two rules as they are and
+  names the exit codes.
+
+The review also raised a **failure mode the refusal introduces**: a host
+carrying `[providers.staging]` after `staging` was removed from
+`[[environments]]` can no longer load `guarden.toml` at all, so every program
+that reads it fails rather than only the ones that wanted the mapping. That is
+a deliberate fail-closed choice and the spec says so; it is recorded here
+because it is the cost of the rule, not a free strictness.
 
 ## The RED and the GREEN, as measured
 
