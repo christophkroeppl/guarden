@@ -122,10 +122,17 @@ assert_stdout_empty
 # hold, and an empty set with no flag at all, are the filesystem — `1`, as the
 # next two runs assert.
 #
-# No template is installed at this point in the suite, and that must not matter
-# to the shape refusal: the argument is at fault whatever the host holds, so the
-# run below answers `2` with an empty set, a registry-free name and nothing
-# written.
+# **The set IS installed at this point in the suite**, and that is the point:
+# ticket 330 made the install phase copy the service templates, so the run
+# below answers `2` with a set the machine holds — `postgres` and
+# `vaultwarden` — and not with an empty one. The argument is at fault
+# whatever the host holds, so the code is `2` either way, and the stderr the
+# run prints names the set that was there:
+#
+#   error: the template '../x' is not a template name; available templates: postgres, vaultwarden
+#
+# That is what the RED measures, and it is why the earlier run's quoted
+# stderr ("… holds none") is not what this suite prints any more.
 
 run weedr service create rejectedapp-staging --template ../x
 assert_exit 2
@@ -145,12 +152,6 @@ assert_stderr_has "BAD"
 assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/rejectedapp-staging.toml
 assert_no_passwd rejectedapp-staging
-
-# The other side of the same line, asked with the same flag: a name that breaks
-# no rule, and a set that does not hold it. The answer came from the host's
-# filesystem, so it stays `1` — the same answer `add --from <service>` gives for
-# a service the host has never heard of, and the answer spec 1.2's `needs:` row
-# states for a provider that does not exist.
 
 # The other side of the same line, asked with the same flag: a name that breaks
 # no rule, and a set that does not hold it. The answer came from the host's
@@ -286,8 +287,9 @@ rmdir /usr/lib/guarden/templates/services/staged
 # asserted here because a copy that keeps the template's `root:root 0644` is a
 # file the service's own podman generator cannot read -- and a service's home is
 # `0700` to its owner (spec 2.1), so nothing root-owned belongs in it
-# (AGENTS.md). `units.install` installs every rendered unit `0640` under the
-# record's uid, and a template's copy has to land the same way.
+# (AGENTS.md). `units.install` installs every rendered unit at the tree's own
+# `0700` under the record's uid (spec 2.1), and a template's copy has to land
+# the same way.
 
 install -d -m 0755 /usr/lib/guarden/templates/services/probe
 seed /usr/lib/guarden/templates/services/probe/probe.container \
@@ -305,7 +307,7 @@ assert_file_exists /var/lib/guarden/registry/probeapp-staging.toml
 assert_file_has /var/lib/guarden/registry/probeapp-staging.toml 'source = "manual"'
 assert_file_exists "$unit"
 assert_owner "$unit" "probeapp-staging:$(id -gn probeapp-staging)"
-assert_mode "$unit" 640
+assert_mode "$unit" 700
 run weedr service list
 assert_exit 0
 assert_stdout_has "probeapp-staging"
@@ -356,7 +358,7 @@ cmp -s /var/lib/guarden/registry/probeapp-staging.toml \
     "$GUARDEN_FIXTURES/probeapp-staging.toml" \
     || _fail "the second create rewrote the record it was meant to refuse"
 assert_owner "$unit" "probeapp-staging:$(id -gn probeapp-staging)"
-assert_mode "$unit" 640
+assert_mode "$unit" 700
 
 # The whole `--env` list is asked **before** any of them is created (spec 5.1):
 # one name in the list that the registry already holds refuses the request and
