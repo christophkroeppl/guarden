@@ -4,13 +4,22 @@
 #
 # A `needs:` entry may name a LOGICAL provider, and the host resolves it per
 # track through `[providers]` in `guarden.toml`. The mutator resolves the name
-# too, against the consumer's own track, and the two refusals it makes have to
-# name the CONCRETE provider — the one the registry was consulted for — because
-# that is the service the operator has to fix. A refusal that named the
-# logical name would send the operator looking for a service that does not
-# exist on this host.
+# too, against the consumer's own track, and the refusal it makes has to name
+# the CONCRETE provider — the one the registry was consulted for — because that
+# is the service the operator has to fix. A refusal that named the logical name
+# would send the operator looking for a service that does not exist on this
+# host.
 #
-# The RENDERER's two refusals are the same rule on the other side of the same
+# **`edges.install` makes one other answer about the name — a WARNING when the
+# resolved provider has no registry entry — and a poke cannot observe it.** The
+# same ingest renders the consumer's units once the registry is saved, the
+# render refuses the edge that was recorded with no publication, and the raise
+# takes `_emit` with it: the warning sits in `outcome.warnings` and is never
+# printed. This suite therefore pins the one site a poke reaches. The warning's
+# name is held to the same rule in `edges.install` and has no suite that could
+# assert it; ticket 289 is the ordering that would make it observable.
+#
+# The RENDERER's refusals are the same rule on the other side of the same
 # resolution, and they need no real host, so they live in
 # `t83-provider-diagnostics.sh`.
 #
@@ -36,7 +45,7 @@ purge() {
 }
 
 cleanup() {
-    purge postgres-staging ghost-staging nowhere-staging
+    purge postgres-staging ghost-staging
 }
 trap cleanup EXIT
 
@@ -80,20 +89,3 @@ assert_stderr_has "postgres-staging"
 assert_stderr_has "ghost-staging"
 assert_stderr_has "db"
 assert_stderr_has "cache"
-
-# The provider the logical name resolves to does not exist. This one is a
-# WARNING, not a refusal: a poke creates services in dependency order and a
-# manifest may name one a later deploy brings into being, so the edge is
-# recorded with no publication and `loom` is what refuses it. The warning
-# names the concrete name for the same reason the refusal does.
-nowhere=/var/lib/guarden/staging/nowhere/9f2c1ab
-mkdir -p "$nowhere/.guarden/quadlet"
-seed "$nowhere/.guarden/service.yml" "project: nowhere" "units: .guarden/quadlet/" \
-    "state:" "  - data" "needs:" "  - service: absent" "    as: db" \
-    "    port: 5432" "    auth: database"
-seed "$nowhere/.guarden/quadlet/web.container" "[Container]" \
-    "Image=docker.io/library/nginx:1.27"
-run weedr service ingest nowhere-staging --from poke nowhere@9f2c1ab
-assert_exit 0
-assert_stderr_has "absent-staging"
-assert_stderr_has "nowhere-staging"
