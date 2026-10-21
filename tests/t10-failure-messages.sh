@@ -96,11 +96,11 @@ unset SUITE_TIMEOUT
 # which no in-machine suite can do to a host process. That boundary is ticket
 # 266's; what is asserted here is every literal the chain is built from, each
 # pinned by its own measured mutation.
-# Every pin reads the comment-stripped stream — the timeout assignment anchor
-# and the two adjacency pins read the raw file, adjacency being about the
-# physical next line, which stripping would destroy — so prose quoting a pin
-# cannot break the pin, and a commented-out call cannot satisfy one; a
-# trailing `# …` naming a token would still count.
+# Every pin reads the comment-stripped stream except the two adjacency pins
+# below, which read the raw file, adjacency being about the physical next line,
+# which stripping would destroy — so prose quoting a pin cannot break the pin,
+# and a commented-out call cannot satisfy one; a trailing `# …` naming a token
+# would still count.
 runner=$GUARDEN_ROOT/tests/lxc.sh
 [ -f "$runner" ] || _fail "the runner source is not in the machine at $runner"
 calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c '_failure_message "' || true)
@@ -140,8 +140,12 @@ grep -qE '^APT_LOCK_WAIT=\$\{GUARDEN_LXC_APT_LOCK_WAIT:-' "$runner" \
     || _fail "the runner no longer takes its apt-lock budget from GUARDEN_LXC_APT_LOCK_WAIT"
 grep -qE '^GOLDEN_APT_LOCK_WAIT=\$\{GUARDEN_LXC_GOLDEN_APT_LOCK_WAIT:-' "$runner" \
     || _fail "the runner no longer gives the golden an overridable apt-lock budget of its own"
-grep -qE '^CLOUD_INIT_WAIT=\$\{GUARDEN_LXC_CLOUD_INIT_WAIT:-' "$runner" \
-    || _fail "the runner no longer bounds cloud-init's status wait from GUARDEN_LXC_CLOUD_INIT_WAIT"
+# **One budget per caller, and no second knob.** 737e1c5 made the wait take its
+# budget from the caller; a `CLOUD_INIT_WAIT` assignment beside it bounds nothing.
+status_wait=$(grep -vE '^[[:space:]]*#' "$runner" | grep -B1 -F -- 'cloud-init status --wait' | grep -cF -- '--signal=KILL "$budget"' || true)
+[ "$status_wait" = 1 ] || _fail "cloud-init's status wait is no longer bounded by the budget its caller named"
+knob=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'CLOUD_INIT_WAIT' || true)
+[ "$knob" = 0 ] || _fail "the runner names a CLOUD_INIT_WAIT bound on $knob lines; the status wait takes the caller's budget, and a knob nothing reads is a bound it does not apply"
 # 737e1c5 made the clock a parameter: a cut takes APT_LOCK_WAIT, the golden GOLDEN_APT_LOCK_WAIT.
 budget=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'local budget=${2:-$APT_LOCK_WAIT}' || true)
 [ "$budget" = 1 ] || _fail "the runner's lock wait no longer takes the caller's budget, defaulting to APT_LOCK_WAIT"
