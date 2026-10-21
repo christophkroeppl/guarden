@@ -269,25 +269,25 @@ FAIL t83-provider-diagnostics.sh
 1 suites: 1 ran, 0 inherited, 1 failures, 1 machines cut
 ```
 
-**GREEN, and the suites that must not move** — `8d32485`, the change merged with
-`develop`. There are two merges in it: the second brought develop's
-`compose.refuse_document` and the unit-mode change, so the four suites that read the
-render were re-run on that tree rather than inherited from the first. One run each, on
-a machine of its own:
+**GREEN, and the suites that must not move** — `31a095b`, the change merged with
+`develop` three times as it moved underneath. The last merge brought ticket 318's
+basic-auth opt-out, which changes `render.py` in another function, so the
+renderer-facing suites were run once more on that tree rather than inherited from
+`8d32485`. One run each, on a machine of its own:
 
 ```
-$ GUARDEN_LXC_RUNNER=guarden-run-t290n tests/lxc.sh run t84-provider-diagnostics-mutator --no-cache
-ok   t84-provider-diagnostics-mutator.sh
-$ GUARDEN_LXC_RUNNER=guarden-run-t290o tests/lxc.sh run t83 --no-cache
+$ GUARDEN_LXC_RUNNER=guarden-run-t290r tests/lxc.sh run t83 --no-cache
 ok   t83-provider-diagnostics.sh
-$ GUARDEN_LXC_RUNNER=guarden-run-t290p tests/lxc.sh run t40-edges --no-cache
+$ GUARDEN_LXC_RUNNER=guarden-run-t290v tests/lxc.sh run t40-edges --no-cache
 ok   t40-edges.sh
-$ GUARDEN_LXC_RUNNER=guarden-run-t290q tests/lxc.sh run t80-edges --no-cache
+$ GUARDEN_LXC_RUNNER=guarden-run-t290w tests/lxc.sh run t84-provider-diagnostics-mutator --no-cache
+ok   t84-provider-diagnostics-mutator.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290x tests/lxc.sh run t80-edges --no-cache
 ok   t80-edges.sh
 ```
 
-`t30-parsers` is the fifth, and it was measured on `14f896a`, the first merge:
-`git diff 14f896a 8d32485 -- src/guarden/config.py` is empty, so the parser suite's
+`t30-parsers` is the fifth, and it was measured on `14f896a`, an earlier merge:
+`git diff 14f896a 31a095b -- src/guarden/config.py` is empty, so the parser suite's
 subject did not move between the two trees.
 
 `t40-edges` is on the list because it asserts the self-edge refusal's words, and
