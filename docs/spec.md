@@ -2338,10 +2338,18 @@ nothing private and stays. A poke can therefore see which projects are registere
 else about the box, which is less than it could and more than it needs. Its rule is
 
 ```
-hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy, \
-  /usr/lib/guarden/bin/furrow preview drop, /usr/lib/guarden/bin/furrow queue list, \
-  /usr/lib/guarden/bin/furrow status, /usr/lib/guarden/bin/weedr project list
+hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy *, \
+  /usr/lib/guarden/bin/furrow preview drop *, /usr/lib/guarden/bin/furrow queue list *, \
+  /usr/lib/guarden/bin/furrow status *, /usr/lib/guarden/bin/weedr project list *
 ```
+
+**The trailing `*` is the arguments each verb may carry, and it is load-bearing.** A sudoers
+command that carries an argument specification must match it EXACTLY, so a rule naming the bare
+verb admits only the bare verb — and every real invocation carries arguments: the poke's is
+`furrow deploy <service> --from poke <project>@<sha>`. A rule without the `*` refuses it, and
+the whole gitops path is dead on every real host. The `*` grants the arguments and not the
+project: the per-project binding is in the SSH forced command `hose` reads, and `furrow`
+re-derives the project from the key file and refuses a project no key holds.
 
 so a poke reaches a root program only by way of one that is itself unprivileged, and the
 `(guarden)` is what makes that a property of the file rather than of a reader's assumption.

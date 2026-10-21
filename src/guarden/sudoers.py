@@ -13,11 +13,25 @@ The verbs are therefore named WHOLE, and the rule grants the `hose` user the
 ability to run them AS the mutator's own identity (`guarden`) and nothing
 else:
 
-    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy
-    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow preview drop
-    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow queue list
-    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow status
-    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/weedr project list
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy *
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow preview drop *
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow queue list *
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow status *
+    hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/weedr project list *
+
+**The trailing `*` is the arguments, and it is load-bearing.** A sudoers
+command that carries an argument specification must match it EXACTLY, so a
+rule naming the bare verb admits only the bare verb -- and every real
+invocation carries arguments: the poke's is
+`furrow deploy <service> --from poke <project>@<sha>`, so a rule without the
+`*` refuses it, and the whole gitops path is dead on every real host.
+Measured before the `*` was there: "sudo: I'm sorry hose. I'm afraid I can't
+do that".
+
+The `*` is safe because the per-project binding is NOT in the rule: it is in
+the SSH forced command `hose` reads, and `furrow` re-derives the project from
+the key file and refuses a project no key holds. The rule grants the VERB and
+its arguments; the binding that matters is enforced one layer up.
 
 **No `weedr` mutating verb is in the list** — `add`, `create`, `ingest`,
 `fork`, `purge`, `rollback`, `port open` and `firewall open` are all absent,

@@ -617,13 +617,26 @@ if [ -d /etc/sudoers.d ]; then
         # The verbs, read out of the file and compared with the spec's list
         # (spec 5.1): the poke may deploy, drop a preview, read the queue and
         # the lanes, and read the projects — and NOTHING ELSE.
+        #
+        # **The rule names the verb AND the arguments it may carry.** A sudoers
+        # command with associated arguments must match them EXACTLY
+        # (`man sudoers`), and the poke's real invocation is
+        # `furrow deploy <service> --from poke <project>@<sha>` — so a rule
+        # naming the bare verb admits only the bare verb, and the whole gitops
+        # path was dead on every real host. MEASURED before the fix:
+        # "sudo: I'm sorry hose. I'm afraid I can't do that".
+        #
+        # The `*` is safe because the per-project binding is NOT in the rule:
+        # it is in the SSH forced command `hose` reads, and `furrow`
+        # re-derives the project from the key file and refuses a project no
+        # key holds.
         echo "MEASURE: the rule's grants: $(grep -c NOPASSWD "$rule")"
         for verb in "furrow deploy" "furrow preview drop" "furrow queue list" \
                     "furrow status" "weedr project list"; do
-            if grep -q "NOPASSWD: .*/$verb\$" "$rule"; then
+            if grep -q "NOPASSWD: .*/$verb \*$" "$rule"; then
                 echo "MEASURE: the rule grants $verb"
             else
-                _fail "the guarden sudoers rule does not grant '$verb', which the spec's capability table names"
+                _fail "the guarden sudoers rule does not grant '$verb' with its arguments, which the spec's capability table names"
             fi
         done
         # And it grants the POKE, as the mutator's identity, and nothing that

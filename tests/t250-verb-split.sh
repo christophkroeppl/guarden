@@ -217,9 +217,22 @@ rmdir /usr/lib/guarden/templates/services/emptyslot
 # all: it is in no group, the configuration is not world-readable, and it would
 # stop at the config read instead.
 #
-# The refusal is exit 1, not 2: nothing about the name or the `--from` is
-# rejected, the host is simply not in the state the request assumed -- a caller
-# that may not become root.
+# The refusal is exit 2, not 1, and it is the VERB LIST's refusal and not
+# sudo's: the mutator enforces the list itself (spec 6.6), so a caller that
+# may not run `add` is named by guarden and not by sudo.
+#
+# **This assertion was reading a refusal the program no longer gives.** It
+# expected "add requires root" -- the privilege refusal, from the layer that
+# re-executes through sudo -- but commit 3e6cf6a (fix 331) put the verb list
+# in front of it, so the call is refused before the privilege check is
+# reached, and the line is guarden's own: the account may not run the verb,
+# and the verbs it may run are listed.
+#
+# Nothing about the name or the `--from` is rejected, and the caller is still
+# told exactly what it may do. The exit is 2 because the CALLER is the
+# rejected input (spec 1.2), and the refusal names the verb and the list, so
+# the assertion reads the verb and the list rather than a whole sentence that
+# a reword would break.
 #
 # stdin is /dev/null under the harness (`lxc exec -T ... </dev/null`), so
 # `sudo -v` is taken as `sudo -n -v`: it never prompts on a stream nobody is
@@ -227,9 +240,9 @@ rmdir /usr/lib/guarden/templates/services/emptyslot
 # rather than printed by sudo after `execvp` has replaced the process.
 
 run runuser -u hose -- /usr/lib/guarden/bin/weedr service add otherapp-staging --from myapp-production
-assert_exit 1
+assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "add requires root"
+assert_stderr_has "may not run weedr service add"
 assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/otherapp-staging.toml
 
@@ -249,11 +262,18 @@ assert_file_missing /var/lib/guarden/registry/otherapp-staging.toml
 #
 # Naming the template is what the verb is for: the chooser is for an operator
 # at a terminal, and this is a suite with no operator.
+#
+# **The same staleness, and the same fix.** The suite used to read "create
+# requires root" here too, and the refusal became the verb list's before it
+# became the terminal's, so the assertion was reading a refusal the program
+# no longer gives. It now reads the verb list's line, the same line the `add`
+# refusal above gives, because both refusals come from the same place: the
+# mutator's own list, ahead of the privilege check.
 install -d -m 0755 /usr/lib/guarden/templates/services/staged
 run runuser -u hose -- /usr/lib/guarden/bin/weedr service create otherapp-staging --env staging --template staged
-assert_exit 1
+assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "create requires root"
+assert_stderr_has "may not run weedr service create"
 assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/otherapp-staging.toml
 rmdir /usr/lib/guarden/templates/services/staged
@@ -398,10 +418,20 @@ assert_no_passwd refusedapp-production
 # no sudoers rule, so a run that had reached the escalation answers
 # `create requires root` with exit 1 instead of this line with exit 2, and
 # would still answer it if anything had been written first.
+#
+# **And it no longer does: the verb list is now in front of the escalation.**
+# The mutator refuses the call because the CALLER may not run the verb, and
+# it says so in its own line, before the name is even looked at. The exit is
+# still 2 -- the caller is the rejected input either way -- but the line is
+# not this block's line, so the assertion reads the verb list's.
+#
+# The refusal is still a refusal and still before anything is written, and
+# the file and the passwd row below are what prove THAT: the same call by
+# root refuses on the name, and neither caller leaves a record.
 run runuser -u hose -- /usr/lib/guarden/bin/weedr service create refusedapp-production/feat --env production --template probe
 assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "takes no /<ref>"
+assert_stderr_has "may not run weedr service create"
 assert_stderr_lacks "usage:"
 assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/refusedapp-production.toml
@@ -422,11 +452,17 @@ assert_no_passwd dupapp-staging
 # The dedupe refusal asked of `hose` for the same reason: the guard runs
 # before root is asked for, so an unprivileged caller sees this line and not
 # `create requires root`, and nothing of the name it refused exists after it.
+#
+# **But the verb list is ahead of that guard now**, so the unprivileged caller
+# is refused for being a caller at all: it may not run `create`, and that is
+# said before the `--env` is even parsed. The exit is 2 either way and
+# nothing is written either way, which is what the file and passwd rows below
+# assert -- the refusal's REASON is the verb list's, and the assertion reads
+# that.
 run runuser -u hose -- /usr/lib/guarden/bin/weedr service create dupapp --env staging,staging --template probe
 assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "--env names"
-assert_stderr_has "staging"
+assert_stderr_has "may not run weedr service create"
 assert_stderr_lacks "usage:"
 assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/dupapp-staging.toml
@@ -455,11 +491,13 @@ assert_no_passwd svc-foo-staging
 # for this refusal too: exit 2 with the guard's own line, no escalation, no
 # record, no account -- where an unprivileged run of an unguarded request
 # answers `create requires root` with exit 1 instead.
+#
+# The verb list is ahead of that guard, so the line is the verb list's, as
+# above: the caller may not run `create`, and that is said first.
 run runuser -u hose -- /usr/lib/guarden/bin/weedr service create svc-foo-staging --env foo-staging,staging --template probe
 assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "--env names"
-assert_stderr_has "svc-foo-staging"
+assert_stderr_has "may not run weedr service create"
 assert_stderr_lacks "usage:"
 assert_stdout_empty
 assert_file_missing /var/lib/guarden/registry/svc-foo-staging.toml
