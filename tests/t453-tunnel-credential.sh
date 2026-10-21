@@ -20,7 +20,9 @@
 #      no edge file at all.
 #
 #   3. The credential is the vendor's, and guarden's own instrument for it is
-#      `weedr share issue` — the act's words name that command.
+#      `weedr share issue` — the act's words name that command, and the verb's
+#      own refusal proves the split: a grant names a tunnel route and refuses
+#      an edge one.
 #
 # machine: fresh
 
@@ -39,6 +41,11 @@ ensure_accounts
 # module's default posture: the basic-auth policy is what mints the login
 # this ticket is about, so the gate is installed and the service is created
 # after it.
+#
+# The tracks state `expose = "edge"`, so the DEFAULT is the edge and the
+# tunnel is something an operator promotes a service to. That is what makes
+# the two terminators distinguishable in this file: a service left alone is
+# an edge route, and only the act moves it.
 cat >"$GUARDEN_PREFIX/etc/guarden/guarden.toml" <<'TOML'
 [host]
 domain = "example.com"
@@ -69,6 +76,7 @@ free_limit = 0.10
 keep_last = 7
 kind = "slot"
 fork_from = ""
+expose = "edge"
 
 [[environments]]
 name = "staging"
@@ -79,6 +87,7 @@ free_limit = 0.20
 keep_last = 0
 kind = "slot"
 fork_from = "production"
+expose = "edge"
 
 [[environments]]
 name = "preview"
@@ -97,6 +106,22 @@ run soil packages --apply
 assert_not_rejected
 run soil install --apply
 assert_not_rejected
+
+# A service created BEFORE the gate module's policy exists is grandfathered: it
+# carries no login at all, because the policy is asked at creation time and the
+# record is the record (spec 3.4). It is the control for the claim below — a
+# service with no credential has no credential that could have failed to
+# follow it, so the act must say nothing about one.
+oldapp=$GUARDEN_PREFIX/var/lib/guarden/staging/oldapp/9f2c1ab
+mkdir -p "$oldapp/.guarden/quadlet"
+seed "$oldapp/.guarden/service.yml" "project: oldapp" "units: .guarden/quadlet/" \
+    "routes:" "  - container: web" "    port: 80" "    host: old"
+seed "$oldapp/.guarden/quadlet/web.container" "[Unit]" "Description=the old container" \
+    "[Container]" "Image=docker.io/library/nginx:1.27"
+run weedr service ingest oldapp-staging --from poke oldapp@9f2c1ab
+assert_exit 0
+assert_file_lacks "$GUARDEN_PREFIX/var/lib/guarden/registry/oldapp-staging.toml" "basicauth"
+
 run weedr module add gate-traefik
 assert_exit 0
 run weedr module add cloudflared
@@ -128,14 +153,16 @@ assert_file_exists /var/lib/guarden/edge/basicauth/routed-staging.htpasswd
 # decides it, so it is the only place the split between the two terminators can
 # be read. Its stdout names BOTH: what protects the route (the vendor's policy,
 # and guarden's instrument for it) and what does not (the edge's basic-auth
-# login).
+# login and its forward-auth, both of which are in front of the edge's own
+# routes only).
 run weedr expose set routed-staging tunnel
 assert_exit 0
 # The record is written, whatever the act says.
 assert_file_has "$reg" 'value = "tunnel"'
 # What protects the route: the vendor, and guarden's own verb for it.
 assert_stdout_has "weedr share issue"
-# What does not: the edge's login, named as the thing that does not travel.
+# What does not: the edge's own middleware, named as the thing that is not in
+# this path.
 assert_stdout_has "basic auth"
 # And the route's own new posture is named, so the line is about THIS service.
 assert_stdout_has "routed-staging"
@@ -153,19 +180,9 @@ assert_stdout_has "weedr share issue"
 assert_stdout_has "basic auth"
 
 # A service with NO login says nothing about a credential that does not exist:
-# the line would be a claim about nothing. The service here is created BEFORE
-# the gate module's policy exists, so it is grandfathered and carries no
+# the line would be a claim about nothing. The service here was created BEFORE
+# the gate module's policy existed, so it is grandfathered and carries no
 # login at all.
-oldapp=$GUARDEN_PREFIX/var/lib/guarden/staging/oldapp/9f2c1ab
-mkdir -p "$oldapp/.guarden/quadlet"
-seed "$oldapp/.guarden/service.yml" "project: oldapp" "units: .guarden/quadlet/" \
-    "routes:" "  - container: web" "    port: 80" "    host: old"
-seed "$oldapp/.guarden/quadlet/web.container" "[Unit]" "Description=the old container" \
-    "[Container]" "Image=docker.io/library/nginx:1.27"
-run weedr service ingest oldapp-staging --from poke oldapp@9f2c1ab
-assert_exit 0
-assert_file_lacks "$GUARDEN_PREFIX/var/lib/guarden/registry/oldapp-staging.toml" "basicauth"
-
 run weedr expose set oldapp-staging tunnel
 assert_exit 0
 assert_stdout_lacks "basic auth"
@@ -176,6 +193,15 @@ assert_stdout_lacks "basic auth"
 # cloudflared has no traefik vocabulary: the file must not carry a middleware
 # definition, a basic-auth block or a users file, because there is no traefik
 # in that path to read one.
+#
+# The slice is the NEXT RENDER's (ticket 294), so the route reaches the tunnel
+# at the next render and not at the act. The re-ingest is that render.
+echo "# promoted" >>"$staged/.guarden/quadlet/web.container"
+run weedr service ingest routed-staging --from poke routed@9f2c1ab
+assert_exit 0
+[ "$(sed -n 's/^destination = "\(.*\)"$/\1/p' "$slice" | head -n 1)" = "tunnel" ] \
+    || _fail "the slice's destination did not follow the record"
+
 run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 tunnel=$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml
@@ -191,15 +217,10 @@ assert_file_lacks "$tunnel" "forward-auth"
 # ticket exists to remove.
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
 
-# The service's slice says `tunnel`, so the render agrees with the record and
-# the two terminators are not both serving one route.
-[ "$(sed -n 's/^destination = "\(.*\)"$/\1/p' "$slice" | head -n 1)" = "tunnel" ] \
-    || _fail "the slice's destination is not tunnel"
-
-# The EDGE half is untouched by the promotion: the login still exists, and the
-# edge's own middleware is still rendered for an edge route. This is the case
-# the ticket's decision does NOT touch, and a change that moved the login
-# would break it.
+# The EDGE half is untouched by the promotion: another service, left on the
+# edge, still gets its login in front of its route. This is the case the
+# ticket's decision does NOT touch, and a change that moved the login would
+# break it.
 edgeapp=$GUARDEN_PREFIX/var/lib/guarden/staging/edgeapp/9f2c1ab
 mkdir -p "$edgeapp/.guarden/quadlet"
 seed "$edgeapp/.guarden/service.yml" "project: edgeapp" "units: .guarden/quadlet/" \

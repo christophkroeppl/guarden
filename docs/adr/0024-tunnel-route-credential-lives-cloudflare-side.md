@@ -13,6 +13,8 @@ time-bounded issuance projected onto the vendor's `Allow` policy (ticket 220, sp
 The basic-auth login a service was minted at creation protects that service's **edge**
 route, and it does not follow the service to the tunnel.
 
+Amends spec §6.2 and §6.4.
+
 ## Status
 
 accepted (2026-10-21) — implemented on `fix/t323-work`. The test is
@@ -27,12 +29,19 @@ half and does not travel.
 Two things follow, and both are load-bearing:
 
 - **The act that promotes a service to the tunnel says so.** `weedr expose set <name>
-  tunnel` prints, on stdout, that the route is reached through the tunnel and that the
-  edge's basic-auth login does not protect it. This is not a courtesy line: an operator
+  tunnel` prints, on stdout, that the route carries no middleware at all — the edge's
+  basic-auth login and its forward-auth are both in front of the edge's own routes — and
+  that a tunnel route is protected by the vendor's Access policy, with `weedr share
+  issue` as guarden's own instrument for it. This is not a courtesy line: an operator
   who promoted a service to `tunnel` and saw only `<name> exposure tunnel` would
   reasonably believe the credential followed it, and the split between the two
   terminators is invisible from the guarden side. The line names what protects the route
   and what does not, so the answer is read where the decision is made.
+
+  The line is written only for a service that **has** a login. A service created before
+  the gate module's policy was in force is grandfathered and carries no credential at all,
+  so there is nothing that could have failed to follow it, and a line about nothing is
+  noise.
 
 - **No rendered artefact implies a middleware on a path that has none.** The tunnel's
   ingress file is cloudflared's own configuration and carries no traefik vocabulary at
