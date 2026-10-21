@@ -19,8 +19,18 @@ the service is flagged" — and enforce whatever the decision is. If the answer
 is "nowhere", the act must say it rather than leaving the operator to infer it
 from the middleware's absence.
 
-## Status: ready-for-agent
+## Status: done, verified by `tests/t454-tunnel-credential.sh`
 
-- [ ] The `expose set … tunnel` act (or the docs the operator reads) states
-      what protects a tunnel route and what does not.
-- [ ] No rendered artefact implies a middleware on a path that has none.
+- [x] The `expose set … tunnel` act (or the docs the operator reads) states
+      what protects a tunnel route and what does not. — `weedr expose set
+      <name> tunnel` prints the line for a service that carries the edge login,
+      and says nothing for one created before the policy existed: there is no
+      credential that could have failed to follow it. ADR-0024 is the canonical
+      statement; spec §6.2 and §6.4 and `docs/sysadmin.md` point at it.
+- [x] No rendered artefact implies a middleware on a path that has none. —
+      `roots` writes the edge's file provider only for `edge`-destination
+      routes, so a tunnel route has no edge file at all; the tunnel's ingress
+      is cloudflared's own configuration and carries no traefik vocabulary
+      (`middlewares`, `basicAuth`, `usersFile`, `forward-auth`). Both are
+      asserted, and a neighbouring edge service's rendered file is asserted in
+      the same run as the control.

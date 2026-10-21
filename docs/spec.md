@@ -1760,6 +1760,10 @@ weedr expose set <name> <loopback|tunnel|public>  # record the service's exposur
   # gated track, `tunnel` without the cloudflared module, and
   # anything else lists the three — each exit 2, one line, before
   # any record is written. Not on any sudoers rule.
+  # `tunnel` on a service carrying the default edge login
+  # ALSO prints one line naming what protects the route and
+  # what does not (ADR-0024): the tunnel is a different
+  # terminator and carries no middleware at all.
 weedr expose unset <name>  # return the service to its default exposure; already at
   # the default is exit 0 and changes nothing
 weedr expose list [--json]  # every service's recorded exposure and what it resolves to
@@ -2173,6 +2177,23 @@ existing service in a gated track; anything else is exit `1` and no configuratio
 The auth service's own routes never carry the rule. With the module **not** installed, `roots`
 emits the route without a middleware and writes a single `warning:` line naming the service and
 the route, once, on every sync — so `auth: true` in a manifest is never silently ignored.
+
+**A tunnel route is a different terminator, and it carries no middleware at all.**
+`roots` writes the edge's file-provider configuration only for routes whose destination is
+`edge`; a route whose destination is `tunnel` goes into the tunnel's own ingress file
+(`/var/lib/guarden/tunnel/config.yml`, spec 2), which is cloudflared's configuration and carries
+no traefik vocabulary — no `middlewares:`, no `basicAuth`, no `usersFile`. Cloudflared dials the
+service's publication directly, so the edge is never in that path and neither the edge's
+`basicAuth` middleware nor its forward-auth rule can be in it.
+
+**So a tunnel route's protection is the vendor's Access policy, and the edge's default basic-auth
+login does not follow the service there** (ADR-0024). Guarden's own instrument for the vendor's
+policy is `weedr share issue` — a time-bounded issuance projected onto the vendor's `Allow`
+policy (§6.2). `weedr expose set <name> tunnel` says so on stdout, in one line, whenever the
+service carries the default edge login: the act is the only place an operator decides the
+posture, and the split between the two terminators is invisible from the guarden side otherwise.
+A service with no login has no credential that could have followed it, and the act says nothing
+about it.
 
 `roots` has no intermediate route format. If the edge is ever replaced, `roots` is replaced.
 
