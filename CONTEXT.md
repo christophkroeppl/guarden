@@ -51,8 +51,9 @@ instances of one preview service share their service's single user.
 _Avoid_: ref, slot, sandbox
 
 **unit**:
-A systemd unit. Rootless quadlet generates one per container plus `.volume` units for
-declared volumes.
+A systemd unit. Rootless quadlet generates one per container; a declared volume is not a
+unit of its own, and the container's unit carries a `Volume=` line naming the path the
+mutator made (spec §6.3).
 _Avoid_: container, unit file (when you mean one container's unit)
 
 **publication**:
@@ -134,7 +135,8 @@ configuration, is never snapshotted, is never a fork or rollback source, and is 
 subvolume after a fork**: a bulk volume is never cloned from a live volume, because a copy as of
 an instant is not reproducible afterwards and two targets that quietly disagreed would be worse
 than two empty ones. It is a subvolume on every path, the fork included — never a plain
-directory. It still gets a `.volume` unit so a container can mount it. Size is not what makes a
+directory. A container mounts it from the subvolume itself: the unit carries a `Volume=` line
+naming that path, and there is no `.volume` unit (spec §6.3). Size is not what makes a
 volume bulk: a two-terabyte media library is a state volume, because a film somebody deleted has
 to come back. The point of the second word is that "never snapshotted" is a name rather than a
 flag somebody forgets.

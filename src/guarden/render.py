@@ -14,7 +14,7 @@ and the order is the argument: the opinionated pass runs *after* the source is
 read and *before* anything is emitted, so a converter that passes a field through
 and a repository that writes one by hand are treated identically. The owned fields
 are the refusal list, the whole `PublishPort` set, `Network=pasta:`, `AddHost=`,
-the credential requests, the `.volume` units and the start-order edges. What is
+the credential requests and the start-order edges. What is
 left — image, command, entrypoint, environment, user, working directory, labels —
 belongs to the repository, and podlet owns the translation of those.
 
@@ -286,7 +286,15 @@ class Context:
         return home / paths.QUADLET
 
     def volume_path(self, kind: str, volume: str) -> Path:
-        return paths.volume(self.service, kind, volume, self.instance)
+        """The host path a declared volume is mounted from.
+
+        **A `state` volume is mounted from its PAYLOAD, one level down inside
+        the subvolume** (ADR-0020), so the container never sees snapper's
+        `.snapshots` subtree and the image's own recursive chown never reaches
+        it. A `bulk` volume is mounted from the subvolume itself, because it
+        carries no snapper configuration and therefore no such subtree.
+        """
+        return paths.mount_source(self.service, kind, volume, self.instance)
 
     def volume_root(self) -> Path:
         """The tree `volume_root()` paths live under, for this unit.
@@ -437,6 +445,10 @@ def _check_declared(document: manifest_mod.Manifest, present: Path) -> None:
 
 def _compose_source(path: Path) -> Source:
     document = compose.document(path)
+    # The document-level tables are checked before the services are, because a
+    # `networks:` table is a claim about the whole document and not about one
+    # container (spec 6.3, ticket 272).
+    compose.refuse_document(document, path)
     declared = compose.services(document, path)
     warnings: list[str] = []
     mounts: dict[str, list[Mount]] = {}
@@ -817,17 +829,17 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
         concrete = context.provider(edge.service)
         if concrete == context.service:
             raise errors.GuardenError(
-                f"the manifest {document.source} needs {edge.service!r}, which is the service "
-                f"that declared it: a self-edge has no consumer and is nearly always a "
-                f"copy-paste"
+                f"the manifest {document.source} needs {edge.service!r}, which resolves to "
+                f"{concrete!r} — the service that declared it: a self-edge has no consumer "
+                f"and is nearly always a copy-paste"
             )
         provider = registry.load(concrete)
         if provider is None:
             raise errors.GuardenError(
                 f"{context.service} needs {edge.service!r} as {edge.prefix!r}, and there is "
-                f"no registry entry for it; a service that does not exist yet is created by a "
-                f"later deploy, and one that never is names a service this host has never "
-                f"heard of",
+                f"no registry entry for {concrete}; a service that does not exist yet is "
+                f"created by a later deploy, and one that never is names a service this host "
+                f"has never heard of",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         if edge.prefix not in provider.provides:
@@ -883,10 +895,10 @@ def edge_publications(
         ]
         if not numbers:
             raise errors.GuardenError(
-                f"{context.service} needs {edge.service!r} on port {edge.port} and its "
-                f"registry entry names no allocated publication for that edge; the mutator "
-                f"allocates one when it installs the edge, and the renderer does not guess "
-                f"a loopback port",
+                f"{context.service} needs {edge.service!r} on port {edge.port}, which "
+                f"resolves to {concrete!r}, and that provider's registry entry names no "
+                f"allocated publication for the edge; the mutator allocates one when it "
+                f"installs the edge, and the renderer does not guess a loopback port",
                 errors.HOST_NOT_AS_ASSUMED,
             )
         out.append((edge.service, concrete, min(numbers)))
@@ -1168,6 +1180,11 @@ def _dropins(context: Context | None, source: Source) -> dict[str, Unit]:
     the mutator writes it under, so a hand-written drop-in that happens to
     carry a `UserNS=` line is refused by the base unit's own filter instead
     (the `UserNS` entry in `OWNED_KEYS`).
+
+    **This directory is the only path to the admin's own configuration**
+    (ADR-0024). There is no staging copy of it anywhere: guarden never
+    stages the admin's file and never copies it in, so what the admin writes
+    here is what the generator reads, and what this merge reads.
     """
     out: dict[str, Unit] = {}
     if context is None or not context.record.uid:
@@ -1462,7 +1479,13 @@ def _volume_lines(
             if context is not None:
                 path = context.volume_path(declared[mount.source], mount.source)
             else:
-                path = ABSENT / declared[mount.source] / mount.source
+                # No host to read, so the path is the one the host would hold:
+                # the same rule, applied to a tree that does not exist. The
+                # `state` volume's mount source is its payload (ADR-0020) and
+                # the `bulk` volume's is the subvolume itself.
+                path = paths.mount_source_at(
+                    ABSENT, declared[mount.source], mount.source
+                )
             out.append(f"{path}:{mount.target}{mode}")
     return out
 
@@ -1597,11 +1620,13 @@ def _routes(
         service=context.service if context else "",
         project=context.record.project if context else "",
         track=context.track.name if context else "",
-        # Ticket 292: the basic-auth policy the mutator recorded at creation
-        # (registry `basicauth`), carried to `roots` in the slice so the
-        # renderer — never the renderer re-reading a manifest — is what places
-        # the middleware. Absent/false is a grandfathered service, and it
-        # renders byte for byte what it rendered before.
+        # Ticket 292: the basic-auth login MINTED for this service at creation
+        # (registry `basicauth`), carried to `roots` in the slice. It is the
+        # fact about the past and it never changes. Whether the middleware that
+        # asks for the login is attached is the operator's setting in the
+        # root-owned `overrides.toml` (ADR-0024), which `roots` reads beside
+        # this flag — so neither half is a manifest key, and a slice that
+        # predates the table renders byte for byte what it rendered before.
         basicauth=bool(context.record.basicauth) if context else False,
         rows=rows,
     )

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The declared volumes and the `.volume` units (ticket 40, spec 4, 6.3).
+# The declared volumes, and the `Volume=` line each one becomes (ticket 40,
+# spec 4, 6.3).
 #
 # **A mounted named volume in neither `state:` nor `bulk:` is refused, naming the
 # volume.** It would land in the service's rootless image store, where nothing
@@ -7,10 +8,12 @@
 # the most expensive mistake a manifest can make, and the manifest is not allowed
 # to make it.
 #
-# A `.volume` unit is emitted for every declared volume, `state` and `bulk`
-# alike, because a container must be able to mount either — the difference
-# between the two is whether a snapper configuration exists, not whether a
-# container can reach the data.
+# A declared volume is mounted by its own host path and there is no `.volume`
+# unit: the mutator makes the subvolume before the unit is installed, so the
+# `Volume=` line names the path it made — and a `state` volume's data lives one
+# level down in its payload (ADR-0020), so its line names the payload. The
+# difference between the two kinds is whether a snapper configuration exists,
+# not whether a container can reach the data.
 #
 # machine: shared
 # `guarden_prefix` stages the host; every registry row, staged manifest and
@@ -54,7 +57,7 @@ assert_exit 0
 assert_stderr_empty
 
 assert_file_has "$render/units/web.container" \
-    "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/state/data:/var/lib/app"
+    "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/state/data/data:/var/lib/app"
 assert_file_has "$render/units/web.container" \
     "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/bulk/chainstate:/data"
 assert_file_missing "$render/units/data.volume"
@@ -68,7 +71,7 @@ instance=$GUARDEN_FIXTURES/instance
 run loom render "$project" --service myapp-preview --instance 'feature\x2dlogin' --out "$instance"
 assert_exit 0
 assert_file_has "$instance/units/web.container" \
-    "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/instances/feature\\x2dlogin/state/data:/var/lib/app"
+    "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/instances/feature\\x2dlogin/state/data/data:/var/lib/app"
 assert_file_has "$instance/units/web.container" \
     "Volume=$GUARDEN_PREFIX/var/lib/guarden/services/myapp-preview/instances/feature\\x2dlogin/bulk/chainstate:/data"
 

@@ -105,15 +105,13 @@ run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
 assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
-# The ingress hostname is asserted as a WHOLE LINE, not as a substring: the
-# rendered value is the bare allocated label `web` — claim_host returns
-# `<host_prefix><label>` and appends no domain — so the tunnel today serves a
-# name that is in no zone at all. That is ticket 293's open gap, carried as
-# ticket 306, and this assertion measures it exactly: a substring
-# `hostname: "web"` would also pass on `web.example.com`, so the whole line is
-# matched and a future zone-qualified name has to change this assertion on
-# purpose.
-run grep -qxF '  - hostname: "web"' \
+# The ingress hostname is asserted as a WHOLE LINE, not as a substring.
+# **A tunnel route's name is in the TUNNEL's zone** (ticket 324):
+# `<host_prefix><label>.<tunnel_domain>`, allocated by the mutator and recorded,
+# because a name derived at render time is a second answer a grant could
+# disagree with. `web` is a substring of `web.tunnel.example.net`, so the whole
+# line is matched and a bare label cannot pass.
+run grep -qxF '  - hostname: "web.tunnel.example.net"' \
     "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
 assert_exit 0
 assert_file_has "$services" \

@@ -47,7 +47,7 @@ itself.
 **The run order is 75, 75, 0, and the two 75s are the design.** The btrfs
 root conversion is a staged offline operation that crosses two reboots — the
 first converts the root filesystem, the second boots into the migrated
-`@`/`@var` layout — and the installer stops at each of them with **exit 75**,
+`@`/`@var`/`@tmp` layout — and the installer stops at each of them with **exit 75**,
 which means *a reboot is required, then run me again*. The command to re-run
 is printed in the banner before the script exits, so you never have to
 remember it:
@@ -63,7 +63,7 @@ So the whole thing is three runs:
 | run | what it does | what you do |
 |---|---|---|
 | 1 | converges `install` and `packages`, stages the conversion | reboot |
-| 2 | runs the conversion in the initramfs, stages the `@`/`@var` migration | reboot |
+| 2 | runs the conversion in the initramfs, stages the `@`/`@var`/`@tmp` migration | reboot |
 | 3 | finishes the migration and converges the rest | nothing — it prints `guarden host converged` |
 
 Re-running is safe and is the expected recovery, not a workaround: every phase
@@ -196,13 +196,40 @@ reboot                   # only if --check asked for it
 ```
 
 State lives in `/var/lib/guarden/soil/`. **Two reboots**: the first converts the root offline in
-the initramfs, the second boots into the migrated `@`/`@var` layout; `--check` names the marker
+the initramfs, the second boots into the migrated `@`/`@var`/`@tmp` layout; `--check` names the marker
 while either is outstanding, and a run after the second reports no drift. `/boot` stays on ext4. The same phase installs
 `/etc/apt/apt.conf.d/80guarden-snapper`, whose `DPkg::Pre-Invoke` snapshots `root` before every
-package transaction, creates the `root` and `home` configurations, and installs the replacement
+package transaction, creates the `root` configuration, and installs the replacement
 cleanup timer. It creates **no** service volume, and a snapper configuration belonging to a service is created by
 the mutator and never recreated here. Never hand-edit a snapper configuration — change the
 canonical values in the phase and re-apply.
+
+**`/tmp` gets its own subvolume, and the two facts that follow from it are worth knowing before
+you rely on it.** The layout is three subvolumes, not two: `@` for `/`, `@var` for `/var` and
+`@tmp` for `/tmp`, the third at the btrfs top level. `/tmp` is volatile data and is **not
+snapshotted** — it has no snapper configuration and no ladder, so nothing rolls it back and no
+`TIMELINE_LIMIT_*` value governs it; the phase checks that no configuration for it exists rather
+than assuming it. What that costs:
+
+- **The tmpfs's size cap is gone.** `/tmp` used to be bounded by the tmpfs mount, roughly half
+  of RAM; now it is bounded by the filesystem. A process that fills `/tmp` fills the root
+  filesystem. A bound, if you want one, is a btrfs qgroup limit, which guarden does not manage.
+- **`/tmp` survives a reboot.** A tmpfs is empty at every boot; a subvolume is not. Nothing
+  clears it at boot — the distribution's `q /tmp 1777 root root 10d` still ages its contents out
+  after ten days, and that is the only thing that does. If you need `/tmp` gone at every boot,
+  say so and guarden will give it a clearing entry rather than leaving it to you.
+
+`/tmp` keeps the `nosuid` and `nodev` the tmpfs it replaces carried, and its mode is `1777`, set
+by tmpfiles and not by the conversion.
+
+**A host converted before `@tmp` existed takes one extra stage, and it is not a re-conversion.**
+Its layout is `@` and `@var` with the state file saying `done`, so the ordinary conversion will
+never look at it again. `soil storage --apply` recognises that layout, creates `@tmp` at the
+top level, writes the `/tmp` fstab line and asks for a reboot; the run after the reboot reports
+no drift. Nothing is copied and the `@`/`@var` migration is not re-run — `@` is the running
+system, and rsyncing `/` into it would copy the system onto itself. The one reboot is needed
+because `/tmp` holds live files on a running host, and mounting a new subvolume over them would
+orphan them under processes that are not going away.
 
 ### the values `soil storage` owns
 
@@ -384,9 +411,17 @@ than where the renderer reads, and nothing would look at it. The file name is th
 and the user manager is per service uid, so two services created from one template do not
 share a unit.
 
-**No set ships.** `soil install` builds `/usr/lib/guarden/templates/` from
-`src/guarden/templates/`, and that tree has no `services/` subdirectory, so on a host that has
-just been installed `create` is refused before anything else is asked of it:
+**Two templates ship.** `soil install` copies `src/guarden/templates/` to
+`/usr/lib/guarden/templates/`, and that tree carries a `services/` subdirectory with `postgres`
+and `vaultwarden` in it, so a host that has just been installed already holds a set:
+
+```
+$ ls /usr/lib/guarden/templates/services/
+postgres  vaultwarden
+```
+
+**The set is empty only on a host whose templates were taken away**, and then `create` is
+refused before anything else is asked of it:
 
 ```
 weedr service create myapp --env staging --template postgres
@@ -403,7 +438,7 @@ rule, and then it is exit `2` whatever the host holds:
 
 ```
 weedr service create myapp --env staging --template ../x
-error: the template '../x' is not a template name; /usr/lib/guarden/templates/services holds none
+error: the template '../x' is not a template name; available templates: postgres, vaultwarden
 ```
 
 The same line with templates installed: a name that breaks no rule and a set that does not hold
@@ -466,12 +501,25 @@ Three things that bite on a first hand deployment, none of them a bug in the man
   schema and answers `not-required` on an ungated track and `ready` on a gated one, so a
   `Secret=` naming a key nobody planted is refused by podman when the container starts and not
   by `[gate] reason`. There is no blocked state to look at — plant first, then start.
-* **Give the volume an owner the image accepts.** A volume is created `0700` under the service
-  uid, and an image that runs as its own uid cannot write it:
-  `mkdir: can't create directory '/var/lib/postgresql/data/pgdata': Permission denied`. The
-  step is `podman unshare chown -R <image uid>:<image uid> <volume>`, run as the service user
-  (tickets 273 and 277). Point the image's data directory at a *subdirectory* of the mount, or
-  it collides with snapper's root-owned `.snapshots`.
+* **Do not chown a volume to the image's uid.** A volume is created `0700` under the service
+  uid, and that is the right owner: guarden renders `UserNS=keep-id:uid=…,gid=…` for a unit
+  whose image declares a user (ADR-0019), and the line maps that uid **onto the service
+  identity** — so the container's uid 10001 *is* the service user on the host, and it writes
+  the 0700 volume with no chown anywhere. Chowning the volume's tree to the image's uid
+  instead — through the container's namespace, as the service user — moves the tree onto a
+  uid the container does not own under that mapping (the image's uid lands in the service's
+  subuid band), and the container loses the write it had. On a `state` volume it is worse
+  than that: the walk reaches snapper's root-owned `.snapshots` and fails, **having already
+  moved the volume's own owner**, so a command that reports failure leaves a broken
+  deployment behind it.
+  **Nothing to do here** — if a service's image cannot write its volume, the answer is the pair
+  the probe recorded, `owner_uid` and `owner_gid` in
+  `/var/lib/guarden/registry/<name>.toml`, and the `UserNS=keep-id:uid=…,gid=…` line
+  `weedr service start` writes into
+  `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf`. It is not a
+  chown. The one manual step that remains is pointing the image's data directory at a
+  *subdirectory* of the mount, so its entrypoint's recursive chown never reaches snapper's
+  root-owned `.snapshots` (ticket 273, ADR-0020).
 * **A re-ingest after an edit redeploys** (ticket 275). `source_hash` covers the whole staged
   tree — the unit source, the compose file, the Containerfile and the application's own files
   — because the whole tree is the build's context and every file in it is a build input (spec
@@ -603,14 +651,106 @@ else moves data aside.
 ```
 /var/lib/guarden/services/<name>/home/          its home; units, image store, instances
 /var/lib/guarden/services/<name>/state/<vol>/   a subvolume, with snapper config <name>-<vol>
+/var/lib/guarden/services/<name>/state/<vol>/data/
+                                             the volume's data, one level down inside
+                                             the subvolume, and what the container
+                                             mounts: snapper's .snapshots/ is the
+                                             payload's sibling, so a container never
+                                             sees it (ADR-0020)
 /var/lib/guarden/registry/<name>.toml           the record
 /etc/guarden/services/<name>/overrides.toml     admin grants
 /etc/containers/systemd/users/<uid>/            admin units and drop-ins, uid-scoped
+/etc/containers/systemd/users/<uid>/<unit>.container.d/
+    the drop-ins merged into that unit: guarden's `50-guarden-keepid.conf`
+    and your own `90-admin.conf`
 /var/lib/guarden/removed/<service>/<time>/<vol>/   moved, not deleted, by service remove
 ```
 
+**A `state` volume's data is one level down, and an existing volume whose data is at the
+root is refused rather than moved.** A `state` volume is a btrfs subvolume and snapper puts
+its own root-owned `0750` `.snapshots/` inside it; the container is rootless, so its `uid 0`
+is the service uid and it cannot chown a directory owned by the real host root. Every image
+whose entrypoint chowns its data directory — `postgres`, `mariadb`, `mysql`,
+`elasticsearch` — therefore fails against a `state` volume whose data is at the root, with
+
+    chown: changing ownership of '/var/lib/postgresql/data/.snapshots': Operation not permitted
+
+**The payload directory is the fix**: the container mounts `state/<vol>/data/`, the payload's
+sibling is `.snapshots/`, and the image's chown walks the payload only.
+
+**Guarden does not migrate a volume that already has its data at the root.** The mutator and
+`weedr service start` both refuse with one line naming the service, the volume, the payload
+directory and the work, and they change nothing. To move the data across:
+
+    weedr service stop <service>
+    mkdir -p /var/lib/guarden/services/<svc>/state/<vol>/data
+    find /var/lib/guarden/services/<svc>/state/<vol> -mindepth 1 -maxdepth 1 \
+        ! -name .snapshots -exec mv -t /var/lib/guarden/services/<svc>/state/<vol>/data {} +
+    chown -R <svc>:<svc> /var/lib/guarden/services/<svc>/state/<vol>/data
+    weedr service start <service>
+
+**The start asks the same question again**, so a move that missed something is refused rather
+than started against a half-moved volume.
+
+**The move is the operator's, deliberately**, and it is the same rule guarden already states
+for a newly declared volume: the volume starts EMPTY and the data does not follow the change.
+
 Nothing root-owned lives under `home`. If a file you expected to be protected is inside `home`,
 it is not — that is the rule, and the fix is to move it.
+
+### the drop-in directory, and the one file in it that is yours
+
+`/etc/containers/systemd/users/<uid>/<unit>.container.d/` is podman's rootless quadlet
+search path for that service's units, and it is where your own drop-ins go. Guarden reads
+the files in it and puts them back into the rendered unit — that is what makes a cap survive
+a regeneration — and it writes **exactly one** file there itself:
+
+```
+50-guarden-keepid.conf    the keep-id pin, root:root 0644, written by the mutator
+```
+
+**`90-admin.conf` is yours, and it wins.** Drop-ins merge in alphabetical order by
+filename — not by mtime, not by which directory they are in — and the last value of a
+scalar key is the one that runs. So a file named `90-` overrides guarden's `50-`:
+
+```sh
+# /etc/containers/systemd/users/<uid>/web.container.d/90-admin.conf
+[Container]
+UserNS=keep-id:uid=2002,gid=2002
+```
+
+What that line does, and what it costs:
+
+- **It overrides the pin guarden probed and recorded.** The container then runs under your
+  mapping and not the one the image's own user asked for. The registry still holds
+  guarden's pair — your file is not the record and does not become one, so `weedr service
+  list` will not show your value.
+- **It bypasses the refusal of a repository's own `Userns=`.** That refusal is about
+  repository input. This file is root-owned and no repository can reach it.
+- **It takes effect only after a daemon-reload.** A drop-in is read by the generator, and
+  the generator runs at reload. Edit the file, reload the service user's manager, restart
+  the unit:
+
+  ```sh
+  systemctl --user --machine <service>@ daemon-reload
+  weedr service stop <service>
+  weedr service start <service>
+  ```
+
+- **Guarden never writes that file and never deletes it.** Not on a re-render, and not when
+  the service is removed: the removal takes guarden's own `50-guarden-keepid.conf` and
+  leaves yours where it is. If you want the override gone, delete it yourself.
+
+**The file must be readable by the service user.** The generator reads this path as the
+service's own uid, and a root-owned `0600` file there yields no generated unit at all — the
+unit simply does not exist. `0644` is what guarden's own file carries, and it is the mode to
+use.
+
+**There is no other place to put a drop-in.** This directory is the whole of the admin's
+path to a unit, and there is **no staging copy of it anywhere** on the host: guarden never
+stages your file and never copies it in from somewhere else, so what you write here is what
+the generator reads (ADR-0024). A file dropped into `/etc/guarden/services/<name>/units.d/`
+is a file nothing reads — that path is not created by any program and is not a second way in.
 
 ### what an override can grant
 
@@ -732,7 +872,7 @@ The rest of the host, and where to look when a path is not what you expected:
 | `/var/lib/systemd/credential.secret` | the encryption key, when the host is set up with `systemd-creds --with-key=host`. Absent on a `--with-key=tpm2` host, where the key is sealed to the TPM |
 | `/etc/ssh/authorized_keys.d/hose` | the poke keys, one forced command per project |
 | `guarden-firewall.service` | the unit `soil firewall` installs to load the set |
-| `/etc/containers/systemd/users/<uid>/` | where admin units and drop-ins go, and the only place |
+| `/etc/containers/systemd/users/<uid>/` | where admin units and drop-ins go, and the only place — there is no staging copy of them (ADR-0024) |
 | `/var/lib/guarden/removed/<service>/<time>/<vol>/` | volumes a removal moved aside |
 
 There are two groups and no per-object groups. **`soil install` creates the `guarden` group**, and
@@ -1303,11 +1443,12 @@ somebody forgot.
 A service may declare as many `state` volumes as it needs, and one snapshot covers all of them.
 Each is a subvolume with its own snapper configuration named `<service>-<volume>`.
 
-A `bulk` volume is a btrfs subvolume like any other and gets a `.volume` unit so a container can
-mount it, but it has no snapper configuration, is never a fork or rollback source, and **is an
-empty subvolume after a fork**. It is a subvolume on every path, the fork included — never a plain
-directory, because the `.volume` unit has to resolve to the same kind of thing either way. It is
-never cloned from a live volume: a copy as of an instant is not reproducible
+A `bulk` volume is a btrfs subvolume like any other and a container mounts it by its own path —
+the subvolume itself — in a `Volume=` line, not a `.volume` unit (spec §6.3). It has no snapper
+configuration, is never a fork or rollback source, and **is an empty subvolume after a fork**. It
+is a subvolume on every path, the fork included — never a plain directory, because the path the
+`Volume=` line names has to resolve to the same kind of thing on a fresh deployment and after a
+fork. It is never cloned from a live volume: a copy as of an instant is not reproducible
 afterwards, and a fork that quietly produced different data on two targets would be worse than an
 empty one. Rebuild it instead, which is what the declaration promises.
 
@@ -1647,6 +1788,30 @@ is only ever created here. A host with no edge module has no `edge` group, and
 A route on a track whose `expose` is `tunnel` is reached through the tunnel and
 is not public on the edge. Getting somebody to it is a **grant**, and a grant is
 an issuance that always expires.
+
+**A tunnel route carries no middleware, and the edge's basic-auth login does not follow it
+there.** The tunnel is a *different terminator*: cloudflared dials the service's publication
+directly (`http://<name>:<publication>` in `/var/lib/guarden/tunnel/config.yml`), so traefik
+is never in that path and the per-service `basicAuth` login is never in it either. The
+protection on a tunnel route is **Cloudflare's Access policy**, and `weedr share issue` is
+guarden's own instrument for it.
+
+`weedr expose set <name> tunnel` says so on stdout, in one line, whenever the service carries
+the default edge login:
+
+```sh
+weedr expose set myapp-staging tunnel
+myapp-staging exposure tunnel
+myapp-staging is reached through the tunnel, and the tunnel is a different terminator: its
+route carries no middleware at all — the edge's basic auth login and its forward-auth are
+both in front of the edge's own routes. A tunnel route is protected by the vendor's Access
+policy, and `weedr share issue` is guarden's own instrument for that policy.
+```
+
+**Read that line as the answer to "what is in front of this route".** A service with no
+login — one created before the gate module's policy was in force — prints no such line,
+because there is no credential that could have followed it. Promoting a service to the
+tunnel and reading nothing is not a contradiction: the service has no login to lose.
 
 ```sh
 weedr share issue routed-staging alice@example.com --until 7d

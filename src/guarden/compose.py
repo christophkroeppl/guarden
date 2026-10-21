@@ -89,6 +89,85 @@ REFUSED_COMPOSE_HOST: dict[str, str] = {
                "`soil sysctl` from the root-owned guarden.toml",
 }
 
+# **A resource cap or a weight is the operator's, and the Compose vocabulary
+# refuses it here** (spec 4, ticket 272). The manifest vocabulary already
+# refused `memory:`, `memory_max:`, `memory_high:`, `weight:`, `cpu_weight:` and
+# `io_weight:`; a compose file could carry `mem_limit: 2g` instead and the cap
+# reached the generated unit, because the pinned converter writes it as
+# `[Container] Memory=` and `Memory=` is not a key the renderer owns.
+#
+# **The family is refused whole, and its membership is measured rather than
+# guessed.** The converter turns most of these into `PodmanArgs=--…`, which the
+# renderer drops, so most of them are neutralised incidentally today —
+# `mem_limit:`, `pids_limit:` and `ulimits:` are not: they become `Memory=`,
+# `PidsLimit=` and `Ulimit=`, and each really caps the container. A rule that
+# held only because an incidental drop removed it would be a rule a converter
+# change removes silently.
+CAP_OWNER = (
+    "a resource cap is the operator's, in the admin's own drop-in "
+    f"{paths.ADMIN_UNITS}/<uid>/<unit>.container.d/, and never the repository's"
+)
+
+WEIGHT_OWNER = (
+    "a resource weight is the track's, from the root-owned " f"{paths.GUARDEN_TOML}"
+)
+
+OOM_OWNER = (
+    "whether a container may outlive a host under memory pressure is the "
+    "operator's, in the admin's own drop-in "
+    f"{paths.ADMIN_UNITS}/<uid>/<unit>.container.d/"
+)
+
+REFUSED_COMPOSE_CAPS: dict[str, str] = {
+    "mem_limit": CAP_OWNER,
+    "mem_reservation": CAP_OWNER,
+    "memswap_limit": CAP_OWNER,
+    "mem_swappiness": CAP_OWNER,
+    "cpus": CAP_OWNER,
+    "cpu_quota": CAP_OWNER,
+    "cpu_period": CAP_OWNER,
+    "cpu_rt_runtime": CAP_OWNER,
+    "cpu_rt_period": CAP_OWNER,
+    "cpuset": CAP_OWNER,
+    "pids_limit": CAP_OWNER,
+    "ulimits": CAP_OWNER,
+    "oom_kill_disable": OOM_OWNER,
+    "oom_score_adj": OOM_OWNER,
+    "cpu_shares": WEIGHT_OWNER,
+}
+
+# **A `networks:` claim resolves to nothing on a guarden host** (spec 6.3 and
+# 7.1, ticket 272). Every container of a service runs in its own pasta
+# namespace, there is no shared podman network, and the renderer writes
+# `Network=pasta:` over whatever the source asked for. A compose file that
+# declares one is not a faithful description of what runs, so the declaration is
+# refused rather than silently corrected.
+#
+# **This is a refusal of a false claim rather than of a value the host owns**,
+# which is what separates it from a cap: there is no operator's drop-in to grant
+# a network in, because the network does not exist.
+#
+# The table is refused at the DOCUMENT level and the `networks:` list on a
+# SERVICE, because the two halves are halves of one claim — the table names a
+# network and the service says "this container is on it". Measured: on its own a
+# service list makes the converter exit `1`, spec 1.2's "the host is not in the
+# state the request assumed" over what is a rejected input; with the table
+# present the converter writes a `.network` unit that the conversion drops in
+# silence while the render replaces `Network=`.
+#
+# **`volumes:` is not here**, and neither is `secrets:`: the document-level
+# `volumes:` table is ordinary Compose and is how a named volume is declared,
+# and a top-level `secrets:` with `external: true` is how a podman secret is
+# named. Refusing either would refuse every project.
+NETWORK_CLAIM = (
+    "there is no shared podman network on a guarden host: every container of a "
+    "service runs in its own pasta namespace and the renderer writes "
+    "Network=pasta: over whatever the source asked for, so a network named here "
+    "does not exist and cannot be granted"
+)
+
+REFUSED_COMPOSE_TABLES: dict[str, str] = {"networks": NETWORK_CLAIM}
+
 
 @dataclass(frozen=True)
 class Mount:
@@ -174,6 +253,19 @@ def services(doc: dict[str, Any], path: Path) -> dict[str, dict]:
     return out
 
 
+def refuse_document(doc: dict[str, Any], path: Path) -> None:
+    """The document-level tables this host has no such thing for (spec 7.1).
+
+    Checked on the repository's own declaration and before the converter is
+    driven, so the diagnostic is guarden's and the exit is `2` (spec 1.2).
+    """
+    for key, why in REFUSED_COMPOSE_TABLES.items():
+        if key in doc:
+            raise errors.GuardenError(
+                f"the unit source {path} declares {key}: {_shown(doc[key])}, and {why}"
+            )
+
+
 def refuse(body: dict[str, Any], container: str, path: Path) -> None:
     """The refusal list, checked on the repository's own declaration.
 
@@ -199,7 +291,56 @@ def refuse(body: dict[str, Any], container: str, path: Path) -> None:
                 f"the unit source {path}: the service {container!r} asks for {key}: "
                 f"{_shown(body[key])}, and {why}"
             )
+    _refuse_caps(body, container, path)
+    _refuse_networks(body, container, path)
     _refuse_templated_ports(body, container, path)
+
+
+def _refuse_caps(body: dict[str, Any], container: str, path: Path) -> None:
+    """A resource cap or weight on a Compose service, refused by name (spec 4).
+
+    **Both spellings, because they are one statement.** Compose writes a cap as
+    `mem_limit:` or as `deploy.resources.limits.memory:`, and a rule that held
+    only the short one would be the one-rule-two-spellings failure the `zram:`
+    refusal exists to avoid. The path is named rather than the whole `deploy:`
+    table, because `deploy.replicas` and `deploy.restart_policy` are not caps.
+    """
+    for key, why in REFUSED_COMPOSE_CAPS.items():
+        if key in body:
+            raise errors.GuardenError(
+                f"the unit source {path}: the service {container!r} asks for "
+                f"{key}: {_shown(body[key])}, and {why}"
+            )
+    deploy = body.get("deploy")
+    resources = deploy.get("resources") if isinstance(deploy, dict) else None
+    if not isinstance(resources, dict):
+        return
+    for section in ("limits", "reservations"):
+        table = resources.get(section)
+        if not isinstance(table, dict) or not table:
+            continue
+        named = ", ".join(
+            f"deploy.resources.{section}.{key}" for key in sorted(table)
+        )
+        raise errors.GuardenError(
+            f"the unit source {path}: the service {container!r} asks for "
+            f"{named}: {_shown(table)}, and {CAP_OWNER}"
+        )
+
+
+def _refuse_networks(body: dict[str, Any], container: str, path: Path) -> None:
+    """A `networks:` list on a Compose service, refused by name (spec 6.3).
+
+    The consumer half of the claim the document-level table makes: "this
+    container is on that network", and there is no such network here. Refused
+    on the repository's own declaration, so the exit is `2` rather than the
+    converter's `1` for what is rejected input (spec 1.2).
+    """
+    if "networks" in body:
+        raise errors.GuardenError(
+            f"the unit source {path}: the service {container!r} asks for networks: "
+            f"{_shown(body['networks'])}, and {NETWORK_CLAIM}"
+        )
 
 
 def _refuse_templated_ports(body: dict[str, Any], container: str, path: Path) -> None:

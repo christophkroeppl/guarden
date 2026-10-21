@@ -27,7 +27,7 @@ GUARDEN_GROUP = "guarden"
 LOOM = paths.BIN / "loom"
 SHARED_MODE = 0o750
 SHARED_FILE_MODE = 0o640
-UNIT_MODE = 0o640
+SYSTEM_UNIT_MODE = 0o640
 # The keep-id drop-in, in podman's uid-scoped search path (ADR-0019).
 #
 # **The mode is `0644`, and the reason is who reads it.** The generator reads
@@ -383,18 +383,19 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
         body = path.read_text(encoding="utf-8")
         target = unit_dir(service, escaped_ref) / relative
         own_directory(target.parent, owner)
-        conf.write_file(target, body, UNIT_MODE, owner)
+        # 0700 is the tree's mode (spec 2.1); a unit file has no exception.
+        conf.write_file(target, body, paths.TREE_MODE, owner)
         written.append(str(target))
         entry = search_entry(relative, escaped_ref)
         if entry is not None:
             mirror = unit_dir(service) / entry
             own_directory(mirror.parent, owner)
-            conf.write_file(mirror, body, UNIT_MODE, owner)
+            conf.write_file(mirror, body, paths.TREE_MODE, owner)
             written.append(str(mirror))
 
     for path in sorted(_files(out / "system")):
         target = paths.PREFIX / "etc" / "systemd" / "system" / path.name
-        conf.write_file(target, path.read_text(encoding="utf-8"), UNIT_MODE)
+        conf.write_file(target, path.read_text(encoding="utf-8"), SYSTEM_UNIT_MODE)
         written.append(str(target))
 
     _install_admin_dropins(out, service, escaped_ref, written)
