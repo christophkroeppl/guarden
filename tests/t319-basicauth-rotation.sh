@@ -209,7 +209,7 @@ run weedr secret set rotapp-staging GUARDEN_BASICAUTH <<<"$NEWER"
 assert_exit 1
 # One line, and it names the service: an operator told only that the verb
 # failed would not know which credential is out of step.
-assert_one_diagnostic "error"
+assert_one_diagnostic "error:"
 assert_stderr_has "rotapp-staging"
 chattr -i "$entries"
 
