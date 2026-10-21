@@ -115,11 +115,19 @@ assert_file_has "$secrets_json" "GUARDEN_BASICAUTH"
 # that merely look alike. The password never appears in this file: it is
 # decrypted at runtime and compared in the machine.
 #
-# podman's `secretsdata.json` holds the value base64-encoded, and
-# `secrets.json` names the keys in a NESTED document (`nameToID` /
-# `idToName`), not a flat list — which is what the first version of this
-# assertion got wrong, and the reason it reported a missing key for a key
-# that was there.
+# **podman's file driver keys the data by the secret's ID, not by its name.**
+# `secrets.json` is a NESTED document — `secrets: {<id>: {name: …}}` plus
+# `nameToID` and `idToName` — and `secretsdata.json` is keyed by that same
+# `<id>`. Looking the value up by the NAME therefore finds nothing for a
+# secret that is present, which is what the first two versions of this
+# assertion did: the first reported a missing KEY, the second a missing
+# VALUE. Both were the assertion's mistake, and both read as a product
+# defect. The ID is taken from `nameToID` and the value is read under it.
+#
+# The value in the file is base64 (podman's file driver encodes it, and
+# `t60-secrets.sh` measures the same for a DB_PASSWORD), so it is decoded
+# before the comparison; whether it is encoded is podman's business, and the
+# property under test is that the store holds THIS credential.
 run python3 -c "
 import base64, hashlib, json, subprocess, sys
 
@@ -130,16 +138,26 @@ password = subprocess.run(
 ).stdout.rstrip('\n')
 
 names = json.load(open(secrets_json, encoding='utf-8'))
-if 'GUARDEN_BASICAUTH' not in names.get('nameToID', {}):
+ident = names.get('nameToID', {}).get('GUARDEN_BASICAUTH')
+if ident is None:
     sys.stderr.write('GUARDEN_BASICAUTH is not named in the store\n')
     sys.exit(1)
 
 stored = json.load(open(data_json, encoding='utf-8'))
-value = stored.get('GUARDEN_BASICAUTH')
-if value is None:
-    sys.stderr.write('the store names the key but carries no value for it\n')
+raw = stored.get(ident)
+if raw is None:
+    sys.stderr.write(
+        'the store names the key as %s but carries no value under that id; '
+        'it holds %s\n' % (ident, sorted(stored))
+    )
     sys.exit(1)
-if value != password:
+
+candidates = {raw}
+try:
+    candidates.add(base64.b64decode(raw, validate=True).decode('utf-8'))
+except Exception:
+    pass
+if password not in candidates:
     sys.stderr.write('the stored value is not the value the blob decrypts to\n')
     sys.exit(1)
 
