@@ -5,8 +5,9 @@ the allocation persisted in the registry so it is stable across regenerations
 and unique per service and per instance. The range is
 `ingress.publication_range` and nothing here chooses a number of its own.
 
-A host is allocated the same way (spec 4): `<track host_prefix><label>`, and
-the second claimant is refused with the holder named.
+A host is allocated the same way (spec 4): `<track host_prefix><label>`, plus
+the zone the route is published in when it is a tunnel route, and the second
+claimant is refused with the holder named.
 """
 
 from __future__ import annotations
@@ -60,13 +61,19 @@ def allocate(wanted, current: dict[str, int], used: set[int], span, what: str) -
     return out
 
 
-def claim_host(label: str, prefix: str, holders: dict[str, str], service: str) -> str:
-    """`<host_prefix><label>`, refused when another service already holds it.
+def claim_host(label: str, prefix: str, zone: str, holders: dict[str, str], service: str) -> str:
+    """`<host_prefix><label><zone>`, refused when another service already holds it.
 
     `holders` maps a full host name to the service that claimed it and is read
     from every registry, so the refusal names the holder rather than a number.
+
+    `zone` is the suffix the route's destination publishes it in — `""` for a
+    route the edge or nothing carries, `.` and the tunnel's zone when it is a
+    tunnel route (`service._zone` is the one place that decides, and it is the
+    one place because a name is only ever right if the record and the tunnel
+    agree about it).
     """
-    full = f"{prefix}{label}"
+    full = f"{prefix}{label}{zone}"
     holder = holders.get(full)
     if holder is not None and holder != service:
         raise errors.GuardenError(
