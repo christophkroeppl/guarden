@@ -88,6 +88,34 @@ OLD=$(systemd-creds decrypt --with-key=host "$blob")
 NEW=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
 [ -n "$NEW" ] || _fail "the rotated basic-auth value was not generated"
 
+# --- the blast radius: an ordinary credential is unaffected ------------------
+#
+# `weedr secret set` is the general verb for EVERY credential and the hook
+# sits in its path. A key no owner claims must therefore behave EXACTLY as
+# before: the blob is written, the materialiser is asked, no owner is
+# consulted and no entry is rewritten. This is the check that keeps the
+# change from being a special case bolted onto a general verb.
+#
+# The service's own schema declares an ordinary key, and the service carries
+# a login as well — so the owner list is consulted for this key and must
+# decline it, on the key name alone.
+PLAIN=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
+run weedr secret set rotapp-staging LOG_LEVEL <<<"$PLAIN"
+assert_exit 0
+assert_stdout_has "planted LOG_LEVEL"
+assert_stdout_lacks "$PLAIN"
+plain_blob=/etc/guarden/creds/rotapp-staging/LOG_LEVEL.cred
+assert_file_exists "$plain_blob"
+run systemd-creds decrypt --with-key=host "$plain_blob"
+assert_exit 0
+assert_stdout_has "$PLAIN"
+# And no entry was invented for it: the htpasswd directory holds one entry,
+# for the one service that carries a login, and nothing else.
+held=$(ls -A "$entries" | wc -l)
+[ "$held" = 1 ] \
+    || _fail "the htpasswd directory holds $held files, not the one entry"
+assert_file_exists "$entry"
+
 # --- the rotation ------------------------------------------------------------
 #
 # The ordinary root-side act. It reads the value with the terminal's echo
