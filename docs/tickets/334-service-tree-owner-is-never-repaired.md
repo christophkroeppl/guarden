@@ -192,7 +192,7 @@ The source reverted to develop's `6617f72` and the tests kept:
 
 ```
 $ GUARDEN_LXC_RUNNER=guarden-run-t334w timeout 1800 tests/lxc.sh run t334-tree-repair --no-cache
-sha: ed87491e7049ffaf0813e59356125577dad5b186 (SOURCE REVERTED to develop 6617f72, tests kept)
+sha: 54c18c005a09a858260209b4a3d4159f96bba417 (SOURCE REVERTED to develop 6617f72, tests kept)
 error: /var/lib/guarden/services/routed-preview/home/feature\x2fx/.config/containers/systemd is mode 755, not 700
 error: failed at line 526: return 1 (exit 1)
 FAIL t334-tree-repair.sh
@@ -205,7 +205,7 @@ note: --no-cache: all 1 suites ran and every result was recorded
 
 ```
 $ GUARDEN_LXC_RUNNER=guarden-run-t334w timeout 1800 tests/lxc.sh run t334-tree-repair --no-cache
-sha: ed87491e7049ffaf0813e59356125577dad5b186
+sha: 54c18c005a09a858260209b4a3d4159f96bba417
 ok   t334-tree-repair.sh
 1 suites: 1 ran, 0 inherited, 0 failures, 1 machines cut
 note: --no-cache: all 1 suites ran and every result was recorded
