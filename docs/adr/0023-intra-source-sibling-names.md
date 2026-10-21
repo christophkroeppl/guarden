@@ -25,8 +25,13 @@ already owned by guarden:
 - the **name** is a container key of the unit source — the repository's, but
   scoped to one source, so it never leaves it;
 - the **address** is `ingress.alias`, the pinned gateway;
-- the **port** is the container's own port, which the unit source already
-  declares.
+- the **port** is the container's own port, which the **manifest** declares.
+
+That last one is the whole of what the mechanism was missing, and it is why
+the manifest gains a key: the unit source does not declare a container's port
+in a place guarden reads — not in a Compose `ports:` entry, and not in a
+hand-written `.container` file. The manifest is where guarden already reads
+such facts, and `routes:` and `ports:` are already the vocabulary for them.
 
 ## The decision
 
