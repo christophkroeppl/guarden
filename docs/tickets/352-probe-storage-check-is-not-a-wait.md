@@ -117,7 +117,10 @@ At 69 s the machine answered `lxc exec` — the old gate's whole signal — with
 snapper's configuration not yet readable, and it was converged by the next poll.
 The old code read that 69-second answer as "ready", tested once, and reported the
 storage: the failure this ticket describes, reproduced on the artifact the ticket
-says it was not a defect of.
+says it was not a defect of. It is not a one-off either — a second cut answered
+`state=done marker=absent snapper=rc=1` at 39 s and converged by the poll after
+it, so two of the three probe cuts taken in that hour answered with snapper's
+configuration not yet readable and were converged one poll later.
 
 **`provision`, whole, on a copy of the golden.** `lxc copy guarden-golden
 guarden-golden-t352chk`, its `base` snapshot deleted, then provision on it:
