@@ -1429,6 +1429,19 @@ changed**, one line per directory on stdout, so an operator who meant the wideni
 than left to fight a correction that repeats on every deploy. A repair is the verb doing what it
 says, so the deploy still exits `0`.
 
+**The repair reaches nothing outside the service's own home.** The instance's directory name is
+a registry key, and a registry is a root-owned file an operator can edit by hand, so the repair
+resolves every path it would touch and refuses any that does not land inside the home. **A LINK
+IS NOT FOLLOWED**: the service owns its home and can plant a link in it, and a root-run `chown`
+that followed one would be an escalation — so a path that resolves outside the home is left
+alone, and the link's target is the target's business.
+
+**The owner of a repaired directory is ONE answer, and the host is asked for it.** The uid is
+the one the record holds; the gid is the service user's primary gid, read from the host's own
+passwd database, which is the same answer the tree walk and the installer use. A service user
+the host no longer has is a **refusal naming the service** (exit `1`), and not a gid invented
+from the uid: a gid is a property of the system, and a number nobody assigned is not one.
+
 `weedr service remove <name>` removes a whole service: it reverses all of it, moves each state
 and bulk subvolume to `/var/lib/guarden/removed/<service>/<time>/<vol>/` rather than deleting
 it, and leaves the repository and the operator's offline copy of credentials alone. Its
