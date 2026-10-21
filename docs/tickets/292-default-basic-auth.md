@@ -205,6 +205,77 @@ middleware).
 > start` per mint is a judgement about the credential path, and it belongs
 > with ticket 319 (rotation), which already rewrites the htpasswd entry from
 > the blob and is the natural place for "plant and materialise together".
+>
+> ### Corrected 2026-10-21: the measurement above did not test the case that decides it
+>
+> The section above measured that the credential is in the store **before the
+> ingest returns**, and concluded from that the missing `ask_materialiser`
+> call is "a redundancy, not a gap in the property". **The measurement is
+> right and the conclusion does not follow from it**, because it was taken
+> with the watcher RUNNING. The question the section did not ask is what
+> happens when the watcher is not running — and that is the case the
+> conclusion turns on, because "the watcher usually wins the race" and "the
+> watcher delivers" are different facts.
+>
+> **So the question was asked the other way**, on a fresh cut from the golden,
+> with `guarden-creds.path` stopped and everything else untouched:
+>
+> ```
+> PROBE t-ingest-start=1792560993.330421137
+> PROBE t-ingest-end=1792560996.666947726
+> PROBE one-present-now=yes
+> PROBE stopping-watcher
+> PROBE watcher-active=inactive
+> PROBE two-present-immediately=no
+> PROBE two-present-after-15s=no
+> PROBE starting-materialiser-by-hand
+> PROBE two-present-after-manual=yes
+> ```
+>
+> **With the watcher stopped, the value NEVER arrives.** Not immediately, not
+> after fifteen seconds, and only when `guarden-creds-boot.service` was
+> started by hand. So the watcher's arrival is a **timing win and not a
+> delivery guarantee**, and the store was populated by luck rather than by
+> the product. The "redundancy" is a redundancy **on a host whose path unit
+> is running** — which is a fact about the host, not about the mint, and a
+> host is exactly what the spec's ordering claim is about.
+>
+> **And the spec asks for an ordering, which a watcher cannot give.** Spec
+> 6.2: "The decryption happens once, root-side, in the credential
+> materialiser, which is why that unit exists; **by the time the renderer
+> runs, the value is already a podman secret and the renderer only names
+> it.**" The renderer runs now; the watcher fires eventually, with no bound.
+> The ordering the spec states was not held, and the store — the thing a
+> container's `Secret=` line resolves against — was populated by a race the
+> mutator did not win on purpose.
+>
+> **So the mint asks, the way every other plant asks.** `weedr secret set`
+> plants and then asks (spec 6.2: "encrypts into
+> `/etc/guarden/creds/<name>/<KEY>.cred` mode `0600`, then asks the credential
+> materialiser to run"), and the interactive creator plants and asks. A mint
+> is a plant of a credential, and the spec's rule is about the plant rather
+> than about the verb that performed it. `credentials.ask_materialiser` is
+> the existing mechanism and the mint now calls it; nothing new was
+> invented, and the watcher stays exactly what it is — the trigger for a
+> blob written outside the mutator.
+>
+> **The "store copy is inert" observation stands, and it is not the reason.**
+> The rendered unit still names no `Secret=GUARDEN_BASICAUTH`, because the
+> key is in no schema and is not an edge credential: the credential is
+> consumed by the EDGE through the htpasswd file the mutator writes. That
+> is a property of the ticket's own design, and it is a separate question
+> from whether the value reaches the store. The ticket's bullet asks for the
+> store, and the store is now reached by the mint rather than by luck.
+>
+> **What the assertions are now.** `tests/t292-basicauth-store.sh` asks the
+> question twice: **NOW**, with the watcher masked and no wait at all, so the
+> mint's own ask is the only thing that can deliver and the assertion is a
+> claim about the product; and **EVENTUALLY**, with the watcher unmasked, so
+> a regression in the `.path` path is caught too. And
+> `tests/t292-basicauth-mint-materialises.sh` is the vacuity proof — the
+> same claim with the watcher stopped, plus a comparison of the materialiser
+> unit's own start timestamp across the creation, so the suite cannot pass on
+> a store that something else filled.
 
 - [x] Marker written by `weedr module add gate-traefik`, root-owned, and a
       service created afterwards with `routes:` carries
@@ -212,22 +283,29 @@ middleware).
       edge routers, with **no manifest change**.
 - [x] Credentials are root-owned, per service, `0640 root:edge` htpasswd plus
       the encrypted blob in `/etc/guarden/creds/`, **and the value reaches
-      the service's own podman store** — measured at 0s after the ingest, by
-      the `guarden-creds.path` watcher, and asserted by
-      `tests/t292-basicauth-store.sh`.
+      the service's own podman store** — and it reaches it because the MINT
+      asks the materialiser to run, the way every other plant does, so the
+      value is in the store when the creation returns rather than whenever
+      the `guarden-creds.path` watcher happens to fire. Asserted by
+      `tests/t292-basicauth-store.sh` (NOW, watcher masked, no wait) and
+      `tests/t292-basicauth-mint-materialises.sh` (the same claim with the
+      watcher stopped, plus the materialiser's own start timestamp compared
+      across the creation).
 - [x] A manifest cannot disable auth: a route with `auth: false` on a flagged
       service still renders the basic-auth middleware.
 - [x] A service created **before** the marker (grandfathered) re-renders with
       no basic-auth middleware.
 - [x] Red first: `tests/t450-basicauth.sh` (reserved range t450–t459).
 - [x] Red first: `tests/t292-basicauth-store.sh` — the acceptance item that
-      had no assertion, now asserted. **It was GREEN from the start, and the
-      reason is worth keeping:** the ticket's proposed fix was wrong, and the
-      assertion is what showed it. The value reaches the store on its own
-      (measured 0s), so the suite never went red for the reason the
-      amendment predicted — it went red twice for reasons that were the
-      ASSERTION's own (the store document is nested; the data is keyed by the
-      secret's id), and both of those read as a product defect until a probe
-      dumped the store and showed the credential sitting there. **Non-vacuous:
-      with the watcher masked, the same assertion fails naming the missing
-      credential.**
+      had no assertion, now asserted, and now asked TWICE: **NOW**, with the
+      watcher masked and no wait at all, so the mint's own ask is the only
+      thing that can deliver, and **EVENTUALLY**, with the watcher unmasked,
+      so a regression in the `.path` path is caught too. **Non-vacuous, proven
+      twice:** with the watcher masked, the same assertion fails naming the
+      missing credential, and `tests/t292-basicauth-mint-materialises.sh`
+      fails on the materialiser's start timestamp when the creation did not
+      carry the value.
+- [x] Red first: `tests/t292-basicauth-mint-materialises.sh` — the property
+      the store assertion alone does not measure: with the watcher unable to
+      deliver, the minted credential reaches the service's own store anyway.
+      RED without the mint's ask, GREEN with it.
