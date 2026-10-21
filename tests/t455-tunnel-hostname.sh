@@ -219,6 +219,28 @@ assert_file_has "$tunnel" 'hostname: "preview.tunnel.example.net"'
 assert_file_lacks "$tunnel" "preview.web.tunnel.example.net"
 assert_file_lacks "$tunnel" 'hostname: "preview.web"'
 
+# --- the act moves the name with the destination -----------------------------
+#
+# The name is DERIVED from the destination, and `weedr expose set` is the act
+# that changes the destination — so the name moves in the same act. A route
+# demoted to loopback stops claiming a name in the tunnel's zone, which would
+# otherwise be a claim on a hostname the service will never be published at and
+# a grant that outlives the posture; promoted again, it takes the zone back.
+run weedr expose set routed-production loopback
+assert_exit 0
+run python3 "$GUARDEN_ROOT/tests/registryhost.py" "$prodreg" web
+assert_exit 0
+demoted=$(cat "$GUARDEN_STDOUT")
+[ "$demoted" = "web" ] \
+    || _fail "a demoted route still claims the host ${demoted:-none}, expected web"
+run weedr expose set routed-production tunnel
+assert_exit 0
+run python3 "$GUARDEN_ROOT/tests/registryhost.py" "$prodreg" web
+assert_exit 0
+promoted=$(cat "$GUARDEN_STDOUT")
+[ "$promoted" = "web.tunnel.example.net" ] \
+    || _fail "a re-promoted route claims the host ${promoted:-none}, expected web.tunnel.example.net"
+
 # --- an empty tunnel domain is refused, and it says why ----------------------
 #
 # A route whose destination is the tunnel and no zone to name it in is a
