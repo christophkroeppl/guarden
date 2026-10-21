@@ -132,9 +132,16 @@ assert_file_has "$conf" \
 # **The count is over the WHOLE file and not over one uid's lines**, because a
 # closure check that only looks at the uids it knows about is not a closure
 # check: it would pass on a set that also carried `guarden`.
+#
+# **The uid is taken as a FIELD and not as "a number on the line".** A second
+# `grep -oE '[0-9]+'` over the matched line harvests every number in it — the
+# uid, `127` out of `127.0.0.53`, and `53` out of `dport 53` — so the set it
+# reports is `[0 127 53 994]` and the assertion is RED on a correct render.
+# `sed` takes the one field after `uid-owner` and nothing else, which is what
+# the closure claim is about: WHICH uids hold an accept.
 resolver_uids=$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
-    | grep -oE '^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.53 ' \
-    | grep -oE '[0-9]+' | sort -u | tr '\n' ' ')
+    | sed -n 's/^[[:space:]]*mod owner uid-owner \([0-9][0-9]*\) daddr 127\.0\.0\.53 .*/\1/p' \
+    | sort -u | tr '\n' ' ')
 expected_uids="$svc_uid 0 "
 [ "$resolver_uids" = "$expected_uids" ] \
     || _fail "the resolver's uid set is [$resolver_uids], expected [$expected_uids]"
