@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 from guarden import conf, errors, paths, registry, tool, unitsource, users
@@ -138,7 +139,49 @@ def allow_mounts(source: Path, service: str) -> list[str]:
     return missing
 
 
-def own_directory(path: Path, owner: tuple[int, int]) -> None:
+def _converge(path: Path, owner: tuple[int, int]) -> bool:
+    """One directory inside a service's home, converged to the tree's rule.
+
+    The mode is `0700` and the owner is the service's own uid and gid. **The
+    comparison is read from the host and not assumed**, so a directory that
+    already holds the rule is not touched, and a repair can say what it
+    actually changed instead of what it walked.
+
+    A link is left alone: the tree's rule is about the directories guarden
+    made, and a link's target is the target's.
+    """
+    if path.is_symlink():
+        return False
+    try:
+        info = path.stat()
+    except OSError:
+        return False
+    if (info.st_uid, info.st_gid) == owner and (info.st_mode & 0o7777) == paths.TREE_MODE:
+        return False
+    conf.set_owner(path, owner)
+    os.chmod(path, paths.TREE_MODE)
+    return True
+
+
+def _chain_up(root: Path, home: Path) -> Iterator[Path]:
+    """A directory and every level above it, up to the home and not past it.
+
+    The chain is what the installer made: `conf.write_file`'s
+    `mkdir(parents=True)` creates the leaf AND the levels above it, and every
+    level it makes carries the mutator's umask and root's ownership. A repair
+    that owned the leaf and left the levels above it root-owned inside a `0700`
+    home would be the defect it exists to prevent, one level up.
+    """
+    try:
+        parts = root.relative_to(home).parts
+    except ValueError:
+        yield root
+        return
+    for index in range(len(parts), 0, -1):
+        yield home.joinpath(*parts[:index])
+
+
+def own_directory(path: Path, owner: tuple[int, int]) -> list[Path]:
     """A directory inside a service's home, owned by that service's user.
 
     `conf.write_file` creates the parent with `mkdir(parents=True)` and
@@ -147,15 +190,8 @@ def own_directory(path: Path, owner: tuple[int, int]) -> None:
     for a directory inside a service's home: the spec says nothing root-owned
     lives there, and the service cannot write its own quadlet tree without it.
 
-    **Only a directory this call creates is touched.** The quadlet directory
-    itself is made by `_make_tree` — `0700` to the service user, like the rest
-    of the tree — and re-moding it here would be a second statement of that
-    mode, and one that disagrees with the walk that owns it. What is created
-    here is the **drop-in directory** (`<unit>.container.d`), which nothing
-    else makes.
-
-    The mode is `0700`, the tree's own mode: the drop-in directory holds one
-    file the service owns, inside a directory only the service can enter.
+    The mode is `0700`, the tree's own mode: the directory holds one file the
+    service owns, inside a directory only the service can enter.
 
     **Every directory this call creates is owned, and not only the leaf.** The
     leaf's own parent may be missing too — `home/.config/containers` is
@@ -166,10 +202,14 @@ def own_directory(path: Path, owner: tuple[int, int]) -> None:
     walked up to the first directory that already exists, and each level this
     call makes is created, owned and moded in turn.
 
-    **A directory that already exists is left alone.** Not repaired and not
-    re-moded: the walk that owns a service's tree is `_make_tree`'s, and a
-    second statement of the same mode here would be two places to keep
-    agreeing.
+    **A directory that already exists is CONVERGED, and not left alone.** The
+    tree's rule is `0700` to the service user (spec 2.1), and it is the
+    tree's rule whether guarden made the directory now or found it there: a
+    host that ran an older guarden carries directories this helper made wrong,
+    and the installer is the only writer that made one (ticket 334). The leaf
+    is the one this call is about, so the leaf is the one it converges.
+
+    Returns the directories it changed, so a caller can say what it repaired.
     """
     missing: list[Path] = []
     probe = path
@@ -179,7 +219,59 @@ def own_directory(path: Path, owner: tuple[int, int]) -> None:
     for directory in reversed(missing):
         directory.mkdir(parents=True, exist_ok=True)
         conf.set_owner(directory, owner)
-        os.chmod(directory, 0o700)
+        os.chmod(directory, paths.TREE_MODE)
+    return [path] if _converge(path, owner) else []
+
+
+def owner_of(record) -> tuple[int, int]:
+    """The uid and gid a service's own files carry.
+
+    The service's own uid, and its own gid where the host gave it one — the
+    same pair `install` writes with, so a repair and an install cannot
+    disagree about who owns a directory.
+    """
+    service = record.service
+    return (
+        record.uid,
+        users.group_id(service) if service in users.group_names() else record.uid,
+    )
+
+
+def repair_unit_dirs(
+    service: str, owner: tuple[int, int], refs: list[str]
+) -> list[Path]:
+    """The unit directories of a service and of every instance it holds,
+    converged to the tree's rule (ticket 334).
+
+    **What is repaired is the unit directories: the service's own and every
+    instance's.** Those are the directories the INSTALLER made — the quadlet
+    directory, the levels above it, and the drop-in directory under it — and
+    it made them by `conf.write_file`'s `mkdir(parents=True)`, so they carry
+    the mutator's umask and root's ownership. Every other directory in the
+    tree was made by `_make_tree`'s walk, which owns it, and the walk runs on
+    every create that is not converged.
+
+    **The FILES are not repaired, and that is deliberate.** A unit file's mode
+    is ticket 320's question — two writers disagree about it and suites pin
+    the answer it has not yet been given. A repair that re-moded the files
+    would settle that question by side effect, and this is not that ticket.
+
+    Returns the directories it changed, so a caller can say what it repaired.
+    """
+    home = paths.service_home(service)
+    roots = [unit_dir(service)]
+    roots += [unit_dir(service, ref) for ref in refs]
+    changed: list[Path] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in _chain_up(root, home):
+            if _converge(path, owner):
+                changed.append(path)
+        for path in sorted(root.glob("*.container.d")):
+            if path.is_dir() and _converge(path, owner):
+                changed.append(path)
+    return changed
 
 
 def install(source: Path, service: str, escaped_ref: str | None = None) -> list[str]:

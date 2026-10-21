@@ -43,7 +43,8 @@ stage_poke routed 9f2c1ab
 
 escaped='feature\x2fx'
 home=/var/lib/guarden/services/routed-preview/home
-instance_quadlet="$home/$escaped/.config/containers/systemd"
+instance_home="$home/$escaped"
+instance_quadlet="$instance_home/.config/containers/systemd"
 slot_quadlet="$home/.config/containers/systemd"
 
 run weedr service ingest routed-preview/feature/x --from poke routed@9f2c1ab
@@ -61,11 +62,11 @@ break_it() {
 }
 
 break_it "$instance_quadlet"
-break_it "$instance_quadlet/.config"
-break_it "$instance_quadlet/.config/containers"
+break_it "$instance_home/.config"
+break_it "$instance_home/.config/containers"
 break_it "$slot_quadlet"
-break_it "$slot_quadlet/.config"
-break_it "$slot_quadlet/.config/containers"
+break_it "$home/.config"
+break_it "$home/.config/containers"
 break_it "$instance_quadlet/web.container.d"
 
 # The SAME source again. The deploy is converged, so the create returns before
@@ -76,9 +77,9 @@ assert_stdout_has "converged"
 
 # The tree is the service's own again, and the tree's mode. Every level of the
 # chain, because the older mutator created every level of it.
-for path in "$instance_quadlet" "$instance_quadlet/.config" \
-    "$instance_quadlet/.config/containers" "$slot_quadlet" \
-    "$slot_quadlet/.config" "$slot_quadlet/.config/containers" \
+for path in "$instance_quadlet" "$instance_home/.config" \
+    "$instance_home/.config/containers" "$slot_quadlet" \
+    "$home/.config" "$home/.config/containers" \
     "$instance_quadlet/web.container.d"; do
     assert_mode "$path" 700
     assert_owner "$path" "routed-preview:$group"

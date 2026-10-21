@@ -247,6 +247,13 @@ def sysctl(name: str) -> Path:
 
 NO_LOGIN_SHELL = "/usr/sbin/nologin"
 
+# The mode of a service's tree, and of every directory under it (spec 2.1).
+#
+# **It lives here and not in one program.** The rule is the tree's, and the
+# tree is walked by `service.py` and converged by `units.py` — two writers,
+# one rule, and a second constant would be a second statement of it.
+TREE_MODE = 0o700
+
 # The two volume kinds, and the directory each lives under (spec 2). They are
 # here rather than in `volumes.py` because `volumes` imports this module, and a
 # layout constant a second module had to be read for would be the copy that
