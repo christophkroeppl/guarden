@@ -63,7 +63,7 @@ run weedr service ingest oneapp-staging --from poke oneapp@9f2c1ab
 printf 'PROBE t-ingest-end=%s\n' "$(date +%s.%N)"
 assert_exit 0
 
-one=store_of oneapp-staging
+one=$(store_of oneapp-staging)
 printf 'PROBE one-created-at=%s\n' "$(created_at "$one")"
 printf 'PROBE one-present-now=%s\n' \
     "$(grep -q GUARDEN_BASICAUTH "$one" 2>/dev/null && echo yes || echo no)"
@@ -78,7 +78,7 @@ seed_service twoapp
 run weedr service ingest twoapp-staging --from poke twoapp@9f2c1ab
 assert_exit 0
 
-two=store_of twoapp-staging
+two=$(store_of twoapp-staging)
 printf 'PROBE two-present-immediately=%s\n' \
     "$(grep -q GUARDEN_BASICAUTH "$two" 2>/dev/null && echo yes || echo no)"
 sleep 15
