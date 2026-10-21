@@ -23,6 +23,14 @@ Every way this file could lie is closed here rather than at a call site:
 Nothing here asks the clock whether a result is still good. There is no expiry,
 because an expiry would make what a run means depend on how long ago it was.
 
+**The summary is refused unless the ledger accounts for the whole run.** The run
+hands `report` the number of suites it selected, and a tally that disagrees with
+it prints nothing at all: a ledger whose directory was pruned mid-run, truncated,
+or left over from another run would otherwise be summarised as a smaller run
+that passed — and the summary is the thing that gets believed (ticket 328). The
+count comes from the run's selection and never from the file, so a file that
+lost its lines cannot certify the run that wrote them.
+
 **The key is a hash of the golden's identity, the suite's name, the tree it
 reads, and the machine it was on.** The last of those is `mode` and `group`
 together: `mode` is the sharing policy and the order the suites ran in
@@ -90,7 +98,7 @@ Usage:
     suitecache.py put <golden> <key> <suite> <mode> <group> <exit>
     suitecache.py prune <golden>      drop records from every other golden
     suitecache.py line <verdict> <suite>
-    suitecache.py report --ledger F --golden G --cuts N [--no-cache]
+    suitecache.py report --ledger F --selected N --golden G --cuts N [--no-cache]
 """
 
 from __future__ import annotations
@@ -423,6 +431,18 @@ def cmd_report(args: argparse.Namespace) -> int:
     except OSError as exc:
         return refuse(f"cannot read the run's ledger {args.ledger}: {exc}")
     total = sum(counts.values())
+    # **The file cannot certify itself.** The number of suites the run selected
+    # is the run's own fact and it arrives as an argument, so a tally that
+    # disagrees with it is a record that is not the run's — a directory pruned
+    # mid-run loses the lines already written, and a file left from another run
+    # carries more. Either way there is no summary, because the only thing a
+    # reader would take from one is a claim about work that is not in the record
+    # (ticket 328).
+    if total != args.selected:
+        return refuse(
+            f"the run's ledger {args.ledger} holds {total} suite line(s) and the run selected "
+            f"{args.selected}, so it is not the run's own record; no summary is printed"
+        )
     ran = counts["pass"] + counts["fail"]
     short = args.golden[:8] if args.golden else "none"
     print(
@@ -483,6 +503,7 @@ def build_parser() -> argparse.ArgumentParser:
     line.add_argument("suite")
     report = commands.add_parser("report")
     report.add_argument("--ledger", required=True)
+    report.add_argument("--selected", type=int, required=True)
     report.add_argument("--golden", default="")
     report.add_argument("--cuts", type=int, default=0)
     report.add_argument("--no-cache", action="store_true")

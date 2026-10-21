@@ -71,6 +71,19 @@ REPO=${GUARDEN_LXC_REPO:-$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}"
 VM_REPO=${GUARDEN_LXC_VM_REPO:-/home/ubuntu/guarden}
 CACHE_TOOL=${GUARDEN_LXC_CACHE_TOOL:-$REPO/tests/suitecache.py}
 
+# **The run's own state, and the ledger inside it** (ticket 328). The ledger used
+# to be `$(mktemp -d)/ledger`, which resolves under `TMPDIR` — and on the
+# 2026-10-21 gate the host pruned that directory out from under a live run, so
+# every append failed and the run reached its summary holding a record nobody
+# could read. Not under `TMPDIR`, then; and not in `$REPO` either, because
+# `_push` copies the checkout into every cut and a file the run is writing must
+# not travel with it. It is the suite cache's sibling — both are the harness's
+# own bookkeeping, outside the checkout and outside anything a distribution
+# cleans — created by the run that needs it, so a fresh clone needs nothing.
+# `$RUNNER` is in the path because three parallel streams is the supported shape,
+# and one shared ledger would have them tallying each other's suites.
+RUN_STATE=${GUARDEN_LXC_RUN_STATE:-${XDG_CACHE_HOME:-$HOME/.cache}/guarden/lxc-runs}
+
 # The guest half of the apt-lock wait (ticket 271), read once at load. These
 # bytes travel with the exec because `_wait_cloud_init` runs *before* the
 # checkout is pushed into the cut, and `tests/t370-apt-lock-wait.sh` runs this
@@ -141,6 +154,17 @@ _shares_machine() {
 die() {
     printf 'error: %s\n' "$*" >&2
     exit 1
+}
+
+# **A run's ledger is its only record of what it did, so an append that fails is
+# the end of the run** (ticket 328). The alternative was measured on 2026-10-21:
+# the ledger's directory was pruned mid-run, every write failed, the per-suite
+# lines still printed, and the run exited 0 on a counter in memory while its
+# summary could not be computed at all. Stopping at the write that failed puts
+# the diagnostic where the damage is, instead of at the end of a long run whose
+# record stopped being its own hours earlier.
+_ledger_lost() {
+    die "the run's ledger $1 could not be written, so the run cannot name what it did: $2"
 }
 
 [ -x "$LXC" ] || die "$LXC not found; the LXD snap is not installed at that path"
@@ -1211,12 +1235,17 @@ cmd_run() {
 
     # The ledger: one line per selected suite, `verdict<TAB>name`. It is the run's
     # own record of what happened, and the summary is computed from it rather
-    # than from counters that a caller could set to anything. A ledger written
-    # somewhere it cannot be read is a run that reports nothing, so it is
-    # created up front and its directory is refused if it cannot be written.
+    # than from counters that a caller could set to anything.
+    #
+    # **It is created where the harness owns it, and its directory is created
+    # with it**, so a fresh clone needs no directory and no host pruner owns the
+    # path (`RUN_STATE` above has the measured reason). A ledger that cannot be
+    # created, or written, is the end of the run: the record is what the verdict
+    # is computed from, and a run that has lost it has nothing to report with.
     local ledger
-    ledger=$(mktemp -d)/ledger
-    : >"$ledger" || die "cannot write a run ledger"
+    ledger=$RUN_STATE/$RUNNER/ledger
+    mkdir -p "${ledger%/*}" || die "cannot create the run's state directory ${ledger%/*}"
+    : >"$ledger" || die "cannot write the run's ledger $ledger"
 
     # The mode is part of the key, not a run-wide annotation, and it carries two
     # things a run decides.
@@ -1266,7 +1295,8 @@ cmd_run() {
         if [ -n "$golden_digest" ]; then
             key=$(python3 "$CACHE_TOOL" key "$golden_digest" "$file" "$mode" "$group")
             if [ "$no_cache" = 0 ] && python3 "$CACHE_TOOL" get "$golden_digest" "$key" "$name"; then
-                printf 'inherit\t%s\n' "$name" >>"$ledger"
+                printf 'inherit\t%s\n' "$name" >>"$ledger" \
+                    || _ledger_lost "$ledger" "$name"
                 python3 "$CACHE_TOOL" line inherited "$name"
                 continue
             fi
@@ -1274,7 +1304,8 @@ cmd_run() {
 
         if [ "$want_fresh" = 1 ]; then
             if ! _reset; then
-                printf 'fail\t%s\n' "$name" >>"$ledger"
+                printf 'fail\t%s\n' "$name" >>"$ledger" \
+                    || _ledger_lost "$ledger" "$name"
                 printf 'error: cannot cut a clean %s\n' "$RUNNER" >&2
                 failures=$((failures + 1))
                 shared_open=0
@@ -1291,9 +1322,11 @@ cmd_run() {
         local rc=0
         _run_suite "$name" || rc=$?
         if [ "$rc" -eq 0 ]; then
-            printf 'pass\t%s\n' "$name" >>"$ledger"
+            printf 'pass\t%s\n' "$name" >>"$ledger" \
+                || _ledger_lost "$ledger" "$name"
         else
-            printf 'fail\t%s\n' "$name" >>"$ledger"
+            printf 'fail\t%s\n' "$name" >>"$ledger" \
+                || _ledger_lost "$ledger" "$name"
             failures=$((failures + 1))
             continue
         fi
@@ -1311,9 +1344,16 @@ cmd_run() {
         printf 'note: --fresh cuts a machine per file and overrode the shared declaration of %d suite(s)\n' \
             "$overridden"
     fi
-    local report_args=(--ledger "$ledger" --golden "$golden_digest" --cuts "$cuts")
+    # **The summary is the run's verdict, and it is refused rather than
+    # approximated.** The count it is checked against is the run's own selection
+    # (`$total`), never the file's, so a ledger that lost lines — the pruned
+    # directory of ticket 328 — cannot be summarised as a smaller run that
+    # passed. And a refusal has to END the run: the exit test below reads a
+    # counter in memory, so falling through printed an error where the summary
+    # belonged and then exited 0, which is the silent zero the ticket measured.
+    local report_args=(--ledger "$ledger" --selected "$total" --golden "$golden_digest" --cuts "$cuts")
     [ "$no_cache" = 1 ] && report_args+=(--no-cache)
-    python3 "$CACHE_TOOL" report "${report_args[@]}"
+    python3 "$CACHE_TOOL" report "${report_args[@]}" || die "no summary: the run's ledger $ledger could not certify the $total suite(s) this run selected"
     [ "$failures" -eq 0 ]
 }
 
