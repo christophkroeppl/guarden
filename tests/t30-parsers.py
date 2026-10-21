@@ -466,6 +466,26 @@ def providers_table() -> None:
         "a track with no table of its own resolves nothing",
     )
 
+    # **The two sides are not held to the same rule.** The concrete name becomes
+    # a Linux user name and carries the 31-character limit; the logical name is
+    # a lookup key that becomes nothing, and the manifest's own `needs:` entry
+    # holds it to the pattern alone. A forty-character logical name is legal in
+    # a manifest, so a table that refused to map it would refuse a mapping the
+    # manifest is asking for.
+    long_logical = "a-logical-provider-name-longer-than-a-service-name"
+    config = load(f'[providers.staging]\n{long_logical} = "postgres-staging"\n')
+    check(
+        config.resolve_provider("staging", long_logical) == "postgres-staging",
+        "a logical name longer than a service name is mapped",
+    )
+    try:
+        load(f'[providers.staging]\n{long_logical} = "{long_logical}"\n')
+    except errors.GuardenError as exc:
+        check(exc.code == 1, "an over-long concrete name is the host, so exit 1")
+        check("providers" in exc.message, "the over-long concrete name is named")
+    else:
+        FAILURES.append("an over-long concrete name was accepted")
+
     for body, what in (
         ('[providers.staging]\n"Not a name" = "postgres-staging"\n', "an invalid key"),
         ('[providers.staging]\npostgres = "Not a name"\n', "an invalid value"),

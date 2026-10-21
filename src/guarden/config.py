@@ -461,6 +461,14 @@ def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, di
     diagnostic never describes. The track is validated too, for the same reason
     the override table's unknown keys are refused: a mapping nothing reads is a
     mapping an operator believes is in effect.
+
+    **The two sides are not checked by the same rule, and the difference is
+    load-bearing.** The concrete name becomes a Linux user name, so it carries
+    the 31-character limit; the logical name is a lookup key that becomes
+    nothing, so it carries only the pattern — which is the same rule the
+    manifest's own `needs:` entry is held to (`manifest._needs`). A logical name
+    of forty characters is legal in a manifest, and a table that refused to map
+    it would refuse a mapping the manifest is asking for.
     """
     if not isinstance(table, dict):
         raise _type_error(str(where_file), "providers", "a table")
@@ -481,18 +489,21 @@ def _providers(table: Any, where_file: Any, tracks: list[Track]) -> dict[str, di
                 raise _type_error(
                     str(where_file), f"providers.{track}.{logical}", "a service name"
                 )
-            for name, what in (
-                (logical, "a logical provider name"),
-                (concrete, f"the service name {logical!r} resolves to"),
-            ):
-                try:
-                    names.validate(name, what)
-                except errors.GuardenError as exc:
-                    raise errors.GuardenError(
-                        f"{where_file}: [providers.{track}] maps a logical provider name to "
-                        f"a service name: {exc.message}",
-                        errors.HOST_NOT_AS_ASSUMED,
-                    ) from None
+            if not isinstance(logical, str) or not names.NAME_RE.match(logical):
+                raise errors.GuardenError(
+                    f"{where_file}: [providers.{track}] maps a logical provider name to a "
+                    f"service name: the logical name {logical!r} must match "
+                    f"{names.NAME_RE.pattern}",
+                    errors.HOST_NOT_AS_ASSUMED,
+                )
+            try:
+                names.validate(concrete, f"the service name {logical!r} resolves to")
+            except errors.GuardenError as exc:
+                raise errors.GuardenError(
+                    f"{where_file}: [providers.{track}] maps a logical provider name to "
+                    f"a service name: {exc.message}",
+                    errors.HOST_NOT_AS_ASSUMED,
+                ) from None
             resolved[logical] = concrete
         out[track] = resolved
     return out
