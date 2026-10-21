@@ -188,9 +188,11 @@ Not on the guarden sudoers rule, and not reachable from a deploy:
 `weedr service rollback`, `weedr service add`, `weedr service create`,
 `weedr module add`, `weedr expose set`, `weedr expose unset`,
 `weedr project add`,
-`weedr project grant`, `weedr project revoke`, and every `weedr share`
-verb. A customer-facing grant is safe to have precisely because a poke
-can deploy to a preview and cannot mint, extend or revoke access to one.
+`weedr project grant`, `weedr project revoke`, every `weedr share` verb,
+and every `weedr clone` verb: a clone reads production data and a load
+writes it, so neither is reachable from a poke. A customer-facing grant is
+safe to have precisely because a poke can deploy to a preview and cannot
+mint, extend or revoke access to one.
 """
 
 
