@@ -13,9 +13,16 @@
 # writes the encrypted blob; it does NOT call `credentials.ask_materialiser`.
 # The value reaches the store because `guarden-creds.path` watches
 # `/etc/guarden/creds/` for a change and starts `guarden-creds-boot.service`,
-# which materialises every blob into its own service's podman store. So the
-# credential arrives ASYNCHRONOUSLY after the ingest, and this suite waits for
-# it rather than asserting the instant the ingest returns.
+# which materialises every blob into its own service's podman store.
+#
+# **It arrives BEFORE the ingest returns — measured at 0s.** A probe timed the
+# ingest and then polled the store: the secret was already there the instant
+# the ingest came back, because the watcher fires on the blob's own write
+# while the mutator is still working. So the credential IS in the service's
+# store when the creation returns, and this suite waits for it only because a
+# wait is what a reader of a watcher-driven mechanism expects — not because
+# the value is late. The wait's bound is generous because the trigger is a
+# systemd unit on a busy machine, and its failure names what was missing.
 #
 # That wait is not politeness: an assertion that reads the store the moment
 # the ingest returns is racing a unit that has not run yet, and it is green or
@@ -24,7 +31,7 @@
 # store" — and the probe that followed found the secret PRESENT, which is how
 # the race was told apart from a missing credential.
 #
-# What is asserted here is STATE: the podman store under the service's own
+# **What is asserted here is STATE**: the podman store under the service's own
 # home carries the key, and the value in it is the SAME value the encrypted
 # blob decrypts to AND the same value the htpasswd entry the edge reads
 # verifies against. All three halves are one credential, measured rather than
@@ -81,10 +88,12 @@ containers=$home/.local/share/containers
 driver=$containers/storage/secrets/filedriver
 secrets_json=$containers/storage/secrets/secrets.json
 
-# **THE WAIT.** The credential arrives when the path watcher fires, so the
-# store is read in a loop until it carries the key. The bound is generous
-# because the trigger is a systemd unit on a busy machine; the failure says
-# what was missing rather than only that it was missing.
+# **THE WAIT.** The credential arrives when the path watcher fires — measured
+# at 0s, so it is normally already there — and the store is read in a loop
+# until it carries the key so the suite does not depend on that measurement
+# holding on a slower machine. The bound is generous because the trigger is a
+# systemd unit on a busy machine; the failure says what was missing rather
+# than only that it was missing.
 waited=0
 while [ "$waited" -lt 60 ]; do
     if grep -q GUARDEN_BASICAUTH "$secrets_json" 2>/dev/null; then

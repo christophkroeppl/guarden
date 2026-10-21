@@ -159,21 +159,75 @@ middleware).
 > raced it. **Settle (b) before writing the fix** — if the value does arrive
 > within a bounded wait, the assertion is racing a watcher rather than
 > catching a missing call, and the fix is wrong.
+>
+> ### Settled 2026-10-21: (b) is what happened, so the proposed FIX is wrong
+>
+> The amendment above said to settle (b) before writing the fix, and to treat
+> "the value arrives within a bounded wait" as proof the fix is wrong. **That
+> is what was measured**, on a fresh cut from the golden:
+>
+> ```
+> PROBE ingest-start=1792559846.578169083
+> PROBE ingest-end=1792559850.794223160
+> PROBE immediately secrets.json=yes data.json=yes
+> PROBE arrived-after=0s
+> PROBE data.json-after={ "fee23842883ef861d1ad2e238": "amY2OFp2ek44ZGVMSU11YnZBTXBDSlpaLV9lOEhfdHV2TllXQlhsc0dkdw==" }
+> ```
+>
+> **The credential is in the service's own podman store before the ingest
+> returns.** The watcher fires on the blob's own write while the mutator is
+> still working, so the value is there when the creation returns — which is
+> what the ticket's bullet asked for, and it is TRUE without a product
+> change. The mint's missing `ask_materialiser` call is a redundancy, not a
+> gap in the property.
+>
+> **And the store copy is inert, so nothing is waiting on it.** A podman
+> secret is only useful if some unit asks for it: `render.py:_secret_requests`
+> builds the `Secret=` list from the SCHEMA's requests plus the edges' own
+> credential keys, and `GUARDEN_BASICAUTH` is in neither — it is minted by the
+> mutator, never declared by a repository. The probe's unit dump found no
+> `Secret=` line at all in the service's rendered `web.container`. The
+> credential is consumed by the EDGE, through the htpasswd file the mutator
+> writes; the podman copy is a second copy of a value nothing reads.
+>
+> So the two readings of "the value must reach the store" are both satisfied
+> already, and the fix the amendment proposed would add a `systemctl start`
+> per mint to make a copy that arrives anyway, arrive sooner. **What the
+> acceptance item actually needs is the ASSERTION, not the change** — and
+> that assertion is `tests/t292-basicauth-store.sh`, now GREEN on the
+> current tree and proven non-vacuous (with the watcher masked, the same
+> assertion fails naming the missing credential).
+>
+> **The one thing a mint's own `ask_materialiser` would buy** is that the
+> value's arrival stops depending on the watcher at all — a service created
+> on a box where `guarden-creds.path` is not running would carry a blob and
+> no store copy until the next boot. Whether that is worth a `systemctl
+> start` per mint is a judgement about the credential path, and it belongs
+> with ticket 319 (rotation), which already rewrites the htpasswd entry from
+> the blob and is the natural place for "plant and materialise together".
 
 - [x] Marker written by `weedr module add gate-traefik`, root-owned, and a
       service created afterwards with `routes:` carries
       `basicauth = true` in its registry and a `basicAuth` middleware on its
       edge routers, with **no manifest change**.
-- [ ] Credentials are root-owned, per service, `0640 root:edge` htpasswd plus
+- [x] Credentials are root-owned, per service, `0640 root:edge` htpasswd plus
       the encrypted blob in `/etc/guarden/creds/`, **and the value reaches
-      the service's own podman store** — the blob alone is not enough, because
-      the container resolves `Secret=` against that store and not against the
-      blob.
+      the service's own podman store** — measured at 0s after the ingest, by
+      the `guarden-creds.path` watcher, and asserted by
+      `tests/t292-basicauth-store.sh`.
 - [x] A manifest cannot disable auth: a route with `auth: false` on a flagged
       service still renders the basic-auth middleware.
 - [x] A service created **before** the marker (grandfathered) re-renders with
       no basic-auth middleware.
 - [x] Red first: `tests/t450-basicauth.sh` (reserved range t450–t459).
-- [ ] Red first: `tests/t292-basicauth-store.sh` — written, committed on
-      `fix/t292-creds-store`, and RED until the mint asks the materialiser to
-      run.
+- [x] Red first: `tests/t292-basicauth-store.sh` — the acceptance item that
+      had no assertion, now asserted. **It was GREEN from the start, and the
+      reason is worth keeping:** the ticket's proposed fix was wrong, and the
+      assertion is what showed it. The value reaches the store on its own
+      (measured 0s), so the suite never went red for the reason the
+      amendment predicted — it went red twice for reasons that were the
+      ASSERTION's own (the store document is nested; the data is keyed by the
+      secret's id), and both of those read as a product defect until a probe
+      dumped the store and showed the credential sitting there. **Non-vacuous:
+      with the watcher masked, the same assertion fails naming the missing
+      credential.**
