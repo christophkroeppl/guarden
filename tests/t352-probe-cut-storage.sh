@@ -102,6 +102,37 @@ assert_stderr_has 'the probe cut did not come up, so its storage state was never
 assert_stderr_lacks 'does not carry the converged storage state'
 unset GUARDEN_LXC_PROBE_WAIT
 
+# **A guest agent that stops answering must not hold the loop.** The case above
+# fails to exec, which is instantaneous; a WEDGED agent answers nothing at all
+# while LXD still reports RUNNING (measured 2026-10-21 as `Context ID not set in
+# volatile.vsock_id` for 40+ minutes). The poll is bounded, so the budget still
+# expires: this fake `lxc` sleeps far longer than the whole budget, and the loop
+# has to give up after about one poll rather than in ten minutes. Without the
+# per-poll `timeout`, this case hangs for 600s and the suite dies of its own
+# timeout instead of naming the defect.
+cat >"$GUARDEN_FIXTURES/lxc-wedged" <<'WEDGED'
+#!/bin/sh
+# `exec`, so the shell is REPLACED by sleep and there is no child holding the
+# pipe. A script that spawns a child instead (`sh -c 'sleep 600'`) is not fixed
+# by `timeout --foreground`: the kill lands on the shell, the child keeps stdout
+# open, and the command substitution waits forever. `lxc` is a real binary, so
+# the production call has no child; this fake has to match that shape or the
+# test hangs rather than measuring the bound.
+exec sleep 600
+WEDGED
+chmod +x "$GUARDEN_FIXTURES/lxc-wedged"
+GUARDEN_LXC_PROBE_WAIT=3
+export GUARDEN_LXC_PROBE_WAIT
+wedged_started=$SECONDS
+run_installed "$host" check "$GUARDEN_FIXTURES/lxc-wedged" guarden-golden
+wedged_elapsed=$((SECONDS - wedged_started))
+assert_exit 1
+assert_one_diagnostic 'error:'
+assert_stderr_has 'the probe cut did not come up, so its storage state was never read'
+[ "$wedged_elapsed" -lt 60 ] \
+    || _fail "a wedged lxc held the loop ${wedged_elapsed}s against a 3s budget"
+unset GUARDEN_LXC_PROBE_WAIT
+
 # A cut that cannot happen is refused before any waiting: the source is named and
 # the failure is the cut's, not the storage's.
 run_installed "$host" cut /nonexistent/lxc guarden-golden/base guarden-probe
