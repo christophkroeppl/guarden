@@ -1983,32 +1983,75 @@ def _with_bootstrap(body: str) -> str:
     return f"{head}\n{BOOTSTRAP}\n{tail}"
 
 
+def _checkout() -> Path | None:
+    """The checkout's `src/`, or None when the installed tree is the only code.
+
+    Reading the installed tree back as the source is what made a changed program
+    or module invisible to `soil install`, so the checkout is preferred and an
+    installed host with none has nothing to compare against (ticket 275).
+    """
+    running = Path(__file__).resolve().parent.parent
+    if running != paths.LIBDIR.resolve():
+        return running if (running / "guarden").is_dir() else None
+    candidate = paths.CHECKOUT / "src"
+    return candidate if (candidate / "guarden").is_dir() else None
+
+
 def _source_tree() -> Path:
-    return Path(__file__).resolve().parent.parent
+    """Where guarden's own files are read from: the checkout, else the installed tree."""
+    return _checkout() or Path(__file__).resolve().parent.parent
+
+
+def _program_bytes(program: str) -> str:
+    """An installed program: the module, bootstrapped, with its interpreter line."""
+    body = (_source_tree() / "guarden" / f"{program}.py").read_text(encoding="utf-8")
+    return f"{SHEBANG}\n{_with_bootstrap(body)}"
 
 
 def _install_programs() -> None:
     source = _source_tree()
     binaries = paths.BIN
-    binaries.mkdir(parents=True, exist_ok=True)
     for program in _PROGRAMS:
-        h.run_or_die("install", "-m", "0755", "-o", "root", "-g", "root",
-                     str(source / "guarden" / f"{program}.py"),
-                     str(binaries / program))
+        h.write_file(binaries / program, _program_bytes(program), 0o755)
+    h.run_or_die("chown", "-R", "root:root", str(binaries))
     # The whole package, not just cli.py: every program imports more of it.
     h.run_or_die("install", "-d", "-m", "0755", "-o", "root", "-g", "root",
                  str(paths.LIBDIR / "guarden"))
     for module in sorted((source / "guarden").glob("*.py")):
+        target = paths.LIBDIR / "guarden" / module.name
+        if target == module:
+            continue
         h.run_or_die("install", "-m", "0644", "-o", "root", "-g", "root",
-                     str(module), str(paths.LIBDIR / "guarden" / module.name))
+                     str(module), str(target))
     templates = source / "guarden" / "templates"
     if templates.is_dir():
         h.run_or_die("cp", "-r", "-T", str(templates), str(paths.TEMPLATES))
 
 
 def _programs_installed() -> bool:
-    binaries = paths.BIN
-    return all((binaries / program).is_file() for program in _PROGRAMS)
+    """Whether the installed programs and package are the source's, bytes and all.
+
+    Contents, not existence: a program or a module that kept its name and changed
+    its bytes was never re-installed, so the host kept running the old code. A
+    host with no checkout reads the installed tree back, and has nothing to
+    compare.
+    """
+    source = _checkout()
+    if source is None:
+        return all((paths.BIN / program).is_file() for program in _PROGRAMS)
+    for program in _PROGRAMS:
+        installed = paths.BIN / program
+        if not installed.is_file():
+            return False
+        if installed.read_text(encoding="utf-8") != _program_bytes(program):
+            return False
+    for module in sorted((source / "guarden").glob("*.py")):
+        installed = paths.LIBDIR / "guarden" / module.name
+        if not installed.is_file():
+            return False
+        if installed.read_bytes() != module.read_bytes():
+            return False
+    return True
 
 
 def _programs_runnable() -> bool:
@@ -2040,12 +2083,9 @@ def _make_programs_runnable() -> None:
     runtime dependencies assume and what `python3-yaml` and `python3-jinja2` are
     installed for.
     """
-    source = _source_tree()
-    binaries = paths.BIN
     for program in _PROGRAMS:
-        body = (source / "guarden" / f"{program}.py").read_text(encoding="utf-8")
-        h.write_file(binaries / program, f"{SHEBANG}\n{_with_bootstrap(body)}", 0o755)
-    h.run_or_die("chown", "-R", "root:root", str(binaries))
+        h.write_file(paths.BIN / program, _program_bytes(program), 0o755)
+    h.run_or_die("chown", "-R", "root:root", str(paths.BIN))
 
 
 def _templates_installed() -> bool:

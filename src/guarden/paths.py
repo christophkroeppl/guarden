@@ -119,6 +119,10 @@ PODMAN_STORE = Path(".local/share/containers")
 # rather than in a template — so it widens no authority.
 TEMPLATES = Path(os.environ.get("GUARDEN_TEMPLATES") or (PREFIX / "usr/lib/guarden/templates"))
 
+# The checkout a host is installed FROM. Not under the prefix, which relocates
+# what a run writes; `GUARDEN_REPO_DIR` is `tools/install.sh`'s own variable.
+CHECKOUT = Path(os.environ.get("GUARDEN_REPO_DIR") or "/usr/local/src/guarden")
+
 
 def overrides(service: str) -> Path:
     return ETC_SERVICES / service / "overrides.toml"
