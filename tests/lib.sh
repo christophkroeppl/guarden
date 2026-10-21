@@ -363,7 +363,7 @@ assert_file_lacks() {
         return 1
     fi
     local filtered status=0
-    filtered=$(mktemp)
+    filtered=$(mktemp) || { _fail "mktemp failed, so $1 could not be searched"; return 1; }
     grep -a -vE '^[[:space:]]*(#|;)' -- "$1" >"$filtered" || status=$?
     if [ "$status" -gt 1 ]; then
         rm -f "$filtered"
