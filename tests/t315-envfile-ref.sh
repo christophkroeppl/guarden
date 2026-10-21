@@ -52,6 +52,7 @@ purge() {
         path_was_active=1
     fi
     systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
+    remove_snapper_configs "$@" || failed=1
     for service in "$@"; do
         paths=(
             "/var/lib/guarden/services/$service"
@@ -80,6 +81,7 @@ purge() {
     # log.** A `home` left behind reached whoever got the machine next and failed
     # an assertion there about something else (ticket 329), so what survives the
     # removal is reported here, naming the purge.
+    assert_no_snapper_configs "$@" || failed=1
     [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
 }
 

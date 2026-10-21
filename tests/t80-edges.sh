@@ -50,6 +50,7 @@ purge() {
         path_was_active=1
     fi
     systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
+    remove_snapper_configs "$@" || failed=1
     for service in "$@"; do
         paths=(
             "/var/lib/guarden/services/$service"
@@ -73,6 +74,7 @@ purge() {
     fi
     # A teardown that cannot remove the tree is a failure, not a line in the
     # log; `t315-envfile-ref.sh` has the long form of that decision too.
+    assert_no_snapper_configs "$@" || failed=1
     [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
 }
 
