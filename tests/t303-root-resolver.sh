@@ -247,22 +247,43 @@ printf 'MEASURE: ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
 # rule and about the traffic in one read: the reply accept is
 # `saddr 127.0.0.53 proto {udp,tcp} sport 53` — the source, not the
 # destination — so it is the reply's own counter and the query's is not in it.
+#
+# **The row is found by WHAT THE RULE SAYS and not by a column number.**
 # `iptables -nvx -L` prints `pkts bytes target prot opt in out source
-# destination`, so the reply's source is the eighth field and the query's
-# destination is the ninth.
+# destination` and then the match extension, and the extension for a
+# source-port match is spelled `spt:53` while a destination-port match is
+# `dpt:53` — so the reply's rows are the ones carrying `spt:53` and the
+# query's carry `dpt:53`. **The first attempt at this read the source out of a
+# fixed field and got nothing**, because the `in`/`out` columns are what the
+# rule carries and they move with the chain. The counter is the first column
+# on every row, whatever else the row holds, so the sum is taken from the
+# first field of the rows that match the rule's own spelling.
 reply_packets() {
     iptables-legacy -nvx -L guarden-svc 2>/dev/null \
-        | awk '$3 == "ACCEPT" && $8 == "127.0.0.53" {n += $1} END {print n + 0}'
+        | grep 'spt:53' \
+        | grep '127\.0\.0\.53' \
+        | awk '{n += $1} END {print n + 0}'
 }
 reply_before=$(reply_packets)
 
 # **A well-formed DNS query**, so the stub answers it rather than dropping it:
 # a two-byte header (id, flags with RD set), one question, and the question's
-# name and type. The name is `.invalid` by construction — **it is a name no
-# upstream can answer**, so the answer is a refusal from the stub rather than
-# a lookup that depends on the internet, and the round trip is measured
-# hermetically.
-run sh -c "printf '\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03foo\x07invalid\x00\x00\x01\x00\x01' | nc -u -w2 127.0.0.53 53" || true
+# name and type.
+#
+# **The name is `localhost`, and it is sent as a RAW DNS PACKET rather than
+# through a resolver library.** Two reasons, and both are about the
+# measurement rather than about the stub:
+#
+#   * **A raw packet bypasses nss entirely**, so the name in `/etc/hosts` is
+#     irrelevant and there is no second path that could answer it. The first
+#     attempt used `getent hosts localhost`, which nss answers from
+#     `/etc/hosts` — so it measured nothing about the resolver at all.
+#   * **`localhost` is answered by the stub itself**, from its own local
+#     data, and needs no upstream. A name no upstream can answer — `.invalid`
+#     — would send resolved out to the network, and the measurement would
+#     then depend on the host's upstream and on the very packet path this
+#     ticket is about.
+run sh -c "printf '\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x09localhost\x00\x00\x01\x00\x01' | nc -u -w2 127.0.0.53 53" || true
 
 reply_after=$(reply_packets)
 printf 'MEASURE: REPLY_ACCEPT_COUNTER=%s->%s\n' "$reply_before" "$reply_after" >&2
