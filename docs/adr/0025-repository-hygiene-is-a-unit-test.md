@@ -7,7 +7,7 @@ with no runner: a check that cannot fail, which is the shape this repository
 retires elsewhere. The ticket asks where repository-hygiene checks run, not how
 this one works.
 
-The decision: **a suite runs in a machine and there is no host-only tier; a
+The decision: **a suite runs in a machine and no allowlist can exempt one; a
 claim about the checkout is a unit test, and `just unit` runs it on the
 checkout.**
 
