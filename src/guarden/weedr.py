@@ -25,6 +25,7 @@ from guarden import (
     creator,
     credentials,
     edgeconf,
+    edges,
     errors,
     exposure,
     firewall,
@@ -1244,6 +1245,17 @@ def _start(args) -> int:
     # names the volume, the payload directory and the work, and it is the same
     # refusal the mutator makes (ADR-0020).
     service.refuse_legacy_volumes(resolved.name, resolved.escaped_ref)
+    # **Step 10 again, and here because the ingest that ran it may have been too
+    # early** (ticket 284). A consumer's ingest normally runs before its
+    # provider's container is up, so `edges.provision` warns and creates no role —
+    # and the deploy that would have re-run it answers `converged` and installs
+    # nothing, so the credential and the role it names could part company for
+    # good. This is the later command: the provider is up by now, the container
+    # that needs the role is about to run, and the creation is idempotent. After
+    # the volume refusal above, so a service that cannot start this way does not
+    # get a role minted for it first.
+    for warning in edges.provision_pending(record):
+        sys.stderr.write(f"{warning}\n")
     # ADR-0019: the probe, the record and guarden's own `UserNS=keep-id` line
     # come before the units are handed to systemctl — the line has to be in
     # the file the generator reads, and `start_units` reloads the manager
@@ -1335,6 +1347,10 @@ def _restart(args) -> int:
         raise errors.GuardenError(
             f"{resolved.name} cannot start: {verdict.reason}", errors.HOST_NOT_AS_ASSUMED
         )
+    # The same step-10 re-attempt as `_start`, for the same reason: a restart is
+    # the other way an operator says "now it can run" (ticket 284).
+    for warning in edges.provision_pending(record):
+        sys.stderr.write(f"{warning}\n")
     service.ensure_owner_line(resolved.name, resolved.escaped_ref)
     service.start_units(resolved.name, resolved.escaped_ref)
     sys.stdout.write(f"restarted {resolved.name}\n")

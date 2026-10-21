@@ -1936,3 +1936,32 @@ remove.
 A raw `systemctl --user start` bypasses the gate entirely. That is true of every guarden rule on
 the box and it is a deliberate act by someone who already has those powers — but nothing CI can
 reach can do it.
+
+### a database edge that created no role
+
+An `auth: database` edge creates **one role named after the consumer** and one database per name
+in the edge's `databases:` list — `<consumer>` when the list is absent, `<consumer>-<name>`
+otherwise. It can only do that while the provider's container is **running**, and at a consumer's
+ingest it usually is not: a poke installs the provider and the consumer in that order, and no
+ingest starts anything. So the ingest says
+
+```
+warning: the container postgres-production-db of postgres-production is not running, so no
+role and no database were created for myapp-production; the credential is planted and a deploy
+that starts postgres-production creates them
+```
+
+and the credential it planted names an object that does not exist yet. **A later command creates
+it.** `weedr service start` re-runs the creation for every `database` edge of the service it
+starts, before the unit is handed to systemd, so once the provider is up one start is enough:
+
+```sh
+weedr service start postgres-production   # if it is not already up
+weedr service start myapp-production      # creates the role and its databases
+```
+
+The start does not refuse when the provider is still down; it repeats the warning and starts
+anyway, because a provider that is down fails the consumer's connection and not its process. And
+a database of the edge's own name that another role already owns is refused at the ingest, with
+both names printed, rather than taken over — `ALTER DATABASE … OWNER TO` would move somebody
+else's data.

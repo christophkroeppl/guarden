@@ -87,14 +87,30 @@ assert_file_lacks "$README" "git -C /usr/lib/guarden pull"
 # says which one it is: the programs live there, the checkout does not.
 assert_file_has "$DOC" "the programs live"
 
-# --- 310: the phase order is the installer's order -------------------------
+# --- 310: the phase order is the DESCRIPTION order, not the bootstrap one ----
 #
-# `packages, storage, sysctl, firewall, install, units` was the runbook's
-# line and the installer's order is `install` first, because `install` seeds
-# the file `packages` resolves its fetch against. Following the runbook
-# verbatim on a fresh box is therefore not the working flow.
-assert_file_lacks "$DOC" 'Phases in order: `packages`, `storage`, `sysctl`, `firewall`, `install`, `units`'
+# The runbook states the DESCRIPTION order, and says so: `soil list` prints
+# that order and it is not the order a fresh host runs them (`install` comes
+# first there, because `install` seeds the file `packages` resolves its fetch
+# against). The parsed comparison below is what holds the runbook to the
+# program, and the assertion under it requires the line to be present.
+#
+# There used to be an `assert_file_lacks` here for that same line, and it
+# contradicted the assertion immediately below it. It passed because
+# docs/sysadmin.md is 106,213 bytes — larger than one pipe buffer — so
+# `assert_file_lacks` could not fail on it at all. `e177cbe` made that helper
+# able to fail — it added `tests/t212-assert-file-lacks.sh`, and `t212` there is
+# the suite's number, not a ticket — and that is what surfaced this; the line is
+# correct and the negative assertion was stale from the day it was written.
+# Ticket 352 is a different defect — the provision probe's storage wait in
+# tests/lxc.sh — and does not touch this helper.
 assert_file_has "$DOC" "Phases in order:"
+# **The qualifier is the sentence that makes the phase list not a falsehood.**
+# Without it the runbook states an order and leaves the reader to assume it is
+# the one a fresh host runs, which is the mistake ticket 310 measured. This is
+# the assertion that replaces the stale `assert_file_lacks` removed in t353:
+# that one demanded the line be ABSENT, this one demands the line be HONEST.
+assert_file_has "$DOC" "not the order a fresh host runs them"
 # The order the runbook states is the order the program states, compared
 # rather than transcribed: a runbook that drifts from `soil list` fails here.
 doc_order=$(sed -n 's/^Phases in order: \(.*\)\.$/\1/p' "$DOC" \
@@ -127,9 +143,10 @@ expected_bootstrap="install packages storage sysctl firewall units "
 [ "$install_order" = "$expected_bootstrap" ] \
     || _fail "install.sh runs [$install_order], the bootstrap order is [$expected_bootstrap]"
 # The reason `install` goes first is stated, because an order without a reason
-# is an order an operator "corrects".
-assert_file_has "$DOC" "install"
-assert_file_has "$README" "install"
+# is an order an operator "corrects". These read the claim, not the word
+# "install", which every one of these documents contains for other reasons.
+assert_file_has "$DOC" "needs what it seeds"
+assert_file_has "$README" "seeds the file"
 
 # --- 311: a fresh-install section, with the canonical command -------------
 #

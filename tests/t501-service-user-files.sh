@@ -463,7 +463,10 @@ assert_file_lacks "$registry/$OTHER.toml" "pwned"
 usermod --append --groups guarden "$SVC"
 assert_supplementary_group "$SVC" guarden
 out=$(as_service sh -c "cat '$registry/$OTHER.toml'" 2>&1 || true)
-if printf '%s' "$out" | grep -q "service = "; then
+# `text_has` on the captured output, not a pipe into `grep -q`: under `pipefail`
+# the pipe reports the producer's SIGPIPE instead of the match, and a RED
+# demonstration that reads green is not a demonstration.
+if text_has "$out" "service = "; then
     echo "MEASURE: RED — with $SVC in the guarden group it reads another service's record, which is the leak the group membership opens"
 else
     _fail "the RED demonstration did not go red: with $SVC in the guarden group the read was still refused: $out"

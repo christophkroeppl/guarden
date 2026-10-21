@@ -222,6 +222,31 @@ assert_stderr_lacks() {
     fi
 }
 
+# text_has <captured text> <literal>: whether an already-captured text names it.
+#
+# **This is the shape a suite must use instead of `printf '%s' "$text" | grep
+# -q`.** `grep -q` exits at its first match, so the producer is still writing
+# when the reader closes the pipe; it takes SIGPIPE, `pipefail` turns the
+# pipeline into 141, and the caller reads "no match" for text that is right
+# there. A here-string has no producer to signal.
+#
+# **0 and 1 are the only answers.** Anything else is `grep` failing to decide —
+# a death by signal included — and it fails the suite rather than answering "no
+# match". The pass arm of a negative assertion is exactly 1, so "I could not
+# read it" must never land there: that is the direction in which this shape is
+# silent.
+text_has() {
+    local rc=0
+    grep -qF -- "$2" <<<"$1" || rc=$?
+    case $rc in
+        0 | 1) return "$rc" ;;
+        *)
+            _fail "grep exited $rc deciding whether the captured text names $2"
+            return 1
+            ;;
+    esac
+}
+
 assert_stdout_empty() {
     if [ -s "$GUARDEN_STDOUT" ]; then
         _fail "stdout is not empty"
@@ -327,15 +352,30 @@ assert_rule_count() {
 # Measured: `t160-grants.sh` failed at this line with
 # `error: failed at line 311: grep -vE … (exit 1)` and named no assertion at
 # all, because the assertion never ran. **An empty filter is not an error and
-# it is not a match**, so `|| true` says so; the `if` below is what decides
-# whether the string is present.
+# it is not a match**, so exit 1 is tolerated below and exit >1 is not.
+#
+# `-a` into a scratch file: a binary's `grep -v` answer is stderr-only, so a
+# captured filter passes vacuously; exit 2 means it could not be searched.
 assert_file_lacks() {
     [ -e "$1" ] || return 0
-    local filtered
-    filtered=$(grep -vE '^[[:space:]]*(#|;)' "$1" || true)
-    if printf '%s\n' "$filtered" | grep -qF -- "$2"; then
-        _fail "$1 names $2 and should not"
+    if [ ! -f "$1" ]; then
+        _fail "$1 is not a regular file, so it cannot be searched for $2"
+        return 1
     fi
+    local filtered status=0
+    filtered=$(mktemp)
+    grep -a -vE '^[[:space:]]*(#|;)' -- "$1" >"$filtered" || status=$?
+    if [ "$status" -gt 1 ]; then
+        rm -f "$filtered"
+        _fail "$1 could not be searched for $2 (grep exit $status)"
+        return 1
+    fi
+    if grep -aqF -- "$2" "$filtered"; then
+        rm -f "$filtered"
+        _fail "$1 names $2 and should not"
+        return 1
+    fi
+    rm -f "$filtered"
 }
 
 assert_executable() {
@@ -378,13 +418,26 @@ _assert_verb_set() {
     [ "$found" = "$expected" ] || _fail "$path lists [$found], expected [$expected]"
 }
 
+# **The first `{verb list}` block is taken by capture, not by `grep -o | head`.**
+# `head -n 1` exits after its first line, so `grep -o` is still writing when the
+# pipe closes, takes SIGPIPE, and `pipefail` makes the whole assignment exit
+# 141 — a false red that ends the suite on a help output that is perfectly
+# readable. Captured first, the first block is a parameter expansion, and every
+# reader left in the pipeline reads to the end of its input. A help that names
+# no block fails here: an unreadable help is not a program with no verbs.
 _verbs_of() {
     local path=$1
     set -- $path
     run "$@" --help
     [ "$GUARDEN_EXIT" = 0 ] || _fail "$path --help exited $GUARDEN_EXIT"
-    grep -o '{[^}]*}' "$GUARDEN_STDOUT" |
-        head -n 1 |
+    local blocks first
+    blocks=$(grep -o '{[^}]*}' "$GUARDEN_STDOUT" || true)
+    first=${blocks%%$'\n'*}
+    [ -n "$first" ] || {
+        _fail "$path --help names no {verb list}"
+        return 1
+    }
+    printf '%s\n' "$first" |
         tr -d '{}' |
         tr ',' '\n' |
         sed 's/ (.*//' |
@@ -661,6 +714,101 @@ assert_no_snapper_config() {
     fi
 }
 
+# snapper_configs_of <service>...: the configuration files whose SUBVOLUME is in
+# those trees — `snapper list-configs` named none of them when they existed as files.
+snapper_configs_of() {
+    local path name subvolume service
+    for path in /etc/snapper/configs/*; do
+        [ -f "$path" ] || continue
+        name=${path##*/}
+        if ! subvolume=$(snapper --no-dbus -c "$name" get-config 2>/dev/null \
+            | awk -F'|' 'tolower($1) ~ /subvolume/ {gsub(/[[:space:]]/, "", $2); print $2}'); then
+            return 1
+        fi
+        [ -n "$subvolume" ] || continue
+        for service in "$@"; do
+            case "$subvolume" in
+                "/var/lib/guarden/services/$service/"*)
+                    printf '%s\n' "$name"
+                    break
+                    ;;
+            esac
+        done
+    done
+}
+
+# _snapper_registry: the file carrying SNAPPER_CONFIGS, whichever path the
+# distribution uses. Debian and Ubuntu keep it in /etc/default/snapper; Fedora
+# and Arch in /etc/sysconfig/snapper.
+_snapper_registry() {
+    local path
+    for path in /etc/default/snapper /etc/sysconfig/snapper; do
+        [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
+    done
+    return 1
+}
+
+# _snapper_unregister <name>: take a name out of SNAPPER_CONFIGS.
+#
+# **The directory is not the whole of the state.** Measured on this golden: a
+# name left in SNAPPER_CONFIGS with no file under /etc/snapper/configs is
+# invisible to `snapper list-configs`, and the NEXT `create-config` answers
+# "Creating config failed (config already exists)." — which is the exact failure
+# this teardown exists to prevent. So a name is always removed from the registry,
+# not merely from the directory.
+_snapper_unregister() {
+    local file kept name
+    file=$(_snapper_registry) || return 1
+    kept=''
+    for name in $(
+        sed -n 's/^SNAPPER_CONFIGS="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$file"
+    ); do
+        [ "$name" = "$1" ] || kept="${kept:+$kept }$name"
+    done
+    sed -i "s|^SNAPPER_CONFIGS=.*|SNAPPER_CONFIGS=\"${kept}\"|" "$file"
+}
+
+# remove_snapper_configs <service>...: before the trees, because `delete-config`
+# refuses once the subvolume is gone. It also stops at the file after a `set-config`
+# (measured: rc=0, `.snapshots` and the daemon's entry gone, the file left), and
+# removing the file alone leaves the daemon naming it — so both halves, in this order.
+#
+# **`delete-config` failing is not ignorable.** It fails when the subvolume is
+# already gone, and swallowing that left the name registered while the file was
+# removed — the divergence `assert_no_snapper_configs` could not see. The
+# registry is cleared for the name either way, so the teardown leaves one state
+# rather than two.
+remove_snapper_configs() {
+    local names config
+    names=$(snapper_configs_of "$@") || return 1
+    for config in $names; do
+        snapper --config "$config" delete-config >/dev/null 2>&1 || :
+        _snapper_unregister "$config" || :
+        rm -f "/etc/snapper/configs/$config"
+    done
+}
+
+# assert_no_snapper_configs <service>...: the teardown's promise.
+#
+# Two states, because one check cannot see the other. The directory walk catches
+# a configuration file that survived; the registry check catches a NAME that
+# survived with no file, which `list-configs` hides and `create-config` refuses.
+assert_no_snapper_configs() {
+    local names file name orphan=''
+    names=$(snapper_configs_of "$@") \
+        || _fail "snapper could not be asked, so no configuration can be ruled out for: $*"
+    [ -z "$names" ] || _fail "snapper configuration(s) left after the purge: $(printf '%s ' $names)"
+    if file=$(_snapper_registry); then
+        for name in $(
+            sed -n 's/^SNAPPER_CONFIGS="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$file"
+        ); do
+            [ -e "/etc/snapper/configs/$name" ] || orphan="${orphan:+$orphan }$name"
+        done
+        [ -z "$orphan" ] \
+            || _fail "snapper configuration name(s) still registered with no file, so a later create-config will refuse them: $orphan"
+    fi
+}
+
 # assert_dpkg <pkg> / assert_no_dpkg <pkg>: what a converge actually installed.
 assert_dpkg() {
     local state
@@ -727,12 +875,38 @@ assert_no_linger() {
 }
 
 # assert_supplementary_group <user> <group> / assert_no_supplementary_group
+#
+# **The group list is captured, and the match is a here-string.** `id -nG | tr |
+# grep -qx` is the SIGPIPE shape: `grep -qx` exits at the first match, `id` is
+# still writing when the pipe closes, and `pipefail` makes the pipeline 141
+# instead of the answer. For the positive assertion that is a false red; for the
+# negative one it is a **silent pass on the membership it exists to refuse**,
+# because "the pipeline died" and "the group is absent" are the same exit status
+# to an `if`. Captured first, there is no producer left to signal.
+#
+# **A group list that cannot be read is a failure, never an absence.** `id -nG`
+# exiting non-zero — no such user, or a death by signal — prints and returns
+# non-zero, which is the direction that matters here: an unreadable list is the
+# one state in which the negative assertion knows nothing, so it must not answer
+# "not a member". The `return` is not `_fail`'s alone on purpose: a caller that
+# runs the helper inside an `if` or a `||` list has disabled `set -e` for it,
+# and there it would otherwise fall through to the answer.
 assert_supplementary_group() {
-    id -nG "$1" | tr ' ' '\n' | grep -qx "$2" \
+    local groups
+    groups=$(id -nG "$1" | tr ' ' '\n') || {
+        _fail "the group list of $1 could not be read"
+        return 1
+    }
+    grep -qxF -- "$2" <<<"$groups" \
         || _fail "$1 is not a member of $2 (members: $(id -nG "$1"))"
 }
 assert_no_supplementary_group() {
-    if id -nG "$1" | tr ' ' '\n' | grep -qx "$2"; then
+    local groups
+    groups=$(id -nG "$1" | tr ' ' '\n') || {
+        _fail "the group list of $1 could not be read"
+        return 1
+    }
+    if grep -qxF -- "$2" <<<"$groups"; then
         _fail "$1 is a member of $2 and should not be"
     fi
 }
