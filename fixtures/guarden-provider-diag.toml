@@ -1,0 +1,45 @@
+[host]
+domain = "example.com"
+interface = ""
+admin_user = "operator"
+
+[ingress]
+alias = "10.0.2.2"
+publication_range = [20000, 32767]
+
+[network]
+backend = "pasta"
+pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]
+
+[build]
+lanes = 1
+
+[modules]
+enabled = ["gate-traefik", "homepage"]
+
+[[environments]]
+name = "production"
+host_prefix = ""
+gated = true
+weight = 1000
+free_limit = 0.10
+keep_last = 7
+kind = "slot"
+fork_from = ""
+
+[[environments]]
+name = "staging"
+host_prefix = "staging."
+gated = false
+weight = 100
+free_limit = 0.20
+keep_last = 0
+kind = "slot"
+fork_from = "production"
+
+[providers.staging]
+postgres = "postgres-staging"
+absent = "absent-staging"
+
+[providers.production]
+postgres = "postgres-production"
