@@ -726,13 +726,20 @@ snapper_configs_of() {
 }
 
 # remove_snapper_configs <service>...: call it before the trees go, because
-# `delete-config` takes the read-only `.snapshots` subtree with it.
+# `delete-config` takes the read-only `.snapshots` subtree with it, and because it
+# refuses outright once the subvolume is gone (measured: rc=1, errno:2).
 remove_snapper_configs() {
-    local service names config
+    local service names config subvolume
     for service in "$@"; do
         names=$(snapper_configs_of "$service") || return 1
         for config in $names; do
-            snapper --config "$config" delete-config >/dev/null 2>&1 || :
+            snapper --config "$config" delete-config >/dev/null 2>&1 && continue
+            subvolume=$(snapper --config "$config" get-config 2>/dev/null \
+                | awk -F'|' 'tolower($1) ~ /subvolume/ {gsub(/[[:space:]]/, "", $2); print $2}' || true)
+            if [ -n "$subvolume" ] && [ ! -e "$subvolume" ]; then
+                rm -f "/etc/snapper/configs/$config"
+                printf 'note: %s is a configuration whose subvolume is gone; removed it\n' "$config" >&2
+            fi
         done
     done
 }
