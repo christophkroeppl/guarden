@@ -182,9 +182,13 @@ to it.
   services/<name>/home/<escaped-ref>/  one instance's unit directory, on an instance track
   services/<name>/state/<vol>/  a volume: a btrfs subvolume. A `state` volume has a
   snapper configuration named <service>-<vol>; a `bulk`
-  volume has none
+  volume has none. A `state` volume's DATA lives in
+  `state/<vol>/data/`, and that is what the container mounts —
+  see ADR-0020 and §8.1
   services/<name>/bulk/<vol>/  the same for a `bulk` volume, split out so the `state/`
-  tree contains nothing but snapshotted subvolumes
+  tree contains nothing but snapshotted subvolumes. A `bulk` volume is
+  mounted from the subvolume itself: it has no snapper configuration and
+  therefore no `.snapshots` subtree to keep out of the way
   services/<name>/instances/<escaped-ref>/  an instance's OWN tree, on an instance track.
   A sibling of `state/`, never a child of it — see below.
   Its `state/<vol>` has a snapper configuration named
@@ -523,6 +527,10 @@ postgres = "postgres-production"
 
 Each `[providers.<track>]` table maps a logical provider name to the concrete service that serves it in that track. `Config.resolve_provider(track, logical)` returns the concrete name, or `logical` unchanged when there is no mapping — so a manifest that names a full service name (`postgres-production`) keeps working, and a host with no `[providers]` table behaves exactly as before. The resolution runs in the mutator and the renderer, at every point a `needs:` entry becomes a provider lookup, an edge key, a hostname or a `Wants=` edge; both sides resolve from the same table, so the key the mutator writes is the key the renderer reads.
 
+**The two sides of a row are not held to the same rule.** The **concrete** name becomes a Linux user name, so it is a service name in full: the pattern, the 31-character limit and no `..`. The **logical** name is the manifest's own token and a lookup key that becomes nothing, so it is held to the pattern alone — the same rule the manifest's `needs:` entry is held to, and a forty-character logical name is legal in a manifest. A key that is not a name at all can never match a `needs:` entry, and a concrete name that is not one resolves to a service that does not exist — so the consumer is refused at the render with a name no provider can be connected to, and the operator is hunting a line the diagnostic never describes. A name that breaks either rule is **exit `2`**, the same code the track table's own `kind`/`cap`/`fork_from` mistakes carry, and a value of the wrong type is exit `1`.
+
+A `[providers.<track>]` for a track the host does not have is **exit `2`** and names the tracks the host does have: it is the same shape as a `fork_from` naming no track, which is a name in this file that names no track, and it is a rule this file states. A mapping nothing reads is a mapping an operator believes is in effect.
+
 #### `[edge_overrides]` — the operator's pin
 
 `/etc/guarden/overrides.toml` is the host-level exception to the per-track default. It holds one table:
@@ -533,6 +541,8 @@ postgres = "postgres-staging"   # on this host, postgres always means staging
 ```
 
 Precedence: **explicit override > `[providers]` environment default > literal name**. The override is host-wide and names no track — it applies to every service on the host that names the logical provider. The file is `0640 root:guarden` so that `loom`, running as `guarden`, can read it; it is seeded empty by `soil install` only when absent, and no program writes it afterwards. A pin that an operator has to re-ingest to apply is not a pin: the renderer reads the file on every render, so a pin is effective on the very next `loom render`.
+
+**Both sides of an override row are service names in full** — the pattern, the 31-character limit and no `..` — which is a stricter rule than `[providers]` applies to its logical side (§3.1 above). The difference is deliberate and it is the override's own: the override is the one table an operator writes by hand to redirect a provider on one box, so its key is a service name in the operator's own vocabulary rather than a manifest's token. The cost is that a logical provider name long enough to be legal in a manifest cannot be pinned — and the refusal is exit `1` naming the file, because the override is read on every resolution and a bad one takes the host's edge resolution down. The override is read **first**, so this rule governs before `[providers]` is consulted at all.
 
 The manifest refuses `environment:` and `track:` by name (spec 4): the host decides the environment. This table is where that decision is expressed — the repository names the logical provider, and the root-owned track table says which concrete service answers it per track.
 
@@ -1461,6 +1471,10 @@ In order:
 10. For a `database` edge, a role and a database in the provider, a minted password planted as
   a podman secret in the **consumer's** store, and nothing in the provider's. For a `secret`
   edge, a minted secret planted in both, because the provider has to be able to verify it.
+  **The provider is the concrete service the consumer's track resolves the manifest's
+  logical name to** (§3.1): the role and the database are created in *that* provider, and
+  the edge's registry record is keyed by its name. A manifest that names no logical name
+  names the service itself, and nothing changes.
 11. Units, rendered by `loom` and installed by the mutator.
 12. **A fork, when the track forks — as an internal step of this command, from the track's
   `fork_from` field and nothing else.** §8.3 has the rules; the two that matter here are that
@@ -1986,10 +2000,16 @@ loom check <source-dir>
 
 Unprivileged and pure: the same manifest, the same registry, the same overrides and the same
 configuration always produce the same bytes. It reads the manifest, the registry, the
-referenced overrides and the environment table, and writes quadlet units, a `.volume` unit for
-every declared volume — `state` and `bulk` alike, since a container must be able to mount
-either — an environment file, the host entries, the credential requests, and the rendered
-slices that the mutator installs into `/var/lib/guarden/shared/<name>/` for `roots` and `twig`.
+referenced overrides and the environment table, and writes quadlet units — each with the
+`Volume=` line of every declared volume, `state` and `bulk` alike, since a container must be
+able to mount either — an environment file, the host entries, the credential requests, and the
+rendered slices that the mutator installs into `/var/lib/guarden/shared/<name>/` for `roots` and
+`twig`.
+
+**A declared volume is mounted by its own path, and there is no `.volume` unit.** The mutator
+makes the subvolume before the unit is installed, so the `Volume=` line names the path the
+mutator made and the container binds it directly; a `.volume` unit would be a second thing
+saying the same fact, and the one that could go stale.
 
 `loom` **must** refuse rather than guess, with the code §1.2 gives each case.
 
@@ -2745,6 +2765,15 @@ no alias — to the host's loopback alias. The edge's route target is
 generated environment variable per edge carries `DB_HOST` and `DB_PORT`, and for a database
 edge the credential arrives as `/run/secrets/DB_PASSWORD`.
 
+**The name is the concrete one, and the concrete one is what the consumer's track resolves
+the manifest's logical name to** (§3.1). A manifest that names `postgres` renders
+`AddHost=postgres-staging:…` in a staging consumer and `AddHost=postgres-production:…` in a
+production one, and the environment variable carries the same name. The manifest names one
+logical provider and the host says which service answers it per track; the repository cannot
+name the environment (§4), so the resolution is the host's and the host's alone. A name the
+table does not map is the name as written, so a manifest that names a full service name keeps
+working and a host with no `[providers]` table behaves exactly as it did before.
+
 **A name inside a unit source is not a name.** Every container of one service runs in its own
 pasta namespace and there is no shared network (§7.1), so the containers of one unit source
 cannot resolve each other, and `AddHost=` carries service names only: it is written for an edge
@@ -3132,6 +3161,42 @@ Every declared volume, `state` or `bulk`, is a btrfs subvolume owned by the serv
 track, `<service>-<escaped-ref>-<volume>`. A `bulk` volume
 has none, is never snapshotted, is never a fork or rollback source, and is created empty by a
 fork.
+
+**A `state` volume's data lives one level down, in `state/<vol>/data/`, and that is what the
+container mounts** (ADR-0020). The subvolume is still the volume — it is what snapper snapshots
+and what the configuration owns — and the payload directory is inside it.
+
+**Why the data is not at the subvolume's root.** snapper puts its own `.snapshots` directory
+**inside** the subvolume it owns, `0750 root:root`, and the container is rootless: its `uid 0`
+is the *service* uid through `/etc/subuid`, so it cannot chown a directory owned by the real
+host root. Every image whose entrypoint runs `chown -R` over its data directory therefore fails
+against a `state` volume — the stock `postgres` image among them, and with it `mariadb`,
+`mysql` and `elasticsearch` — and the failure is structural rather than a race, because the
+volume always carries snapper's root-owned subtree.
+
+**So the container never sees `.snapshots` at all**: what it mounts is the payload, and
+`.snapshots` is the payload's *sibling*, not its child. The image's own data path lands inside
+the payload, so **the image's convention wins and guarden's layout makes room for it**: the
+repository's mount target is unchanged and no environment value has to be set.
+
+**A `bulk` volume has no payload directory and is mounted from the subvolume itself**, because
+it carries no snapper configuration and therefore no `.snapshots` subtree to keep out of the
+way. The decision changes only `state` volumes, and a rule that changed every volume would be a
+rule about a problem only `state` has.
+
+**Guarden does not move the data down a level, and a volume whose data is at the root is
+refused.** A move renames live data under a running process, it cannot skip `.snapshots`
+without a second rule, and it is not atomic across a service's several volumes. So the mutator
+refuses with one line, naming the service, the volume, the payload directory and the work,
+and it changes nothing: **the volume starts EMPTY and the operator moves the data across
+deliberately** — the same rule as for a newly declared volume, below. The refusal is exit `1`
+(the host is not in the state the request assumed) and not `2`.
+
+**`weedr service start` asks the same question and answers with the same line**, because a
+service deployed before this change carries a volume with its data at the root and the start is
+the operator's way out of that: without the check they meet the image's own chown error in a
+container's log instead of a line naming the volume and the work. The check is the mutator's
+own function, so the two answers cannot drift apart.
 
 **A volume is what makes a service's data durable, and a service that keeps data declares
 one.** A container that mounts no declared volume keeps its data in **podman's anonymous

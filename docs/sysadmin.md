@@ -651,6 +651,12 @@ else moves data aside.
 ```
 /var/lib/guarden/services/<name>/home/          its home; units, image store, instances
 /var/lib/guarden/services/<name>/state/<vol>/   a subvolume, with snapper config <name>-<vol>
+/var/lib/guarden/services/<name>/state/<vol>/data/
+                                             the volume's data, one level down inside
+                                             the subvolume, and what the container
+                                             mounts: snapper's .snapshots/ is the
+                                             payload's sibling, so a container never
+                                             sees it (ADR-0020)
 /var/lib/guarden/registry/<name>.toml           the record
 /etc/guarden/services/<name>/overrides.toml     admin grants
 /etc/containers/systemd/users/<uid>/            admin units and drop-ins, uid-scoped
@@ -659,6 +665,35 @@ else moves data aside.
     and your own `90-admin.conf`
 /var/lib/guarden/removed/<service>/<time>/<vol>/   moved, not deleted, by service remove
 ```
+
+**A `state` volume's data is one level down, and an existing volume whose data is at the
+root is refused rather than moved.** A `state` volume is a btrfs subvolume and snapper puts
+its own root-owned `0750` `.snapshots/` inside it; the container is rootless, so its `uid 0`
+is the service uid and it cannot chown a directory owned by the real host root. Every image
+whose entrypoint chowns its data directory — `postgres`, `mariadb`, `mysql`,
+`elasticsearch` — therefore fails against a `state` volume whose data is at the root, with
+
+    chown: changing ownership of '/var/lib/postgresql/data/.snapshots': Operation not permitted
+
+**The payload directory is the fix**: the container mounts `state/<vol>/data/`, the payload's
+sibling is `.snapshots/`, and the image's chown walks the payload only.
+
+**Guarden does not migrate a volume that already has its data at the root.** The mutator and
+`weedr service start` both refuse with one line naming the service, the volume, the payload
+directory and the work, and they change nothing. To move the data across:
+
+    weedr service stop <service>
+    mkdir -p /var/lib/guarden/services/<svc>/state/<vol>/data
+    find /var/lib/guarden/services/<svc>/state/<vol> -mindepth 1 -maxdepth 1 \
+        ! -name .snapshots -exec mv -t /var/lib/guarden/services/<svc>/state/<vol>/data {} +
+    chown -R <svc>:<svc> /var/lib/guarden/services/<svc>/state/<vol>/data
+    weedr service start <service>
+
+**The start asks the same question again**, so a move that missed something is refused rather
+than started against a half-moved volume.
+
+**The move is the operator's, deliberately**, and it is the same rule guarden already states
+for a newly declared volume: the volume starts EMPTY and the data does not follow the change.
 
 Nothing root-owned lives under `home`. If a file you expected to be protected is inside `home`,
 it is not — that is the rule, and the fix is to move it.

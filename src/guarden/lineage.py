@@ -539,12 +539,23 @@ def _clone(source: Path, target: Path, owner: tuple[int, int]) -> None:
     clone read-only would be a service that starts and cannot write. The clone is
     the buffer, so an unmodified block costs no space and the source snapshot is
     never written to.
+
+    **The payload directory exists and is owned**, because it is what the
+    container mounts (ADR-0020): a clone carries the SOURCE's ownership on
+    everything inside it, and a mount source the target's container cannot
+    write is a service that starts and cannot store anything. A source whose
+    data was at the root — a volume made before this change — has no payload
+    in its snapshot, and the empty one created here is the volume the operator
+    has to move the data into.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     tool.run(["btrfs", "subvolume", "snapshot", str(source), str(target)])
     tool.run(["btrfs", "property", "set", str(target), "ro", "false"])
     volumes.own(target, owner)
     _snapshots_subvolume(target)
+    payload = target / paths.DATA
+    payload.mkdir(parents=True, exist_ok=True)
+    volumes.own(payload, owner)
 
 
 def _snapshots_subvolume(volume: Path) -> None:

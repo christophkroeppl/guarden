@@ -73,11 +73,11 @@ echo "$line" | grep -qF 'exceeded 456s' || _fail "a configured wall clock does n
 unset SUITE_TIMEOUT
 
 # **The runner calls this function twice, every `error:` line in it is one of
-# six known, and every bound it runs is the measured shape.** `_push`
+# seven known, and every bound it runs is the measured shape.** `_push`
 # delivers tests/lxc.sh into the machine, so the drift the extraction could
 # grow is greppable from here, and each pin spans spellings rather than one of
-# them: the count moves on any seventh line naming `error:` in any form (an
-# `echo`, a format variable, a continuation line); the six signatures pin
+# them: the count moves on any eighth line naming `error:` in any form (an
+# `echo`, a format variable, a continuation line); the seven signatures pin
 # each line's leading literal over the comment-stripped stream, so a site that
 # changed or went away fails — while a reword confined to a continuation
 # line's tail beyond that literal is not caught, and the pins catch presence,
@@ -110,17 +110,18 @@ marker_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_failure_message 
 plain_calls=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cE '_failure_message "\$name" "\$rc"[[:space:]]*$' || true)
 [ "$plain_calls" = 1 ] || _fail "the plain call is gone, duplicated, or silenced; it must end its line exactly once"
 sites=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c 'error:' || true)
-[ "$sites" = 6 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of six is the enumeration"
+[ "$sites" = 7 ] || _fail "the runner names 'error:' on $sites non-comment lines; a fixed set of seven is the enumeration"
 # (ticket 271 split one line into two: a lock that was held and a lock that
 # could not be measured were printed as the same failure, and the ticket's
 # whole complaint is that the message could not tell them apart.)
-for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after %ss (held by %s; last answer: %s); '" "printf 'error: the apt locks on %s could not be shown free after %ss (last answer: %s); '" "printf 'error: cannot cut a clean %s\\n'"; do
+# (the seventh is the cache-key refusal: a key not computed runs the suite and records nothing.)
+for sig in "printf 'error: %s\\n'" "printf 'error: fuser is not on %s, so the apt lock wait cannot run; '" "printf 'error: %s is missing %s, so no check of the wait can come free\\n'" "printf 'error: %s still holds the apt lock after %ss (held by %s; last answer: %s); '" "printf 'error: the apt locks on %s could not be shown free after %ss (last answer: %s); '" "printf 'error: cannot compute the cache key for %s; it runs and nothing is recorded for it\\n'" "printf 'error: cannot cut a clean %s\\n'"; do
     # `grep -c`, not `grep -q`: a `grep -q` that exits on its first match sends
     # SIGPIPE to the `grep -vE` still writing upstream, and under `pipefail`
     # the pipeline then reads as a failed match — measured here as a race that
     # failed a different signature on each of two identical runs.
     n=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- "$sig" || true)
-    [ "$n" -ge 1 ] || _fail "the runner lost one of its six known error lines: $sig"
+    [ "$n" -ge 1 ] || _fail "the runner lost one of its seven known error lines: $sig"
 done
 kills=$(grep -vE '^[[:space:]]*#' "$runner" | grep -c -- '--foreground --signal=KILL' || true)
 [ "$kills" = 6 ] || _fail "the runner carries $kills '--foreground --signal=KILL' uses; six is the measured set (lock-file check, probe poll, cloud-init status, evidence, the suite's marker, the suite itself)"

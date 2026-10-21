@@ -123,11 +123,16 @@ assert_file_has "$driver/secretsdata.json" "$encoded"
 first=$(printf '%s' "a-real-value" | base64 -w0)
 assert_file_lacks "$driver/secretsdata.json" "$first"
 
-# --- the unit is still the trigger for a change made outside the verb --------
+# --- the installed pair, and what these two lines do and do not say ----------
 #
-# The path unit watches the blob directory, so a blob written by anything else
-# — a restored backup, an operator's own `cp` — is materialised without the
-# verb being involved. That is the unit's whole job, and it is the reason it
-# has to be RUNNING rather than merely enabled.
+# These are the unit's TEXT and not a trigger: the machine has a path unit that
+# names the blob directory and the oneshot it starts, and whether a blob written
+# outside the verb is caught is a different question. Measured 2026-10-21:
+# `PathChanged=/etc/guarden/creds/` fires for a new entry directly under that
+# directory and NOT for a change inside an existing service directory, which is
+# where every blob lives (`<cred>/<service>/<KEY>.cred`). The plant above is the
+# path that carries a value in — the verb starts the oneshot itself — and the
+# gap is recorded in docs/notes/creds-watcher-fires-one-level-up.md. It is not
+# this ticket's, and a suite that asserted the wider claim would be red today.
 assert_file_has /etc/systemd/system/guarden-creds.path "PathChanged=/etc/guarden/creds/"
 assert_file_has /etc/systemd/system/guarden-creds.path "Unit=guarden-creds-boot.service"
