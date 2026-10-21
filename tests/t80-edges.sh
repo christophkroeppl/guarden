@@ -41,12 +41,12 @@ dialed_publication() {
 purge() {
     local failed=0 service attempt
     local -a paths
-    # **The credential trigger is held for the duration of the removal**, for
-    # the reason `t315-envfile-ref.sh` states in full: deleting a blob under
-    # `/etc/guarden/creds/` fires `guarden-creds.path`, whose oneshot runs
-    # `podman secret create` as every remaining service — inside the trees this
-    # loop is deleting. Without this, the removal loses that race with
-    # "Directory not empty" (measured on `needful-production`, ticket 329).
+    # **The credential trigger is held while the trees are removed**, for the
+    # reason `t315-envfile-ref.sh` states in full: its oneshot materialises every
+    # remaining service's credentials with `podman secret create` as that service,
+    # writing into the service's own `home` — the tree this loop is deleting — so
+    # a purge and a materialise can collide with "Directory not empty" (measured
+    # 2026-10-21 on `needful-production`). The trigger is restored afterwards.
     systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
     for service in "$@"; do
         paths=(

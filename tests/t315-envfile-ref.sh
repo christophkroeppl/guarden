@@ -39,17 +39,14 @@ registry=/var/lib/guarden/registry
 purge() {
     local failed=0 service attempt
     local -a paths
-    # **The host's credential trigger is stopped for the duration of the
-    # removal, and that is what makes the removal a removal.** Deleting a blob
-    # under `/etc/guarden/creds/` fires `guarden-creds.path`, whose oneshot
-    # materialises EVERY service's credentials with `runuser -u <service> podman
-    # secret create` — so it creates `home/.local/share/containers/storage`
-    # inside the very trees this loop is walking, and `rm -rf` then loses the
-    # race with "Directory not empty" and leaves a service behind (measured
-    # 2026-10-21 on `needful-production`, and it is the mechanism ticket 329's
-    # `rm:` line names). The trigger is restored afterwards, so a purge at the
-    # start of a suite leaves the host as it found it; the suites' own teardown
-    # moves no credential, so holding it costs nothing.
+    # **The host's credential trigger is held while the trees are removed.** Its
+    # oneshot materialises every remaining service's credentials with `podman
+    # secret create` as that service, which writes into the service's own `home` —
+    # the tree this loop is deleting — so a purge and a materialise can collide
+    # (measured 2026-10-21: `rm: cannot remove
+    # '.../needful-production/home/.local/share/containers/storage': Directory not
+    # empty`). The trigger is restored afterwards, so a purge leaves the host as
+    # it found it.
     systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
     for service in "$@"; do
         paths=(
@@ -58,9 +55,9 @@ purge() {
             "/etc/guarden/creds/$service"
             "$registry/$service.toml"
         )
-        # A process can still be exiting (`podman` on its way out from the
-        # materialise that was in flight), so the removal is retried twice
-        # before it is called a failure.
+        # A process may still be exiting (`podman` on its way out from a
+        # materialise), so the removal is retried twice before it is called a
+        # failure.
         attempt=0
         until rm -rf "${paths[@]}"; do
             attempt=$((attempt + 1))
@@ -74,17 +71,21 @@ purge() {
     done
     systemctl start guarden-creds.path >/dev/null 2>&1 || :
     # **A teardown that cannot remove the tree is a failure, not a line in the
-    # log.** `rm` printed its diagnostic and the `set -e` that would have
-    # stopped on it is switched off inside an EXIT trap, so a home left behind
-    # reached whoever got the machine next and failed an assertion there —
-    # about something else entirely (ticket 329). Reporting it here names the
-    # purge, which is the thing that went wrong.
+    # log.** A `home` left behind reached whoever got the machine next and failed
+    # an assertion there about something else (ticket 329), so what survives the
+    # removal is reported here, naming the purge.
     [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
 }
 
 cleanup() {
-    purge pgprov-envfile-staging envconsumer-preview || exit 1
+    # **The conf goes whatever the purge did.** A purge that cannot remove its
+    # tree must not leave a second leftover behind as well, and the exit status
+    # still has to say the purge failed, so the removal runs first and the failure
+    # is raised after it.
+    local rc=0
+    purge pgprov-envfile-staging envconsumer-preview || rc=1
     rm -f /etc/guarden/firewall/50-services.conf
+    return "$rc"
 }
 trap cleanup EXIT
 
@@ -339,13 +340,11 @@ echo "MEASURE: the plain instance's unit is '${plain_active:-unreadable}'"
 
 # --- the teardown takes the tree with it ------------------------------------
 #
-# **Nothing of this suite's may be left behind, and a failure to see that was
-# silent.** The teardown ran `rm -rf` from an EXIT trap, where `set -e` is
-# switched off, so a tree it could not remove was a printed diagnostic and
-# nothing else — and the name it left behind was met by the next suite, which
-# failed an assertion about something else (ticket 329: a `home` survived a
-# purge). So the removal is performed HERE, where a failure can still name this
-# suite, and the state it promises is asserted rather than assumed.
+# **Nothing of this suite's may be left behind, and a removed tree was not the
+# thing being asserted.** A `home` a teardown could not remove was met by the next
+# suite on the machine, which then failed an assertion about something else (ticket
+# 329), so the removal is performed HERE, where a failure can name this suite, and
+# the state it promises is asserted rather than assumed.
 #
 # The two instances are stopped first, because a unit left active is a container
 # still running as a service whose tree is about to go: the next run of this
