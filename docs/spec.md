@@ -1133,6 +1133,17 @@ Validation rules:
   name. `ports:` is a request and is legitimate; a key that records an open host port is not.
   `firewall:` is the same shape of thing and for the same reason: it records nothing that is in
   force, and the only file that does is the root-owned `overrides.toml` (§7.7).
+
+  The rule is not the manifest's own vocabulary's alone. A `compose.yaml` that states a resource
+  cap or a weight — `mem_limit:`, `mem_reservation:`, `memswap_limit:`, `mem_swappiness:`,
+  `cpus:`, `cpu_quota:`, `cpu_period:`, `cpu_rt_runtime:`, `cpu_rt_period:`, `cpuset:`,
+  `pids_limit:`, `ulimits:`, `oom_kill_disable:`, `oom_score_adj:`, the `cpu_shares:` weight, or
+  a non-empty `deploy.resources.limits` / `deploy.resources.reservations` — is refused by name
+  with exit `2` before the converter is driven, because the two vocabularies state one thing and
+  a rule that held only one of them would be a rule a repository says in the other. A cap an
+  operator *grants* is written in the admin's own drop-in,
+  `/etc/containers/systemd/users/<uid>/<unit>.container.d/`; a weight is the track's, in the
+  root-owned `guarden.toml`.
 - **There is no range form** for a port, in a manifest or in a grant: a service that wants a
   block of ports lists them. A range would make the manifest harder to read than the firewall it
   produces, and a service needing a hundred ports is a signal that it should be reached over an
@@ -1941,6 +1952,15 @@ colon and splits the remainder on commas — and the renderer
 rendering would give a repository the host's whole network namespace, and a pasta option list
 that survived would let a repository remove the host mapping the connectivity model rests on.
 A unit source naming a backend other than `pasta` is refused with the key named.
+
+**A `networks:` declaration is refused, and this is where it differs from a backend.** The
+renderer replaces a backend and a published port because it can regenerate each from host state;
+there is nothing to regenerate for a network. A guarden host has no shared podman network (§7.1),
+so a document-level `networks:` table names one that does not exist, and a service's `networks:`
+list is the membership claim that network would carry (§7.3). Both are refused by name with exit
+`2` on the repository's own declaration, before the converter is driven — a service naming a
+network it did not declare would otherwise reach the converter and come back as the converter's
+exit `1` for what is a rejected input (§1.2).
 
 **The renderer owns the published-port set completely.** It strips every `PublishPort` line
 found in the unit source, from Compose or from hand-written quadlet, and regenerates the
