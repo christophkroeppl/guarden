@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# soil-storage-convert — offline ext4 → btrfs conversion + @/@var migration.
+# soil-storage-convert — offline ext4 → btrfs conversion + @/@var/@tmp migration.
 #
 # **This is the phase's machinery, shipped with the programs.** It lives under
 # `/usr/lib/guarden/templates/convert/` — installed by `soil install` from
@@ -17,9 +17,9 @@
 # The guarden port of .install/30-convert-btrfs.sh from the retired `next` branch.
 # Two things differ from that script and both are forced by the spec:
 #
-#   * the subvolumes are `@` and `@var`, not `@` and `@home` — spec 6.1 and
-#     src/guarden/hostprep.py `_btrfs_layout_holds()`, which reads
-#     `btrfs subvolume list /` and requires exactly those two names;
+#   * the subvolumes are `@`, `@var` and `@tmp`, not `@` and `@home` — spec 6.1
+#     and src/guarden/hostprep.py `_btrfs_layout_holds()`, which reads
+#     `btrfs subvolume list /` and requires exactly those three names;
 #   * the state directory is `/var/lib/guarden/soil/` (spec 6.1's filesystem
 #     table: "soil/ — the btrfs convert state and the reboot marker", 0750
 #     root:guarden), not a private /var/lib tree of its own.
@@ -29,6 +29,16 @@
 # that layout at all -- the host's configurations are `root` alone
 # (hostprep.HOST_CONFIGURATIONS), and `_btrfs_layout_holds()` is written to
 # accept exactly that layout.
+#
+# `@tmp` is the third subvolume and it is the one with **no snapper
+# configuration and no ladder**, which is the operator's requirement
+# (ticket 340): `/tmp` is volatile data and not to be snapshotted. The
+# subvolume is created at the btrfs **top level** — a `@tmp` nested inside `@`
+# would be the fail-open shape, because `subvol=@tmp` resolves against the
+# filesystem's top level and the mount would then fall back to the tmpfs
+# while the layout looked right to anyone who only grepped for the name. The
+# distribution's `q /tmp 1777 root root 10d` applies the mode to the mounted
+# subvolume at boot, so the script does not chmod it.
 #
 # Usage: soil-storage-convert [--check|--apply] [--yes]
 set -euo pipefail
@@ -40,14 +50,20 @@ ROOT_MOUNT="/"
 ROOT_SUBVOL="@"
 VAR_MOUNT="/var"
 VAR_SUBVOL="@var"
+TMP_MOUNT="/tmp"
+TMP_SUBVOL="@tmp"
 MOUNT_OPTS="subvol=%s,noatime,compress=zstd"
+# /tmp keeps the two security options the tmpfs it replaces carried. Dropping
+# them silently would put a world-writable directory on a filesystem that
+# honours suid and device nodes.
+TMP_MOUNT_OPTS="subvol=%s,noatime,compress=zstd,nosuid,nodev"
 FSTAB_TAG="guarden-storage"
 REBOOT_MARKER="${STATE_DIR}/reboot-required"
 ASSUME_YES=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRACUT_MODULE_SRC="${SCRIPT_DIR}/dracut/99guarden-convert"
 DRACUT_MODULE_DST="/usr/lib/dracut/modules.d/99guarden-convert"
-# /var goes into @var, /home stays a plain directory inside @.
+# /var goes into @var, /tmp into @tmp, /home stays a plain directory inside @.
 RSYNC_EXCLUDES=(
   --exclude=/proc/ --exclude=/sys/ --exclude=/dev/ --exclude=/run/
   --exclude=/tmp/ --exclude=/mnt/ --exclude=/media/
@@ -58,7 +74,7 @@ RSYNC_EXCLUDES=(
 
 usage() {
   printf 'usage: soil-storage-convert [--check|--apply] [--yes]\n'
-  printf '  --check  read-only; exit 0 only when / is btrfs on @ and /var on @var\n'
+  printf '  --check  read-only; exit 0 only when / is btrfs on @, /var on @var and /tmp on @tmp\n'
   printf '  --apply  converge one step; exit 75 when a reboot is required (re-run after)\n'
   printf '  --yes    skip the destructive-conversion confirmation\n'
 }
@@ -111,22 +127,45 @@ reboot_marker_set() { mkdir -p "$STATE_DIR"; : >"$REBOOT_MARKER"; }
 reboot_marker_clear() { rm -f "$REBOOT_MARKER"; }
 reboot_marker() { [[ -e "$REBOOT_MARKER" ]] && printf '%s' "$REBOOT_MARKER" || printf ''; }
 
-check_mount() { # <mount> <subvol>
+# `quiet` keeps a predicate from printing a diagnosis: base_layout_holds() is
+# asked twice on a host whose layout is wrong, and the diagnosis belongs to the
+# check that already gave it, not to the question of which stage to run.
+check_mount() { # <mount> <subvol> [quiet]
   local opts
-  is_mountpoint "$1" || { err "$1: not a separate mountpoint (want subvol $2)"; return 1; }
+  is_mountpoint "$1" || {
+    [[ "${3:-}" == quiet ]] || err "$1: not a separate mountpoint (want subvol $2)"
+    return 1
+  }
   opts="$(mount_opts "$1")"
-  opt_has_subvol "$opts" "$2" && { log "$1: btrfs subvol $2"; return 0; }
-  err "$1: mounted but not subvol $2 (got '${opts}')"
+  if opt_has_subvol "$opts" "$2"; then
+    [[ "${3:-}" == quiet ]] || log "$1: btrfs subvol $2"
+    return 0
+  fi
+  [[ "${3:-}" == quiet ]] || err "$1: mounted but not subvol $2 (got '${opts}')"
   return 1
 }
 
 # This is the same predicate hostprep._btrfs_layout_holds() applies:
-#   h.run("btrfs", "subvolume", "list", "/")  then  "@" in layout and "@var" in layout
+#   h.run("btrfs", "subvolume", "list", "/")  then
+#   "@" in layout and "@var" in layout and "@tmp" in layout
 verify_layout() {
   local rc=0
   [[ "$(root_fstype)" == btrfs ]] || { err "root filesystem is '$(root_fstype)', not btrfs"; return 1; }
   check_mount "$ROOT_MOUNT" "$ROOT_SUBVOL" || rc=1
   check_mount "$VAR_MOUNT" "$VAR_SUBVOL" || rc=1
+  check_mount "$TMP_MOUNT" "$TMP_SUBVOL" || rc=1
+  return "$rc"
+}
+
+# The two-subvolume layout a host converted before `@tmp` existed carries. A
+# host with these two and not the third is a host to *finish*, not one to
+# convert again: re-running stage 2 on it would rsync `/` into `@` a second
+# time, and the running system is already `@`.
+base_layout_holds() {
+  local rc=0
+  [[ "$(root_fstype)" == btrfs ]] || return 1
+  check_mount "$ROOT_MOUNT" "$ROOT_SUBVOL" quiet || rc=1
+  check_mount "$VAR_MOUNT" "$VAR_SUBVOL" quiet || rc=1
   return "$rc"
 }
 
@@ -149,7 +188,7 @@ confirm_conversion() {
   ((ASSUME_YES == 1)) && return 0
   [[ -t 0 ]] || { err "refusing destructive conversion without --yes (non-interactive)"; return 1; }
   err "the next boot converts ${dev} ($(root_fstype)) to btrfs OFFLINE in the initramfs,"
-  err "then reboots again to migrate into @/@var; the ext4 backup is kept until verified."
+  err "then reboots again to migrate into @/@var/@tmp; the ext4 backup is kept until verified."
   read -r -p "[soil-storage] type 'convert' to continue: " answer || true
   [[ "$answer" == "convert" ]]
 }
@@ -240,7 +279,7 @@ migrate_subvolumes() {
   log "mounting btrfs top-level at ${TOP}..."
   try_mount "${dev} top-level" "$TOP" -o subvolid=5 "$dev" || return 1
 
-  for name in "$ROOT_SUBVOL" "$VAR_SUBVOL"; do
+  for name in "$ROOT_SUBVOL" "$VAR_SUBVOL" "$TMP_SUBVOL"; do
     if btrfs subvolume show "${TOP}/${name}" >/dev/null 2>&1; then
       log "subvol ${name} already present"
     elif [[ -e "${TOP}/${name}" ]]; then
@@ -252,25 +291,31 @@ migrate_subvolumes() {
     fi
   done
 
-  log "copying / into @ (virtual dirs and /var excluded)..."
+  log "copying / into @ (virtual dirs, /var and /tmp excluded)..."
   rsync -aAXHS --delete --numeric-ids --one-file-system "${RSYNC_EXCLUDES[@]}" \
     / "${TOP}/${ROOT_SUBVOL}/" || { err "rsync / → @ failed"; return 1; }
   log "copying /var into @var..."
   rsync -aAXHS --delete --numeric-ids --one-file-system --exclude=/lost+found/ \
     /var/ "${TOP}/${VAR_SUBVOL}/" || { err "rsync /var → @var failed"; return 1; }
 
-  # The excludes never create these on the receiver; /var is now a mountpoint.
+  # The excludes never create these on the receiver; /var and /tmp are now
+  # mountpoints.
   for d in dev proc sys run tmp mnt media var; do mkdir -p "${TOP}/${ROOT_SUBVOL}/${d}"; done
 
   uuid="$(root_uuid)"
   [[ -n "$uuid" ]] || uuid="$dev"
   log "rewriting fstab in @ (keeping /boot and /boot/efi entries)..."
   fstab_new="${TOP}/${ROOT_SUBVOL}/etc/fstab"
-  awk '/^[[:space:]]*#/ {print; next} $2=="/" || $2=="/var" {next} {print}' \
+  # The /tmp line is dropped whatever it says: `systemd-fstab-generator` keeps
+  # the FIRST entry for a path and refuses the second, so a leftover tmpfs line
+  # would win and @tmp would never mount — the same fail-open shape as a
+  # nested @tmp.
+  awk '/^[[:space:]]*#/ {print; next} $2=="/" || $2=="/var" || $2=="/tmp" {next} {print}' \
     "$fstab_new" >"${fstab_new}.new"
   {
     printf 'UUID=%s / btrfs %s 0 0 # %s\n' "$uuid" "$(printf "$MOUNT_OPTS" "$ROOT_SUBVOL")" "$FSTAB_TAG"
     printf 'UUID=%s /var btrfs %s 0 0 # %s\n' "$uuid" "$(printf "$MOUNT_OPTS" "$VAR_SUBVOL")" "$FSTAB_TAG"
+    printf 'UUID=%s /tmp btrfs %s 0 0 # %s\n' "$uuid" "$(printf "$TMP_MOUNT_OPTS" "$TMP_SUBVOL")" "$FSTAB_TAG"
   } >>"${fstab_new}.new"
   mv "${fstab_new}.new" "$fstab_new"
 
@@ -315,6 +360,49 @@ migrate_subvolumes() {
   exit 75
 }
 
+# --- stage 4: the @tmp a host converted before it existed --------------------
+# The conversion above creates @tmp; a host converted before this change exists
+# has @ and @var and no third subvolume, and the layout predicate now requires
+# one. Finishing that host is one subvolume and one fstab line -- not another
+# rsync of /, which is what stage 2 would do and which would copy the running
+# system onto itself. The reboot is the mechanism rather than a live mount over
+# a busy /tmp: /tmp holds live files on a running host, and mounting the new
+# subvolume over it would orphan them under processes that are not going away.
+migrate_tmp_subvolume() {
+  local dev uuid fstab_new
+  dev="$(root_device)"
+  [[ -n "$dev" ]] || { err "cannot determine root device"; return 1; }
+
+  TOP="$(mktemp -d /tmp/guarden-btrfs-top.XXXXXX)"
+  log "mounting btrfs top-level at ${TOP}..."
+  try_mount "${dev} top-level" "$TOP" -o subvolid=5 "$dev" || return 1
+
+  if btrfs subvolume show "${TOP}/${TMP_SUBVOL}" >/dev/null 2>&1; then
+    log "subvol ${TMP_SUBVOL} already present"
+  else
+    log "creating subvol ${TMP_SUBVOL} at the top level..."
+    btrfs subvolume create "${TOP}/${TMP_SUBVOL}" || return 1
+  fi
+
+  # The fstab here is the live one -- the root is @ already, so /etc/fstab is
+  # the file inside @ that the original conversion wrote -- and only the /tmp
+  # line is touched: the / and /var lines are already the guarden ones, and
+  # rewriting them would discard whatever the operator has since changed.
+  uuid="$(root_uuid)"
+  [[ -n "$uuid" ]] || uuid="$dev"
+  fstab_new="/etc/fstab"
+  awk '/^[[:space:]]*#/ {print; next} $2=="/tmp" {next} {print}' \
+    "$fstab_new" >"${fstab_new}.new"
+  printf 'UUID=%s %s btrfs %s 0 0 # %s\n' "$uuid" "$TMP_MOUNT" \
+    "$(printf "$TMP_MOUNT_OPTS" "$TMP_SUBVOL")" "$FSTAB_TAG" \
+    >>"${fstab_new}.new"
+  mv "${fstab_new}.new" "$fstab_new"
+
+  reboot_marker_set
+  log "subvol ${TMP_SUBVOL} and its fstab line are staged; a reboot is required to mount ${TMP_MOUNT} on it"
+  exit 75
+}
+
 # --- stage 3: verify + drop the conversion backup ----------------------------
 cleanup_backup() {
   local dev top name out
@@ -344,7 +432,7 @@ if [[ "$MODE" == --check ]]; then
   marker="$(reboot_marker)"
   [[ -n "$marker" ]] && log "reboot marker present: ${marker}"
   if verify_layout && [[ "$state" == done ]]; then
-    log "btrfs @/@var layout is in place"
+    log "btrfs @/@var/@tmp layout is in place"
     exit 0
   fi
   log "conversion needed: this script --apply [--yes]"
@@ -361,6 +449,11 @@ done)
     # makes that window self-healing.
     reboot_marker_clear
     exit 0
+  fi
+  # A host converted before `@tmp` existed: @ and @var are in place and the
+  # third is missing. Finish it rather than converting it again.
+  if base_layout_holds; then
+    migrate_tmp_subvolume || exit 1 # exits 75 on success
   fi
   err "state=done but the layout does not verify; manual inspection needed"
   exit 1
@@ -381,8 +474,12 @@ converting | none)
       cleanup_backup
       state_set done
       reboot_marker_clear
-      log "btrfs @/@var layout already present"
+      log "btrfs @/@var/@tmp layout already present"
       exit 0
+    fi
+    # @ and @var in place and @tmp missing: finish, do not re-convert.
+    if base_layout_holds; then
+      migrate_tmp_subvolume || exit 1 # exits 75 on success
     fi
     state_set converting
     migrate_subvolumes || exit 1 # exits 75 on success

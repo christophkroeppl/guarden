@@ -714,8 +714,14 @@ _prove() {
     local instance=$1
     vm_exec_t "$instance" 'python3 -c "import yaml, jinja2"' \
         || die "$instance lacks python3-yaml or python3-jinja2"
-    vm_exec_t "$instance" 'btrfs subvolume show / >/dev/null && btrfs subvolume list / | grep -q "@var"' \
-        || die "$instance has no btrfs root with @ and @var; soil storage will never converge on it"
+    # `@tmp` is named here as well, and a cut from a golden built before the
+    # third subvolume existed would otherwise pass this gate while failing the
+    # layout check: the gate is the place that says the host has the layout the
+    # suite's storage assertions depend on.
+    vm_exec_t "$instance" 'btrfs subvolume show / >/dev/null &&
+        btrfs subvolume list / | grep -q "path @var" &&
+        btrfs subvolume list / | grep -q "path @tmp"' \
+        || die "$instance has no btrfs root with @, @var and @tmp; soil storage will never converge on it"
     vm_exec_t "$instance" 'btrfs subvolume create /var/lib/guarden/.probe >/dev/null 2>&1 &&
         btrfs subvolume delete /var/lib/guarden/.probe >/dev/null 2>&1' \
         || die "$instance cannot create a btrfs subvolume under /var/lib/guarden"

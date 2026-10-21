@@ -8,12 +8,17 @@
 # because a rule that skipped whatever it did not recognise would silently drop a
 # configuration the operator owns.
 #
-# The host's own layout — the `@` and `@var` subvolumes and `/boot` on ext4 — is
-# the harness's to build (tests/lxc.sh) and not this file's to stand in for. A
-# stand-in for `btrfs subvolume list` proves only that the phase asked the
-# question, not that the box has the answer, so those items are asserted by the
-# machine's own state instead: a converge that ran on this layout and a `--check`
-# that finds nothing left to do can only both be true of a host that has it.
+# The host's own layout — the `@`, `@var` and `@tmp` subvolumes and `/boot` on
+# ext4 — is the harness's to build (tests/lxc.sh) and not this file's to stand
+# in for. A stand-in for `btrfs subvolume list` proves only that the phase asked
+# the question, not that the box has the answer, so those items are asserted by
+# the machine's own state instead: a converge that ran on this layout and a
+# `--check` that finds nothing left to do can only both be true of a host that
+# has it.
+#
+# `/tmp`'s block below is where the third subvolume is measured: it is the one
+# member of the layout that is a mount rather than a file, and the one whose
+# requirement is negative — no snapper configuration, so no ladder.
 
 . "$(dirname "$0")/lib.sh"
 
@@ -185,6 +190,67 @@ run soil storage --apply
 assert_exit 0
 run soil storage --check
 assert_exit 0
+
+# The layout's third member, and the one whose requirement is negative.
+#
+# `/tmp` is volatile data and is not to be snapshotted, so it gets a subvolume of
+# its own — `@tmp`, at the btrfs **top level** — and no snapper configuration:
+# a configuration whose subvolume is `/tmp` would give `/tmp` a ladder whatever
+# `soil storage` did or did not write, so "no ladder" is not something the phase
+# can assert about itself.
+#
+# Every assertion here asks the machine rather than the phase, and every one of
+# them is a property a host converted before `@tmp` existed fails: that is the
+# RED this block turns when the source change is reverted.
+#
+# `@tmp` is required as `path @tmp` and refused as `path @/@tmp`, because a
+# `@tmp` nested inside `@` is the fail-open shape — `subvol=@tmp` resolves
+# against the filesystem's top level, so the mount would fall back to the tmpfs
+# while the layout looked right to anyone who only grepped for the name.
+run findmnt -n -o FSTYPE --target /tmp
+assert_exit 0
+assert_stdout_has btrfs
+run findmnt -n -o SOURCE --target /tmp
+assert_exit 0
+assert_stdout_has "/@tmp"
+run findmnt -n -o OPTIONS --target /tmp
+assert_exit 0
+assert_stdout_has nosuid
+assert_stdout_has nodev
+run btrfs subvolume list /
+assert_exit 0
+assert_stdout_has "path @tmp"
+assert_stdout_lacks "@/@tmp"
+
+# The mode belongs to the distribution's tmpfiles, not to the conversion: `q
+# /tmp 1777 root root 10d` in `/usr/lib/tmpfiles.d/tmp.conf` applies it to the
+# mounted subvolume at boot, and a script that chmodded it would be pinning a
+# fact that is not its to pin.
+assert_mode /tmp 1777
+assert_owner /tmp root:root
+
+# No configuration, and therefore no ladder. The subvolume column of
+# `snapper list-configs` is what is asked, rather than a configuration *named*
+# `tmp` — the requirement is about the subvolume, and an operator's configuration
+# called `tmp` for some other subvolume is not a ladder for this one.
+tmp_configs=$(snapper list-configs | awk -F'|' \
+    '$2 ~ /^[[:space:]]*\/tmp[[:space:]]*$/ { print $1 }')
+if [ -n "$tmp_configs" ]; then
+    _fail "a snapper configuration exists for /tmp: ${tmp_configs}"
+fi
+
+# The volatile marker is not in a snapshot, which is the property the subvolume
+# exists for: a `root` snapshot copies `@`, and a nested subvolume is not part of
+# the copy, so what was written to `/tmp` before the snapshot is not in it. Every
+# snapshot is asked rather than only the newest one, because the claim is about
+# all of them.
+printf 'volatile-marker\n' >/tmp/guarden-volatile-marker
+run snapper -c root create --description probe --cleanup-algorithm timeline
+assert_exit 0
+run find /.snapshots -path '*/snapshot/tmp/guarden-volatile-marker'
+assert_exit 0
+assert_stdout_empty
+rm -f /tmp/guarden-volatile-marker
 
 # seed_snapper_config <name> [daily]: a configuration as snapper holds one,
 # carrying values a converge has to put right.

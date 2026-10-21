@@ -284,6 +284,7 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/` | `0755` | `root:root` | the mutator, installing the keep-id drop-in. One directory per unit, and the admin's own file in it is never touched |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | `0644` | `root:root` | the mutator, on the install that renders the pin. **World-readable, and that is the point**: the generator reads this path as the service user, and a root-owned `0600` file there yields NO generated unit at all (measured: `probe-quadlet-dropins.md` row 10). Nothing secret is in it — a `UserNS=` line names a uid and a gid — and root alone writes it |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3) |
+| `/tmp` | `1777` | `root:root` | **not the conversion's**: `systemd-tmpfiles`, through `q /tmp 1777 root root 10d` in the distribution's `/usr/lib/tmpfiles.d/tmp.conf`, applied to the `@tmp` subvolume the conversion mounts at it. `btrfs subvolume create` makes `@tmp` `0755` and nothing guarden does would change that, because the mode is the distribution's row and its owner is tmpfiles — the conversion that created the subvolume is not the thing that owns the mode on it |
 
 `/run/guarden/locks/` is `2770 root:guarden` because `guarden` and root both take these locks
 — `queue` and `deploy-*` are taken by `furrow` as the `guarden` user, and the remaining names
@@ -1555,15 +1556,18 @@ still converge and the run still exits `1`.
   that needs it — after the disable — so the *first* `packages` run on a host whose timers are
   still armed meets them only in the window before its own first item: the disable is what
   closes that window.
-- `storage` verifies btrfs with `@` and `@var` subvolumes, installs
+- `storage` verifies btrfs with `@`, `@var` and `@tmp` subvolumes, installs
   `/etc/apt/apt.conf.d/80guarden-snapper` with a `DPkg::Pre-Invoke` that snapshots `root`
   before every package transaction, converges the canonical value set into every snapper
-  configuration it can see — a service's configurations, and the host's own `root` and `home`,
-  and nothing else (§8.1) — creates `root` and `home` where they are absent, and installs
-  `/var/lib/guarden/soil/`. It creates **no** service volume. **A root that is not yet btrfs,
+  configuration it can see — a service's configurations, and the host's own `root`,
+  and nothing else (§8.1) — creates `root` where it is absent, and installs
+  `/var/lib/guarden/soil/`. It creates **no** service volume, and **no configuration for
+  `/tmp`**: the layout's third subvolume is the one with no ladder, because `/tmp` is volatile
+  data that is not to be snapshotted, and the phase asks `snapper list-configs` for that
+  rather than asserting it about itself (§8.1). **A root that is not yet btrfs,
   or that is btrfs without the subvolumes, is converted**: the phase drives a staged offline
   conversion — `--apply` schedules it, a reboot runs it in the initramfs, and the phase is run
-  again after each reboot (twice in all: the conversion, then the `@`/`@var` migration) — and
+  again after each reboot (twice in all: the conversion, then the `@`/`@var`/`@tmp` migration) — and
   while a reboot is outstanding it reports the marker it wrote at
   `/var/lib/guarden/soil/reboot-required` and stays unmet, which is the one drift a `storage`
   run is expected to carry between reboots. It also **disables the
@@ -3032,18 +3036,30 @@ operator owns:
 
 - **A service's configuration** — the name matches a registry entry, so the track is read from the
   registry and the retention values come from that track.
-- **`root` and `home`**, the host's own. These are converged with the **fixed set only** —
-  `EMPTY_PRE_POST_CLEANUP`, `NUMBER_MIN_AGE`, `NUMBER_CLEANUP`, `TIMELINE_CLEANUP` — and **no
-  ladder value and no `FREE_LIMIT` is written for them**, because no track owns them and there is
-  no track to read a default from. Their ladder is left as the distribution shipped it. Nothing
-  snapshots them on a schedule, so their limits govern only what a human gets who runs `snapper`
-  by hand there, and that is a human's own housekeeping rather than a policy guarden owns. An
-  earlier revision applied the skip rule to these two as well, which meant every
-  `soil storage --apply` emitted two warnings and never converged the host at all.
+- **`root`**, the host's own, and the only one. `/home` is **not** among them: it is a directory
+  inside `@` rather than a subvolume of its own, and snapper snapshots a subvolume, so a
+  configuration for `/home` could not be created on this layout at all. It is converged with the
+  **fixed set only** — `EMPTY_PRE_POST_CLEANUP`, `NUMBER_MIN_AGE`, `NUMBER_CLEANUP`,
+  `TIMELINE_CLEANUP` — and **no ladder value and no `FREE_LIMIT` is written for it**, because no
+  track owns it and there is no track to read a default from. Its ladder is left as the
+  distribution shipped it. Nothing snapshots it on a schedule, so its limits govern only what a
+  human gets who runs `snapper` by hand there, and that is a human's own housekeeping rather than
+  a policy guarden owns. An earlier revision applied the skip rule to the host's configurations
+  as well, which meant every `soil storage --apply` emitted two warnings and never converged the
+  host at all.
 - **Anything else** is a configuration guarden did not create, so it is **skipped with a
   `warning:` line naming it** and left byte-for-byte alone. This is the "every configuration it
   can see" in the phase description, and "can see" is doing the work: seeing means a name that
-  either matches a registry entry or is one of the host's two.
+  either matches a registry entry or is `root`.
+
+**The layout's third subvolume is not a configuration case at all.** `/tmp` is mounted from
+`@tmp` and carries **no snapper configuration**, because `/tmp` is volatile data that is not to
+be snapshotted: there is no `TIMELINE_LIMIT_*` value that governs it, no cleanup algorithm, and
+nothing that would roll it back. The phase verifies that rather than assuming it — `snapper
+list-configs` names every configuration and the subvolume it is for, so a configuration whose
+subvolume is `/tmp` is one that would give `/tmp` a ladder whatever the phase did or did not
+write. guarden creates no configuration for `/tmp`, and a configuration that appeared there
+anyway is not guarden's to remove.
 
 A configuration for a **removed** service is the case that matters most, and it is the second
 branch: `weedr service remove` deletes the service's `state` subvolumes, and `soil storage` is
