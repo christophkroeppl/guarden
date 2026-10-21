@@ -58,6 +58,12 @@ wrong claim are recorded in the ADR rather than edited out.
 - `src/guarden/weedr.py` — untouched. The renderer needed no change: the accept set is
   built in `rules.resolver_lines`, and the uid list the mutator passes is still the
   registry's service uids.
+- `src/guarden/firewall.py` — **needs one comment, and the file is not this ticket's
+  to edit.** The comment above `rules.resolver_lines(service_uids())` says
+  "`service_uids()` is the registry's uids and nothing else", which is true of that
+  call and now reads as though it were the whole of the resolver's uid set. The
+  clarification is one sentence ("root is added inside `resolver_lines`, not here") and
+  is left to the parent, because other workers are in that tree.
 - The deny, the publications, the service accepts, the reply accepts, the granted rules
   and the firewall's one-writer-per-file split — all unchanged.
 - `AGENTS.md` — it carries the canonical statement of the resolver rule and would want
