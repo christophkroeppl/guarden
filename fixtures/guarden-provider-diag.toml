@@ -40,6 +40,8 @@ fork_from = "production"
 [providers.staging]
 postgres = "postgres-staging"
 absent = "absent-staging"
+myself = "myapp-staging"
+dbsrc = "dbprov-staging"
 
 [providers.production]
 postgres = "postgres-production"

@@ -510,11 +510,13 @@ def providers_table() -> None:
             FAILURES.append(f"{what} was accepted")
 
     # A table for a track the host does not have is refused by name: a mapping
-    # nothing reads is a mapping an operator believes is in effect.
+    # nothing reads is a mapping an operator believes is in effect. It is the
+    # same shape as a `fork_from` naming no track — a name in this file that
+    # names no track — so it carries the same exit code, 2.
     try:
         load("[providers.preprod]\npostgres = \"postgres-preprod\"\n")
     except errors.GuardenError as exc:
-        check(exc.code == 1, "a table for an unknown track is the host, so exit 1")
+        check(exc.code == 2, "a table for an unknown track is a rule, so exit 2")
         check("preprod" in exc.message, "the unknown track is named")
     else:
         FAILURES.append("a table for an unknown track was accepted")
