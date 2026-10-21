@@ -714,16 +714,17 @@ assert_no_snapper_config() {
     fi
 }
 
-# snapper_configs_of <service>...: the configuration files whose SUBVOLUME lives in
-# one of those trees, read without the daemon — measured: `snapper list-configs`
-# can name none of the configurations that exist as files.
+# snapper_configs_of <service>...: the configuration files whose SUBVOLUME is in
+# those trees — `snapper list-configs` named none of them when they existed as files.
 snapper_configs_of() {
     local path name subvolume service
     for path in /etc/snapper/configs/*; do
         [ -f "$path" ] || continue
         name=${path##*/}
-        subvolume=$(snapper --no-dbus -c "$name" get-config 2>/dev/null \
-            | awk -F'|' 'tolower($1) ~ /subvolume/ {gsub(/[[:space:]]/, "", $2); print $2}' || true)
+        if ! subvolume=$(snapper --no-dbus -c "$name" get-config 2>/dev/null \
+            | awk -F'|' 'tolower($1) ~ /subvolume/ {gsub(/[[:space:]]/, "", $2); print $2}'); then
+            return 1
+        fi
         [ -n "$subvolume" ] || continue
         for service in "$@"; do
             case "$subvolume" in
@@ -736,9 +737,8 @@ snapper_configs_of() {
     done
 }
 
-# remove_snapper_configs <service>...: call it before the trees go, because
-# `delete-config` refuses once the subvolume is gone (measured: errno:2, and the
-# configuration stays).
+# remove_snapper_configs <service>...: before the trees, because `delete-config`
+# refuses once the subvolume is gone (measured: errno:2, and it stays).
 remove_snapper_configs() {
     local names config
     names=$(snapper_configs_of "$@") || return 1
@@ -748,11 +748,11 @@ remove_snapper_configs() {
     done
 }
 
-# assert_no_snapper_configs <service>...: the teardown's promise. `configuration_exists`
-# in the product is a stat of snapper's directory, so this is the same question.
+# assert_no_snapper_configs <service>...: the teardown's promise.
 assert_no_snapper_configs() {
     local names
-    names=$(snapper_configs_of "$@") || _fail "snapper could not be asked, so no configuration can be ruled out for: $*"
+    names=$(snapper_configs_of "$@") \
+        || _fail "snapper could not be asked, so no configuration can be ruled out for: $*"
     [ -z "$names" ] || _fail "snapper configuration(s) left after the purge: $(printf '%s ' $names)"
 }
 
