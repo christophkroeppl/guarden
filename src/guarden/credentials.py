@@ -203,10 +203,15 @@ def plant(service: str, key: str, stored: str) -> Path:
         for owner in owners:
             owner.rotate(service, key, stored)
     except errors.GuardenError as exc:
-        _restore_blob(service, key, previous, blob)
+        undone = _restore_blob(service, key, previous, blob)
         raise errors.GuardenError(
             f"{service}: {key} was not rotated: {exc.message}; the value typed is not on the "
-            f"host, and {blob} holds the value it held before",
+            f"host, and {blob} "
+            + (
+                "holds the value it held before"
+                if undone
+                else "could NOT be put back, so it holds the value that was typed"
+            ),
             errors.HOST_NOT_AS_ASSUMED,
         ) from None
     return blob
@@ -226,18 +231,31 @@ def _write_blob(service: str, key: str, stored: str) -> Path:
     return blob
 
 
-def _restore_blob(service: str, key: str, previous: str | None, blob: Path) -> None:
+def _restore_blob(service: str, key: str, previous: str | None, blob: Path) -> bool:
     """Put the value the blob held before back into the blob.
 
     A blob that was not there before is taken away again, so a failed first
     plant leaves no half of a credential behind — a blob holding a value
     nothing else holds is a value nobody can log in with and nobody can
     find.
+
+    **A rollback that fails does not replace the diagnostic that caused it.**
+    The caller is already reporting that the rotation failed and why; a
+    rollback that raises its own error would replace that with one about the
+    rollback, and the operator would be told about the second thing that went
+    wrong instead of the first. So the rollback is best effort and says
+    whether it worked, and the caller's message says which of the two states
+    the host is in — because "the value typed is on the host and the old one
+    is not" is a fact the operator has to be told, not one to leave implied.
     """
-    if previous is None:
-        blob.unlink(missing_ok=True)
-        return
-    _write_blob(service, key, previous)
+    try:
+        if previous is None:
+            blob.unlink(missing_ok=True)
+            return True
+        _write_blob(service, key, previous)
+    except (OSError, errors.GuardenError):
+        return False
+    return True
 
 
 def _owners() -> list:
