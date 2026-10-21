@@ -243,63 +243,46 @@ printf 'MEASURE: ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
 [ "$after" = "$before" ] \
     || _fail "root's datagram to 127.0.0.53:53 met the deny: root does not hold a stub accept"
 
-# **And the round trip completes: root's query is answered and the reply comes
-# back.** This is the cost the decision was taken to remove, measured on the
-# reply's own path rather than on the exit code of a lookup.
+# **And the round trip completes: root's query is ANSWERED.** This is the cost
+# the decision was taken to remove, and it is measured by the lookup's own
+# answer.
 #
-# **The measurement is the REPLY accept's counter**, which is a fact about the
-# rule and about the traffic in one read: the reply accept is
-# `saddr 127.0.0.53 proto {udp,tcp} sport 53` — the source, not the
-# destination — so it is the reply's own counter and the query's is not in it.
+# **The measurement is the LOOKUP, and the name is one the stub must answer.**
+# `getent hosts <name>` asks the resolver for a name and answers with the
+# result; on a host where the deny refuses root's query it exits 2, and on a
+# host where the accept is in force it exits 0 and prints the address. The
+# name is `github.com` — a DOTTED name, which is the point: `localhost` is
+# answered by nss from `/etc/hosts` and never reaches the resolver at all, so
+# a lookup of it measures nss rather than the stub. A dotted name has to go
+# to the stub to be answered.
 #
-# **The row is found by WHAT THE RULE SAYS and not by a column number.**
-# `iptables -nvx -L` prints `pkts bytes target prot opt in out source
-# destination` and then the match extension, and the extension for a
-# source-port match is spelled `spt:53` while a destination-port match is
-# `dpt:53` — so the reply's rows are the ones carrying `spt:53` and the
-# query's carry `dpt:53`. **The first attempt at this read the source out of a
-# fixed field and got nothing**, because the `in`/`out` columns are what the
-# rule carries and they move with the chain. The counter is the first column
-# on every row, whatever else the row holds, so the sum is taken from the
-# first field of the rows that match the rule's own spelling.
-reply_packets() {
-    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
-        | grep 'spt:53' \
-        | grep '127\.0\.0\.53' \
-        | awk '{n += $1} END {print n + 0}'
-}
-reply_before=$(reply_packets)
+# **The earlier attempt measured the REPLY accept's counter and it could not
+# tell the two answers apart.** The reply accept is `saddr 127.0.0.53 proto
+# {udp,tcp} sport 53`, but the reply never reaches it: the reply to a query
+# that was itself permitted is matched by the `ESTABLISHED` conntrack rule
+# ABOVE it in the chain, so the reply's counter stays at 0 under BOTH
+# answers. Measured on a real cut, with the two answers in force one after
+# the other:
+#
+#     ANSWER_A (root holds the accept):  reply counter 0 -> 0   getent rc=0
+#     ANSWER_B (root does not)         :  reply counter 0 -> 0   getent rc=2
+#
+# **The reply's counter is 0 in both rows, so it discriminates nothing.** The
+# two rows that DO differ are `getent`'s exit code and the deny's counter,
+# and both are asserted below. The reply accept is still asserted to be
+# RENDERED (in the file and in the chain), because it is part of the rule
+# set — but it is not what the round trip is measured on.
+run getent hosts github.com
+assert_exit 0
+assert_stdout_has "github.com"
 
-# **A well-formed DNS query**, so the stub answers it rather than dropping it:
-# a two-byte header (id, flags with RD set), one question, and the question's
-# name and type.
-#
-# **The name is `localhost`, and it is sent as a RAW DNS PACKET rather than
-# through a resolver library.** Two reasons, and both are about the
-# measurement rather than about the stub:
-#
-#   * **A raw packet bypasses nss entirely**, so the name in `/etc/hosts` is
-#     irrelevant and there is no second path that could answer it. The first
-#     attempt used `getent hosts localhost`, which nss answers from
-#     `/etc/hosts` — so it measured nothing about the resolver at all.
-#   * **`localhost` is answered by the stub itself**, from its own local
-#     data, and needs no upstream. A name no upstream can answer — `.invalid`
-#     — would send resolved out to the network, and the measurement would
-#     then depend on the host's upstream and on the very packet path this
-#     ticket is about.
-run sh -c "printf '\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x09localhost\x00\x00\x01\x00\x01' | nc -u -w2 127.0.0.53 53" || true
-
-reply_after=$(reply_packets)
-printf 'MEASURE: REPLY_ACCEPT_COUNTER=%s->%s\n' "$reply_before" "$reply_after" >&2
-[ "$reply_after" -gt "$reply_before" ] \
-    || _fail "the stub did not answer root's query: the reply accept's counter did not move"
-
-# **And the deny's counter did not move across the same exchange**, which is
-# the same event seen from the other side: a refused query never reaches the
-# stub and never produces a reply.
-after_reply=$(deny_packets)
-[ "$after_reply" = "$after" ] \
-    || _fail "root's resolver exchange met the deny, so the accept is not in force"
+# **And the deny's counter did not move across the same lookup**, which is the
+# same event seen from the other side: a refused query never reaches the
+# stub, and the deny's counter is what says it was refused.
+after_lookup=$(deny_packets)
+printf 'MEASURE: LOOKUP_DENY_COUNTER=%s->%s\n' "$after" "$after_lookup" >&2
+[ "$after_lookup" = "$after" ] \
+    || _fail "root's lookup met the deny, so the accept is not in force"
 
 # **The service uid's query is a different path and the same answer**, which
 # is what makes the service accepts and root's accept one rule rather than
