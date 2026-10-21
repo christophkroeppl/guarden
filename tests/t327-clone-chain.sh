@@ -186,7 +186,7 @@ assert_file_has "$stage/bulk/bulk/clone.sql" "ProdSmtpSecret"
 run weedr clone transform pgdual-staging --from clone.sql --out clone.sql
 assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "same"
+assert_stderr_has "both name"
 
 # --- step 4: the scrub, and what it removed ----------------------------------
 #
