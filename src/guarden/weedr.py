@@ -407,16 +407,23 @@ def _emit(outcome: service.Outcome, verb: str) -> int:
     A default environment is **printed**, because the caller asked for a service
     and got one under a name it did not type, and an operator who cannot see that
     has been given a name by something other than themselves.
+
+    **The notes are printed BEFORE the `converged` line, and not after it.**
+    A converged create can still REPAIR the tree (ticket 334), and a repair
+    that is not said is a repair the operator cannot see — so the lines that
+    report it have to be on stdout even when the verb's answer is `converged`.
+    The order is the notes first and the verdict last, because the verdict is
+    the verb's answer and a caller reads the last line as the answer.
     """
+    for note in outcome.notes:
+        sys.stdout.write(f"{note}\n")
+    for message in outcome.warnings:
+        sys.stderr.write(f"{errors.warn(message)}\n")
     if outcome.converged:
         sys.stdout.write("converged\n")
         return 0
     if outcome.resolved.defaulted:
         sys.stdout.write(f"{outcome.resolved.name}\n")
-    for note in outcome.notes:
-        sys.stdout.write(f"{note}\n")
-    for message in outcome.warnings:
-        sys.stderr.write(f"{errors.warn(message)}\n")
     sys.stdout.write(f"{verb} {outcome.resolved.name} uid {outcome.uid}\n")
     return 0
 

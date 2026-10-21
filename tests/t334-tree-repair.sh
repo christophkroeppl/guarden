@@ -75,6 +75,12 @@ run weedr service ingest routed-preview/feature/x --from poke routed@9f2c1ab
 assert_exit 0
 assert_stdout_has "converged"
 
+# **The repair SAYS what it repaired.** A correction an operator cannot see is
+# a correction an operator cannot consent to, and this is the line that makes
+# the tree's rule the tree's rule rather than a fight.
+assert_stdout_has "repaired"
+assert_stdout_has "$instance_quadlet"
+
 # The tree is the service's own again, and the tree's mode. Every level of the
 # chain, because the older mutator created every level of it.
 for path in "$instance_quadlet" "$instance_home/.config" \
@@ -89,3 +95,46 @@ done
 # re-rendered the units on every converge would not be a converge.
 assert_file_exists "$instance_quadlet/web.container"
 assert_file_has "$instance_quadlet/web.container" "Image=docker.io/library/nginx:1.27"
+
+# --- and the repair stays inside the service's own home ----------------------
+# The instance's directory name is a REGISTRY KEY, and a registry is a
+# root-owned file an operator can edit by hand. A key naming `..` would make
+# the repair chmod and chown a directory OUTSIDE the tree it belongs to — so
+# the repair refuses every path that does not resolve inside the home, and
+# this is where that is measured rather than assumed.
+#
+# **The key is ADDED beside the real one**, and that is the whole subtlety:
+# `_converged` asks whether the ref being deployed is in the registry's
+# instances, so a registry whose only instance carries a different key is NOT
+# converged — the create would take the other branch and the repair would
+# never run at all, and the assertion below would be about nothing. So the
+# registry holds BOTH keys: the real one, so the deploy stays converged, and
+# the hostile one, so the repair has something to walk.
+registry=/var/lib/guarden/registry/routed-preview.toml
+cp "$registry" "$GUARDEN_FIXTURES/registry.toml"
+
+# A directory OUTSIDE the service's home, with a mode and an owner the repair
+# would have to change if it reached it.
+outside=/var/lib/guarden/outside-the-tree
+mkdir -p "$outside"
+chmod 0755 "$outside"
+chown 0:0 "$outside"
+
+# The instance's key names the tree above the service's own, so the repair's
+# path for it resolves outside the home. The key is planted by a TOML PARSER
+# and not by `sed`, because the key's own spelling carries two escapes.
+run python3 "$GUARDEN_ROOT/tests/registrykey.py" "$registry" \
+    'feature\x2fx' '../../../../outside-the-tree'
+assert_exit 0
+
+run weedr service ingest routed-preview/feature/x --from poke routed@9f2c1ab
+assert_exit 0
+assert_stdout_has "converged"
+
+# The directory outside the tree was NOT touched: the repair never reached it.
+assert_mode "$outside" 755
+assert_owner "$outside" "root:root"
+
+# And the registry is put back, so the rest of the machine is the one this
+# suite leaves behind.
+cp "$GUARDEN_FIXTURES/registry.toml" "$registry"

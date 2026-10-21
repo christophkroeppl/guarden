@@ -139,7 +139,7 @@ def allow_mounts(source: Path, service: str) -> list[str]:
     return missing
 
 
-def _converge(path: Path, owner: tuple[int, int]) -> bool:
+def _converge(path: Path, owner: tuple[int, int], home: Path) -> bool:
     """One directory inside a service's home, converged to the tree's rule.
 
     The mode is `0700` and the owner is the service's own uid and gid. **The
@@ -147,14 +147,28 @@ def _converge(path: Path, owner: tuple[int, int]) -> bool:
     already holds the rule is not touched, and a repair can say what it
     actually changed instead of what it walked.
 
-    A link is left alone: the tree's rule is about the directories guarden
-    made, and a link's target is the target's.
+    **A LINK IS REFUSED, and neither the leaf nor anything above it is
+    followed.** The service owns its home, so the service can plant a link
+    there, and `conf.set_owner` and `os.chmod` both follow one by default: a
+    service that replaced `home/.config` with a link to `/etc` would otherwise
+    make this root-run call `chown` and `0700` `/etc/containers`, which is
+    root-owned `0755` and read by every uid's podman generator (spec 2.1).
+
+    **The test is the RESOLVED path against the home.** A leaf that is a link
+    resolves elsewhere, and so does a leaf whose ANCESTOR is one — and the
+    ancestor is the one that matters, because `home/.config` is where a
+    service would put it. A path that resolves inside the home has no link on
+    the way to it that leaves the tree.
     """
     if path.is_symlink():
         return False
     try:
+        resolved = path.resolve()
+        base = home.resolve()
         info = path.stat()
     except OSError:
+        return False
+    if resolved != base and base not in resolved.parents:
         return False
     if (info.st_uid, info.st_gid) == owner and (info.st_mode & 0o7777) == paths.TREE_MODE:
         return False
@@ -171,17 +185,27 @@ def _chain_up(root: Path, home: Path) -> Iterator[Path]:
     level it makes carries the mutator's umask and root's ownership. A repair
     that owned the leaf and left the levels above it root-owned inside a `0700`
     home would be the defect it exists to prevent, one level up.
+
+    **The chain is built from the RESOLVED leaf and not from its spelling.**
+    The leaf's name is a registry key, and a registry is a root-owned file an
+    operator can edit by hand: a key naming `..` would otherwise make this
+    walk step out of the home and `chown` `/var/lib/guarden` itself — which
+    holds `registry/` and `creds/`. So the leaf is resolved first, and a leaf
+    that does not resolve inside the home yields nothing at all.
     """
     try:
-        parts = root.relative_to(home).parts
-    except ValueError:
-        yield root
+        leaf = root.resolve()
+        base = home.resolve()
+    except OSError:
         return
+    if leaf != base and base not in leaf.parents:
+        return
+    parts = leaf.relative_to(base).parts
     for index in range(len(parts), 0, -1):
-        yield home.joinpath(*parts[:index])
+        yield base.joinpath(*parts[:index])
 
 
-def own_directory(path: Path, owner: tuple[int, int]) -> list[Path]:
+def own_directory(path: Path, owner: tuple[int, int]) -> None:
     """A directory inside a service's home, owned by that service's user.
 
     `conf.write_file` creates the parent with `mkdir(parents=True)` and
@@ -190,8 +214,15 @@ def own_directory(path: Path, owner: tuple[int, int]) -> list[Path]:
     for a directory inside a service's home: the spec says nothing root-owned
     lives there, and the service cannot write its own quadlet tree without it.
 
-    The mode is `0700`, the tree's own mode: the directory holds one file the
-    service owns, inside a directory only the service can enter.
+    **Only a directory this call creates is touched.** The quadlet directory
+    itself is made by `_make_tree` — `0700` to the service user, like the rest
+    of the tree — and re-moding it here would be a second statement of that
+    mode, and one that disagrees with the walk that owns it. What is created
+    here is the **drop-in directory** (`<unit>.container.d`), which nothing
+    else makes.
+
+    The mode is `0700`, the tree's own mode: the drop-in directory holds one
+    file the service owns, inside a directory only the service can enter.
 
     **Every directory this call creates is owned, and not only the leaf.** The
     leaf's own parent may be missing too — `home/.config/containers` is
@@ -202,14 +233,14 @@ def own_directory(path: Path, owner: tuple[int, int]) -> list[Path]:
     walked up to the first directory that already exists, and each level this
     call makes is created, owned and moded in turn.
 
-    **A directory that already exists is CONVERGED, and not left alone.** The
-    tree's rule is `0700` to the service user (spec 2.1), and it is the
-    tree's rule whether guarden made the directory now or found it there: a
-    host that ran an older guarden carries directories this helper made wrong,
-    and the installer is the only writer that made one (ticket 334). The leaf
-    is the one this call is about, so the leaf is the one it converges.
-
-    Returns the directories it changed, so a caller can say what it repaired.
+    **A directory that already exists is left alone.** Not repaired and not
+    re-moded: the walk that owns a service's tree is `_make_tree`'s, and a
+    second statement of the same mode here would be two places to keep
+    agreeing. **The repair of a directory an older guarden made wrong is
+    `repair_unit_dirs`' and not this one** (ticket 334), and it is a separate
+    call on purpose: this one runs on every install, where a root-run `chown`
+    of a directory the SERVICE may have replaced with a link is an escalation
+    waiting to happen, and the repair is a converged create's job.
     """
     missing: list[Path] = []
     probe = path
@@ -220,21 +251,60 @@ def own_directory(path: Path, owner: tuple[int, int]) -> list[Path]:
         directory.mkdir(parents=True, exist_ok=True)
         conf.set_owner(directory, owner)
         os.chmod(directory, paths.TREE_MODE)
-    return [path] if _converge(path, owner) else []
 
 
 def owner_of(record) -> tuple[int, int]:
-    """The uid and gid a service's own files carry.
+    """The uid and gid a service's TREE carries.
 
-    The service's own uid, and its own gid where the host gave it one — the
-    same pair `install` writes with, so a repair and an install cannot
-    disagree about who owns a directory.
+    **The pair the tree walk uses, and not the pair the installer writes
+    files with.** `service._make_tree` owns the tree with the service user's
+    PRIMARY gid — the one in the host's own passwd database — and the repair
+    is about the tree, so the repair asks the same database.
+
+    **And the installer asks the same one.** The installer used to build its
+    pair from `users.group_id(service)`, which is the service's own GROUP gid
+    where the host created one — a different number from the primary gid on a
+    host where `useradd` made a group with another gid. Two writers disagreeing
+    about who owns a directory is the drift this ticket exists to close, and it
+    showed up as a repair that "repaired" the same directory on every deploy:
+    the install chowned it one way and the repair chowned it back. So the
+    installer asks the passwd database too, and the two answers are one.
+
+    **The uid comes from the RECORD and not from the passwd database:** the
+    record is what the service was created with, and a uid the host has since
+    reused is the host's problem and not this repair's.
+
+    **A service user the host no longer has is a refusal and not a guess.** The
+    gid is a property of the system, and a gid invented from the uid is a
+    number nobody assigned — so the pair is refused with the service named
+    (spec 1.2: exit `1`, the host is not in the state the request assumed).
     """
-    service = record.service
-    return (
-        record.uid,
-        users.group_id(service) if service in users.group_names() else record.uid,
-    )
+    entries = users.passwd_entries()
+    entry = entries.get(record.service)
+    if entry is None:
+        raise errors.GuardenError(
+            f"{record.service} has no passwd entry on this host, so the owner of its "
+            f"tree is not knowable and nothing can be repaired in it",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return (record.uid, entry[1])
+
+
+def _inside(candidate: Path, root: Path) -> bool:
+    """Whether a path is inside a root, by its resolved parts.
+
+    **The check is on the RESOLVED path and not on the spelling**, because the
+    spelling is what an attacker controls: a registry key is a root-owned
+    file's content, and a key naming `..` or an absolute path would resolve
+    outside the tree it is supposed to be in. A path that does not resolve is
+    answered "not inside" — the repair is a correction and never a guess.
+    """
+    try:
+        resolved = candidate.resolve()
+        base = root.resolve()
+    except OSError:
+        return False
+    return resolved == base or base in resolved.parents
 
 
 def repair_unit_dirs(
@@ -256,6 +326,13 @@ def repair_unit_dirs(
     the answer it has not yet been given. A repair that re-moded the files
     would settle that question by side effect, and this is not that ticket.
 
+    **Every path is checked to be inside the service's own home.** The
+    instance's directory name is a registry key, and a registry is a
+    root-owned file whose content an operator can edit by hand: a key naming
+    `..` would otherwise make this repair `chmod` and `chown` a directory
+    outside the tree it belongs to. The check is on the resolved path, so a
+    link is answered by where it lands and not by where it points.
+
     Returns the directories it changed, so a caller can say what it repaired.
     """
     home = paths.service_home(service)
@@ -263,13 +340,13 @@ def repair_unit_dirs(
     roots += [unit_dir(service, ref) for ref in refs]
     changed: list[Path] = []
     for root in roots:
-        if not root.is_dir():
+        if not root.is_dir() or not _inside(root, home):
             continue
         for path in _chain_up(root, home):
-            if _converge(path, owner):
+            if _inside(path, home) and _converge(path, owner, home):
                 changed.append(path)
         for path in sorted(root.glob("*.container.d")):
-            if path.is_dir() and _converge(path, owner):
+            if path.is_dir() and _inside(path, home) and _converge(path, owner, home):
                 changed.append(path)
     return changed
 
@@ -283,10 +360,7 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
             f"{service} has no registry entry, so there is nothing to install units into",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    owner = (
-        record.uid,
-        users.group_id(service) if service in users.group_names() else record.uid,
-    )
+    owner = owner_of(record)
     written: list[str] = []
 
     for path in sorted(_files(out / "units")):
