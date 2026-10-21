@@ -169,14 +169,21 @@ assert_exit 1
 
 # A record whose outcome is anything but green is not a hit, whatever else
 # agrees about it.
-seed "$CACHE/$GOLDEN/bogus.json" \
-    "{\"golden\":\"$GOLDEN\",\"key\":\"bogus\",\"outcome\":\"red\",\"suite\":\"$SUITE_NAME\"}"
-cache get "$GOLDEN" bogus "$SUITE_NAME"
+#
+# The two keys below are digests because a key that is not one is refused
+# before a record is read at all (t211): the record has to be reachable under a
+# key the helper would accept, or the miss would be the refusal rather than the
+# record's outcome.
+BOGUS_KEY=$(printf '0%.0s' {1..64})
+seed "$CACHE/$GOLDEN/$BOGUS_KEY.json" \
+    "{\"golden\":\"$GOLDEN\",\"key\":\"$BOGUS_KEY\",\"outcome\":\"red\",\"suite\":\"$SUITE_NAME\"}"
+cache get "$GOLDEN" "$BOGUS_KEY" "$SUITE_NAME"
 assert_exit 1
 
 # A record that is not readable is a miss, not a crash and not a hit.
-seed "$CACHE/$GOLDEN/broken.json" 'not json'
-cache get "$GOLDEN" broken "$SUITE_NAME"
+BROKEN_KEY=$(printf '1%.0s' {1..64})
+seed "$CACHE/$GOLDEN/$BROKEN_KEY.json" 'not json'
+cache get "$GOLDEN" "$BROKEN_KEY" "$SUITE_NAME"
 assert_exit 1
 
 # Pruning drops another golden's records and says how many went.
