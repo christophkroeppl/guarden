@@ -232,3 +232,67 @@ died with exit `129` (SIGHUP) because a foreground run and a background run
 shared one runner name — the documented collision, where `_reset` deletes the
 instance underneath the other run. Re-run alone on its own runner, the suite
 is green, and that is the run quoted above.
+
+## The increment the reviews asked for, measured on `14f896a`
+
+`c6c658c` fixed three of the five places that can name a provider; two were left
+on the logical name, and a `[providers.<track>]` for a track the host does not
+have was still exit `1`. `4165838` closes both, and the run of `t84` that went
+with it found the half of the story that had never been run — ticket 289.
+
+**RED** — `505b110`: the tests, with the source at its pre-fix state.
+
+```
+$ GUARDEN_LXC_RUNNER=guarden-run-t290a tests/lxc.sh run t30-parsers --no-cache
+error: expected exit 0, got 1
+  stderr: error: a table for an unknown track is a rule, so exit 2
+error: failed at line 16: return 1 (exit 1)
+FAIL t30-parsers.sh
+1 suites: 1 ran, 0 inherited, 1 failures, 1 machines cut
+
+$ GUARDEN_LXC_RUNNER=guarden-run-t290b tests/lxc.sh run t83 --no-cache
+error: stderr does not name myapp-staging
+error: failed at line 216: return 1 (exit 1)
+FAIL t83-provider-diagnostics.sh
+1 suites: 1 ran, 0 inherited, 1 failures, 1 machines cut
+```
+
+**The no-allocation assertion is not vacuous.** A suite stops at its first
+failure, so that RED never reached the fourth scenario. Reverting only the
+`edge_publications` message on the green tree and re-running `t83` fails there:
+
+```
+$ GUARDEN_LXC_RUNNER=guarden-run-t290m tests/lxc.sh run t83 --no-cache
+error: stderr does not name dbprov-staging
+error: failed at line 216: return 1 (exit 1)
+FAIL t83-provider-diagnostics.sh
+1 suites: 1 ran, 0 inherited, 1 failures, 1 machines cut
+```
+
+**GREEN, and the suites that must not move** — `14f896a`, the change merged with
+`develop`, one run each on a machine of its own:
+
+```
+$ GUARDEN_LXC_RUNNER=guarden-run-t290h tests/lxc.sh run t84-provider-diagnostics-mutator --no-cache
+ok   t84-provider-diagnostics-mutator.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290i tests/lxc.sh run t83 --no-cache
+ok   t83-provider-diagnostics.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290j tests/lxc.sh run t30-parsers --no-cache
+ok   t30-parsers.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290k tests/lxc.sh run t40-edges --no-cache
+ok   t40-edges.sh
+$ GUARDEN_LXC_RUNNER=guarden-run-t290l tests/lxc.sh run t80-edges --no-cache
+ok   t80-edges.sh
+```
+
+`t40-edges` is on the list because it asserts the self-edge refusal's words, and
+it passed with its assertions unchanged: the new wording is a clarification that
+still carries the name the operator acts on, not a different answer. `ruff check
+src tools/check-deps tests` passes, and no unit assertion moved —
+`tests/test_config_providers.py`'s only change is its docstring.
+
+**`t84` is ticket 289's measurement.** Its absent-provider scenario asserted
+exit `0` and had never been run: the render the same ingest runs refuses the
+edge it recorded, so exit `0` is unreachable and the mutator's warning dies with
+the raise. The scenario is gone until 289 decides the ordering, and the suite's
+header says so.
