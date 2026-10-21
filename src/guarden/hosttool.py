@@ -156,11 +156,11 @@ class Item:
     modes cannot disagree about what converged state means.
 
     `correctable = False` marks the fact that is reported and never corrected.
-    spec 6.1 is explicit that the two host invariants are of that kind: an
-    operator who set a sysctl on purpose is not a machine to argue with. Such an
-    item is drift for `--check` and nothing at all for `--apply`, because a
-    converge that could not fix it and still reported it would make every run on
-    such a host fail.
+    spec 6.1 is explicit that several host facts are of that kind — a sysctl an
+    operator set on purpose, a snapper configuration for `/tmp`, a service's
+    recorded exposure. Such an item is drift for `--check` and nothing at all
+    for `--apply`, because a converge that could not fix it and still reported
+    it would make every run on such a host fail.
     """
 
     what: str

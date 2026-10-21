@@ -87,7 +87,9 @@ lint:
 # varlock is not a declared dependency — `just check` exists to prove nothing
 # reaches past the standard library and the two distribution packages — so this
 # reports rather than fails when it is absent, as `lint` does for ruff.
-# tests/t35-env-schema.sh asserts the same thing and more.
+# This recipe resolves and prints; `just unit` is the one that asserts about the
+# schema (tests/test_env_schema.py), because an assertion is a test and this is
+# a reader's convenience.
 env:
     @if command -v varlock >/dev/null; then varlock load -p .env.schema; else echo "varlock not installed"; fi
 
@@ -103,6 +105,11 @@ ci: lint unit test
 # that asserts nothing, wearing a different hat. The adversarial review named
 # it: the sudoers rule's content was pinned only by a unit test that no recipe
 # ran.
+#
+# **The checkout is the other subject no machine can see** (ADR-0025): the root
+# `.env.schema`'s tracked-ness is a fact about this repository's `.git`, which
+# a cut does not carry, so `tests/test_env_schema.py` is a unit test and this is
+# the recipe that runs it. It executes no guarden program and writes nothing.
 #
 # The interpreter is the checkout's own venv when it has one, for the reason
 # `check` gives: a developer without the distribution's packages still gets a

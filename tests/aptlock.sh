@@ -18,9 +18,9 @@
 #                unmeasured           fuser could not say, so nothing was learned
 #
 #   evidence   ticket 271's capture, in its order: `fuser -v` on the locks, the
-#              `systemctl status` of cloud-init.service, apt-daily.service and
-#              unattended-upgrades.service, and the tail of
-#              /var/log/cloud-init.log.
+#              `systemctl status` of the cloud-init services this image has and
+#              of apt-daily.service and unattended-upgrades.service, and the
+#              tail of /var/log/cloud-init.log.
 #
 # `fuser`'s exit code alone is not the answer — its own man page says non-zero
 # means "none of the specified files is accessed **or a fatal error**", and 1
@@ -73,14 +73,42 @@ probe() {
 }
 
 # Best effort, and it always exits 0: this output is what a failed cut prints,
-# and a `systemctl status` that cannot find a unit the image does not have is
-# content rather than an error — the absence is one of the things the reader is
-# being shown.
+# and a capture that stopped on its own first line would report less than the
+# thing it was taken to explain.
+#
+# Three things about the capture are decisions, not conveniences.
+#
+# **The cloud-init services are the ones the image has, asked for by asking
+# systemd.** Every image this harness runs has cloud-init, and no two
+# generations agree on the unit names: ubuntu 26.04 ships cloud-init-local,
+# cloud-init-main and cloud-init-network and has no cloud-init.service at all,
+# so ticket 271's fixed name printed "Unit cloud-init.service could not be
+# found" — an absence that reads as a fact about cloud-init rather than about
+# the name the capture invented. `list-unit-files` is the image's own answer,
+# and asking about the units it names cannot produce that line.
+#
+# **A lock nobody holds is said out loud.** `fuser -v` prints nothing at all
+# for a file no process has open, so a command line with no output under it
+# reads as a measurement that failed instead of as the state that is actually
+# free. `held by: nobody` is what the reader gets instead.
+#
+# **The log line is emitted even when the file is absent**, for the same
+# reason: the evidence says what it looked for and what it found, in both
+# directions.
 evidence() {
     printf 'fuser -v %s\n' "$locks"
-    fuser -v $locks 2>&1
-    printf 'systemctl status cloud-init.service apt-daily.service unattended-upgrades.service\n'
-    systemctl status --no-pager cloud-init.service apt-daily.service unattended-upgrades.service 2>&1
+    holders=$(fuser -v $locks 2>&1)
+    if [ -n "$holders" ]; then
+        printf '%s\n' "$holders"
+    else
+        printf 'held by: nobody\n'
+    fi
+    cloud=$(systemctl list-unit-files --no-legend --plain 'cloud-init*.service' 2>/dev/null \
+        | awk '{print $1}' | tr '\n' ' ')
+    cloud=${cloud% }
+    units="${cloud:+$cloud }apt-daily.service unattended-upgrades.service"
+    printf 'systemctl status %s\n' "$units"
+    systemctl status --no-pager $units 2>&1
     printf 'tail -n 40 /var/log/cloud-init.log\n'
     if [ -r /var/log/cloud-init.log ]; then
         tail -n 40 /var/log/cloud-init.log
