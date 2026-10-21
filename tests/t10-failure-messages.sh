@@ -139,8 +139,18 @@ grep -qE '^APT_LOCK_WAIT=\$\{GUARDEN_LXC_APT_LOCK_WAIT:-' "$runner" \
     || _fail "the runner no longer takes its apt-lock budget from GUARDEN_LXC_APT_LOCK_WAIT"
 grep -qE '^CLOUD_INIT_WAIT=\$\{GUARDEN_LXC_CLOUD_INIT_WAIT:-' "$runner" \
     || _fail "the runner no longer bounds cloud-init's status wait from GUARDEN_LXC_CLOUD_INIT_WAIT"
-deadline=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '-lt "$APT_LOCK_WAIT"' || true)
-[ "$deadline" -ge 1 ] || _fail "the runner's lock wait no longer polls until the APT_LOCK_WAIT clock runs out"
+# The deadline is a CLOCK and its budget is a PARAMETER: a cut takes
+# `APT_LOCK_WAIT`, the golden takes `GOLDEN_APT_LOCK_WAIT`, because a fresh
+# golden's first boot installs the whole package set and needs longer than a cut
+# over a machine that already has it. The pin therefore reads the parameter and
+# its default, not the name of one of its two callers — pinning
+# `-lt "$APT_LOCK_WAIT"` failed the moment the golden got a budget of its own,
+# while the property the line exists for (a wall clock, not a count of polls)
+# was intact.
+budget=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'local budget=${2:-$APT_LOCK_WAIT}' || true)
+[ "$budget" -ge 1 ] || _fail "the runner's lock wait no longer takes its budget as a parameter defaulting to APT_LOCK_WAIT"
+deadline=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- '-lt "$budget"' || true)
+[ "$deadline" -ge 1 ] || _fail "the runner's lock wait no longer polls until the clock it was given runs out"
 guest=$(grep -vE '^[[:space:]]*#' "$runner" | grep -cF -- 'tests/aptlock.sh' || true)
 [ "$guest" -ge 1 ] || _fail "the runner no longer reads the guest half of the wait from tests/aptlock.sh"
 for verb in probe evidence; do
