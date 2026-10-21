@@ -127,10 +127,45 @@ FAIL t491-creds-trigger.sh
 that already exists, and it only ENABLES the boot oneshot
 (`src/guarden/hostprep.py:2643-2657`, with the deliberate "Not `--now`"). So a
 box whose blobs are already present when the phase runs — a restore, a
-re-install — materialises nothing until a change or the next boot.
+re-install — materialises nothing until the next boot (or a hand-run of the
+oneshot): not even a blob change would fire it, per the measurement above.
 
 Starting the oneshot as a converge step would close that, and it is not an
 `Item`: a `Type=oneshot` without `RemainAfterExit=` is `inactive` once it
 succeeds, so an `is-active` predicate could never hold and `--check` would report
 permanent drift on a converged host. It is a decision of its own and is not made
 here.
+
+## Observed once, not reproduced: the rotation assertion
+
+On 2026-10-21 `tests/t491-creds-trigger.sh` failed at its rotation assertion on
+a tree whose only change was a comment, on a host at load average 100:
+
+```
+error: /var/lib/guarden/services/credstrig-staging/home/.local/share/containers/storage/secrets/filedriver/secretsdata.json does not name YS1yb3RhdGVkLXZhbHVl
+error: failed at line 264: return 1 (exit 1)
+FAIL t491-creds-trigger.sh
+```
+
+Two candidates: a second plant's `systemctl start` (`src/guarden/credentials.py:402`)
+merging into an in-flight `Type=oneshot` instead of queueing a run, or two
+materialiser runs overlapping with the older snapshot winning.
+
+A throwaway probe (`t9probe6.sh`) planted and rotated back to back three times,
+and with a pause twice, reading the oneshot's run count from the journal:
+
+```
+PROBE round 1: oneshot runs 1->3  first=NO rotated=YES
+PROBE round 2: oneshot runs 3->5  first=NO rotated=YES
+PROBE round 3: oneshot runs 5->7  first=NO rotated=YES
+PROBE round 4: oneshot runs 7->9  first=NO rotated=YES
+PROBE round 5: oneshot runs 9->11 first=NO rotated=YES
+```
+
+Five of five rounds ran the oneshot once per plant and left the rotated value in
+the store, so a second plant is not normally swallowed and the failure was not
+reproduced by that shape. No fix and no ticket: the record exists so the next
+occurrence has a witness. What would settle it is the failing run's own
+`journalctl -u guarden-creds-boot.service` beside `secretsdata.json`, and the
+harness deletes the cut when the suite ends — so a repeat should be read before
+the machine goes.
