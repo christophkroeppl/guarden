@@ -37,16 +37,20 @@ export GUARDEN_PREFIX=/
 registry=/var/lib/guarden/registry
 
 purge() {
-    local failed=0 service attempt
+    local failed=0 service attempt path_was_active=0
     local -a paths
-    # **The host's credential trigger is held while the trees are removed.** Its
-    # oneshot materialises every remaining service's credentials with `podman
-    # secret create` as that service, which writes into the service's own `home` —
-    # the tree this loop is deleting — so a purge and a materialise can collide
-    # (measured 2026-10-21: `rm: cannot remove
-    # '.../needful-production/home/.local/share/containers/storage': Directory not
-    # empty`). The trigger is restored afterwards, so a purge leaves the host as
-    # it found it.
+    # **The host's credential trigger is held while the trees are removed.** The
+    # purge deletes `/etc/guarden/creds/<name>`, and `guarden-creds.path` watches
+    # that directory, so the removal itself starts the materialiser: a
+    # `podman secret create` per service that still has a blob, run in that
+    # service's own `home` — the tree this loop is deleting. The collision is a
+    # race and does not reproduce on demand (measured once, 2026-10-21:
+    # `rm: cannot remove '.../needful-production/home/.local/share/containers/
+    # storage': Directory not empty`); the retry below is the second line. The
+    # unit is put back only if this purge found it running.
+    if systemctl is-active --quiet guarden-creds.path; then
+        path_was_active=1
+    fi
     systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
     for service in "$@"; do
         paths=(
@@ -69,7 +73,9 @@ purge() {
         done
         userdel "$service" >/dev/null 2>&1 || :
     done
-    systemctl start guarden-creds.path >/dev/null 2>&1 || :
+    if [ "$path_was_active" = 1 ]; then
+        systemctl start guarden-creds.path >/dev/null 2>&1 || :
+    fi
     # **A teardown that cannot remove the tree is a failure, not a line in the
     # log.** A `home` left behind reached whoever got the machine next and failed
     # an assertion there about something else (ticket 329), so what survives the
