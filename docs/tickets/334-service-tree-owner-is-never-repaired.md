@@ -197,3 +197,64 @@ ok   t334-tree-repair.sh
 
 **The suite is not vacuous**: with the source reverted (`git revert --no-commit`
 of the fix commit, the test kept) it goes RED again with the same diagnostic.
+
+## The adversarial review, and what it found
+
+A second model read the change against the tree and found five real defects.
+Four were closed in `27505a1` and the fifth was a measurement that measured
+nothing. They are recorded here because **a decision with no stated reasoning
+is a decision the next reader has to re-derive** — and so is a fix whose holes
+are not written down.
+
+1. **The repair was never said.** `weedr._emit` returned on
+   `outcome.converged` BEFORE the loop that prints `outcome.notes`, so the
+   repair's lines never reached stdout, and decision 2's "the repair reports
+   what it changed" was not implemented at all. The notes are now printed
+   before the verdict: the verdict is the verb's answer and a caller reads
+   the last line as the answer.
+
+2. **The installer would have followed a link out of the tree.** `own_directory`
+   converged an EXISTING leaf, and `conf.set_owner` and `os.chmod` both follow
+   a link by default. The service owns its home, so the service can plant a
+   link there — and one that replaced `home/.config` with a link to `/etc`
+   would have made a root-run install `chown` and `0700` `/etc/containers`,
+   which is root-owned `0755` and read by every uid's podman generator
+   (spec 2.1). `own_directory` is back to touching only what it creates, and
+   the repair of an existing directory is `repair_unit_dirs`' — a separate
+   call, on a converged create, where every path is resolved and checked
+   against the home before anything is chowned.
+
+3. **A registry key naming `..` walked out of the home.** `_chain_up` used a
+   lexical `relative_to`, which accepts `..`, so a key would have walked the
+   chain up to `/var/lib/guarden` itself — which holds `registry/` and
+   `creds/`. The chain is built from the RESOLVED leaf, and a leaf that does
+   not resolve inside the home yields nothing at all.
+
+4. **The repair and the installer disagreed about the owner.** The repair
+   asked the passwd database for the service user's PRIMARY gid; the
+   installer asked `users.group_id(service)` for the service's own GROUP
+   gid — a different number on a host where `useradd` made a group with
+   another gid. The two chowned the same directory different ways on
+   alternate deploys, so **every converged deploy "repaired" again**, and
+   spec 5.3's "changes nothing" was false. The installer now asks the same
+   database, so there is ONE answer. And a service user the host no longer
+   has is a **refusal naming the service**, not a gid invented from the uid:
+   a gid is a property of the system, and a number nobody assigned is not one.
+
+5. **The containment block measured nothing.** Renaming the registry's only
+   instance key made `_converged` return False, so the create took the other
+   branch and the repair never ran — the assertion was about a code path
+   that was not taken. The key is now **added beside the real one**, so the
+   deploy stays converged AND the repair has a hostile path to walk.
+
+**What the review did NOT find**, read and checked rather than assumed: the
+repair does not break ticket 320's `0640`-against-`0700` question (the repair
+touches directories only, and the files are left alone); it does not break
+`t333`'s assertions (the same two properties, and the t333 suite is green);
+and it does not touch a directory belonging to a different service (every path
+is resolved and checked against the service's own home before it is touched).
+
+**The golden hides finding 4**, and that is worth knowing: `tests/lib.sh`
+creates a same-named group for the service user, which makes the two gids
+identical on the test machine. The defect is real on a host where `useradd`
+does not make one, and no suite on this golden would have seen it.
