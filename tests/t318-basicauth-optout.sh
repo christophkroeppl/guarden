@@ -60,6 +60,14 @@ assert_not_rejected
 # force — so a service created after the marker would carry a login like any
 # other, and creating one here afterwards would assert the opposite of what
 # ticket 292 does.
+#
+# **And the precondition is asserted, not assumed.** The grandfathering IS the
+# marker's absence, so a guest that already carries one — a runner that was not
+# cleanly re-cut, a hand-driven machine — would mint this service, and the
+# failure would land on the registry assertion below instead of on the state
+# that caused it.
+run test -f /etc/guarden/edge/basicauth-policy
+assert_exit 1
 oldapp=$GUARDEN_PREFIX/var/lib/guarden/staging/oldopt/9f2c1ab
 mkdir -p "$oldapp/.guarden/quadlet"
 seed "$oldapp/.guarden/service.yml" "project: oldopt" "units: .guarden/quadlet/" \
