@@ -384,9 +384,17 @@ than where the renderer reads, and nothing would look at it. The file name is th
 and the user manager is per service uid, so two services created from one template do not
 share a unit.
 
-**No set ships.** `soil install` builds `/usr/lib/guarden/templates/` from
-`src/guarden/templates/`, and that tree has no `services/` subdirectory, so on a host that has
-just been installed `create` is refused before anything else is asked of it:
+**Two templates ship.** `soil install` copies `src/guarden/templates/` to
+`/usr/lib/guarden/templates/`, and that tree carries a `services/` subdirectory with `postgres`
+and `vaultwarden` in it, so a host that has just been installed already holds a set:
+
+```
+$ ls /usr/lib/guarden/templates/services/
+postgres  vaultwarden
+```
+
+**The set is empty only on a host whose templates were taken away**, and then `create` is
+refused before anything else is asked of it:
 
 ```
 weedr service create myapp --env staging --template postgres
@@ -403,7 +411,7 @@ rule, and then it is exit `2` whatever the host holds:
 
 ```
 weedr service create myapp --env staging --template ../x
-error: the template '../x' is not a template name; /usr/lib/guarden/templates/services holds none
+error: the template '../x' is not a template name; available templates: postgres, vaultwarden
 ```
 
 The same line with templates installed: a name that breaks no rule and a set that does not hold
