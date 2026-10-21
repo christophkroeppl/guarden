@@ -658,12 +658,6 @@ allow = ["/dev/dri"]  # host paths this service's units may bind-mount
 [expose]
 tunnel = ["web"]  # route labels published through the tunnel instead of the service's
   # resolved destination; a loopback record still wins (§3.3)
-
-[ownership]
-volumes = { "data" = 999 }  # the uid that owns a volume's tree, when the image's own
-  # uid cannot. A GRANT, like every other table here: the
-  # manifest names the volume and the admin names the uid, and
-  # a uid the host does not already have is refused. ADR-0021
 ```
 
 `keep_last` and `free_limit` override the track's defaults. `groups.add` gives the service
@@ -685,10 +679,19 @@ a posture to be private. `edge` is a value a track states and `public` is the re
 for the same position (§3.4, §6.2 `weedr expose set`).
 
 Nothing else is overridable. Routes, edges, state volumes, the unit source and the credential
-schema are the repository's, and this file does not touch them. The one exception is
-`[ownership]`, and it is an exception with a reason: ADR-0021 decided that a volume shared by
-two image uids needs an owner the admin names, and that the grant belongs in this file
-because this file is what an operator reads to know every way the host has been widened.
+schema are the repository's, and this file does not touch them.
+
+**`[ownership]` is DECIDED and NOT YET IMPLEMENTED, and a file carrying it is REFUSED.** It
+is not in the sample above for that reason: the sample is what an operator copies into a file,
+and a table the program refuses has no place in it. ADR-0021 decided that a volume shared by
+two image uids needs an owner the admin names, and that the grant belongs in this file because
+this file is what an operator reads to know every way the host has been widened; the ADR holds
+the shape. **The table does not exist in the program yet**, so
+`overrides.load()` refuses the key `ownership` by name and the verb that read it exits `1`
+(spec 1.2: the host is not in the state the request assumed). The implementation is ticket
+308's item 2. **Until it lands, the answer to "a volume is owned by the service uid and the
+container runs as another" is not this table** — it is the keep-id pin (ADR-0019), which maps
+the image's uid onto the service identity and leaves the volume owned by the service uid.
 
 ### 3.4 `/var/lib/guarden/registry/<name>.toml`
 
