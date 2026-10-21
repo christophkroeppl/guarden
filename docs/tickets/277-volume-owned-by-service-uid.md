@@ -2,6 +2,11 @@
 
 Blockers: none. Found 2026-10-14 deploying RustFS.
 
+**Status: SUPERSEDED by ADR-0019 (2026-10-18), and the residue it left behind
+is fixed here.** The ticket's premise was right and its two remedies are both
+wrong under the decision that replaced them. What this ticket now carries is the
+record of that, and the three defects the superseded rule left in the tree.
+
 ## What happens
 
 guarden creates a service's volumes owned by the **service user** (uid 992 for
@@ -33,19 +38,78 @@ podman unshare chown -R 10001:10001 <volume>     # run as the service user
 
 after which the container sees `10001 10001` and writes both `/data` and `/logs`.
 
-## What this ticket wants
+## Why BOTH remedies are now wrong — ADR-0019
 
-A volume has an **owner uid** that is a property of the service, not of guarden's
-layout, and the create path must set it through `podman unshare` (or the
-equivalent) rather than assuming the service uid is the right one. Two ways to
-express it, and either is fine:
+ADR-0019 (`docs/adr/0019-container-uid-ownership-keep-id.md`, accepted
+2026-10-18, merged `d9f48e0`) decided the **opposite** of what this ticket
+proposed, and it is the binding decision:
 
-- a manifest field (`owner: 10001`, default the service uid), or
-- reading the image's `Config.User` at ingest and owning the volume accordingly.
+> guarden probes the image's user at first start and renders
+> `UserNS=keep-id:uid=<image uid>,gid=<image gid>`, which **maps the image's uid
+> ONTO THE SERVICE IDENTITY**.
 
-Until then, every image that drops privileges in its own Dockerfile — which is
-most non-trivial images — fails at first start with a message that names neither
-guarden nor the volume.
+Under that pin the container's uid 10001 **is** the service user on the host
+filesystem. The 0700 service-owned volume is writable — with the volume owned by
+the service uid, exactly as the create path already does it, and with no chown
+anywhere. `tests/t350-keepid.sh` measures this end to end, and says in its own
+header: *"Ticket 277's `Permission denied` is the failure this replaces."*
+
+**So the create path must NOT change**, and neither remedy below may be
+implemented:
+
+- **The namespace chown** (`podman unshare chown -R <image uid>:<image uid>
+  <volume>`) moves the tree onto a uid the container does not own under the pin
+  — the image's uid lands in the service's **subuid band** — and the container
+  loses the write it had. On a `state` volume it is worse: the walk reaches
+  snapper's root-owned `.snapshots` and fails, **having already moved the
+  volume's own owner**, so a command that reports failure leaves a broken
+  deployment behind it. Measured, below.
+- **A manifest field** (`owner: 10001`) and **reading `Config.User` at ingest**
+  would put the volume's owner on a uid the pin maps into the subuid band, which
+  is the same defect by another route — and the first of them would also be a
+  repository naming a host uid, which is the request/grant split the spec
+  refuses (§7.7).
+
+The escape hatch for a volume genuinely shared by two image uids is **ADR-0021**:
+`overrides.toml` gains `[ownership] volumes = { "<vol>" = <uid> }` as an ADMIN
+grant. That is decided and **not yet implemented** (ticket 308's item 2), and
+the spec's §3.3 now says so where an operator reads it.
+
+## The residue, and what was fixed
+
+The superseded rule was still in the tree in three places, and each is a defect
+in its own right:
+
+1. **`docs/sysadmin.md` told the operator to run the destructive step.** It is
+   now a "do not chown a volume to the image's uid" note that names the hazard
+   and points at the pin instead.
+2. **`docs/spec.md` §3.3 documented `[ownership]` as a present table.** The
+   program has no such table and `overrides.load()` refuses the key by name, so
+   a file carrying the table the spec documents was **refused with exit 1**. The
+   spec now says the table is decided-and-unimplemented and that the answer to
+   "a volume is owned by the service uid and the container runs as another" is
+   the pin.
+3. **`src/guarden/overrides.py` said "Five tables and nothing else" and "not
+   one of the eight"** — there are six (`[expose]` is the sixth).
+
+## The measurement
+
+`tests/t277-volume-owner.sh`, on a real cut with a real `useradd`, a real
+subuid range, real rootless podman and real systemd. Three claims:
+
+- **the create path's owner** (the decision lock): both volumes are owned by the
+  **service uid** before the start and after it, the container writes into the
+  `state` volume with no chown anywhere in the file, and the file lands on the
+  host owned by the service uid. **The volume's owner must NOT become the
+  image's uid** — a later implementer must not "fix" this ticket by doing that.
+- **what the runbook's step costs**, on both kinds of volume: on a `bulk` volume
+  the chown completes, the tree ends up owned by the **subuid-aliased** host uid
+  (`subuid_base + image_uid - 1`, read from the host's own `/etc/subuid`), and
+  the container's write is **refused**; on a `state` volume the chown **fails**
+  on `.snapshots` and the volume's own owner has **already moved**.
+- **the tree does not prescribe it any more**: a grep over the standing
+  documents and the programs for the step, the same shape as t350's
+  refuted-claims block.
 
 ## The same class, third instance
 
@@ -55,3 +119,6 @@ This is the third face of one problem in this deploy (272's siblings 273 and
 root) are not modelled, and each one surfaces as an application-level error.
 `/data` and `/logs` both had to be pre-created and owned; the image expects both
 to exist.
+
+**Ownership was the face ADR-0019 closed; the other two are 273 (ADR-0020, the
+`.snapshots` subtree) and 325 (the image's own data-directory convention).**

@@ -1,42 +1,42 @@
 #!/usr/bin/env bash
 # Ticket 277: a volume is owned by the service uid, but the container may run
-# as another — and the runbook's remedy for it BREAKS a pinned deployment.
+# as another — and the runbook's remedy for it BREAKS a working deployment.
 #
 # **What this file is.** ADR-0019 (accepted 2026-10-18) settled ticket 277's
 # question by deciding the opposite of what the ticket proposed: guarden probes
 # the image's user at first start and renders `UserNS=keep-id:uid=…,gid=…`,
 # which maps the image's uid ONTO THE SERVICE IDENTITY. Under that pin the
 # container's uid 10001 IS the host uid of the service user, so the 0700
-# service-owned volume is writable — and `tests/t350-keepid.sh` measures it.
+# service-owned volume is writable — with the volume owned by the service uid,
+# and with no chown anywhere.
 #
-# **The residue this file measures.** The runbook still tells the operator to
-# do the thing the pin made wrong. `docs/sysadmin.md` says:
+# **The residue this file measures.** The runbook still prescribed the step the
+# pin made wrong. `docs/sysadmin.md` said:
 #
 #     The step is `podman unshare chown -R <image uid>:<image uid> <volume>`,
 #     run as the service user (tickets 273 and 277).
 #
-# That step chowns the volume's tree to the IMAGE's uid. Under the pin, the
-# image's uid is mapped onto the service identity — so a tree owned by host uid
-# 10001 is owned, in the container's own namespace, by a uid the pin maps into
-# the service's SUBUID band, and the container loses the write it had. The
-# operator follows the runbook and breaks a deployment that was working.
+# That step moves the volume's tree onto a uid the container does not own
+# under the pin, and the measurement below is what it costs.
 #
-# **Two claims, and each is a measurement of the machine:**
+# **Three claims, and each is a measurement of the machine:**
 #
-#   * **the pin case**: a service whose image declares `USER 10001`, deployed
-#     and started with NO manual chown anywhere in this file, writes into its
-#     own `state/data` volume from inside the container, and the file lands on
-#     the host owned by the SERVICE uid. The volume's owner never became the
-#     image's uid and never had to.
-#   * **the runbook's remedy**: the SAME service, with the runbook's chown
-#     applied — `podman unshare chown -R 10001:10001 <volume>` as the service
-#     user — loses the write. The container's uid 10001 now lands on a
-#     subuid-aliased owner and the write is refused.
-#
-# The second claim is what makes the first one load-bearing: it says the
-# runbook's instruction is not merely unnecessary under the pin, it is
-# destructive, and the reason is a property of the mapping rather than of any
-# one image.
+#   * **the create path's owner** (the decision lock): the volume is owned by
+#     the SERVICE uid before the start and after it, the container writes into
+#     it with no chown anywhere in this file, and the file lands on the host
+#     owned by the service uid. **The volume's owner must NOT become the
+#     image's uid** — the pin is what makes the container's write possible, and
+#     a chown to the image's uid takes it away.
+#   * **what the runbook's step costs**, measured on both kinds of volume. On a
+#     `bulk` volume the chown COMPLETES, the tree ends up owned by the
+#     subuid-aliased host uid, and the container's write is refused. On a
+#     `state` volume the chown FAILS on snapper's root-owned `.snapshots` —
+#     and it has already moved the volume's own owner when it does, so a
+#     command that reports failure still breaks the deployment.
+#   * **the tree does not prescribe it any more**: a grep over the standing
+#     documents and the programs for the step, the same shape as t350's
+#     refuted-claims block. A runbook that tells an operator to break a
+#     working deployment is a defect, and this is where it is caught.
 #
 # Real host, real `useradd`, real subuid range, real rootless podman, real
 # systemd: `GUARDEN_PREFIX=/`, as `t350-keepid.sh` does.
@@ -63,6 +63,9 @@ assert_exit 0
 # The staged tree is written here rather than shipped as a fixture: `fixtures/`
 # holds configuration inputs and manifests, and a Containerfile a suite needs
 # is staged the way `t230-build` seeds one into a service's home.
+#
+# It declares BOTH kinds of volume, because the runbook's step behaves
+# differently on each and the difference is the measurement.
 
 staged=/var/lib/guarden/staging/kidv/0000001
 mkdir -p "$staged/.guarden/quadlet"
@@ -70,14 +73,17 @@ seed "$staged/.guarden/service.yml" \
     "project: kidv" \
     "units: .guarden/quadlet/" \
     "state:" \
-    "  - data"
+    "  - data" \
+    "bulk:" \
+    "  - scratch"
 seed "$staged/.guarden/quadlet/app.container" \
     "[Unit]" \
     "Description=the volume-owner probe container" \
     "" \
     "[Container]" \
     "Image=localhost/kidv-staging:latest" \
-    "Volume=data:/data"
+    "Volume=data:/data" \
+    "Volume=scratch:/scratch"
 seed "$staged/Containerfile" \
     "FROM docker.io/library/alpine:3.20" \
     "RUN adduser -D -u 10001 kiduser" \
@@ -94,13 +100,16 @@ home=/var/lib/guarden/services/kidv-staging/home
 unit=$home/.config/containers/systemd/app.container
 record=$registry/kidv-staging.toml
 svc_uid=$(id -u kidv-staging)
-volume=/var/lib/guarden/services/kidv-staging/state/data
+state_vol=/var/lib/guarden/services/kidv-staging/state/data
+bulk_vol=/var/lib/guarden/services/kidv-staging/bulk/scratch
 dropin_dir=/etc/containers/systemd/users/"$svc_uid"/app.container.d
 pin=$dropin_dir/50-guarden-keepid.conf
 
 # The image's own uid, read from the image's own passwd, the way the probe
 # reads it — so the number asserted below is the image's and not a constant
-# this file made up.
+# this file made up. And the service's subuid base, read from the host's own
+# `/etc/subuid`, because the host uid the runbook's step lands the tree on is
+# DERIVED from it and the derivation is the claim.
 
 runtime=/run/user/"$svc_uid"
 for _ in $(seq 1 30); do
@@ -118,22 +127,27 @@ image_uid=$(grep ":x:10001:" "$GUARDEN_STDOUT" | cut -d: -f3 || true)
 [ -n "$image_uid" ] || _fail "the image's passwd names no entry for uid 10001 to resolve against"
 echo "MEASURE: the image declares uid $image_uid"
 
-# --- the volume's owner, before anything starts ----------------------------
-#
-# The volume is the service's, owned by the service uid, 0700 — the spec's
-# rule (8.1) and the isolation boundary. This is asserted BEFORE the start so
-# a reader can see the owner the create path chose and that the start does not
-# change it.
+subuid_base=$(grep "^kidv-staging:" /etc/subuid | cut -d: -f2 || true)
+[ -n "$subuid_base" ] || _fail "/etc/subuid holds no range for kidv-staging"
+aliased_uid=$((subuid_base + image_uid - 1))
+echo "MEASURE: the service's subuid base is $subuid_base, so the image's uid $image_uid is host uid $aliased_uid"
 
-assert_subvolume "$volume"
-vol_owner=$(stat -c %u "$volume")
-[ "$vol_owner" = "$svc_uid" ] \
-    || _fail "the volume $volume is owned by host uid $vol_owner, not the service uid $svc_uid"
-echo "MEASURE: the volume's owner before the start: $vol_owner"
-
-# --- the pin, and the write it makes possible ------------------------------
+# --- claim 1: the create path's owner, and the write it allows --------------
 #
-# The start probes the image's user and renders the line. The volume is NOT
+# The volume is the service's, owned by the service uid, 0700 — the spec's rule
+# (8.1) and the isolation boundary. Asserted BEFORE the start, so a reader can
+# see the owner the create path chose.
+
+assert_subvolume "$state_vol"
+assert_subvolume "$bulk_vol"
+for volume in "$state_vol" "$bulk_vol"; do
+    owner=$(stat -c %u "$volume")
+    [ "$owner" = "$svc_uid" ] \
+        || _fail "the volume $volume is owned by host uid $owner, not the service uid $svc_uid"
+done
+echo "MEASURE: both volumes are owned by the service uid $svc_uid before the start"
+
+# The start probes the image's user and renders the line. The volumes are NOT
 # chowned by this file, by the create path, or by anything else: the pin is
 # what makes the write possible.
 
@@ -166,7 +180,7 @@ run_in "$home" setpriv --reuid=kidv-staging --regid=kidv-staging --clear-groups 
     podman exec "$container" sh -c 'id -u > /data/written-by'
 assert_exit 0
 
-written=$volume/written-by
+written=$state_vol/written-by
 assert_file_exists "$written"
 inside=$(cat "$written")
 [ "$inside" = "10001" ] \
@@ -176,45 +190,95 @@ owner=$(stat -c %u "$written")
     || _fail "the file written inside the container is owned by host uid $owner, not the service uid $svc_uid"
 echo "MEASURE: the file the container wrote is owned by host uid $owner (the service uid)"
 
-# The volume's owner is UNCHANGED by the start: the pin did not need to
-# change it, and a create path that had chowned it to the image's uid would
-# have changed it.
-vol_owner_after=$(stat -c %u "$volume")
-[ "$vol_owner_after" = "$svc_uid" ] \
-    || _fail "the volume $volume is owned by host uid $vol_owner_after after the start, not the service uid $svc_uid — the pin makes the write possible without touching the owner"
+# **The decision lock.** The volume's owner is UNCHANGED by the start: the pin
+# did not need to change it, and a create path that had chowned it to the
+# image's uid would have changed it. A later implementer reading this ticket
+# must not "fix" it by making the owner the image's uid — that is the step
+# claim 2 measures the cost of.
+for volume in "$state_vol" "$bulk_vol"; do
+    owner=$(stat -c %u "$volume")
+    [ "$owner" = "$svc_uid" ] \
+        || _fail "the volume $volume is owned by host uid $owner after the start, not the service uid $svc_uid — the pin makes the write possible without touching the owner"
+done
 
-# --- the runbook's remedy, and what it does to a working deployment ---------
+# --- claim 2: what the runbook's step costs ---------------------------------
 #
-# `docs/sysadmin.md` tells the operator: "The step is `podman unshare chown -R
-# <image uid>:<image uid> <volume>`, run as the service user (tickets 273 and
-# 277)." This block applies exactly that, as the service user, and then asks
-# the container to write again.
+# The step the runbook prescribed, verbatim: `podman unshare chown -R <image
+# uid>:<image uid> <volume>`, run as the service user.
 #
-# The expectation is a REFUSAL, and the reason is the pin: the image's uid is
-# mapped onto the service identity, so a tree owned by host uid 10001 is owned
-# in the container by a uid that lands in the service's subuid band, and the
-# container's own uid 10001 — which the pin put on the service identity — no
-# longer owns what it wrote a moment ago.
+# **On a BULK volume it completes.** A bulk volume carries no snapper
+# configuration and therefore no `.snapshots`, so nothing refuses it — and the
+# tree ends up owned by the subuid-aliased host uid, which under the pin is a
+# uid the container does not own, so the container's write is refused.
 
 run_in "$home" setpriv --reuid=kidv-staging --regid=kidv-staging --clear-groups \
     env -u OLDPWD HOME="$home" PWD="$home" USER=kidv-staging LOGNAME=kidv-staging \
     XDG_RUNTIME_DIR="$runtime" \
-    podman unshare chown -R "$image_uid:$image_uid" "$volume"
+    podman unshare chown -R "$image_uid:$image_uid" "$bulk_vol"
 assert_exit 0
-echo "MEASURE: the runbook's chown applied: $(stat -c %u "$volume")"
+bulk_owner=$(stat -c %u "$bulk_vol")
+[ "$bulk_owner" = "$aliased_uid" ] \
+    || _fail "the bulk volume $bulk_vol is owned by host uid $bulk_owner after the runbook's chown, not the subuid-aliased host uid $aliased_uid"
+echo "MEASURE: the runbook's chown left the bulk volume owned by host uid $bulk_owner (the image's uid, aliased)"
 
 run_in "$home" setpriv --reuid=kidv-staging --regid=kidv-staging --clear-groups \
     env -u OLDPWD HOME="$home" PWD="$home" USER=kidv-staging LOGNAME=kidv-staging \
     XDG_RUNTIME_DIR="$runtime" \
-    podman exec "$container" sh -c 'id -u > /data/written-after-chown'
-echo "MEASURE: the write after the runbook's chown: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+    podman exec "$container" sh -c 'id -u > /scratch/after-bulk-chown'
+echo "MEASURE: the write into the bulk volume after the chown: $(tr '\n' '|' <"$GUARDEN_STDERR")"
 assert_exit 1
 assert_stderr_has "Permission denied"
 echo "MEASURE: the runbook's chown costs the container its write on the volume"
 
-# The tree is the image's uid now, which is what the runbook's step produced.
-chowned_owner=$(stat -c %u "$volume")
-[ "$chowned_owner" = "$image_uid" ] \
-    || _fail "the volume $volume is owned by host uid $chowned_owner after the runbook's chown, not the image's uid $image_uid"
+# **On a STATE volume it FAILS — and it has already moved the owner when it
+# does.** Snapper's `.snapshots` is root-owned `0750` and a read-only btrfs
+# subvolume, so the recursive chown cannot complete; but the walk chowns the
+# volume's own root before it reaches `.snapshots`, so a command that reports
+# failure has already broken the deployment. This is the sharper half of the
+# claim: the operator sees a red command and a broken volume.
+
+run_in "$home" setpriv --reuid=kidv-staging --regid=kidv-staging --clear-groups \
+    env -u OLDPWD HOME="$home" PWD="$home" USER=kidv-staging LOGNAME=kidv-staging \
+    XDG_RUNTIME_DIR="$runtime" \
+    podman unshare chown -R "$image_uid:$image_uid" "$state_vol"
+echo "MEASURE: the runbook's chown on the state volume: exit=$GUARDEN_EXIT"
+echo "MEASURE: its stderr: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_stderr_has ".snapshots"
+
+state_owner=$(stat -c %u "$state_vol")
+[ "$state_owner" = "$aliased_uid" ] \
+    || _fail "the state volume $state_vol is owned by host uid $state_owner after the runbook's FAILED chown, not the subuid-aliased host uid $aliased_uid — a chown that reports failure has already moved the owner"
+echo "MEASURE: the failed chown still moved the state volume onto host uid $state_owner"
+
+run_in "$home" setpriv --reuid=kidv-staging --regid=kidv-staging --clear-groups \
+    env -u OLDPWD HOME="$home" PWD="$home" USER=kidv-staging LOGNAME=kidv-staging \
+    XDG_RUNTIME_DIR="$runtime" \
+    podman exec "$container" sh -c 'id -u > /data/after-state-chown'
+echo "MEASURE: the write into the state volume after the failed chown: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_stderr_has "Permission denied"
+
+# --- claim 3: the tree does not prescribe it any more ------------------------
+#
+# The same shape as t350's refuted-claims block: prose is the one surface no
+# assertion in this family reads, which is how a superseded rule survives in a
+# runbook. The standing documents and the programs are the scope — the spec,
+# the runbook, the glossary and the sources — and NOT `docs/tickets/`, which
+# is the findings ledger where a finding is recorded and this ticket's own file
+# is deleted when the work merges.
+#
+# The bracketed spellings keep this line out of its own match, and `-I` keeps a
+# stale `__pycache__` byte-compilation of an older docstring from answering for
+# the file beside it.
+
+run grep -rnI -e 'unshare chown' -e 'chown -R <image' -e 'chown -R 10001' \
+    "$GUARDEN_ROOT/docs/spec.md" \
+    "$GUARDEN_ROOT/docs/sysadmin.md" \
+    "$GUARDEN_ROOT/CONTEXT.md" \
+    "$GUARDEN_ROOT/AGENTS.md" \
+    "$GUARDEN_ROOT/src"
+echo "MEASURE: the superseded step still in the tree: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
+assert_exit 1
 
 echo "ok t277-volume-owner.sh"
