@@ -529,28 +529,53 @@ def _run_container(
     **The clone is mounted at the path the source's own unit mounts the volume
     at**, because the image's conventions are written for that path. A clone
     mounted somewhere else would not be a postgres the image recognises.
+
+    **The container carries the source unit's `UserNS=keep-id` pin, and without
+    it the clone does not start.** The source runs its image's own user (999 in
+    the postgres image) mapped onto the service's uid, so the volume's files are
+    the service's on the host and 999's inside the container. A `podman run`
+    with the default map would instead make container root the service's uid and
+    container 999 an unmapped subuid, and the 0700 clone would be a directory the
+    image's own user cannot enter: the entrypoint's `mkdir -p "$PGDATA"` answers
+    `Permission denied` on the parent and the container dies before postgres
+    starts (measured on the golden VM). `render.owner_line` is the one spelling
+    of the pin, so the throwaway container is mapped exactly as the source is.
     """
-    argv = tool.runuser_as(
-        source.name,
-        "podman",
-        "run",
-        "--detach",
+    argv = [
+        *tool.runuser_as(source.name, "podman", "run", "--detach"),
         "--name",
         container,
         "--network",
         _network(),
         "--volume",
         f"{target}:{mount}:rw",
-        *_environment(unit),
-        image,
-    )
+    ]
+    pin = _userns(source, unit, image)
+    if pin is not None:
+        argv.extend(["--userns", pin])
+    argv.extend(_environment(unit))
+    argv.append(image)
     result = tool.call(argv, cwd="/tmp")
     if not result.ok:
-        detail = result.stderr.strip() or result.stdout.strip()
+        detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
         raise errors.GuardenError(
-            f"the container {container} did not start: {detail}", errors.HOST_NOT_AS_ASSUMED
+            f"the container {container} did not start" + (f": {detail}" if detail else ""),
+            errors.HOST_NOT_AS_ASSUMED,
         )
     _wait_for_engine(source.name, container)
+
+
+def _userns(source: Service, unit: Path, image: str) -> str | None:
+    """The `UserNS=` value the source unit's own drop-in carries, or `None`.
+
+    **The same function the renderer writes the source's pin with**, so the
+    throwaway container cannot be mapped differently from the container whose
+    data it serves. `None` is an unprobed image or one that declares no user, and
+    both mean the default map is the right one.
+    """
+    from guarden import render
+
+    return render.owner_line(source.record, unit.stem, image)
 
 
 def _network() -> str:
@@ -568,6 +593,13 @@ def _wait_for_engine(account: str, container: str) -> None:
     recovering WAL**, and the operator's own run measured 14 seconds before it
     accepted a connection. A verb that said "started" and left the caller to
     guess would make the next step of the chain a retry loop in a shell script.
+
+    **A container that has already exited is not waited on for the full two
+    minutes**, and its own words are in the diagnostic. `podman logs` reads
+    nothing under the journald log driver, which is what a machine with a
+    user manager uses, so the read is the journal filtered by the service uid —
+    that is where the entrypoint's refusal is, and a timeout that named only the
+    clock cost a diagnosis round (measured on the golden VM).
     """
     for _ in range(READY_ATTEMPTS):
         ready = tool.call(
@@ -576,16 +608,41 @@ def _wait_for_engine(account: str, container: str) -> None:
         )
         if ready.ok:
             return
+        state = tool.call(
+            tool.runuser_as(account, "podman", "inspect", container, "--format",
+                            "{{.State.Status}} {{.State.ExitCode}}"),
+            cwd="/tmp",
+        )
+        if state.ok and state.stdout.split()[:1] == ["exited"]:
+            break
         time.sleep(READY_INTERVAL)
-    logs = tool.call(tool.runuser_as(account, "podman", "logs", "--tail", "20", container),
-                     cwd="/tmp")
-    detail = errors.oneline(logs.stdout.strip() or logs.stderr.strip())
     raise errors.GuardenError(
-        f"the container {container} did not start serving {ENGINE} in "
-        f"{int(READY_ATTEMPTS * READY_INTERVAL)}s"
-        + (f": {detail}" if detail else ""),
+        f"the container {container} did not start serving {ENGINE}: {_diagnosis(account, container)}",
         errors.HOST_NOT_AS_ASSUMED,
     )
+
+
+def _diagnosis(account: str, container: str) -> str:
+    """What the container is doing, and the last thing it said."""
+    state = tool.call(
+        tool.runuser_as(account, "podman", "inspect", container, "--format",
+                        "{{.State.Status}} (exit {{.State.ExitCode}})"),
+        cwd="/tmp",
+    )
+    said = state.stdout.strip() if state.ok else ""
+    from guarden import users
+
+    entry = users.passwd_entries().get(account)
+    if entry is None:
+        return said or "the container said nothing"
+    journal = tool.call(
+        ["journalctl", "--no-pager", "-n", "200", "--since", "-10 min", f"_UID={entry[0]}"]
+    )
+    lines = [line for line in journal.stdout.splitlines() if container in line]
+    if not lines:
+        return said or "the container said nothing, and the journal holds no line for it"
+    tail = errors.oneline(" | ".join(line.split(": ", 1)[-1] for line in lines[-3:]))
+    return f"{said}; {tail}" if said else tail
 
 
 def _remove_container(source: Service, container: str) -> None:
@@ -901,9 +958,14 @@ def load(service: Service, database: str, source: str) -> list[str]:
 def _require_database(service: Service, container: str, database: str) -> None:
     """A refusal when the target database does not exist.
 
-    The check is `psql`'s own answer from the engine, asked with a psql variable
-    so the name cannot be read as SQL.
+    The check is `psql`'s own answer from the engine. The name is quoted into
+    the query with its single quotes doubled, rather than passed as a psql
+    variable: **psql does not interpolate variables in a `-c` argument**
+    (measured on the golden VM — it answered `syntax error at or near ":"`), so a
+    variable here would be a query that never substituted and a check that could
+    not answer.
     """
+    literal = database.replace("'", "''")
     argv = tool.runuser_as(
         service.name,
         "podman",
@@ -915,9 +977,7 @@ def _require_database(service: Service, container: str, database: str) -> None:
         "-d",
         "postgres",
         "-tAc",
-        "SELECT 1 FROM pg_database WHERE datname = :'db'",
-        "-v",
-        f"db={database}",
+        f"SELECT 1 FROM pg_database WHERE datname = '{literal}'",
     )
     result = tool.call(argv, cwd="/tmp")
     if not result.ok:

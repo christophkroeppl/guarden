@@ -123,17 +123,17 @@ with a different blast radius. An `equals:` match is the same shape for a key th
 value.
 
 **The transform reports what it removed, and the report is the point.** A scrub that silently
-removed twelve rows is a scrub nobody can review. Every row removed is named with its table and
-its key, and the count is in the summary line.
+removed twelve rows is a scrub nobody can review. Every removal is named with its table — and for
+a `keys:` rule, with the value of the column that matched — and the count is in the summary line.
 
 ## What the transform is not
 
 **The transform is NOT a query language.** It does not accept SQL, and it does not accept a
 predicate. A rule that could express arbitrary SQL would be an arbitrary database write dressed as
 a policy, and the review that a manifest block is for — a diff in a pull request — is worthless
-against arbitrary SQL. The four things a rule can say are "empty this table", "delete the rows of
-this table whose column starts with this", "delete the rows of this table whose column equals
-this", and "keep this table".
+against arbitrary SQL. The three things a rule can say are "empty this table", "delete the rows of
+this table whose column starts with this" and "delete the rows of this table whose column equals
+this". A table the block does not name is kept, and that is the only "keep" there is.
 
 ## The chain, and the ownership each step has
 
@@ -148,8 +148,11 @@ this", and "keep this table".
 exactly the concept the operator named — "staging pg (bulk volume)" — and a bulk volume is a
 subvolume that is never snapshotted, so a dump in it does not enter any snapshot and does not
 appear in a fork. `podman cp` cannot write into `/var/lib/guarden` (measured: `chmod /: operation
-not permitted`), which is why the testrun used a tar stream over a pipe; **the verb writes the
-file as the service user directly**, so the tar-stream workaround is not in the product.
+not permitted`), which is why the testrun used a tar stream over a pipe. **The verb does not put a
+file in `/tmp` and does not use `podman cp` either**: `pg_dump` writes to stdout, the mutator (root)
+writes those bytes into a temporary file in the target's bulk volume through the §3.5 protocol, and
+chowns the result to the service user. The container's file system is never the handoff, so the
+tar-stream workaround is not in the product.
 
 **A load refuses a target with no bulk volume.** The chain's target is a bulk volume by
 definition: it is a landing area, not a store, and a dump loaded into a `state:` volume would be a
