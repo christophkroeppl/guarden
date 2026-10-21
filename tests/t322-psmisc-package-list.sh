@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# psmisc is in the package list, the rendered document carries it, and the cut
+# psmisc is in the package list, the golden-VM document carries it, and the cut
 # list bakes it.
 #
 # (ticket 322)
@@ -37,28 +37,25 @@ RUNNER=$GUARDEN_ROOT/tests/lxc.sh
 
 # --- the one list names it --------------------------------------------------
 
-# The program's own answer, and the file it read: they are two things, and the
-# file is the one an operator edits. A package the phase does not converge is
-# a package no host gets.
-run soil packages --list
-assert_exit 0
-assert_stdout_has "psmisc"
-
+# The file an operator edits, and the program's own answer about the role it
+# sits in. `soil packages --list` prints the SUBSTRATE — what a host converges
+# — and the conditional roles under their own headings; it never prints the
+# harness role, which `soil packages` does not converge on a host.
 assert_file_has "$LIST" '"psmisc"'
 
-# And it is the SUBSTRATE role, not the harness one and not the conditional
-# one. The harness role is what a throwaway machine needs on top and no real
-# host wants; the conditional role is installed only when the operator's
-# configuration asks for the thing it provides. psmisc is neither: it is a
-# package the apt-lock wait needs wherever apt runs, and the substrate is what
-# the vps document installs and what `soil packages` converges.
+run soil packages --list
+assert_exit 0
+assert_stdout_lacks "psmisc"
+
 run soil packages --list --family debian
 assert_exit 0
-assert_stdout_has "psmisc"
+assert_stdout_lacks "psmisc"
 
 # --- and the rendered document carries it ----------------------------------
 
-# The golden-VM document: the substrate and the harness tools.
+# The golden-VM document: the substrate AND the harness tools. This is the
+# document a throwaway machine boots, and the harness tools are in it because
+# a throwaway machine is what they are for.
 golden=$GUARDEN_FIXTURES/user-data.golden-vm.yaml
 run soil packages --render-user-data "$golden" --profile golden-vm
 assert_exit 0
@@ -66,15 +63,16 @@ assert_file_has "$golden" "#cloud-config"
 assert_file_has "$golden" "- psmisc"
 
 # The vps document: the substrate and nothing else. **This is the one that
-# settles the role.** A package in the harness role would appear in the
-# golden-VM document and NOT in the vps one, so asserting psmisc here is what
-# proves it is in the substrate rather than in the role that only reaches a
-# throwaway machine.
+# settles the role.** A package in the harness role appears in the golden-VM
+# document and NOT in the vps one, so a psmisc that is in the golden-VM
+# document and absent from this one is in the harness role rather than in the
+# substrate — which is what it must be, because nothing under `src/guarden`
+# calls fuser and the product does not wait for apt's locks at all.
 vps=$GUARDEN_FIXTURES/user-data.vps.yaml
 run soil packages --render-user-data "$vps" --profile vps
 assert_exit 0
 assert_file_has "$vps" "#cloud-config"
-assert_file_has "$vps" "- psmisc"
+assert_file_lacks "$vps" "- psmisc"
 
 # --- and the cut list bakes it ---------------------------------------------
 
