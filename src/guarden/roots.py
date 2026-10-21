@@ -92,10 +92,10 @@ def basicauth_flags() -> tuple[dict[str, bool], list[str]]:
     """The per-service basic-auth middleware the edge attaches, and what could
     not be decided.
 
-    Read from the same slice files `slices()` reads, so the middleware and the
-    routes it attaches to can never come from two sources. A service whose
-    slice predates the flag (or carries `false`) is grandfathered: no flag, no
-    middleware, byte-identical output.
+    The MINT is read from the same slice files `slices()` reads, so the login the
+    edge attaches and the routes it attaches it to can never come from two
+    sources. A service whose slice predates the flag (or carries `false`) is
+    grandfathered: no flag, no middleware, byte-identical output.
 
     **An instance's slice is one of the places the flag is read from, and that
     is what keeps the middleware on a preview.** The flag is a SERVICE's
