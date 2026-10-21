@@ -79,8 +79,10 @@ would say the wait succeeded. That is unchanged.
 - [x] The harness's cut list bakes it, so a cut has `fuser` before any suite
       runs.
 - [x] The guard's message names the list, not a hand-patch of the golden.
-- [x] Red-first: `tests/t322-psmisc.sh` and `tests/t322-psmisc-package-list.sh`
-      are RED on the pre-fix tree and GREEN after it.
+- [x] Red-first: `tests/t322-psmisc.sh` is RED on the pre-fix tree and GREEN
+      after it. (There were two suites for a while — `t322-psmisc.sh` and
+      `t322-psmisc-package-list.sh`, written independently into the same
+      worktree — and `d76e3bf` merged them into the one file the card owns.)
 
 ### Deliberately not changed
 
