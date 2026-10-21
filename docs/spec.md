@@ -1007,6 +1007,10 @@ routes:  # published to the edge
   # name outside host.domain
   auth: true
 
+siblings:  # a container of THIS service another container may dial (§7.3)
+  - container: api  # a container in THIS service
+    port: 3000  # the container's own port; the publication to dial is guarden's
+
 firewall:  # firewall rules this service ASKS for (§7.7). A request and
   - name: wireguard-peer  # nothing else: none is installed until an admin grants it
   chain: guarden-svc  # one of guarden's own chains; today the only value
@@ -1034,7 +1038,9 @@ scrub:  # the operator's policy for a CLONED copy of this database (ADR-0025).
 `service:` key inside a `routes:` or `widgets:` block is a validation error, because the
 manifest's whole point is that a developer can tell which is which. `port:` under `routes:` is
 the **container's** port and is required: guarden allocates the loopback publication that
-Traefik dials, and the manifest never names it.
+Traefik dials, and the manifest never names it. `port:` under `siblings:` is the **container's**
+port too, and it is required for the same reason (§7.3): it is what guarden translates into the
+publication the sibling is dialled on, and the manifest never names that either.
 
 `needs` and `provides` must agree, and they are compared **kind to kind**: a consumer's
 `as: db` requires a provider whose `provides:` lists `db`, and its `as: secret` requires one
@@ -1049,7 +1055,8 @@ Validation rules:
 
 - Unknown top-level keys are refused, and so are unknown keys **inside** a known one. Each
   block has a closed key set: a `needs` entry takes `service`, `as`, `port`, `auth` and
-  `databases` and nothing else; a `routes` or `ports` entry takes `container` and `port`; a `firewall` entry
+  `databases` and nothing else; a `routes`, `ports` or `siblings` entry takes `container` and
+  `port`; a `firewall` entry
   takes `name`, `chain` and `rule` and nothing else; a
   `widgets` entry
   takes `container` and `file`; a `scrub:` entry takes `tables` and `keys` and nothing else, a
@@ -2906,24 +2913,77 @@ name the environment (§4), so the resolution is the host's and the host's alone
 table does not map is the name as written, so a manifest that names a full service name keeps
 working and a host with no `[providers]` table behaves exactly as it did before.
 
-**A name inside a unit source is not a name.** Every container of one service runs in its own
-pasta namespace and there is no shared network (§7.1), so the containers of one unit source
-cannot resolve each other, and `AddHost=` carries service names only: it is written for an edge
-and for the edge's routed services, never for a container. A value in a unit source that names
-one of the file's own other containers as a host therefore renders units in which the name
-resolves to nothing — and a rendered entry would not connect either, because the host binds each
-container's allocated **publication** (§7.4) and never the container port the value dials, so
-making that work would need a port-translating name map, which is the mechanism this design does
-not have. `loom` refuses such a unit source, naming the container, the sibling, the key and the
-value, and the answer the diagnostic carries is `needs:`: the target becomes a service of its
-own with an edge between them, which is the only connectivity there is. A multi-container stack
-is therefore split into provider and consumer services before it can be deployed.
+**A name inside a unit source is a name — but only a declared one.** Every container of one service
+runs in its own pasta namespace and there is no shared network (§7.1), so the containers of one unit
+source cannot resolve each other by network. What they can do is resolve each other's **names**,
+and the renderer writes those names the same way it writes an edge's:
+
+```
+AddHost=<container>:<ingress.alias>
+```
+
+The mechanism is the one an edge already uses with one field added. An edge's name map translates a
+name to an **address**; a sibling's translates a name to an address **and a port**, because the host
+binds each container's allocated **publication** (§7.4) and forwards the container's port to it — so
+from inside another container of the same service, the address that answers is the publication, and
+never the container port a value dials.
+
+**So the port is what the repository reads rather than writes.** The renderer writes
+`<NAME>_HOST` and `<NAME>_PORT` into the same environment file the edges' variables live in, and
+the repository's own entrypoint composes its URL from them. A value that hard-codes the container's
+port dials a port nothing binds, and that is a fact about the repository, visible in the
+repository's own source.
+
+`<NAME>` is the container's name with every dash replaced by an underscore and the whole upper-cased:
+`api` gives `API_HOST` and `API_PORT`, `my-api` gives `MY_API_HOST` and `MY_API_PORT`. Two
+containers whose names give the same variable are refused, because the environment file would carry
+that variable twice and the second row would win — a silent failure with no diagnostic anywhere. A
+container declared twice under `siblings:` is refused for the same reason and with the same shape.
+
+**The manifest says which container and which port**, because the unit source declares neither
+where guarden reads it:
+
+```yaml
+siblings:
+  - container: api
+    port: 3000
+```
+
+The port in the manifest is the container's **own** port — the one the application inside it serves.
+The port in the environment file is the **publication**. The translation between them is guarden's,
+and it is the only thing the renderer does with the entry. A sibling's publication is the service's
+own allocation, in its own registry record, so a sibling needs no new grant and no new number
+beyond the allocation the mutator already makes.
+
+**What is still refused.** A container of this source that the manifest did not declare under
+`siblings:` is refused, because guarden cannot allocate a publication for a container whose port it
+was never told, so the name would still be dead; the diagnostic names the declaration that fixes
+it. The repository's own host entry is refused: the key is the renderer's, and the renderer writes
+these names itself. A value naming a container's **own** name is refused, as a self-edge is —
+though a container *declared* under `siblings:` is not a self-reference, because the block names
+the containers of this source that others may dial and a container that is both the dialer and the
+dialled is a fact about the topology.
+
+**A name that is not a container of this unit source is the repository's own business.** Guarden
+resolves a service's providers and the containers of the source the unit came from; a value naming
+an external host is neither, and refusing it would be guarden policing a name it cannot know and
+does not resolve.
+
+**Nothing is granted.** A sibling's publication is reachable by the service's own uid, which the
+accept set (§7.6) already carries for every publication that service holds, and the name never
+leaves the source: it is not a service name and never appears in another service's units.
+
+**One repository is one service.** The service name is `<project>-<track>`, the manifest has no
+`services:` table, and a poke stages one tree for one service — so the migration "split it into a
+service of its own and name it under `needs:`" is not reachable from one repository. It would need a
+second project, a second poke key and a second repository. ADR-0023 carries the decision.
 
 ### 7.4 Publications
 
 A **publication** is a loopback port allocated from `ingress.publication_range`. Publications
 are the only ports anything in guarden binds. One is created for every container named in a
-`routes:`, `ports:` or `needs:` entry, and for the edge's API when its module declares one. A
+`routes:`, `ports:`, `siblings:` or `needs:` entry, and for the edge's API when its module
+declares one. A
 `ports:` entry is included because a grant is a translation to a publication: without it a
 peer-to-peer service that exposes a public port and declares no route and no dependency would
 have a requestable port and no destination to translate to.

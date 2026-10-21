@@ -56,7 +56,24 @@ in creates the volumes. See `docs/sysadmin.md`, **Deploying a service by hand**.
 |---|---|---|
 | `postgres` | `docker.io/library/postgres:17-alpine` | the third-party database deployment from the app-VM runbook: loopback publication, a `Secret=` read as an environment variable, `PGDATA` a subdirectory of the mount |
 | `vaultwarden` | `docker.io/vaultwarden/server:latest` | a self-hosted web service with one data volume and no credential line |
+| `rustfs` | `docker.io/rustfs/rustfs:latest` | an S3-compatible object store, and a **provider of the `secret` kind**: a consumer edges to it with `auth: secret` and reads the minted value as `<AS>_SECRET` |
 
 Each is one `.container` file, which is all `create` needs. The file name is the
 unit name in the service's own user manager, and the manager is per service uid,
 so two services created from the same template do not share a unit.
+
+**A template carries no `provides:`**, and the `rustfs` one is where that
+matters: a consumer's edge to a provider is checked against the provider's
+**registry** (spec 7.3), and the kinds reach the registry from the provider's
+manifest — which a template does not ship. So the operator writes it, and
+`weedr service add <name> --from <name>` reconciles it in:
+
+```yaml
+project: rustfs
+units: .guarden/quadlet/
+provides:
+  - secret
+ports:
+  - container: rustfs
+    port: 9000
+```

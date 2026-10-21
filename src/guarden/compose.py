@@ -387,48 +387,77 @@ def _refuse_templated_ports(body: dict[str, Any], container: str, path: Path) ->
             )
 
 
-def check_siblings(declared: dict[str, dict], path: Path) -> None:
-    """A sibling container named as a host, refused with `needs:` (spec 7.3).
+def check_siblings(
+    declared: dict[str, dict], path: Path, known: set[str] | None = None
+) -> None:
+    """A container of this source named as a host, and not declared as one.
 
-    **Decision, ticket 285: intra-compose connectivity is out of scope by
-    design, and this is the refusal that makes it visible.** The whole of name
-    resolution the renderer writes is `AddHost=<service>:<ingress.alias>` for a
-    declared edge — a *service* name, with no suffix and no alias — and there is
-    no name map to put a container in (spec 7.3). Two containers of one Compose
-    file are siblings rather than provider and consumer, so a value naming one as
-    a host renders units in which the name resolves to nothing: the file
-    converts, the units render, and nothing says so until something dials.
+    **Decision, ticket 316: a name inside one unit source resolves** (ADR-0023,
+    spec 7.3) — but only when the manifest says which container it is and what
+    port that container serves, because the port is what guarden has to
+    translate.
 
-    **A rendered entry would not connect either.** From inside a container the
-    alias is the host's loopback, where each container answers on its
-    *publication* — an allocation from `ingress.publication_range` — and never on
-    the container port the value dials (spec 7.4), so `http://api:3000` would
-    reach a port nothing binds. Making that work needs a port-translating name
-    map, which is the mechanism this design does not have.
+    **Why the port is the publication and not the container's port.** The host
+    binds each container's allocated **publication** (§7.4) and forwards the
+    container's port to it, so from inside another container of the same
+    service the address that answers is the publication — never the container
+    port a value dials. A name map that translated a name to an address *and*
+    the right port is what makes this work, and it is the mechanism an edge
+    already uses with one field added: `AddHost=<name>:<alias>` for the
+    address, and the publication for the port.
 
-    The answer is the vocabulary the manifest already carries: the target becomes
-    a service of its own and `needs:` names it. Refused here, on the repository's
-    own declaration and in the vocabulary it was written in, before the converter
-    runs — one line naming the container, the sibling, where the value was
-    written and the value.
+    So the name resolves and the **port** is what the repository must read
+    rather than write: the renderer writes `<NAME>_HOST` and `<NAME>_PORT` into
+    the environment file, and the repository's own entrypoint composes its URL
+    from them. A value that hard-codes the container's port dials a port
+    nothing binds, and that is a fact about the repository, visible in the
+    repository's own source.
+
+    `known` is the set of container names the manifest declared under
+    `siblings:`. A name in it resolves; a name outside it is a container whose
+    port guarden was never told, so no publication is bound for it and the
+    name would still be dead.
+
+    **The repository's own host entry is refused**, because the key is the
+    renderer's (spec 6.3): the renderer writes the sibling names itself, and a
+    repository writing one would have it dropped — so the repository would
+    believe in an address guarden does not carry.
     """
+    resolved = set(known or ())
     for container in sorted(declared):
-        values = _host_values(declared[container])
-        for sibling in sorted(declared):
-            if sibling == container:
-                continue
-            for where, text, bare in values:
-                if _dials(text, sibling, bare):
+        for where, text, bare in _host_values(declared[container]):
+            if _dials(text, container, bare):
+                raise errors.GuardenError(
+                    f"the unit source {path}: the service {container!r} names itself as a "
+                    f"host in {where} ({text!r}), and a container dialling itself is a "
+                    f"copy-paste: there is nothing to translate, because it is the one "
+                    f"being addressed"
+                )
+            for sibling in sorted(declared):
+                if sibling == container:
+                    continue
+                if not _dials(text, sibling, bare):
+                    continue
+                if where.startswith("extra_hosts"):
                     raise errors.GuardenError(
-                        f"the unit source {path}: the service {container!r} names its "
-                        f"sibling container {sibling!r} as a host in {where} "
-                        f"({text!r}), and a name inside one unit source resolves to "
-                        f"nothing: the renderer writes AddHost= only for a declared "
-                        f"edge and it carries a service name (spec 7.3), so split "
-                        f"{sibling!r} into a service of its own and name it under "
-                        f"`needs:` in the manifest, or give this value an address "
-                        f"that exists"
+                        f"the unit source {path}: the service {container!r} writes {where} "
+                        f"({text!r}), and the host entries are the renderer's: it writes "
+                        f"AddHost= for the containers this manifest declares under "
+                        f"`siblings:` and for the declared edges (spec 6.3, 7.3), so an "
+                        f"entry written here is dropped and the name in it resolves to "
+                        f"nothing"
                     )
+                if sibling in resolved:
+                    continue
+                raise errors.GuardenError(
+                    f"the unit source {path}: the service {container!r} names the "
+                    f"container {sibling!r} as a host in {where} ({text!r}), and a "
+                    f"container of this unit source is reached on its publication, "
+                    f"which guarden cannot allocate without the port it serves: "
+                    f"declare {sibling!r} under `siblings:` in the manifest with the "
+                    f"port it serves, and the renderer writes the host entry and the "
+                    f"publication to dial it on (spec 7.3, 7.4)"
+                )
 
 
 def _host_values(body: dict[str, Any]) -> list[tuple[str, str, bool]]:

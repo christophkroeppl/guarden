@@ -499,8 +499,17 @@ def resolve_unit_source(directory: Path, document: manifest_mod.Manifest) -> Sou
         )
     _check_declared(document, compose.COMPOSE_REL if has_compose else QUADLET_DIR)
     if has_compose:
-        return _compose_source(compose_file)
-    return _quadlet_source(quadlet_dir)
+        return _compose_source(compose_file, _known_siblings(document))
+    return _quadlet_source(quadlet_dir, _known_siblings(document))
+
+
+def _known_siblings(document: manifest_mod.Manifest) -> set[str]:
+    """The container names the manifest declared under `siblings:`.
+
+    The set the sibling rule reads: a name in it resolves to that container,
+    and a name outside it is a container whose port guarden was never told.
+    """
+    return {sibling.container for sibling in document.siblings}
 
 
 def _check_declared(document: manifest_mod.Manifest, present: Path) -> None:
@@ -525,7 +534,7 @@ def _check_declared(document: manifest_mod.Manifest, present: Path) -> None:
         )
 
 
-def _compose_source(path: Path) -> Source:
+def _compose_source(path: Path, known: set[str] | None = None) -> Source:
     document = compose.document(path)
     # The document-level tables are checked before the services are, because a
     # `networks:` table is a claim about the whole document and not about one
@@ -548,8 +557,8 @@ def _compose_source(path: Path) -> Source:
 
     # Checked once the whole container set is known and before the converter is
     # driven: a sibling name is a fact about two services in this file, and the
-    # refusal belongs on the repository's own declaration (spec 7.3, ticket 285).
-    compose.check_siblings(declared, path)
+    # refusal belongs on the repository's own declaration (spec 7.3, ADR-0023).
+    compose.check_siblings(declared, path, known)
 
     units: dict[str, Unit] = {}
     for translation in compose.convert(path):
@@ -573,7 +582,7 @@ def _compose_source(path: Path) -> Source:
     return Source(kind="compose", origin=path, units=units, mounts=mounts, warnings=warnings)
 
 
-def _quadlet_source(directory: Path) -> Source:
+def _quadlet_source(directory: Path, known: set[str] | None = None) -> Source:
     files = sorted(directory.glob("*.container"))
     if not files:
         raise errors.GuardenError(f"the unit source {directory} has no .container unit in it")
@@ -588,7 +597,7 @@ def _quadlet_source(directory: Path) -> Source:
     # it was wired into `_compose_source` only, and a `.guarden/quadlet/` source
     # rendered names that resolve to nothing).
     compose.check_siblings(
-        {name: _unit_body(unit) for name, unit in units.items()}, directory
+        {name: _unit_body(unit) for name, unit in units.items()}, directory, known
     )
     return Source(kind="quadlet", origin=directory, units=units, mounts=mounts)
 
@@ -837,13 +846,14 @@ def check_exec(unit: unitsource.Unit, origin: str) -> None:
 
 
 def check_containers(document: manifest_mod.Manifest, source: Source) -> None:
-    """`routes:`, `ports:` and `widgets:` name a container the unit source
-    defines. Both sides are input, so this is exit `2` naming the manifest and the
-    key (spec 1.2)."""
+    """`routes:`, `ports:`, `siblings:` and `widgets:` name a container the unit
+    source defines. Both sides are input, so this is exit `2` naming the manifest
+    and the key (spec 1.2)."""
     defined = source.containers()
     for block, entries in (
         ("routes", [(route.container, "routes") for route in document.routes]),
         ("ports", [(entry.container, "ports") for entry in document.ports]),
+        ("siblings", [(entry.container, "siblings") for entry in document.siblings]),
         ("widgets", [(widget.container, "widgets") for widget in document.widgets]),
     ):
         for container, _ in entries:
@@ -853,6 +863,50 @@ def check_containers(document: manifest_mod.Manifest, source: Source) -> None:
                     f"{container!r}, and the unit source {source.origin} defines "
                     f"{', '.join(defined)}"
                 )
+    _check_siblings(document, source)
+
+
+def _check_siblings(document: manifest_mod.Manifest, source: Source) -> None:
+    """A sibling named twice, or colliding on its variable, is refused.
+
+    **Two entries naming one container are refused**, because the generated
+    variables would collide — `API_HOST` and `API_PORT` would be written twice
+    with two different ports, and the second would silently win.
+
+    **Two containers whose names give the same variable are refused**, and this
+    is not the same check: `my-api` and `my_api` are two containers and one
+    variable, because a variable name cannot carry a dash. The environment file
+    would carry `MY_API_HOST` twice, and the second row would win — a silent
+    failure with no diagnostic anywhere.
+
+    **A container declaring itself is not refused**, because it is not a
+    self-reference: the block names the containers of this source that OTHER
+    containers may dial, and a container that is both the dialer and the dialled
+    is a fact about the topology, not a copy-paste. The value that names a
+    container's OWN name is the copy-paste, and the sibling rule is where that
+    is caught.
+    """
+    seen: dict[str, int] = {}
+    variables: dict[str, str] = {}
+    for sibling in document.siblings:
+        if sibling.container in seen:
+            raise errors.GuardenError(
+                f"the manifest {document.source}: the siblings entry for the container "
+                f"{sibling.container!r} is declared twice, and the generated variables "
+                f"would be written twice with two different ports"
+            )
+        seen[sibling.container] = sibling.port
+        variable = sibling.variable
+        for other, other_variable in variables.items():
+            if other_variable != variable:
+                continue
+            raise errors.GuardenError(
+                f"the manifest {document.source}: the containers {other!r} and "
+                f"{sibling.container!r} both give the variable {variable}, because a "
+                f"variable name cannot carry a dash; the environment file would carry "
+                f"{variable}_HOST twice and the second row would win"
+            )
+        variables[sibling.container] = variable
 
 
 def check_volumes(document: manifest_mod.Manifest, source: Source) -> list[Mount]:
@@ -1065,8 +1119,11 @@ def check_ingress(document: manifest_mod.Manifest, context: Context) -> str:
     install` derives it from the pinned `-g`, so this is exit `1` — the host is
     not in the state the render assumed. A service that needs no name is not
     refused for a missing alias.
+
+    **A service with a `siblings:` entry needs a name** — the sibling's own —
+    so the alias is required for it too (ADR-0023).
     """
-    if not document.needs and not routed_names(context.service):
+    if not document.needs and not document.siblings and not routed_names(context.service):
         return context.config.alias
     if not context.config.alias:
         raise errors.GuardenError(
@@ -1203,11 +1260,13 @@ def build(
 
     edge_ports: list[tuple[str, str, int]] = []
     routed: list[str] = []
+    sibling_ports: list[tuple[str, str, int]] = []
     if context is not None:
         check_edges(document, context)
         check_ingress(document, context)
         edge_ports = edge_publications(document, context)
         routed = routed_names(context.service)
+        sibling_ports = sibling_publications(document, context)
 
     schema = secretschema.read(directory / document.schema if document.schema else ABSENT)
     plan.warnings.extend(_image_warnings(source, context))
@@ -1226,6 +1285,7 @@ def build(
         compose.check_siblings(
             {name: _unit_body(unit, domain) for name, unit in source.units.items()},
             source.origin,
+            _known_siblings(document),
         )
 
     for container in source.containers():
@@ -1243,6 +1303,7 @@ def build(
                 routed=routed,
                 schema=schema,
                 domain=domain,
+                siblings=[name for name, _, _ in sibling_ports],
                 owner=owner,
             ),
         )
@@ -1260,9 +1321,10 @@ def build(
                 ),
             )
 
-    if edge_ports and context is not None:
+    if (edge_ports or sibling_ports) and context is not None:
         plan.add(
-            f"units/{ENV_FILE}", _environment_file(document, edge_ports, context.service)
+            f"units/{ENV_FILE}",
+            _environment_file(document, edge_ports, context.service, sibling_ports),
         )
     plan.add(f"system/{ORDER_TARGET}", _order_target(document, context))
     plan.add("shared/routes.toml", _routes(document, context, ports))
@@ -1350,6 +1412,8 @@ def _publications(
         wanted.setdefault(route.container, route.port)
     for entry in document.ports:
         wanted.setdefault(entry.container, entry.port)
+    for entry in document.siblings:
+        wanted.setdefault(entry.container, entry.port)
     out: dict[str, tuple[int, int]] = {}
     if context is None:
         return out
@@ -1407,6 +1471,7 @@ def _container_unit(
     routed: list[str],
     schema: secretschema.Schema,
     domain: str,
+    siblings: list[str] | None = None,
     owner: str | None = None,
 ) -> str:
     """One container unit: the source's own fields, then every field guarden owns.
@@ -1422,6 +1487,7 @@ def _container_unit(
     """
     unit = merged if merged is not None else _merged(source.units[container])
     service = context.service if context else ""
+    sibling_names = list(siblings or [])
     for key in OWNED_KEYS:
         unit.drop("Container", key)
 
@@ -1463,10 +1529,12 @@ def _container_unit(
     if context is not None:
         unit.put("Container", "Network", [context.config.network])
         # Every name this unit may have to resolve: the providers it declared an
-        # edge to, and — for the edge itself — every routed service, because a
-        # route target is `<service>:<publication>` and the edge has no other
-        # way to turn that name into an address.
+        # edge to, the containers of its own source it may dial (ADR-0023), and
+        # — for the edge itself — every routed service, because a route target
+        # is `<service>:<publication>` and the edge has no other way to turn
+        # that name into an address.
         hosts = [concrete for _, concrete, _ in sorted(edge_ports)]
+        hosts.extend(name for name in sibling_names if name not in hosts)
         hosts.extend(name for name in routed if name not in hosts)
         if hosts:
             unit.put(
@@ -1474,7 +1542,7 @@ def _container_unit(
                 "AddHost",
                 [f"{name}:{context.config.alias}" for name in hosts],
             )
-        if edge_ports:
+        if edge_ports or sibling_names:
             # **The value is escaped, and the path on disk is not.** Quadlet
             # reads `EnvironmentFile=` by C-unescaping its value, and the
             # instance's directory is named by the escaped ref — `feature/x` is
@@ -1641,7 +1709,10 @@ def _secret_requests(
 
 
 def _environment_file(
-    document: manifest_mod.Manifest, edge_ports: list[tuple[str, str, int]], consumer: str
+    document: manifest_mod.Manifest,
+    edge_ports: list[tuple[str, str, int]],
+    consumer: str,
+    siblings: list[tuple[str, str, int]] | None = None,
 ) -> str:
     """`<AS>_HOST` and `<AS>_PORT` for every edge, plus what a database edge adds.
 
@@ -1658,6 +1729,12 @@ def _environment_file(
     logical name to, with no suffix and no alias, and there is no name map
     and no `/etc/hosts` (spec 7.3). The password is not written here: it
     arrives as the `<AS>_PASSWORD` secret.
+
+    **A sibling's rows are `<NAME>_HOST` and `<NAME>_PORT`** — the same two
+    keys an edge gets, from a different source. The host is the container's own
+    name, which the unit resolves through the `AddHost=` the renderer writes,
+    and the port is the **publication** (ADR-0023), so the pair is the address
+    another container of this source dials.
     """
     rows: list[tuple[str, str]] = []
     for edge in document.needs:
@@ -1676,7 +1753,50 @@ def _environment_file(
                     rows.append((f"{edge.variable}_{database.upper()}_DATABASE", name))
             else:
                 rows.append((f"{edge.variable}_DATABASE", edges.role_name(consumer)))
+    variables = {sibling.container: sibling.variable for sibling in document.siblings}
+    for container, host, publication in siblings or ():
+        rows.append((f"{variables[container]}_HOST", host))
+        rows.append((f"{variables[container]}_PORT", str(publication)))
     return render_template("guarden.env.j2", rows=rows)
+
+
+def sibling_publications(
+    document: manifest_mod.Manifest, context: Context
+) -> list[tuple[str, str, int]]:
+    """`<NAME>_HOST` and `<NAME>_PORT` for every sibling, from the service's own
+    registry.
+
+    Each row is `(container, host, publication)`: the container's own name — the
+    name the consumer resolves — and the **publication** guarden allocated for
+    that container (spec 7.4).
+
+    **The port is the publication and not the container's own port.** The host
+    binds each container's publication and forwards the container's port to it,
+    so from inside another container of the same service the address that
+    answers is the publication. The container's own port is what the
+    application listens on, and the sibling's entry in the manifest says so —
+    the port the application inside it serves (ADR-0023).
+
+    **The publication is the same service's own allocation**, so a sibling
+    needs no new number and no new grant: it is in the service's own record,
+    where every other publication of that service is. A sibling with no
+    allocated publication is exit `1` — the host has not been asked yet —
+    rather than a loopback port the renderer invented.
+    """
+    out: list[tuple[str, str, int]] = []
+    allocated = context.publications()
+    for sibling in document.siblings:
+        publication = allocated.get(sibling.container)
+        if publication is None:
+            raise errors.GuardenError(
+                f"{context.service} names the container {sibling.container!r} as a sibling, "
+                f"and its registry entry allocates no publication for it; a sibling is "
+                f"reached on a publication, and the mutator allocates one when it "
+                f"installs the service",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        out.append((sibling.container, sibling.container, publication))
+    return out
 
 
 def _order_target(document: manifest_mod.Manifest, context: Context | None) -> str:

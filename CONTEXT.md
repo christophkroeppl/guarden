@@ -57,11 +57,21 @@ mutator made (spec §6.3).
 _Avoid_: container, unit file (when you mean one container's unit)
 
 **publication**:
-A loopback port guarden allocates, from `ingress.publication_range`, for a container a route or
-an edge names. Publications are the only ports anything in guarden binds, and they are never a
-door from outside: a granted public port is translated to one of them. Every publication carries
-a uid-matched accept set and a drop for every other uid.
+A loopback port guarden allocates, from `ingress.publication_range`, for a container a route, a
+port, a sibling or an edge names. Publications are the only ports anything in guarden binds, and
+they are never a door from outside: a granted public port is translated to one of them. Every
+publication carries a uid-matched accept set and a drop for every other uid.
 _Avoid_: port (when you mean the allocated loopback number), ingress, endpoint
+
+**sibling**:
+A container of the *same* unit source that another container of it may dial, declared under the
+manifest's `siblings:` block with the port it serves **inside** its own container. The renderer
+writes `AddHost=<container>:<ingress.alias>` into every unit of the source and
+`<NAME>_HOST`/`<NAME>_PORT` into the environment file, where the port is the sibling's
+**publication** and not the container port the manifest named. A sibling never leaves the source:
+it is not a service name, no other service's units carry it, and it is not a grant — `overrides`
+has nothing to say about it.
+_Avoid_: service, dependency (it is neither: no edge, no grant, no unit tree of its own)
 
 **port**:
 A TCP/UDP number. A manifest *requests* a public one; a root-owned `overrides.toml` grants it;

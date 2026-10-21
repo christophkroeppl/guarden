@@ -44,6 +44,7 @@ TOP_LEVEL_KEYS = {
     "provides",
     "ports",
     "routes",
+    "siblings",
     "widgets",
     "firewall",
     "schema",
@@ -60,6 +61,7 @@ BLOCK_KEYS = {
     "needs": {"service", "as", "port", "auth", "databases"},
     "ports": {"container", "port"},
     "routes": {"container", "port", "host", "auth"},
+    "siblings": {"container", "port"},
     "widgets": {"container", "file"},
     "firewall": {"name", "chain", "rule"},
 }
@@ -196,6 +198,35 @@ class Route:
 
 
 @dataclass(frozen=True)
+class Sibling:
+    """One `siblings:` entry: a container of THIS service another container may
+    dial.
+
+    `container` is a container key of this service's own unit source and `port`
+    is the port it serves **inside** that container. Neither is the address the
+    consumer dials: the renderer translates the pair into the sibling's
+    **publication** — the loopback port guarden allocated for that container
+    (spec 7.4) — and writes it into the environment file beside the edges'
+    variables (ADR-0023).
+    """
+
+    container: str
+    port: int
+
+    @property
+    def variable(self) -> str:
+        """The prefix of the generated variables: `api` gives `API_HOST` and
+        `API_PORT`.
+
+        The container's own name is the identity, the way it is for `routes:`
+        and `ports:`, so there is no `as:` to write. A container name is not
+        always a variable name, so the dashes become underscores and the rest
+        is uppercased — the same shape `Edge.variable` gives an `as:` prefix.
+        """
+        return self.container.replace("-", "_").upper()
+
+
+@dataclass(frozen=True)
 class Widget:
     """One `widgets:` entry: a file the dashboard copies, unparsed."""
 
@@ -305,6 +336,7 @@ class Manifest:
     needs: list[Edge] = field(default_factory=list)
     ports: list[Publication] = field(default_factory=list)
     routes: list[Route] = field(default_factory=list)
+    siblings: list[Sibling] = field(default_factory=list)
     widgets: list[Widget] = field(default_factory=list)
     firewall: list[RuleRequest] = field(default_factory=list)
     schema: str | None = None
@@ -412,6 +444,7 @@ def read(path: Path) -> Manifest:
         needs=_needs(document.get("needs", []), path),
         ports=_publications(document.get("ports", []), path),
         routes=_routes(document.get("routes", []), path),
+        siblings=_siblings(document.get("siblings", []), path),
         widgets=_widgets(document.get("widgets", []), path),
         firewall=_firewall(document.get("firewall", []), path),
         schema=_schema(document.get("schema"), path),
@@ -575,7 +608,7 @@ def _check_blocks(document: dict, path: Path) -> None:
     and a developer who reaches for `exposure:` inside a route entry is asking
     the question the refusal exists to answer.
     """
-    for block in ("ports", "routes", "widgets"):
+    for block in ("ports", "routes", "siblings", "widgets"):
         entries = document.get(block)
         if not isinstance(entries, list):
             continue
@@ -803,6 +836,31 @@ def _routes(value: Any, path: Path) -> list[Route]:
                 port=_port(entry.get("port"), f"the routes entry for {container!r}", path),
                 host=host,
                 auth=bool(entry.get("auth", False)),
+            )
+        )
+    return out
+
+
+def _siblings(value: Any, path: Path) -> list[Sibling]:
+    """`siblings:` entries: a container of this service and the port it serves.
+
+    The container is a NAME in this service's own vocabulary — the same one
+    `routes:` and `ports:` use — and the port is the container's own port. The
+    port is NOT the port the consumer dials: the renderer translates the pair
+    into the sibling's publication (ADR-0023), and the environment file carries
+    the translation.
+    """
+    out: list[Sibling] = []
+    for entry in _entries(value, "siblings", path):
+        container = entry.get("container")
+        if not isinstance(container, str) or not container.strip():
+            raise errors.GuardenError(
+                f"the manifest {path}: a siblings entry names {container!r} as its container"
+            )
+        out.append(
+            Sibling(
+                container=container,
+                port=_port(entry.get("port"), f"the siblings entry for {container!r}", path),
             )
         )
     return out

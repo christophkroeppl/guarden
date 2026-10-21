@@ -783,8 +783,28 @@ the renderer refuses every other one, and an entry here is a grant in exactly th
 for it, so the file an operator reviews stays short, and an entry naming a rule no manifest
 requested is refused rather than installed.
 
-Routes, edges, state volumes, the unit source and the credential schema are the repository's,
-and this file does not touch them.
+Routes, edges, siblings, state volumes, the unit source and the credential schema are the
+repository's, and this file does not touch them.
+
+One of them is worth naming here anyway, because it is the one that looks like a grant and is
+not. **A `siblings:` entry is not a grant.** It names a container of the *same* unit source and
+the port it serves, and the renderer answers it with the container's own **publication** — a
+loopback number the service's own uid already holds and the firewall's accept set already carries
+(§7.6). So a sibling dials a sibling without anything in `overrides.toml` changing, and the only
+thing the manifest is asked for is the fact guarden cannot read anywhere else: which port the
+application inside that container serves.
+
+```yaml
+# in the repository's .guarden/service.yml
+siblings:
+  - container: api
+    port: 3000
+```
+
+The consumer reads `API_HOST` and `API_PORT` from the service's own environment file, and
+`API_PORT` is the **publication** — not the `3000` the manifest names. A value that hard-codes the
+container's own port dials a port nothing binds, and that is visible in the repository's own
+source.
 
 One thing it deliberately does not hold is the provenance of a secret value. `overrides.toml`
 grants ports and sets retention; it says nothing about which keys are planted and which are
