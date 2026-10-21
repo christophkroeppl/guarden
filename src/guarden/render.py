@@ -1620,11 +1620,13 @@ def _routes(
         service=context.service if context else "",
         project=context.record.project if context else "",
         track=context.track.name if context else "",
-        # Ticket 292: the basic-auth policy the mutator recorded at creation
-        # (registry `basicauth`), carried to `roots` in the slice so the
-        # renderer — never the renderer re-reading a manifest — is what places
-        # the middleware. Absent/false is a grandfathered service, and it
-        # renders byte for byte what it rendered before.
+        # Ticket 292: the basic-auth login MINTED for this service at creation
+        # (registry `basicauth`), carried to `roots` in the slice. It is the
+        # fact about the past and it never changes. Whether the middleware that
+        # asks for the login is attached is the operator's setting in the
+        # root-owned `overrides.toml` (ADR-0024), which `roots` reads beside
+        # this flag — so neither half is a manifest key, and a slice that
+        # predates the table renders byte for byte what it rendered before.
         basicauth=bool(context.record.basicauth) if context else False,
         rows=rows,
     )

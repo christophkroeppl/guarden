@@ -801,11 +801,16 @@ assert_one_diagnostic "error:"
 assert_stderr_has "is not a verdict"
 
 # --- the summary says how many ran and how many were inherited --------------
+#
+# `--selected` is how many suites the run selected, and it is what the tally is
+# checked against: the file cannot certify itself, and a summary computed from a
+# ledger that lost lines would be a claim about a run that did not happen
+# (ticket 328, where the ledger's directory was pruned mid-run).
 
 LEDGER=$GUARDEN_FIXTURES/ledger
 
 seed "$LEDGER" "pass	t30-create.sh" "pass	t30-list.sh" "inherit	t70-fork.sh"
-cache report --ledger "$LEDGER" --golden "$GOLDEN" --cuts 2
+cache report --ledger "$LEDGER" --selected 3 --golden "$GOLDEN" --cuts 2
 assert_exit 0
 assert_stdout_has "3 suites"
 assert_stdout_has "2 ran"
@@ -816,7 +821,7 @@ assert_stdout_has "0 failures"
 # summary that said "3 suites" there, with no word about inheriting, would be a
 # claim of verification that did not happen.
 seed "$LEDGER" "inherit	t30-create.sh" "inherit	t30-list.sh" "inherit	t70-fork.sh"
-cache report --ledger "$LEDGER" --golden "$GOLDEN" --cuts 0
+cache report --ledger "$LEDGER" --selected 3 --golden "$GOLDEN" --cuts 0
 assert_exit 0
 assert_stdout_has "0 ran"
 assert_stdout_has "3 inherited"
@@ -825,7 +830,7 @@ assert_stdout_has "verified nothing"
 # A run that inherited some of them says which, and says the rest are the only
 # observations it made.
 seed "$LEDGER" "pass	t30-create.sh" "inherit	t30-list.sh" "inherit	t70-fork.sh"
-cache report --ledger "$LEDGER" --golden "$GOLDEN" --cuts 1
+cache report --ledger "$LEDGER" --selected 3 --golden "$GOLDEN" --cuts 1
 assert_exit 0
 assert_stdout_has "2 of 3 suites were inherited"
 assert_stdout_has "the 1 that ran are the only results this run observed"
@@ -833,7 +838,7 @@ assert_stdout_has "--no-cache"
 
 # A ledger that is not there is a report that cannot be written, and it says so
 # rather than printing a count of nothing.
-cache report --ledger "$GUARDEN_FIXTURES/absent-ledger" --golden "$GOLDEN"
+cache report --ledger "$GUARDEN_FIXTURES/absent-ledger" --selected 3 --golden "$GOLDEN"
 assert_exit 1
 assert_one_diagnostic "error:"
 
@@ -841,7 +846,7 @@ assert_one_diagnostic "error:"
 # everything — the claim a release gate is entitled to make and a cached run is
 # not.
 seed "$LEDGER" "pass	t30-create.sh" "pass	t30-list.sh" "pass	t70-fork.sh"
-cache report --ledger "$LEDGER" --golden "$GOLDEN" --cuts 3 --no-cache
+cache report --ledger "$LEDGER" --selected 3 --golden "$GOLDEN" --cuts 3 --no-cache
 assert_exit 0
 assert_stdout_has "--no-cache: all 3 suites ran"
 assert_stdout_has "0 inherited"
