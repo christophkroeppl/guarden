@@ -40,7 +40,7 @@ import hashlib
 import os
 from pathlib import Path
 
-from guarden import conf, credentials, paths, users
+from guarden import conf, credentials, errors, paths, registry, users
 
 # The schema key the minted login is planted under, and the name of the record
 # in the registry's [generated] table — the same "guarden minted this" ledger a
@@ -172,6 +172,72 @@ def mint(record, when: str) -> None:
     write_entry(record.service, password)
     record.basicauth = True
     record.generated[KEY] = when
+
+
+def owns(service: str, key: str) -> bool:
+    """Whether this module's credential is the one being written.
+
+    The predicate is the KEY and the record's flag, and nothing else. A
+    service that never carried a login has no entry to rewrite, and a key
+    that is not this module's is not this module's business — the credential
+    module asks every owner it knows, and each one answers for itself.
+
+    **A record that cannot be read is not this module's business either.**
+    The registry is the record of the fact, and a registry that will not
+    parse is the host not being in the state the request assumed — but it is
+    a fact about the RECORD, and this function is asked a question about the
+    credential. The verb that owns the record reports that failure itself,
+    with the path in the message; here the answer is "not mine", and the
+    credential is written exactly as it would be for any other key.
+    """
+    if key != KEY:
+        return False
+    try:
+        record = registry.load(service)
+    except errors.GuardenError:
+        return False
+    return record is not None and record.basicauth
+
+
+def rotate(service: str, key: str, stored: str) -> bool:
+    """Rewrite the service's htpasswd entry from a value that was just planted.
+
+    **The edge does not read the blob — it reads the entry.** So a rotation
+    that replaces the blob and leaves the entry alone puts a login in front of
+    the edge that is not the one the operator just rotated to, and the two
+    halves of one credential disagree until somebody rewrites the entry by
+    hand. This is the hook that stops that: the same act that replaces the
+    blob re-derives the entry from the same value.
+
+    The shape is `restore`'s — write the entry from a value — and the
+    difference is only where the value comes from: `restore` reads it back
+    out of the blob, because the blob is all it has; this one is handed the
+    value that was just planted, so the entry and the blob are derived from
+    ONE value rather than from two reads of one file.
+
+    **A service that never carried a login is not this function's business.**
+    The flag is the record of the fact, and a service created before the
+    policy has no entry and no middleware — so there is nothing to rewrite
+    and nothing to report.
+
+    **A write that cannot be made is a diagnostic, not a traceback.** The
+    entry is root-side state on a filesystem that can refuse even root, and
+    the refusal is the host not being in the state the request assumed — so
+    it is one line naming the service and the path, and the caller is the
+    one that decides what a refusal means for the credential as a whole.
+    """
+    if not owns(service, key):
+        return False
+    path = host_file(service)
+    try:
+        write_entry(service, stored)
+    except OSError as exc:
+        raise errors.GuardenError(
+            f"the basic-auth entry of {service} could not be written at {path}: "
+            f"{exc.strerror or exc}",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    return True
 
 
 def restore(record) -> bool:
