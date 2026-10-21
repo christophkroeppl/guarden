@@ -617,7 +617,8 @@ def _wait_for_engine(account: str, container: str) -> None:
             break
         time.sleep(READY_INTERVAL)
     raise errors.GuardenError(
-        f"the container {container} did not start serving {ENGINE}: {_diagnosis(account, container)}",
+        f"the container {container} did not start serving {ENGINE}: "
+        f"{_diagnosis(account, container)}",
         errors.HOST_NOT_AS_ASSUMED,
     )
 
