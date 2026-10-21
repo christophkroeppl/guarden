@@ -1405,7 +1405,29 @@ In order:
 13. A re-render of the edge's routes and the dashboard, at the end of the command (§6.9).
 
 Every step is idempotent. A second `ingest` or `add` of a converged service exits `0`, says it
-converged, and changes nothing.
+converged, and changes nothing — except the one thing below, which is a mode and not a deploy.
+
+**The one thing a converged `ingest` or `add` does change is a mode.** The tree's rule is `0700`
+to the service user (§2.1), and a host that ran an older guarden carries directories that do not
+hold it — the unit directories an older installer made, root-owned with the mutator's umask.
+**A converged create REPAIRS them**, and it is the only verb that does: a converged create is
+exactly the one that installs nothing, so a repair placed anywhere else would never run on the
+deploy it is for.
+
+**What is repaired is the unit directories — the service's own and every instance's — and the
+levels above them.** Those are the directories the INSTALLER made, by `mkdir(parents=True)`, and
+every other directory in the tree is made and owned by the tree walk, which runs on every create
+that is not converged. **The FILES are not repaired**: a unit file's mode is a separate question
+(§2.1's `0640` against the tree's `0700`), and a repair that re-moded them would settle it by
+side effect.
+
+**Whose mode wins is the tree's**, and the spec is silent on a deliberate widening, so it says
+so: the `0700` is not a convenience but the isolation boundary that stops one service user
+reading another's volumes off the host filesystem, so an operator who widened a directory under
+the home has widened that boundary and the repair puts it back. **The repair REPORTS what it
+changed**, one line per directory on stdout, so an operator who meant the widening is told rather
+than left to fight a correction that repeats on every deploy. A repair is the verb doing what it
+says, so the deploy still exits `0`.
 
 `weedr service remove <name>` removes a whole service: it reverses all of it, moves each state
 and bulk subvolume to `/var/lib/guarden/removed/<service>/<time>/<vol>/` rather than deleting
