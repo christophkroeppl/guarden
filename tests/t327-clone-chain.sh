@@ -267,12 +267,14 @@ state=$(systemctl --user --machine pgdual-staging@ is-active db.service 2>/dev/n
 # --- the verbs are root-only, and no sudoers rule carries them --------------
 #
 # A clone reads production data and a load writes it, so a poke must not reach
-# them. The rule `soil install` writes names the granted deploy verbs whole, and
-# the mutator's own rule names no verb at all — it refuses everything outside
-# `GUARDEN_MAY` when the caller is `guarden`. Both halves are read off the
-# installed file: the positive half first, or an empty file would satisfy the
-# negative one.
-assert_file_has /etc/sudoers.d/guarden "weedr service ingest *"
+# them. The installed rule says so twice over, and both halves are read off the
+# file: the poke's rule grants the deploy verbs and names no `weedr` command at
+# all, and the mutator's own rule grants `guarden` `weedr` whole — the verb list
+# is enforced inside the program, so nothing in the file can name a clone verb.
+assert_file_has /etc/sudoers.d/guarden \
+    "hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/furrow deploy *"
+assert_file_lacks /etc/sudoers.d/guarden \
+    "hose ALL=(guarden) NOPASSWD: /usr/lib/guarden/bin/weedr"
 assert_file_lacks /etc/sudoers.d/guarden "weedr clone"
 
 # --- a refusal that changes nothing ------------------------------------------
