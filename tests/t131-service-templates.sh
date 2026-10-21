@@ -73,6 +73,25 @@ else
     _fail "the rustfs template does not publish the S3 port, so a consumer's edge has nothing to land on"
 fi
 
+# **The vendor's credentials are ASKED for, never carried.** A template is a
+# file in this repository, so an `Environment=<KEY>=<value>` line for the
+# store's access key is a credential in git and a credential baked into every
+# host that installs the template — and `weedr secret set` would then plant a
+# value nothing reads. The keys arrive as environment variables from the
+# service's own podman store instead, the shape the postgres template already
+# takes, and a request nothing satisfies is named by the gate rather than by
+# podman's `125 no such secret`.
+for key in RUSTFS_ACCESS_KEY RUSTFS_SECRET_KEY; do
+    if grep -qE "^Secret=$key(,|$)" "$templates/rustfs"/*.container; then
+        echo "MEASURE: the rustfs template asks for $key as a credential"
+    else
+        _fail "the rustfs template does not ask for $key as a credential, so either the value is in the file or nothing can plant it"
+    fi
+    if grep -qE "^Environment=$key=" "$templates/rustfs"/*.container; then
+        _fail "the rustfs template carries $key as a plaintext Environment= line, which is a credential in git"
+    fi
+done
+
 # --- the verb can choose from the set ---------------------------------------
 #
 # The capability, not the artefact. `create` with a template name is refused

@@ -57,17 +57,20 @@ Volume=rustfs-data:/data
 # not the edge's** — the edge's value is minted by guarden, planted in both
 # stores, and read by the consumer as `<AS>_SECRET`.
 #
-# The defaults are the vendor's own development values and they are a
-# credential in plaintext in a root-owned file. Change them before the service
-# carries anything, with:
+# They arrive as environment variables from the service's own podman store, and
+# the unit carries no value: a template is a file in this repository and a
+# plaintext credential in one is a credential in git. Plant them before the
+# first start:
 #
 #   weedr secret set <name> RUSTFS_ACCESS_KEY
 #   weedr secret set <name> RUSTFS_SECRET_KEY
 #
-# which plants the values into the encrypted blob; the unit then asks for them
-# by name and the materialiser delivers them.
-Environment=RUSTFS_ACCESS_KEY=rustfsadmin
-Environment=RUSTFS_SECRET_KEY=rustfsadmin
+# which decrypts into that store, so the container reads them without the value
+# being written anywhere guarden keeps. A key nothing planted is refused by the
+# gate, naming the key; podman's own answer is `125 no such secret`, which names
+# neither.
+Secret=RUSTFS_ACCESS_KEY,type=env
+Secret=RUSTFS_SECRET_KEY,type=env
 # Where the store keeps its data, and the console's own switch.
 Environment=RUSTFS_VOLUMES=/data
 Environment=RUSTFS_CONSOLE_ENABLE=true
