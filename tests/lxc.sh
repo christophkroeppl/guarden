@@ -308,6 +308,39 @@ _wait_ready() {
     return 1
 }
 
+# **A VM that is RUNNING but whose guest agent never registered is WEDGED, not
+# slow.** Measured 2026-10-21: a freshly provisioned golden answered
+# "Context ID not set in volatile.vsock_id" for 40+ minutes and LXD's journal
+# repeated "Could not get VM state from agent" every few seconds. The guest had
+# never actually booted -- LXD's power state said RUNNING while the guest sat
+# at the firmware prompt. A `lxc stop` + `lxc start` cycle brought the agent
+# up in 20 seconds, and the same image, launched as a bare probe with no
+# cloud-init and no conversion, had a working agent in 30 seconds. So the
+# image was fine and the machine was wedged.
+#
+# **The symptom is silent and the cost is the whole fleet.** LXD reports the
+# instance as RUNNING, so anything that checks the state sees "up" -- and the
+# suites that cut from it inherit a machine with no agent and no packages.
+# `_wait_ready`'s 8-minute budget is then spent on a machine that will never
+# answer, and the failure surfaces much later as "the golden never finished
+# installing python3-yaml".
+#
+# **So the wait power-cycles before it gives up.** One cycle, after the first
+# budget is spent, is enough to tell "slow" from "wedged": a slow machine
+# answers within the budget, and a wedged one answers right after a cycle.
+# The cycle is a power operation on the runner's own machine, so it is safe.
+_wait_ready_or_cycle() {
+    local instance=$1
+    if _wait_ready "$instance"; then
+        return 0
+    fi
+    printf 'the guest agent of %s did not answer; power-cycling it\n' "$instance" >&2
+    $LXC stop "$instance" --force >/dev/null 2>&1 || true
+    sleep 3
+    $LXC start "$instance" >/dev/null 2>&1 || true
+    _wait_ready "$instance"
+}
+
 _boot_id() {
     vm_exec_t "$1" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null | tr -d '\r\n'
 }
@@ -616,7 +649,14 @@ _convert() {
         # alive and try the same stage again before giving up on it.
         if [ "$rc" = 255 ]; then
             printf '  storage: agent did not answer (attempt %d), settling\n' "$attempt"
-            _wait_ready "$instance" || die "$instance stopped answering"
+            # **The settle waits AND cycles, because the reboot that staged the
+            # conversion is exactly when a machine wedges.** Measured
+            # 2026-10-21: a golden that had just been through a conversion
+            # reboot reported "Context ID not set in volatile.vsock_id" for
+            # 40+ minutes while LXD's state said RUNNING, and a power cycle
+            # brought the agent up in 20 seconds. A plain wait would have
+            # spent the whole budget on a machine that was never coming back.
+            _wait_ready_or_cycle "$instance" || die "$instance stopped answering"
             sleep 10
             continue
         fi
@@ -703,7 +743,7 @@ cmd_provision() {
     fi
 
     [ "$(_state "$GOLDEN")" = RUNNING ] || $LXC start "$GOLDEN" >/dev/null
-    _wait_ready "$GOLDEN" || die "$GOLDEN did not become ready"
+    _wait_ready_or_cycle "$GOLDEN" || die "$GOLDEN did not become ready"
 
     # cloud-init installs the package list, and it answers before it has
     # finished. Asking anything of apt while it runs loses the dpkg lock, which
@@ -885,7 +925,7 @@ _reset() {
         $LXC copy "$GOLDEN" "$RUNNER" >/dev/null || return 1
     fi
     $LXC start "$RUNNER" >/dev/null || return 1
-    _wait_ready "$RUNNER" || return 1
+    _wait_ready_or_cycle "$RUNNER" || return 1
     # **cloud-init, before the suite.** A machine cut from the golden is a new
     # instance to cloud-init, so it re-runs this harness's own user-data on every
     # boot: `package_update: true` and nineteen packages, which is an
