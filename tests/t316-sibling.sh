@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# A sibling container named inside one unit source resolves, and a name from
-# OUTSIDE the source still does not (ticket 316, ADR-0023, spec 7.3).
+# A sibling container named inside one unit source resolves, and a container of
+# that source which the manifest does not declare under `siblings:` is still
+# refused (ticket 316, ADR-0023, spec 7.3).
 #
 # Ticket 285 refused this, and the refusal was right about the mechanism and
 # wrong about the conclusion: the alias is the host's loopback, where each
@@ -12,10 +13,18 @@
 # on. The renderer writes both, and the repository composes its own URL from
 # them.
 #
-# **The boundary this suite pins.** A name inside ONE unit source resolves. A
-# name from another source resolves to nothing and is still refused, with the
-# diagnostic naming the difference. And the repository's own `AddHost=` and
-# `extra_hosts` are still refused, because the key is the renderer's.
+# **The boundary this suite pins.** A name inside ONE unit source resolves, and
+# it resolves only when the manifest declared the container it names under
+# `siblings:`. A container of the source that is NOT declared is still refused,
+# and the diagnostic names the declaration that fixes it. The repository's own
+# `AddHost=` and `extra_hosts` are still refused, because the key is the
+# renderer's.
+#
+# **A name that is not a container of this source is not refused, and this is
+# the correction ADR-0023 records:** 285's loop ran over the source's own
+# container keys, so a value naming an external host was never inspected.
+# Guarden neither knows nor resolves such a name, and policing it would be a
+# check that fires on the repository's own business.
 #
 # machine: shared
 # `guarden_prefix` stages the host, and every staged manifest, registry row and
