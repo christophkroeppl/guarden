@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# t453-basicauth-optout.sh — ticket 318: the default basic-auth middleware has
+# t454-basicauth-optout.sh — ticket 318: the default basic-auth middleware has
 # a root-owned, per-service opt-out, and no repository can reach it.
 #
 # The gap this file exists for: ticket 292 put a per-service basic-auth
@@ -288,4 +288,4 @@ assert_exit 0
 assert_stdout_has '"service": "oldopt-staging"'
 assert_stdout_has '"minted": false'
 
-echo "t453-basicauth-optout: ok"
+echo "t454-basicauth-optout: ok"
