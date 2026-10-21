@@ -3471,6 +3471,17 @@ next ordinary run can inherit what the gate observed. The cache lives outside th
   machine of its own is therefore a fact about which verbs it drives and not about whether it
   called `guarden_prefix`.
 
+**A suite is `tests/t[0-9]*.sh`, and every one of them runs in a cut machine.** The runner
+carries no allowlist that can skip one: a suite whose subject a machine cannot see fails
+there rather than disappearing from a run, because an unrun check that the summary does not
+mention reads as a green one (ADR-0025). **A claim about the checkout itself is a unit
+test** — `tests/test_*.py`, run by `just unit` on the checkout — and it exists for what a
+machine cannot answer: a function's answer, and the checkout's own files. The root
+`.env.schema` is tracked only as far as this repository's `.git` can say, and a cut carries
+no repository metadata, so that claim is a unit test and not a suite. It executes no
+guarden program, writes nothing, and drives a command line the way every other test does.
+`just test` says nothing about those claims; `just ci` is the run that covers both tiers.
+
 `just test` runs the whole suite in a throwaway VM and exits `0`; `just test-one <file>` runs one
 suite in one VM, and that is the command for work in progress. There is no suite that runs
 outside a machine (§11).

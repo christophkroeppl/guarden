@@ -81,24 +81,12 @@ APT_LOCK_SH=$REPO/tests/aptlock.sh
 APT_LOCK_GUEST=''
 [ -r "$APT_LOCK_SH" ] && APT_LOCK_GUEST=$(<"$APT_LOCK_SH")
 
-# Tests that cannot run in the machine, by construction rather than by accident.
-#
-# t35-env-schema.sh asks git about the repository: `check-ignore` and
-# `ls-files` need a work tree, and this checkout's `.git` is a file pointing at
-# /media/data/projects/infra/.git/worktrees/service-based, which is a host path
-# that does not exist in a guest. The checkout is pushed without `.git`, so the
-# commands fail and the test reports git's exit 128 as a guarden defect. It is a
-# repository-hygiene test, not a guarden test; the VM runner skips it
-# (`HOST_ONLY`, below), and nothing else runs it today — see ticket 266.
-HOST_ONLY=${GUARDEN_LXC_HOST_ONLY:-t35-env-schema.sh}
-
-_is_host_only() {
-    local name=$1 candidate
-    for candidate in $HOST_ONLY; do
-        [ "$name" = "$candidate" ] && return 0
-    done
-    return 1
-}
+# **Every suite in the selection runs in a cut machine, and there is no list
+# that can skip one** (ADR-0025). A suite whose subject a machine cannot see
+# fails there rather than vanishing from a run: the host-only allowlist this
+# used to carry made an unrun check read as a green one, and a check that
+# cannot fail is not a check. A claim about the checkout is a unit test under
+# `tests/test_*.py`, selected by `just unit` and never by this runner.
 
 # A suite says whether it needs a machine of its own, in the suite itself:
 #
@@ -1153,9 +1141,6 @@ cmd_run() {
         [ -f "$file" ] || continue
         name=${file##*/}
         if [ -n "$pat" ] && [[ "$name" != *"$pat"* ]]; then
-            continue
-        fi
-        if _is_host_only "$name"; then
             continue
         fi
         if [ "$shared" = 1 ]; then
