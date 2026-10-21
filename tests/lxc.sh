@@ -723,11 +723,42 @@ cmd_provision() {
     # install fails — snapper was missing from one golden this way, and the
     # capability gate below is what caught it. Re-assert the list rather than
     # trust that it landed.
+    #
+    # **The apt lock has to be waited for, because on a FRESH boot the
+    # lock is held by cloud-init's own `package_update`.** Measured
+    # 2026-10-21: this install lost the race and printed "Could not get lock
+    # /var/lib/dpkg/lock-frontend. It is held by process 6351 (apt-get)", and
+    # because the whole call was `|| true` the failure was INVISIBLE — the
+    # provision carried on to the conversion, which then failed on a missing
+    # snapper ("snapper is not installed (No such file or directory)"), and the
+    # real cause was two steps earlier.
+    #
+    # The wait is `_wait_cloud_init`'s, which is already the runner's own
+    # answer to "are apt's locks free" — but it is called BEFORE the yaml
+    # loop above, and cloud-init's `package_update` can still be running
+    # after that returns, because `status --wait` can report done while the
+    # per-boot `package_update` still holds the lists lock. So the wait is
+    # repeated HERE, immediately before the install that needs it, and the
+    # install's own failure is no longer swallowed.
+    #
+    # **The install is no longer `|| true`, and that is the point.** A golden
+    # that silently lacks snapper is a golden whose conversion fails an hour
+    # later with a cause three steps removed. Failing here, with apt's own
+    # message, is the cheap and honest failure.
+    _wait_cloud_init "$GOLDEN" || die "cannot wait for apt's locks on $GOLDEN"
     vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq
         apt-get install -y -qq --no-install-recommends
-            snapper btrfs-progs iptables iproute2 passwd uidmap curl ca-certificates || true' \
-        >/dev/null 2>&1 || true
+            snapper btrfs-progs iptables iproute2 passwd uidmap curl ca-certificates' \
+        >/dev/null 2>&1 \
+        || die "$GOLDEN could not install the golden's own packages; apt's locks are held or the mirror is unreachable"
+    # **And the install is ASSERED, not assumed.** The `|| true` that used to
+    # hide this also hid a partially-installed list, and the capability gate
+    # below is the only other place snapper's absence was caught — after the
+    # conversion had already failed. snapper is the one package the conversion
+    # itself needs, so its absence is fatal here rather than later.
+    vm_exec_t "$GOLDEN" 'command -v snapper >/dev/null' \
+        || die "$GOLDEN has no snapper, and the root conversion cannot configure one"
 
     # Preconditions the real-host tests plant for themselves today. They are
     # planted here instead so a green run does not depend on one test having run
