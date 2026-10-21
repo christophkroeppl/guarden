@@ -705,8 +705,23 @@ cmd_provision() {
     if [ "${_needs_build:-0}" = 0 ] && [ "$(_conversion_state "$GOLDEN")" != done ]; then
         printf 'replacing %s: no snapshot and its conversion state is not done\n' "$GOLDEN"
         $LXC stop "$GOLDEN" --force >/dev/null 2>&1 || true
-        $LXC delete "$GOLDEN" --force >/dev/null 2>&1 \
-            || die "cannot delete $GOLDEN; remove it by hand"
+        # **The delete is retried, because a stopped machine's volume can still
+        # be busy.** Measured 2026-10-21: `lxc delete --force` on a machine that
+        # had just been stopped answered with a non-zero and the provision
+        # died with "cannot delete guarden-golden; remove it by hand" -- while
+        # the SAME command, issued again a moment later, succeeded. The
+        # difference was the volume release, which LXD finishes asynchronously
+        # after the stop returns. So the delete is asked again, with a pause
+        # between the asks, and only a delete that fails EVERY time is fatal.
+        local attempt deleted=0
+        for ((attempt = 1; attempt <= 10; attempt++)); do
+            if $LXC delete "$GOLDEN" --force >/dev/null 2>&1; then
+                deleted=1
+                break
+            fi
+            sleep 3
+        done
+        [ "$deleted" = 1 ] || die "cannot delete $GOLDEN; remove it by hand"
         cmd_provision
         return 0
     fi
