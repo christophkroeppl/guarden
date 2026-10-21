@@ -325,6 +325,13 @@ The `0700` on a service's tree is load-bearing. Without it any service user can 
 other service's state volumes directly from the host filesystem, which would make every
 per-consumer credential and every uid-matched firewall rule decorative.
 
+**A unit file inside a service's tree is `0700`, the tree's own mode.** The install that writes
+one and the walk that owns the tree state that one mode, so a file's mode cannot depend on which
+operation ran last — which it did while a second constant said `0640`: a second instance's create
+re-moded the first instance's units to `0700` without reinstalling them, and the first instance's
+next deploy put them back. The service user, whose podman generator reads the file, holds read
+and write either way; what two statements cost was a canonical answer, not an access.
+
 Three carve-outs from `0640 root:guarden`, each for a specific reader:
 
 - `projects.toml` and the files under `projects.d/` are `0444` because `hose` — the
@@ -1429,9 +1436,10 @@ deploy it is for.
 **What is repaired is the unit directories — the service's own and every instance's — and the
 levels above them.** Those are the directories the INSTALLER made, by `mkdir(parents=True)`, and
 every other directory in the tree is made and owned by the tree walk, which runs on every create
-that is not converged. **The FILES are not repaired**: a unit file's mode is a separate question
-(§2.1's `0640` against the tree's `0700`), and a repair that re-moded them would settle it by
-side effect.
+that is not converged. **The FILES are not repaired**: a unit file's mode is the tree's `0700`
+(§2.1), and the install that writes one states it, so there is no second answer for a repair to
+impose. A host that ran an older guarden keeps `0640` unit files until the next install rewrites
+them, and the directory's `0700` is the boundary either way.
 
 **Whose mode wins is the tree's**, and the spec is silent on a deliberate widening, so it says
 so: the `0700` is not a convenience but the isolation boundary that stops one service user
