@@ -39,17 +39,60 @@ dialed_publication() {
 }
 
 purge() {
+    local failed=0 service attempt path_was_active=0
+    local -a paths
+    # **The credential trigger is held while the trees are removed**, for the
+    # reason `t315-envfile-ref.sh` states in full: deleting a creds blob starts
+    # its oneshot, which runs `podman secret create` as every service that still
+    # has one, inside that service's own `home` — the tree this loop is deleting.
+    # The unit is put back only if this purge found it running.
+    if systemctl is-active --quiet guarden-creds.path; then
+        path_was_active=1
+    fi
+    systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
     for service in "$@"; do
-        rm -rf "/var/lib/guarden/services/$service" "/etc/guarden/services/$service" \
-            "$creds/$service" "$registry/$service.toml"
+        paths=(
+            "/var/lib/guarden/services/$service"
+            "/etc/guarden/services/$service"
+            "$creds/$service"
+            "$registry/$service.toml"
+        )
+        attempt=0
+        until rm -rf "${paths[@]}"; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 3 ]; then
+                failed=1
+                break
+            fi
+            sleep 1
+        done
         userdel "$service" >/dev/null 2>&1 || :
     done
+    if [ "$path_was_active" = 1 ]; then
+        systemctl start guarden-creds.path >/dev/null 2>&1 || :
+    fi
+    # A teardown that cannot remove the tree is a failure, not a line in the
+    # log; `t315-envfile-ref.sh` has the long form of that decision too.
+    [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
 }
 
 cleanup() {
+    # **Every name this file creates, not most of them.** A teardown that leaves
+    # a service behind leaves its EDGES behind too, and an edge is a uid-matched
+    # accept rule: a second run of this file on the same machine then reads a
+    # firewall line the first run's `unmapped-staging` put there and fails an
+    # assertion whose subject is not the leftover (measured 2026-10-21, ticket
+    # 329's class of defect). The list is the suite's own inventory.
+    #
+    # The conf goes whatever the purge did, so the removal is done before the
+    # status is raised; `t315-envfile-ref.sh` carries the long form.
+    local rc=0
     purge pgprov-staging pgdual-staging needful-staging needy-staging multidb-staging \
-        twin-staging ghost-staging redis-staging nowhere-staging
+        twin-staging ghost-staging redis-staging nowhere-staging \
+        unpublished-staging unmapped-staging postgres-staging needful-production \
+        postgres-production || rc=1
     rm -f "$conf"
+    return "$rc"
 }
 trap cleanup EXIT
 
@@ -494,3 +537,26 @@ stage_poke unmapped 9f2c1ab
 run weedr service ingest unmapped-staging --from poke unmapped@9f2c1ab
 assert_exit 0
 assert_file_has "$registry/unmapped-staging.toml" '[edges."pgprov-staging:5432:db"]'
+
+# ---------------------------------------------------------------------------
+# The teardown takes the name with the tree
+# ---------------------------------------------------------------------------
+#
+# **A service name is a runtime resource, and two suites spelling it the same
+# way is a channel between them.** This file's provider used to be
+# `t315-envfile-ref`'s too, so a `home` that suite's teardown could not remove
+# was the state this file started from, and the failure then surfaced here as an
+# assertion about something else (ticket 329). `t315` now names its own
+# provider, and this is the other half: what the teardown promises is asserted,
+# `home` by name.
+#
+# `.../home` is the path the ticket's own measurement named, and it is the
+# directory that holds podman's store; the whole tree is asserted as well,
+# because a surviving `state/pgdata` subvolume is the same defect one layer
+# down. This is the last thing the file does: every edge above needs the
+# provider, so nothing after it can.
+purge pgprov-staging
+assert_file_missing /var/lib/guarden/services/pgprov-staging
+assert_file_missing /var/lib/guarden/services/pgprov-staging/home
+assert_file_missing /etc/guarden/services/pgprov-staging
+assert_file_missing "$registry/pgprov-staging.toml"

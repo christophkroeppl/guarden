@@ -37,16 +37,61 @@ export GUARDEN_PREFIX=/
 registry=/var/lib/guarden/registry
 
 purge() {
+    local failed=0 service attempt path_was_active=0
+    local -a paths
+    # **The host's credential trigger is held while the trees are removed.** The
+    # purge deletes `/etc/guarden/creds/<name>`, and `guarden-creds.path` watches
+    # that directory, so the removal itself starts the materialiser: a
+    # `podman secret create` per service that still has a blob, run in that
+    # service's own `home` — the tree this loop is deleting. The collision is a
+    # race and does not reproduce on demand (measured once, 2026-10-21:
+    # `rm: cannot remove '.../needful-production/home/.local/share/containers/
+    # storage': Directory not empty`); the retry below is the second line. The
+    # unit is put back only if this purge found it running.
+    if systemctl is-active --quiet guarden-creds.path; then
+        path_was_active=1
+    fi
+    systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
     for service in "$@"; do
-        rm -rf "/var/lib/guarden/services/$service" "/etc/guarden/services/$service" \
-            "/etc/guarden/creds/$service" "$registry/$service.toml"
+        paths=(
+            "/var/lib/guarden/services/$service"
+            "/etc/guarden/services/$service"
+            "/etc/guarden/creds/$service"
+            "$registry/$service.toml"
+        )
+        # A process may still be exiting (`podman` on its way out from a
+        # materialise), so the removal is retried twice before it is called a
+        # failure.
+        attempt=0
+        until rm -rf "${paths[@]}"; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 3 ]; then
+                failed=1
+                break
+            fi
+            sleep 1
+        done
         userdel "$service" >/dev/null 2>&1 || :
     done
+    if [ "$path_was_active" = 1 ]; then
+        systemctl start guarden-creds.path >/dev/null 2>&1 || :
+    fi
+    # **A teardown that cannot remove the tree is a failure, not a line in the
+    # log.** A `home` left behind reached whoever got the machine next and failed
+    # an assertion there about something else (ticket 329), so what survives the
+    # removal is reported here, naming the purge.
+    [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
 }
 
 cleanup() {
-    purge pgprov-staging envconsumer-preview
+    # **The conf goes whatever the purge did.** A purge that cannot remove its
+    # tree must not leave a second leftover behind as well, and the exit status
+    # still has to say the purge failed, so the removal runs first and the failure
+    # is raised after it.
+    local rc=0
+    purge pgprov-envfile-staging envconsumer-preview || rc=1
     rm -f /etc/guarden/firewall/50-services.conf
+    return "$rc"
 }
 trap cleanup EXIT
 
@@ -65,9 +110,15 @@ run soil firewall --apply
 assert_not_rejected
 
 # --- the provider: it owns the publication the consumer dials --------------
-run weedr service ingest pgprov-staging --from poke pgprov@9f2c1ab
+#
+# **The provider's name is this suite's own** — `pgprov-envfile-staging`, after
+# the `pgprov` fixture it is staged from — and not `pgprov-staging`, because a
+# service NAME is a runtime resource that two suites share the moment they spell
+# it the same way. It was `pgprov-staging` here and in `t80-edges` as well (ticket
+# 329), so one suite's leftover was the other's starting state.
+run weedr service ingest pgprov-envfile-staging --from poke pgprov@9f2c1ab
 assert_exit 0
-db_pub=$(sed -n 's/^db = \([0-9]*\)$/\1/p' "$registry/pgprov-staging.toml")
+db_pub=$(sed -n 's/^db = \([0-9]*\)$/\1/p' "$registry/pgprov-envfile-staging.toml")
 [ -n "$db_pub" ] || _fail "the provider names a db container and no publication was allocated"
 
 # --- the consumer: a preview instance whose ref contains a slash ------------
@@ -88,7 +139,7 @@ seed "$staged/.guarden/service.yml" \
     "state:" \
     "  - data" \
     "needs:" \
-    "  - service: pgprov-staging" \
+    "  - service: pgprov-envfile-staging" \
     "    as: db" \
     "    port: 5432" \
     "    auth: none"
@@ -134,7 +185,7 @@ unit=$instance_quadlet/web.container
 # side of the disagreement that was already right: the file is written into the
 # instance's own directory, and the directory is named by the escaped ref.
 assert_file_exists "$env_file"
-assert_file_has "$env_file" "DB_HOST=pgprov-staging"
+assert_file_has "$env_file" "DB_HOST=pgprov-envfile-staging"
 assert_file_has "$env_file" "DB_PORT=$db_pub"
 assert_file_exists "$unit"
 
@@ -266,8 +317,8 @@ run_in /var/lib/guarden/services/envconsumer-preview/home setpriv \
 assert_exit 0
 inside=$(cat "$GUARDEN_STDOUT")
 echo "MEASURE: the container's own DB_HOST:DB_PORT: $inside"
-[ "$inside" = "pgprov-staging:$db_pub" ] \
-    || _fail "the container sees DB_HOST:DB_PORT '$inside' and the edge wrote 'pgprov-staging:$db_pub'"
+[ "$inside" = "pgprov-envfile-staging:$db_pub" ] \
+    || _fail "the container sees DB_HOST:DB_PORT '$inside' and the edge wrote 'pgprov-envfile-staging:$db_pub'"
 
 # --- the sibling: a ref with no slash is untouched --------------------------
 #
@@ -292,3 +343,25 @@ done
 echo "MEASURE: the plain instance's unit is '${plain_active:-unreadable}'"
 [ "$plain_active" = active ] \
     || _fail "the plain instance's unit web-plain.service is '${plain_active:-unreadable}', not active"
+
+# --- the teardown takes the tree with it ------------------------------------
+#
+# **Nothing of this suite's may be left behind, and a removed tree was not the
+# thing being asserted.** A `home` a teardown could not remove was met by the next
+# suite on the machine, which then failed an assertion about something else (ticket
+# 329), so the removal is performed HERE, where a failure can name this suite, and
+# the state it promises is asserted rather than assumed.
+#
+# The two instances are stopped first, because a unit left active is a container
+# still running as a service whose tree is about to go: the next run of this
+# file on the same machine then met an already-active unit whose container was
+# gone and failed with "never became exec-able" (measured 2026-10-21, the same
+# leftover class one verb over).
+run weedr service stop envconsumer-preview/feature/x
+assert_exit 0
+run weedr service stop envconsumer-preview/plain
+assert_exit 0
+purge envconsumer-preview
+assert_file_missing /var/lib/guarden/services/envconsumer-preview
+assert_file_missing "/var/lib/guarden/services/envconsumer-preview/home"
+assert_file_missing "$registry/envconsumer-preview.toml"
