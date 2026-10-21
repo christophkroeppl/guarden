@@ -87,7 +87,7 @@ assert_file_lacks "$README" "git -C /usr/lib/guarden pull"
 # says which one it is: the programs live there, the checkout does not.
 assert_file_has "$DOC" "the programs live"
 
-# --- 310: the phase order is the installer's order -------------------------
+# --- 310: the phase order is the DESCRIPTION order, not the bootstrap one ----
 #
 # The runbook states the DESCRIPTION order, and says so: `soil list` prints
 # that order and it is not the order a fresh host runs them (`install` comes
@@ -98,9 +98,12 @@ assert_file_has "$DOC" "the programs live"
 # There used to be an `assert_file_lacks` here for that same line, and it
 # contradicted the assertion immediately below it. It passed because
 # docs/sysadmin.md is 106,213 bytes — larger than one pipe buffer — so
-# `assert_file_lacks` could not fail on it at all. Ticket 352's fix to that
-# helper is what surfaced it; the line is correct and the negative assertion
-# was stale from the day it was written.
+# `assert_file_lacks` could not fail on it at all. `e177cbe` made that helper
+# able to fail — it added `tests/t212-assert-file-lacks.sh`, and `t212` there is
+# the suite's number, not a ticket — and that is what surfaced this; the line is
+# correct and the negative assertion was stale from the day it was written.
+# Ticket 352 is a different defect — the provision probe's storage wait in
+# tests/lxc.sh — and does not touch this helper.
 assert_file_has "$DOC" "Phases in order:"
 # The order the runbook states is the order the program states, compared
 # rather than transcribed: a runbook that drifts from `soil list` fails here.
