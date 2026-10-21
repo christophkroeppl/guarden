@@ -830,7 +830,9 @@ def _instance_publications(record) -> set[int]:
     }
 
 
-def _destinations(record, track, manifest: manifest_mod.Manifest, config, name: str) -> dict[str, str]:
+def _destinations(
+    record, track, manifest: manifest_mod.Manifest, config, name: str
+) -> dict[str, str]:
     """Every route label's destination, resolved once, by the resolver.
 
     `exposure.destinations` is the one function the mutator, the renderer's
