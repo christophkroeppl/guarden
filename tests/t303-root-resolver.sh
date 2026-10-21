@@ -215,12 +215,18 @@ assert_stdout_has "127.0.0.53%lo:53"
 before=$(deny_packets)
 [ -n "$before" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"
 
-# **Root sends one datagram to the stub.** `nc -u -w1` writes a two-byte
-# header to a UDP socket; the stub does not answer a malformed query, and it
-# does not have to: what is under test is whether the PACKET was refused by
-# the deny, and the deny's counter answers that whether or not a reply came
-# back.
-run nc -u -w1 127.0.0.53 53 || true
+# **Root sends one datagram to the stub.** `nc -u` sends what it reads on
+# stdin, and **stdin has to carry the bytes**: with no input `nc` reads EOF
+# immediately and sends nothing at all, so the counter would not move and the
+# measurement would be of a packet that was never sent. That is the shape the
+# house idiom uses (`t180-firewall-rules.sh`, `t502-service-user-root.sh`):
+# the pipe is INSIDE a shell, so the bytes reach `nc` rather than the suite's
+# own stdin.
+#
+# The stub does not answer a malformed query, and it does not have to: what is
+# under test is whether the PACKET was refused by the deny, and the deny's
+# counter answers that whether or not a reply came back.
+run sh -c "printf '\x00\x00' | nc -u -w1 127.0.0.53 53" || true
 
 after=$(deny_packets)
 printf 'MEASURE: ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
@@ -313,7 +319,7 @@ mutated=$(cat "$GUARDEN_STDOUT")
 # is the counter-assertion: the measurement is repeated under the other answer
 # and the answer is the opposite one.
 before_mutated=$(deny_packets)
-run nc -u -w1 127.0.0.53 53 || true
+run sh -c "printf '\x00\x00' | nc -u -w1 127.0.0.53 53" || true
 after_mutated=$(deny_packets)
 printf 'MEASURE: UNDER_THE_OTHER_ANSWER_ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' \
     "$before_mutated" "$after_mutated" >&2
@@ -354,7 +360,7 @@ restored=$(cat "$GUARDEN_STDOUT")
 # **And the decision holds again on the restored host**, so the file ends where
 # it began: the deny refuses root's query.
 before_final=$(deny_packets)
-run nc -u -w1 127.0.0.53 53 || true
+run sh -c "printf '\x00\x00' | nc -u -w1 127.0.0.53 53" || true
 after_final=$(deny_packets)
 printf 'MEASURE: RESTORED_ROOT_RESOLVER_DENY_COUNTER=%s->%s\n' \
     "$before_final" "$after_final" >&2
