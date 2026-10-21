@@ -38,9 +38,10 @@ provable. `fixtures/`, `modules/`, `packages/`, `tools/`, `examples/`,
 `src/guarden/**` and `pyproject.toml` are in every key, because a suite
 reaches those through helpers whose arguments cannot be resolved from
 outside — `stage_config` reads `fixtures/$1` and `$1` is a bare name in the
-suite. The root `.env.schema` is in every key as an over-approximation: the
-only reader is `t35-env-schema.sh`, which the runner does not select, so
-nothing in a machine run reads it, and carrying it costs one hash.
+suite. The root `.env.schema` is in every key as an over-approximation: no
+suite in a machine run reads it — its reader is the unit test
+`tests/test_env_schema.py`, which a cut never runs (ADR-0025) — and carrying it
+costs one hash, so it stays on the safe side of the approximation.
 
 **Everything under `tests/` that is not a suite is in every key**, and the
 predicate is the runner's own: `tests/lxc.sh` selects exactly
