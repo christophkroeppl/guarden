@@ -139,6 +139,31 @@ assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "nuxt"
 
+# Two containers whose names give the SAME variable are refused, and this is
+# not the same check as the one above: `my-api` and `my_api` are two
+# containers and one variable, because a variable name cannot carry a dash.
+# The environment file would carry MY_API_HOST twice and the second row would
+# win — a silent failure with no diagnostic anywhere.
+seed "$project/.guarden/quadlet/my-api.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20"
+seed "$project/.guarden/quadlet/my_api.container" "[Container]" \
+    "Image=docker.io/library/alpine:3.20"
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
+    "siblings:" "  - container: my-api" "    port: 3000" "  - container: my_api" "    port: 3001"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "MY_API"
+
+# A container declared twice under `siblings:` is refused too: the generated
+# variables would be written twice with two different ports.
+seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet" \
+    "siblings:" "  - container: api" "    port: 3000" "  - container: api" "    port: 3001"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "declared twice"
+
 # --- a service with no siblings renders as it always did ---------------------
 #
 # The absence of the block is the absence of the mechanism, not a refusal, and

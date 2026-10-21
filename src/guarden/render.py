@@ -741,7 +741,8 @@ def check_containers(document: manifest_mod.Manifest, source: Source) -> None:
 
 
 def _check_siblings(document: manifest_mod.Manifest, source: Source) -> None:
-    """A sibling that is itself, or named twice, is refused.
+    """A sibling that is itself, named twice, or colliding on its variable, is
+    refused.
 
     **A container naming itself is a copy-paste**, the same shape as the
     self-edge the edge check refuses (spec 7.3): there is nothing to translate,
@@ -750,8 +751,15 @@ def _check_siblings(document: manifest_mod.Manifest, source: Source) -> None:
     **Two entries naming one container are refused**, because the generated
     variables would collide — `API_HOST` and `API_PORT` would be written twice
     with two different ports, and the second would silently win.
+
+    **Two containers whose names give the same variable are refused**, and this
+    is not the same check: `my-api` and `my_api` are two containers and one
+    variable, because a variable name cannot carry a dash. The environment file
+    would carry `MY_API_HOST` twice, and the second row would win — a silent
+    failure with no diagnostic anywhere.
     """
     seen: dict[str, int] = {}
+    variables: dict[str, str] = {}
     for sibling in document.siblings:
         if sibling.container in seen:
             raise errors.GuardenError(
@@ -760,6 +768,17 @@ def _check_siblings(document: manifest_mod.Manifest, source: Source) -> None:
                 f"would be written twice with two different ports"
             )
         seen[sibling.container] = sibling.port
+        variable = sibling.variable
+        for other, other_variable in variables.items():
+            if other_variable != variable:
+                continue
+            raise errors.GuardenError(
+                f"the manifest {document.source}: the containers {other!r} and "
+                f"{sibling.container!r} both give the variable {variable}, because a "
+                f"variable name cannot carry a dash; the environment file would carry "
+                f"{variable}_HOST twice and the second row would win"
+            )
+        variables[sibling.container] = variable
     for container in source.containers():
         for sibling in document.siblings:
             if sibling.container != container:
