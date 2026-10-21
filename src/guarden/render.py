@@ -1170,6 +1170,11 @@ def _dropins(context: Context | None, source: Source) -> dict[str, Unit]:
     the mutator writes it under, so a hand-written drop-in that happens to
     carry a `UserNS=` line is refused by the base unit's own filter instead
     (the `UserNS` entry in `OWNED_KEYS`).
+
+    **This directory is the only path to the admin's own configuration**
+    (ADR-0024). There is no staging copy of it anywhere: guarden never
+    stages the admin's file and never copies it in, so what the admin writes
+    here is what the generator reads, and what this merge reads.
     """
     out: dict[str, Unit] = {}
     if context is None or not context.record.uid:
