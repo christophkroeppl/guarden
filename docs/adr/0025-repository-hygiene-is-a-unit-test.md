@@ -66,9 +66,12 @@ accepted (2026-10-21) — implemented in `fix/t304-work`.
   pushes as the tree a suite reads.
 - **A `just test-host` recipe that runs the shell suite.** That is a test
   script executed on the development machine, which is the rule the harness
-  exists to keep — a development checkout is not a target. The unit tier is
-  not an exception to that rule: it runs no guarden program and mutates no
-  host state, and it reads files the checkout owns.
+  exists to keep — a development checkout is not a target. `AGENTS.md` states
+  the rule against running guarden's programs and host-mutating suites on the
+  checkout; the unit tier is neither, and it is not new: `just unit` already
+  ran three files that import the parsers directly, and this ADR only states
+  the boundary it was already standing behind. A unit test reads the checkout
+  and writes nothing.
 - **Delete the suite and rule that the claim is not checked.** The
   `.gitignore` negation is the only thing that keeps the schema out of every
   clone, and a pattern that stops firing is silent — the schema resolves
