@@ -128,7 +128,7 @@ FIREWALL = (
 
 PIN = (("sync", "recompute the snapper marks from the pin files and the registries"),)
 
-# The snapshot-clone chain (ticket 327, ADR-0024).
+# The snapshot-clone chain (ticket 327, ADR-0025).
 #
 # **A separate group, and not four more verbs on `weedr service`.** A `service`
 # verb acts on a service; these act on a SNAPSHOT (a `<service>:<volume>@<n>`
@@ -348,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
         verb_parser.add_argument("name", metavar="NAME", help="the service")
         verb_parser.add_argument("public_port", metavar="PUBLIC_PORT", help="the public port")
 
-    # --- the snapshot-clone chain (ticket 327, ADR-0024) --------------------
+    # --- the snapshot-clone chain (ticket 327, ADR-0025) --------------------
     clone_snapshot = top["clone"]["verbs"]["snapshot"]
     clone_snapshot.add_argument(
         "id", metavar="SNAPSHOT", help="<service>:<volume>@<number>, the clone's source"
@@ -1648,7 +1648,7 @@ def _pin_sync(args) -> int:
 
 
 # --------------------------------------------------------------------------
-# the snapshot-clone chain (ticket 327, ADR-0024)
+# the snapshot-clone chain (ticket 327, ADR-0025)
 # --------------------------------------------------------------------------
 
 

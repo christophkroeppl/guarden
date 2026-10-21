@@ -266,7 +266,7 @@ TREE_MODE = 0o700
 STATE = "state"
 BULK = "bulk"
 
-# The clone's own directory, beside `state/` and `bulk/` (ADR-0024).
+# The clone's own directory, beside `state/` and `bulk/` (ADR-0025).
 #
 # **It is not under `state/`, and that is the point.** `state/` holds nothing
 # but snapshotted subvolumes — that is why it is split from `bulk/` at all —

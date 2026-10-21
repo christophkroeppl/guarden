@@ -65,7 +65,7 @@ BLOCK_KEYS = {
     "scrub": {"tables", "keys"},
 }
 
-# The `scrub:` block's own key sets, closed (ADR-0024).
+# The `scrub:` block's own key sets, closed (ADR-0025).
 #
 # **A `tables:` entry says "every row of this table goes", and there is no
 # second answer.** The transform is a filter over a plain dump, and the restored
@@ -259,7 +259,7 @@ class ScrubKey:
     **A prefix match and an equality match, and nothing else.** A rule that
     could name a row by an arbitrary predicate would be an arbitrary database
     write dressed as a policy, and the review a manifest block is for — a diff
-    in a pull request — is worthless against arbitrary SQL (ADR-0024). A prefix
+    in a pull request — is worthless against arbitrary SQL (ADR-0025). A prefix
     on a named column says exactly "the rows of this table whose column starts
     with this", which is the operator's own rule ("every `ir_config_parameter`
     row whose key begins with `mail.`").
@@ -862,7 +862,7 @@ def _entries(value: Any, block: str, path: Path) -> list[dict]:
 
 # --- the `scrub:` block ------------------------------------------------------
 #
-# **The rule is a POLICY and the manifest is its home** (ADR-0024). It is the
+# **The rule is a POLICY and the manifest is its home** (ADR-0025). It is the
 # operator's statement of what a cloned database must not carry, and the
 # manifest is where a project declares what it is — so the rule is versioned
 # with the deployment, reviewable in a pull request, and travels with the code

@@ -1,6 +1,6 @@
 """The snapshot-clone chain: a tmp container, a dump, a scrub and a load.
 
-ticket 327, ADR-0024. **The operation an operator performs when a production
+ticket 327, ADR-0025. **The operation an operator performs when a production
 database is cloned onto a staging one**, which guarden had no verb for and which
 the operator performed by hand in twelve steps
 (phase-a-snapshot-clone-testrun.md, §9).
@@ -62,7 +62,7 @@ from guarden import (
 from guarden import manifest as manifest_mod
 from guarden import snapshotid as ids
 
-# The engine, in one place (ADR-0024). `edges.ENGINE` is the other user of the
+# The engine, in one place (ADR-0025). `edges.ENGINE` is the other user of the
 # same name, and the two are the same engine: the edge creates a role and a
 # database in it, and this chain dumps and restores through it.
 ENGINE = "postgres"
@@ -717,7 +717,7 @@ def transform(service: Service, source_name: str, out: str) -> list[str]:
 
     **The rule is the service's own manifest**, because the rule is the
     operator's policy and the manifest is where a project declares what it is
-    (ADR-0024). A service whose manifest carries no `scrub:` block is refused:
+    (ADR-0025). A service whose manifest carries no `scrub:` block is refused:
     there is nothing to do, and a verb that silently did nothing would report a
     transform it never performed.
 
@@ -883,7 +883,7 @@ def load(service: Service, database: str, source: str) -> list[str]:
     own — `edges.provision` creates them and converges the password — and a load
     that created the role would be doing the edge's job in a place where the edge
     is not, and the role's password would then be the dump's password rather than
-    the edge's minted one (ADR-0024).
+    the edge's minted one (ADR-0025).
     """
     volume = _bulk_volume(service)
     path = _inside(_volume_path(service, volume), source, "--from")

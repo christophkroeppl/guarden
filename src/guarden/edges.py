@@ -250,7 +250,7 @@ def provision(consumer: str, provider: registry.Registry, container: str,
     databases — reads like a per-database secret and is not.
 
     **The engine-aware code of the EDGE, and it is this function.** `ENGINE` is a
-    constant named here and in `clone`, the other module that speaks postgres (ADR-0024),
+    constant named here and in `clone`, the other module that speaks postgres (ADR-0025),
     and a provider older than `MIN_VERSION` is refused rather than degraded to. A
     container which is not running is a warning and not a refusal: a poke installs the
     provider and the consumer in that order and the container starts after the command

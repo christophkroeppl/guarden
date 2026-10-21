@@ -185,7 +185,7 @@ to it.
   services/<name>/bulk/<vol>/  the same for a `bulk` volume, split out so the `state/`
   tree contains nothing but snapshotted subvolumes
   services/<name>/clones/<name>/  a throwaway clone of one snapshot, made by
-  `weedr clone snapshot` (ADR-0024). It has no
+  `weedr clone snapshot` (ADR-0025). It has no
   snapper configuration and is never snapshotted;
   it holds the clone's data and is owned by the
   service user, and a `weedr clone remove` deletes it
@@ -965,7 +965,7 @@ widgets:
 
 schema: .guarden/.env.schema  # names, types, examples; never values
 
-scrub:  # the operator's policy for a CLONED copy of this database (ADR-0024).
+scrub:  # the operator's policy for a CLONED copy of this database (ADR-0025).
   # `weedr clone transform` reads it and nothing else does. Every row of
   # a `tables:` entry goes; a `keys:` entry removes the rows whose named
   # column matches a prefix or one exact value. It is not SQL.
@@ -1777,7 +1777,7 @@ There is no `weedr redeploy`: deploying is `furrow deploy`, and a mutator that a
 two programs wearing one name. `remove` has the alias `rm`; nothing else does.
 
 **`weedr clone` is the snapshot-clone chain, and it is a group because the chain crosses
-services** (ADR-0024). A `service` verb acts on a service; these act on a snapshot id, on a
+services** (ADR-0025). A `service` verb acts on a service; these act on a snapshot id, on a
 database inside a service, and on a file in a service's bulk volume, and the four steps belong to
 different services: the snapshot is the source's, the dump lands in the target's bulk volume, the
 scrub rule is the target's manifest, and the load happens in the target. A service that does not

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # `weedr clone`: the snapshot-clone chain, end to end on a real machine.
 #
-# (ticket 327, ADR-0024)
+# (ticket 327, ADR-0025)
 #
 # **The chain the operator named, as one suite.** "pinning a snapshot from pg
 # and clone prod odoo db on staging pg and spin it up with staging odoo (spin up
@@ -190,7 +190,7 @@ assert_file_exists "$stage/bulk/bulk/self.sql"
 # --- step 4: the scrub, and what it removed ----------------------------------
 #
 # The operator's own step: "deleting email settings". The rule is a POLICY and
-# it lives in the staging service's own manifest (ADR-0024) — the fixture's
+# it lives in the staging service's own manifest (ADR-0025) — the fixture's
 # `scrub:` block is the one applied here.
 run weedr clone transform pgdual-staging --from clone.sql --out scrubbed.sql
 assert_exit 0
