@@ -89,11 +89,18 @@ assert_file_has "$DOC" "the programs live"
 
 # --- 310: the phase order is the installer's order -------------------------
 #
-# `packages, storage, sysctl, firewall, install, units` was the runbook's
-# line and the installer's order is `install` first, because `install` seeds
-# the file `packages` resolves its fetch against. Following the runbook
-# verbatim on a fresh box is therefore not the working flow.
-assert_file_lacks "$DOC" 'Phases in order: `packages`, `storage`, `sysctl`, `firewall`, `install`, `units`'
+# The runbook states the DESCRIPTION order, and says so: `soil list` prints
+# that order and it is not the order a fresh host runs them (`install` comes
+# first there, because `install` seeds the file `packages` resolves its fetch
+# against). The parsed comparison below is what holds the runbook to the
+# program, and the assertion under it requires the line to be present.
+#
+# There used to be an `assert_file_lacks` here for that same line, and it
+# contradicted the assertion immediately below it. It passed because
+# docs/sysadmin.md is 106,213 bytes — larger than one pipe buffer — so
+# `assert_file_lacks` could not fail on it at all. Ticket 352's fix to that
+# helper is what surfaced it; the line is correct and the negative assertion
+# was stale from the day it was written.
 assert_file_has "$DOC" "Phases in order:"
 # The order the runbook states is the order the program states, compared
 # rather than transcribed: a runbook that drifts from `soil list` fails here.
