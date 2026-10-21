@@ -869,8 +869,7 @@ cmd_provision() {
         install_rc=0
         vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
-            apt-get install -y -qq --no-install-recommends
-                snapper btrfs-progs iptables iproute2 passwd uidmap curl ca-certificates' \
+            apt-get install -y -qq --no-install-recommends snapper btrfs-progs iptables iproute2 passwd uidmap curl ca-certificates' \
             2>"$install_err" >/dev/null || install_rc=$?
         [ "$install_rc" = 0 ] && break
         printf '  packages: install attempt %d failed (rc %d)\n' \
