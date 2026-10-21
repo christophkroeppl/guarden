@@ -36,6 +36,12 @@ RESOLVER_ADDRESS = "127.0.0.53"
 RESOLVER_PORT = 53
 RESOLVER_PROTOCOLS = ("udp", "tcp")
 
+# The uid that resolves names on the host's own behalf. Root is not a service
+# uid and never is — but every name lookup on a systemd-resolved host goes to
+# the stub, so refusing root's query breaks the box's own tooling rather than
+# only the workloads. ADR-0023.
+ROOT_UID = 0
+
 # The chains guarden renders, and the only two a request may name. `guarden-in`
 # is soil's skeleton in 10-framework.conf and `guarden-svc` is the mutator's own
 # in 50-services.conf; growing this set is a change to spec 7.7.
@@ -186,8 +192,8 @@ def resolver_lines(uids: Iterable[int]) -> list[str]:
     through `OUTPUT` and meets the default deny — pasta's exclusion from the
     loopback mapping is about traffic from *inside* a container and says nothing
     about this path (spec §7.6, ADR-0016). One address, one port, both
-    protocols, owner-matched to service uids like every other accept, and no key
-    anywhere that adds another.
+    protocols, owner-matched to service uids like every other accept and to root
+    beside them (ADR-0023), and no key anywhere that adds another.
 
     **The reply accept belongs here, in `OUTPUT`, and not in `INPUT`.** The
     query is sent by the service uid, so it carries the owner match. The reply
@@ -197,11 +203,34 @@ def resolver_lines(uids: Iterable[int]) -> list[str]:
     where it meets the same default deny. An accept by source address alone is
     the whole of it: only the resolver holds `127.0.0.53:53`, and a loopback
     source cannot be forged from a service uid.
+
+    **Root is in the set, and it is the host's own fact rather than the
+    registry's** (ADR-0023). The uid list this function takes is the service
+    uids; root is not one and never will be — the registry is a record of the
+    workloads, and root is not a workload. But a name lookup on a
+    systemd-resolved host goes to the stub at `127.0.0.53`, so refusing root's
+    query does not confine the damage to a workload: it breaks the box's own
+    tooling. Measured on a converged host, root's `getent hosts <name>` exits 2
+    with the deny's own counter moving, `curl <url>` exits 6, and
+    `apt-get update` reports "Temporary failure resolving archive.ubuntu.com"
+    — while the same lookup as the service uid answers. **And the refusal is
+    invisible where it costs the most:** `apt-get update` still exits 0, so a
+    host whose package index silently stopped refreshing looks like a host
+    whose mirror was merely unreachable.
+
+    So root's accepts are rendered here, from the host's own knowledge, beside the
+    service ones and not as one of them: the same address, the same port, the same two
+    protocols, and no key anywhere that adds another. **"Beside" is about the
+    reasoning and not about the file** — `sorted()` puts uid 0's two lines first, so
+    `50-services.conf` shows root's accepts above every service uid's. The order
+    carries no meaning: accepts are not ordered among themselves and every accept
+    precedes the deny.
     """
+    every = sorted(set(uids) | {ROOT_UID})
     lines = [
         f"    mod owner uid-owner {uid} daddr {RESOLVER_ADDRESS} "
         f"proto {protocol} dport {RESOLVER_PORT} jump ACCEPT;"
-        for uid in sorted(set(uids))
+        for uid in every
         for protocol in RESOLVER_PROTOCOLS
     ]
     lines += [

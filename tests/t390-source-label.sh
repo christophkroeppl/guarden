@@ -58,3 +58,32 @@ assert_file_has /var/lib/guarden/registry/myapp-staging.toml 'source = "gitops"'
 run weedr service ingest myapp-production --from poke myapp@9f2c1ab
 assert_exit 0
 assert_file_has /var/lib/guarden/registry/myapp-production.toml 'source = "manual"'
+
+# **A projects configuration that cannot be read does not decide whether the
+# deploy happens.** `source` is a record (spec 3.4: "recorded, and it changes
+# nothing"), so a broken root-owned configuration cannot be the thing that
+# refuses a poke — and it cannot leave a service on the box that no registry
+# entry named either. The label falls back to `manual`, the direction that
+# never claims a receiver path that may not have run, and the fault is
+# REPORTED.
+#
+# The file is a broken TOML document on purpose: `projects.load()` raises out
+# of it, and the read used to happen where the record's own field was built —
+# after the system user, the home and the copied tree existed.
+seed /etc/guarden/projects.toml 'this is not = = valid toml'
+run weedr service ingest broken-production --from poke myapp@9f2c1ab
+assert_exit 0
+assert_file_has /var/lib/guarden/registry/broken-production.toml 'source = "manual"'
+assert_stderr_has "the projects configuration could not be read"
+# The service exists: the deploy SUCCEEDED, and it is not a service on the box
+# with no registry entry.
+assert_file_exists /var/lib/guarden/registry/broken-production.toml
+
+# The broken configuration is still broken for the paths where the projects
+# configuration IS an input and not a record: the receiver refuses an
+# unregistered project (spec 6.7), and so does the listing. The label's
+# tolerance is the label's alone — it does not make the fault go away.
+run weedr project list
+assert_exit 1
+assert_stderr_has "/etc/guarden/projects.toml"
+

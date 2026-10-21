@@ -106,6 +106,10 @@ PROC_SYS = PREFIX / "proc" / "sys"
 # podman's uid-scoped rootless quadlet search path, which is also where admin
 # units and drop-ins go (ADR-0003): the home's own directory is searched first,
 # so a root-owned drop-in here survives a regeneration.
+#
+# **It is the ONLY path to an admin's own configuration** (ADR-0024). There is
+# no staging copy of it: no program reads an admin's file from somewhere else
+# and copies it in, and no program stages one for the mutator to install.
 QUADLET = Path(".config/containers/systemd")
 # podman's own store inside a service's home. Root-relative, the way QUADLET is:
 # a walk of the service tree must leave it exactly as podman made it.
@@ -246,6 +250,13 @@ def sysctl(name: str) -> Path:
 
 
 NO_LOGIN_SHELL = "/usr/sbin/nologin"
+
+# The mode of a service's tree, and of every directory under it (spec 2.1).
+#
+# **It lives here and not in one program.** The rule is the tree's, and the
+# tree is walked by `service.py` and converged by `units.py` — two writers,
+# one rule, and a second constant would be a second statement of it.
+TREE_MODE = 0o700
 
 # The two volume kinds, and the directory each lives under (spec 2). They are
 # here rather than in `volumes.py` because `volumes` imports this module, and a

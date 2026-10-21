@@ -40,7 +40,7 @@ import hashlib
 import os
 from pathlib import Path
 
-from guarden import conf, credentials, paths, users
+from guarden import conf, credentials, errors, paths, registry, users
 
 # The schema key the minted login is planted under, and the name of the record
 # in the registry's [generated] table — the same "guarden minted this" ledger a
@@ -158,20 +158,137 @@ def write_entry(service: str, password: str) -> Path:
 
 
 def mint(record, when: str) -> None:
-    """Plant the service's login and record both halves.
+    """Plant the service's login, carry it into the service's own store, and
+    record both halves.
 
     Idempotent by the record: the first mint is the login, and a re-ingest or
     an instance of an already-flagged service never re-mints — a login that
     changed underneath an operator's stored credential would be worse than no
-    credential at all.
+    credential at all. **It also never re-asks**, so the ask below is paid once
+    per service and not on every converge.
+
+    **The plant asks the materialiser to run, and the order of these three
+    lines is the whole of the reason.** `credentials.plant` writes the
+    encrypted blob; the value is in the service's own podman store only once
+    the materialiser has decrypted it there, and the store is what the
+    container's `Secret=` line resolves against. So a plant that does not ask
+    leaves the value's arrival to whoever notices the blob — and the only
+    thing that notices it is the `guarden-creds.path` watcher, which fires
+    when it fires.
+
+    **Measured, because "the watcher is usually fast enough" is not a
+    guarantee.** With the watcher running, the value was in the store before
+    the ingest returned — the watcher fires on the blob's own write while the
+    mutator is still working, so the timing won the race. With
+    `guarden-creds.path` stopped, the value NEVER arrived: not immediately,
+    not after fifteen seconds, and only when `guarden-creds-boot.service` was
+    started by hand. So the watcher's arrival is a timing win and not a
+    delivery guarantee, and a box whose path unit is not running — a
+    converged host that has not been rebooted since it was installed, a host
+    where the unit failed, a host where somebody stopped it — carried a blob
+    and no store copy until the next boot.
+
+    **So the mint asks, the way every other plant asks.** `weedr secret set`
+    plants and then asks (spec 6.2: "encrypts into
+    `/etc/guarden/creds/<name>/<KEY>.cred` mode `0600`, then asks the
+    credential materialiser to run"), and the interactive creator plants and
+    asks. A mint is a plant of a credential, and the spec's rule is about the
+    plant rather than about the verb that performed it.
+
+    **The ask is BEFORE the htpasswd entry, and the reason is what a failure
+    leaves behind.** The ask raises when the materialiser is installed and
+    could not carry the value, and this is the root-side mutator: raising
+    ends the creation before the record is saved, so a service that was never
+    created leaves no htpasswd entry pointing at a login nothing serves.
+    Writing the entry first would leave exactly that: an orphan file for a
+    service the registry never recorded.
+
+    **And the ask is before the record's own flags for the same reason**: a
+    failed ask must not record a login as minted, because the next attempt
+    mints a fresh value and a half-recorded one would look like the first
+    mint had happened.
+
+    **The ask is the documented no-op on a host that has not converged.** A
+    box whose `soil install` has not run has no materialiser unit at all, and
+    `ask_materialiser` warns and returns for that case rather than raising —
+    so a service created on such a box still holds its blob and its htpasswd
+    entry, and the value reaches the store when the phase that owns the unit
+    has run. That is the same contract the other two callers of the ask get.
     """
     if record.basicauth:
         return
     password = credentials.generated_value()
-    credentials.plant(record.service, KEY, password)
+    blob = credentials.plant(record.service, KEY, password)
+    credentials.ask_materialiser(record.service, KEY, blob)
     write_entry(record.service, password)
     record.basicauth = True
     record.generated[KEY] = when
+
+
+def owns(service: str, key: str) -> bool:
+    """Whether this module's credential is the one being written.
+
+    The predicate is the KEY and the record's flag, and nothing else. A
+    service that never carried a login has no entry to rewrite, and a key
+    that is not this module's is not this module's business — the credential
+    module asks every owner it knows, and each one answers for itself.
+
+    **A record that cannot be read is not this module's business either.**
+    The registry is the record of the fact, and a registry that will not
+    parse is the host not being in the state the request assumed — but it is
+    a fact about the RECORD, and this function is asked a question about the
+    credential. The verb that owns the record reports that failure itself,
+    with the path in the message; here the answer is "not mine", and the
+    credential is written exactly as it would be for any other key.
+    """
+    if key != KEY:
+        return False
+    try:
+        record = registry.load(service)
+    except errors.GuardenError:
+        return False
+    return record is not None and record.basicauth
+
+
+def rotate(service: str, key: str, stored: str) -> bool:
+    """Rewrite the service's htpasswd entry from a value that was just planted.
+
+    **The edge does not read the blob — it reads the entry.** So a rotation
+    that replaces the blob and leaves the entry alone puts a login in front of
+    the edge that is not the one the operator just rotated to, and the two
+    halves of one credential disagree until somebody rewrites the entry by
+    hand. This is the hook that stops that: the same act that replaces the
+    blob re-derives the entry from the same value.
+
+    The shape is `restore`'s — write the entry from a value — and the
+    difference is only where the value comes from: `restore` reads it back
+    out of the blob, because the blob is all it has; this one is handed the
+    value that was just planted, so the entry and the blob are derived from
+    ONE value rather than from two reads of one file.
+
+    **A service that never carried a login is not this function's business.**
+    The flag is the record of the fact, and a service created before the
+    policy has no entry and no middleware — so there is nothing to rewrite
+    and nothing to report.
+
+    **A write that cannot be made is a diagnostic, not a traceback.** The
+    entry is root-side state on a filesystem that can refuse even root, and
+    the refusal is the host not being in the state the request assumed — so
+    it is one line naming the service and the path, and the caller is the
+    one that decides what a refusal means for the credential as a whole.
+    """
+    if not owns(service, key):
+        return False
+    path = host_file(service)
+    try:
+        write_entry(service, stored)
+    except OSError as exc:
+        raise errors.GuardenError(
+            f"the basic-auth entry of {service} could not be written at {path}: "
+            f"{exc.strerror or exc}",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    return True
 
 
 def restore(record) -> bool:

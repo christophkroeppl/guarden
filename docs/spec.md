@@ -160,7 +160,8 @@ to it.
   allow-gated-drop  present only if a poke may drop a service in a
   gated track
 /etc/containers/systemd/users/<uid>/  podman's uid-scoped rootless quadlet path: the admin
-  injection point for a service's own units and drop-ins.
+  injection point for a service's own units and drop-ins, and the ONLY path
+  to them (ADR-0024). There is no staging copy of them anywhere.
   <unit>.container.d/  one directory per unit, holding the drop-ins
   that are merged into that unit's base file. **The mutator writes
   exactly one file in it** — `50-guarden-keepid.conf`, the keep-id
@@ -221,9 +222,19 @@ exists, and keeping a snapshotted tree and an unsnapshotted one in one directory
 above happened in the first place.
 
 Nothing root-owned lives inside a service's home, and **admin units are not copied into
-one**: they live in `/etc/guarden/services/<name>/units.d/` until the mutator installs them
-into `/etc/containers/systemd/users/<uid>/`. Generated units live in the home's quadlet
-directory and are rewritten on regeneration.
+one**: they are drop-ins in `/etc/containers/systemd/users/<uid>/<unit>.container.d/`, which
+the generator reads for a unit whose base file lives in the home (§6.3). Generated units live
+in the home's quadlet directory and are rewritten on regeneration.
+
+**There is no staging copy of an admin's units, and there is no second path to them**
+(ADR-0024). The admin path above is the whole of it: the admin writes the file where the
+generator reads it, the renderer reads it back and merges it into the rendered unit, and the
+mutator writes exactly one file beside it — `50-guarden-keepid.conf`, the keep-id pin
+(§6.3). **A path a document names is a path a program implements**, so this paragraph is the
+answer to the question §2.1's mode table asks: the promised
+`/etc/guarden/services/<name>/units.d/` is not in the table because no program ever read or
+wrote it, and adding the copy would give the admin's own configuration two ways to reach a
+unit — the thing ADR-0019's one-writer-per-file model exists to prevent.
 
 **An instance's units are installed in two places.** The declaration itself lives in the
 instance's own quadlet directory (§5.2), and one entry named `<unit>-<escaped-ref>` — plus
@@ -283,7 +294,8 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/etc/containers/systemd/users/<uid>/` | `0755` | `root:root` | `weedr service add`/`ingest`. The same traverse grant, one level down: the generator reads it as the service user |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/` | `0755` | `root:root` | the mutator, installing the keep-id drop-in. One directory per unit, and the admin's own file in it is never touched |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | `0644` | `root:root` | the mutator, on the install that renders the pin. **World-readable, and that is the point**: the generator reads this path as the service user, and a root-owned `0600` file there yields NO generated unit at all (measured: `probe-quadlet-dropins.md` row 10). Nothing secret is in it — a `UserNS=` line names a uid and a gid — and root alone writes it |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3) |
+| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3). **The renderer READS it** — `render._dropins` merges every `*.conf` in this directory into the unit before generation, which is what makes an operator's `MemoryMax=` survive a regeneration (§6.3, ADR-0024) |
+| `/tmp` | `1777` | `root:root` | **not the conversion's**: `systemd-tmpfiles`, through `q /tmp 1777 root root 10d` in the distribution's `/usr/lib/tmpfiles.d/tmp.conf`, applied to the `@tmp` subvolume the conversion mounts at it. `btrfs subvolume create` makes `@tmp` `0755` and nothing guarden does would change that, because the mode is the distribution's row and its owner is tmpfiles — the conversion that created the subvolume is not the thing that owns the mode on it |
 
 `/run/guarden/locks/` is `2770 root:guarden` because `guarden` and root both take these locks
 — `queue` and `deploy-*` are taken by `furrow` as the `guarden` user, and the remaining names
@@ -513,7 +525,9 @@ Precedence: **explicit override > `[providers]` environment default > literal na
 The manifest refuses `environment:` and `track:` by name (spec 4): the host decides the environment. This table is where that decision is expressed — the repository names the logical provider, and the root-owned track table says which concrete service answers it per track.
 
 `admin_user` is a login name, resolved to a uid. It is the only uid besides the service uids
-that the firewall names, and it is the uid allowed to reach the edge's API.
+and root that the firewall names, and it is the uid allowed to reach the edge's API. Root is
+named because it holds the resolver's accepts (§7.6) and the operator's publication accept
+(§7.6), and the two are the whole of uid 0's exceptions to the loopback deny.
 
 The `[network]` table is load-bearing rather than a preference, because it decides whether a
 container can reach the host at all (§7.1). **The set is pinned, and its shape is validated**:
@@ -1410,7 +1424,42 @@ In order:
 13. A re-render of the edge's routes and the dashboard, at the end of the command (§6.9).
 
 Every step is idempotent. A second `ingest` or `add` of a converged service exits `0`, says it
-converged, and changes nothing.
+converged, and changes nothing — except the one thing below, which is a mode and not a deploy.
+
+**The one thing a converged `ingest` or `add` does change is a mode.** The tree's rule is `0700`
+to the service user (§2.1), and a host that ran an older guarden carries directories that do not
+hold it — the unit directories an older installer made, root-owned with the mutator's umask.
+**A converged create REPAIRS them**, and it is the only verb that does: a converged create is
+exactly the one that installs nothing, so a repair placed anywhere else would never run on the
+deploy it is for.
+
+**What is repaired is the unit directories — the service's own and every instance's — and the
+levels above them.** Those are the directories the INSTALLER made, by `mkdir(parents=True)`, and
+every other directory in the tree is made and owned by the tree walk, which runs on every create
+that is not converged. **The FILES are not repaired**: a unit file's mode is a separate question
+(§2.1's `0640` against the tree's `0700`), and a repair that re-moded them would settle it by
+side effect.
+
+**Whose mode wins is the tree's**, and the spec is silent on a deliberate widening, so it says
+so: the `0700` is not a convenience but the isolation boundary that stops one service user
+reading another's volumes off the host filesystem, so an operator who widened a directory under
+the home has widened that boundary and the repair puts it back. **The repair REPORTS what it
+changed**, one line per directory on stdout, so an operator who meant the widening is told rather
+than left to fight a correction that repeats on every deploy. A repair is the verb doing what it
+says, so the deploy still exits `0`.
+
+**The repair reaches nothing outside the service's own home.** The instance's directory name is
+a registry key, and a registry is a root-owned file an operator can edit by hand, so the repair
+resolves every path it would touch and refuses any that does not land inside the home. **A LINK
+IS NOT FOLLOWED**: the service owns its home and can plant a link in it, and a root-run `chown`
+that followed one would be an escalation — so a path that resolves outside the home is left
+alone, and the link's target is the target's business.
+
+**The owner of a repaired directory is ONE answer, and the host is asked for it.** The uid is
+the one the record holds; the gid is the service user's primary gid, read from the host's own
+passwd database, which is the same answer the tree walk and the installer use. A service user
+the host no longer has is a **refusal naming the service** (exit `1`), and not a gid invented
+from the uid: a gid is a property of the system, and a number nobody assigned is not one.
 
 `weedr service remove <name>` removes a whole service: it reverses all of it, moves each state
 and bulk subvolume to `/var/lib/guarden/removed/<service>/<time>/<vol>/` rather than deleting
@@ -1525,18 +1574,24 @@ still converge and the run still exits `1`.
   that needs it — after the disable — so the *first* `packages` run on a host whose timers are
   still armed meets them only in the window before its own first item: the disable is what
   closes that window.
-- `storage` verifies btrfs with `@` and `@var` subvolumes, installs
+- `storage` verifies btrfs with `@`, `@var` and `@tmp` subvolumes, installs
   `/etc/apt/apt.conf.d/80guarden-snapper` with a `DPkg::Pre-Invoke` that snapshots `root`
   before every package transaction, converges the canonical value set into every snapper
-  configuration it can see — a service's configurations, and the host's own `root` and `home`,
-  and nothing else (§8.1) — creates `root` and `home` where they are absent, and installs
-  `/var/lib/guarden/soil/`. It creates **no** service volume. **A root that is not yet btrfs,
+  configuration it can see — a service's configurations, and the host's own `root`,
+  and nothing else (§8.1) — creates `root` where it is absent, and installs
+  `/var/lib/guarden/soil/`. It creates **no** service volume, and **no configuration for
+  `/tmp`**: the layout's third subvolume is the one with no ladder, because `/tmp` is volatile
+  data that is not to be snapshotted, and the phase asks `snapper list-configs` for that
+  rather than asserting it about itself (§8.1). **A root that is not yet btrfs,
   or that is btrfs without the subvolumes, is converted**: the phase drives a staged offline
   conversion — `--apply` schedules it, a reboot runs it in the initramfs, and the phase is run
-  again after each reboot (twice in all: the conversion, then the `@`/`@var` migration) — and
+  again after each reboot (twice in all: the conversion, then the `@`/`@var`/`@tmp` migration) — and
   while a reboot is outstanding it reports the marker it wrote at
   `/var/lib/guarden/soil/reboot-required` and stays unmet, which is the one drift a `storage`
-  run is expected to carry between reboots. It also **disables the
+  run is expected to carry between reboots. **A host already on `@` and `@var` with no `@tmp` is
+  finished, not converted again**: the phase creates the missing subvolume at the top level and
+  writes its `/tmp` fstab line, which is one subvolume and one line, then asks for the same
+  reboot — re-running the `@` migration instead would rsync `/` onto itself. It also **disables the
   distribution's packaged snapper cleanup timer** and installs the replacement that takes the
   `snapshots` lock (§8.5). A snapper configuration belonging to a service is created by the mutator and is
   never recreated here.
@@ -1728,6 +1783,24 @@ otherwise: `systemd-creds --with-key=host` for a host key at
 prefers a TPM2 key when it finds one, so a box with a TPM would silently encrypt with a
 different key than the runbook describes. `weedr secret list` prints key names and whether each
 is set, never a value.
+
+**A credential may have an output besides its blob, and the verb writes every half of it.**
+The basic-auth login is the one that exists today: the edge's `basicAuth` middleware reads the
+htpasswd **file** the mutator wrote (`usersFile: /etc/guarden/basicauth/<service>.htpasswd`) and
+never the podman secret, so the blob and the entry are two halves of one credential and the
+entry is the half in front of the edge. A `weedr secret set` on that key therefore re-derives the
+entry from the same value it encrypts into the blob, in the same act: **the halves are written
+together or not at all.** The module that owns an output answers for itself — the credential
+module knows only that a key may have an owner — and a key no owner claims is untouched, so the
+verb behaves exactly as before for every ordinary credential.
+
+A rotation that cannot write the output **is a failure, and it leaves the credential as it was.**
+The blob is written first and the derived half second, so a refused write undoes the blob rather
+than leaving one half advanced and the other behind, and the diagnostic names the service. The
+operator is left holding the credential they had; the value they typed never reached the host.
+**Nothing rotates on its own.** There is no expiry, no schedule and no policy that changes a
+credential's value — the only rotation is the manual act an operator performs, and what this
+paragraph says is that the act is consistent.
 
 `weedr port open` takes a public port that the manifest must already have requested, and
 refuses anything else with exit `2` naming the request it would have to be — an admin cannot
@@ -1928,6 +2001,14 @@ three writers, and no file with two of them:
 | the base unit, in the service's own quadlet directory | the renderer, on every install | **no `UserNS=` line at all** — the pin is not in it |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | the mutator, and nobody else | the `UserNS=keep-id:uid=…,gid=…` line |
 | `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | **the admin, and nobody else** | whatever the admin wants; a `UserNS=` line in it **overrides** guarden's pin |
+
+**There is no fourth file, and no staging copy of the third** (ADR-0024). The admin's
+configuration reaches a unit by exactly one path — this directory — and the renderer reads
+it there: `render._dropins` merges every `*.conf` in the unit's drop-in directory into the
+unit before generation, so an operator's `[Service] MemoryMax=` lands in the rendered unit.
+A copy of the admin's file staged elsewhere would give that configuration two ways to reach
+a unit, two files that could disagree, and two answers to "which one is the record" — and
+none of it buys anything the generator does not already do (ADR-0019).
 
 The reasons are measured, and they are the whole of the design. **The base unit carries no
 line** because a base unit that carried it would carry it twice over once the generator
@@ -2723,7 +2804,10 @@ filter OUTPUT
   ... one per (publication, allowed uid) ...
   -A guarden-svc -d 127.0.0.53 -p udp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
   -A guarden-svc -d 127.0.0.53 -p tcp --dport 53 -m owner --uid-owner <service-uid> -j ACCEPT
-  ... one per service uid, the host's stub resolver and nothing else ...
+  ... one per service uid, plus root's pair ...
+  -A guarden-svc -d 127.0.0.53 -p udp --dport 53 -m owner --uid-owner 0 -j ACCEPT
+  -A guarden-svc -d 127.0.0.53 -p tcp --dport 53 -m owner --uid-owner 0 -j ACCEPT
+  ... root's pair, for the host's own name lookups (ADR-0023) ...
   -A guarden-svc -s 127.0.0.53 -p udp --sport 53 -j ACCEPT
   -A guarden-svc -s 127.0.0.53 -p tcp --sport 53 -j ACCEPT
   ... the reply to those queries, source-address matched with NO owner match ...
@@ -2758,11 +2842,46 @@ port 53, over **both** protocols, so a service uid carries two accepts for it �
 `tcp` — exactly as it carries an accept per publication, with the same owner match and above
 the same deny. **The address is `127.0.0.53` and never `127.0.0.0/8`**, and the port is 53 and
 nothing else, so every other loopback destination and every other port on that one are still
-refused. The uid set is the service uids and no other: the rule cannot be widened by a
-manifest, an `overrides.toml`, a module or a poke, and there is no key that adds one. It is
-drawn from guarden's knowledge of what the host runs rather than from configuration, so it is
-not the `[loopback] allow` table the firewall rules removed — see §7.7 for that distinction,
-which is the whole of what makes this rule safe to render unconditionally.
+refused. The uid set is the service uids **and root**, and nothing else: the rule cannot be
+widened by a manifest, an `overrides.toml`, a module or a poke, and there is no key that adds
+one. It is drawn from guarden's knowledge of what the host runs rather than from
+configuration, so it is not the `[loopback] allow` table the firewall rules removed — see
+§7.7 for that distinction, which is the whole of what makes this rule safe to render
+unconditionally.
+
+**Root is in that uid set, beside the service uids and not as one of them.** The uid set is
+the registry's service uids plus **root**, and root's presence is decided rather than
+incidental: it was a side effect of where the list came from until ADR-0023 asked it
+directly. **Root receives the same two owner-matched accepts — `udp` and `tcp`, the same
+address, the same port — and the deny no longer refuses root's query to the resolver.**
+
+Three things carry the answer, and each is a fact about the design rather than a
+preference.
+
+- **The lookup is on the path, and the deny was on the path.** `/etc/resolv.conf` names
+  `127.0.0.53`, so **every** name lookup on the host is a loopback packet *before* any
+  outbound packet exists — the outbound packet is untouched by the deny, but the lookup
+  that precedes it is not, and the stub is inside `127.0.0.0/8`. So `soil packages`'s
+  `apt-get update` and `soil install`'s pinned-artefact fetch, both of which resolve a
+  host name as root, met the deny.
+- **And the refusal was invisible where it cost the most.** Measured on a converged host:
+  root's `getent hosts <name>` exits 2, root's `curl <url>` exits 6, and
+  `apt-get update` reports *"Temporary failure resolving archive.ubuntu.com"* **and
+  still exits 0**. A host whose package index silently stopped refreshing reads as a host
+  with an unreachable mirror, and the operator's next move is the wrong one.
+- **Root already holds a broader exemption on this chain.** The operator's shell reaches
+  every publication (`mod owner uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;`), so
+  uid 0 is not outside the loopback deny — it is inside it with a named exception. The
+  question was therefore never "may root use the loopback" but "may root ask the stub a
+  question", and the marginal fact of the resolver accept is **a second address and the udp
+  half of a protocol pair**, for a uid that already holds every TCP port on `127.0.0.1`.
+  **And because the deny names no uid, uid 0's accept list is the whole of root's loopback
+  policy** — which is why it is short and enumerated rather than broad.
+
+**The accept is drawn from the host's own knowledge and from no configuration, exactly as
+the service set is.** No key adds one, no key removes one, and no address an operator may
+substitute — so this is not a second way to grant a destination beside the publication
+set.
 
 **The reply carries no owner match, and that is not a widening.** The query leaves as the
 service uid and is owner-matched; the answer is generated by systemd-resolved itself, so no
@@ -2801,8 +2920,17 @@ DENY_COUNTER_AFTER=1
 
 So the resolver was unreachable from every service uid and **no first deploy of a new
 workload could complete**, which is a much larger claim than the sentence it replaced was.
-The blanket-drop justification — that it "would break name resolution and package updates" — was wrong on both counts: package updates are outbound and untouched, and the name-resolution failure was real but for the wrong layer. Both claims are gone, and the resolver accept above is the measured answer. The claim
-survived as long as it did because nobody ran `iptables -S`; `docs/sysadmin.md` used to say
+The blanket-drop justification — that it "would break name resolution and package updates" —
+was right about name resolution and **wrong about package updates, in a way this
+document itself got wrong afterwards**: package updates are outbound and the outbound
+*packet* is untouched, but the **name lookup that precedes it** is a loopback packet to
+the stub, so `apt-get update` as root could not resolve a mirror. Measured on a converged
+host with the deny in force: `apt-get update` reports *"Temporary failure resolving
+archive.ubuntu.com"* **and still exits 0** — a host whose package index silently stopped
+refreshing reads as a host with an unreachable mirror. ADR-0023 measures this and the
+resolver's accept for root is the answer; the claim about the outbound packet surviving on
+its own was the error, and it is the same error the blanket drop made one layer up. The
+claim survived as long as it did because nobody ran `iptables -S`; `docs/sysadmin.md` used to say
 the firewall files were ferm source and that `iptables -S` "shows you nothing", which is not
 true.
 
@@ -2990,18 +3118,30 @@ operator owns:
 
 - **A service's configuration** — the name matches a registry entry, so the track is read from the
   registry and the retention values come from that track.
-- **`root` and `home`**, the host's own. These are converged with the **fixed set only** —
-  `EMPTY_PRE_POST_CLEANUP`, `NUMBER_MIN_AGE`, `NUMBER_CLEANUP`, `TIMELINE_CLEANUP` — and **no
-  ladder value and no `FREE_LIMIT` is written for them**, because no track owns them and there is
-  no track to read a default from. Their ladder is left as the distribution shipped it. Nothing
-  snapshots them on a schedule, so their limits govern only what a human gets who runs `snapper`
-  by hand there, and that is a human's own housekeeping rather than a policy guarden owns. An
-  earlier revision applied the skip rule to these two as well, which meant every
-  `soil storage --apply` emitted two warnings and never converged the host at all.
+- **`root`**, the host's own, and the only one. `/home` is **not** among them: it is a directory
+  inside `@` rather than a subvolume of its own, and snapper snapshots a subvolume, so a
+  configuration for `/home` could not be created on this layout at all. It is converged with the
+  **fixed set only** — `EMPTY_PRE_POST_CLEANUP`, `NUMBER_MIN_AGE`, `NUMBER_CLEANUP`,
+  `TIMELINE_CLEANUP` — and **no ladder value and no `FREE_LIMIT` is written for it**, because no
+  track owns it and there is no track to read a default from. Its ladder is left as the
+  distribution shipped it. Nothing snapshots it on a schedule, so its limits govern only what a
+  human gets who runs `snapper` by hand there, and that is a human's own housekeeping rather than
+  a policy guarden owns. An earlier revision applied the skip rule to the host's configurations
+  as well, which meant every `soil storage --apply` emitted two warnings and never converged the
+  host at all.
 - **Anything else** is a configuration guarden did not create, so it is **skipped with a
   `warning:` line naming it** and left byte-for-byte alone. This is the "every configuration it
   can see" in the phase description, and "can see" is doing the work: seeing means a name that
-  either matches a registry entry or is one of the host's two.
+  either matches a registry entry or is `root`.
+
+**The layout's third subvolume is not a configuration case at all.** `/tmp` is mounted from
+`@tmp` and carries **no snapper configuration**, because `/tmp` is volatile data that is not to
+be snapshotted: there is no `TIMELINE_LIMIT_*` value that governs it, no cleanup algorithm, and
+nothing that would roll it back. The phase verifies that rather than assuming it — `snapper
+list-configs` names every configuration and the subvolume it is for, so a configuration whose
+subvolume is `/tmp` is one that would give `/tmp` a ladder whatever the phase did or did not
+write. guarden creates no configuration for `/tmp`, and a configuration that appeared there
+anyway is not guarden's to remove.
 
 A configuration for a **removed** service is the case that matters most, and it is the second
 branch: `weedr service remove` deletes the service's `state` subvolumes, and `soil storage` is

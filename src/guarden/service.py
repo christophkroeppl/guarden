@@ -59,7 +59,7 @@ from guarden import manifest as manifest_mod
 from guarden import modules as modules_mod
 from guarden import overrides as overrides_mod
 
-TREE_MODE = 0o700
+TREE_MODE = paths.TREE_MODE
 
 
 def _in_podman_store(path: Path, root: Path) -> bool:
@@ -289,7 +289,7 @@ def _manifest_directory(source: Source, name: str) -> Path:
     return paths.service_home(name)
 
 
-def _source_label(source: Source) -> str:
+def _source_label(source: Source) -> tuple[str, list[str]]:
     """What the registry may claim about where this tree came from.
 
     spec 3.4 records `source` as `manual` or `gitops` and says it changes
@@ -305,14 +305,42 @@ def _source_label(source: Source) -> str:
     spec denies it and add a precondition spec 5.3's step list does not carry;
     the registration check belongs to `hose` and to `furrow` (spec 6.6), and
     what the mutator owes here is an honest record.
+
+    **The read is TOTAL, and that is what keeps the field a record.** A
+    malformed `projects.toml` or a malformed file under `projects.d/` raises out
+    of `projects.load()`, and the raise happened AFTER the system user, the
+    home and the copied tree existed — so a broken root-owned configuration
+    failed the ingest and left a service on the box that no registry entry
+    named. That gave the label a veto it must not have (spec 3.4: "recorded,
+    and it changes nothing"), and it made a provenance field decide whether a
+    deploy succeeds.
+
+    So the failure is absorbed here: the label falls back to `manual` — the
+    direction that never claims a receiver path that may not have run — and
+    the fault is REPORTED as a warning naming the file. The warning is not
+    swallowed: a broken projects configuration is a host fact an operator has
+    to fix, and `hose` (spec 6.7) and `weedr project list` refuse on it in
+    their own right.
+
+    The answer is a pair because the two halves travel apart: the label is
+    written into the record, and the warning is written to stderr by the verb.
     """
     if source.kind != "poke":
-        return registry.SOURCE_MANUAL
-    return (
-        registry.SOURCE_GITOPS
-        if str(source.project) in projects.load()
-        else registry.SOURCE_MANUAL
-    )
+        return (registry.SOURCE_MANUAL, [])
+    try:
+        registered = projects.load()
+    except errors.GuardenError as exc:
+        return (
+            registry.SOURCE_MANUAL,
+            [
+                f"the projects configuration could not be read, so the source of this "
+                f"service is recorded as {registry.SOURCE_MANUAL} rather than "
+                f"{registry.SOURCE_GITOPS}: {exc.message}"
+            ],
+        )
+    if str(source.project) in registered:
+        return (registry.SOURCE_GITOPS, [])
+    return (registry.SOURCE_MANUAL, [])
 
 
 def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcome:
@@ -357,6 +385,18 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     if existing is not None and _converged(existing, resolved, manifest, project, source_hash):
         outcome.converged = True
         outcome.uid = existing.uid
+        # **A converged create still REPAIRS the tree (ticket 334).** The
+        # convergence check answers "the deploy is what the record says it is",
+        # and it says nothing about the host's modes: a host that ran an older
+        # guarden carries unit directories that are root-owned with the
+        # mutator's umask, and the create that reconciles the service is the
+        # only thing that runs on every deploy.
+        #
+        # **The repair runs here and not at the end of the create**, because
+        # the end of the create is where the units are INSTALLED, and a
+        # converged deploy installs nothing — so a repair placed there would
+        # never run on the deploy it is for.
+        outcome.notes += _repair(existing, resolved)
         return outcome
 
     fresh = bool(resolved.escaped_ref) and (
@@ -365,6 +405,28 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     if fresh and existing is not None:
         outcome.notes += previews.admit(resolved, existing, now)
     outcome.fresh_instance = fresh
+
+    # **The LABEL is read HERE — after the converged return and before the
+    # identity — and it is read only for a service that does not exist yet.**
+    #
+    # Two things are true of the label and this is where both of them hold.
+    # It is written once, at record creation, and a later ingest does not
+    # rewrite it — so a converged service never needs the projects
+    # configuration read at all, and a re-ingest is not held up by a broken
+    # one. And it is a RECORD (spec 3.4: "recorded, and it changes nothing"),
+    # so it cannot be the thing that decides whether the deploy happens: read
+    # at the record's own construction, it sat AFTER the system user, the home
+    # and the copied tree, and a malformed projects configuration failed the
+    # ingest and left a service on the box that no registry entry named.
+    #
+    # The read is total — a configuration that cannot be read records
+    # `manual` and is reported as a warning — so the label never vetoes the
+    # deploy in either direction.
+    label, label_warnings = _source_label(source) if existing is None else (
+        registry.SOURCE_MANUAL,
+        [],
+    )
+    outcome.warnings += label_warnings
 
     identity = users.ensure(resolved.name, paths.service_home(resolved.name))
     outcome.uid = identity.uid
@@ -376,7 +438,12 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
 
     granted = overrides_mod.seeded(resolved.track, overrides_mod.load(resolved.name))
     overrides_mod.save(resolved.name, granted, root_owner)
-    outcome.warnings = users.reconcile_groups(resolved.name, granted.groups)
+    # **The group warnings JOIN the label's and are not a replacement for
+    # them.** This line assigned `outcome.warnings` outright, so a warning
+    # raised before it — the label's, on a host whose projects configuration
+    # could not be read — was discarded on the way out, and the operator saw
+    # a deploy succeed with no word about the configuration that was broken.
+    outcome.warnings += users.reconcile_groups(resolved.name, granted.groups)
 
     record = existing or registry.Registry(
         service=resolved.name,
@@ -385,7 +452,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
         environment=resolved.track.name,
         uid=identity.uid,
         created=now,
-        source=_source_label(source),
+        source=label,
     )
     record.project = project
     record.environment = resolved.track.name
@@ -852,6 +919,46 @@ def _converged(
     )
 
 
+def _repair(record, resolved) -> list[str]:
+    """The tree of a service that is already converged, converged to the
+    tree's rule (ticket 334).
+
+    **What is repaired is the UNIT DIRECTORIES: the service's own and every
+    instance's.** Those are the directories the INSTALLER made — the quadlet
+    directory, the levels above it, and the drop-in directory under it — and it
+    made them by `conf.write_file`'s `mkdir(parents=True)`, so they carry the
+    mutator's umask and root's ownership. A host that ran an older guarden
+    carries them that way, and nothing else repairs them: `_make_tree`'s walk
+    owns the rest of the tree, and it runs on a create that is not converged.
+
+    **Why not the whole tree.** The walk already owns the whole tree, and it
+    reaches the unit directories too — so a repair that walked the whole tree
+    would be a second statement of the tree's rule in a second place, and the
+    two would drift. The repair is narrow because the INSTALLER is the only
+    writer that made a directory wrong.
+
+    **Why not the files.** A unit file's mode is ticket 320's question — two
+    writers disagree about it and suites pin the answer it has not yet been
+    given. A repair that re-moded the files would settle that question by side
+    effect, and this is not that ticket.
+
+    **Whose mode wins: the tree's.** The tree's rule is `0700` to the service
+    user (spec 2.1), and it is a rule about the ISOLATION BOUNDARY rather than
+    about a convenience: `0700` on the service's tree is what stops every
+    service user reading every other service's state volumes off the host
+    filesystem. An operator who widened a directory under the home has widened
+    the boundary, and a repair that did not put it back would leave the hole
+    open — so the tree's rule wins, and the repair says what it changed so an
+    operator who meant it can say so in a place guarden reads.
+
+    The lines are NOTES and not warnings: a repair is the verb doing what it
+    says, so the deploy exits `0` and the operator sees what was corrected.
+    """
+    owner = units.owner_of(record)
+    repaired = units.repair_unit_dirs(record.service, owner, sorted(record.instances))
+    return [f"repaired {path} to the service's own" for path in repaired]
+
+
 def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None) -> None:
     """The whole tree, `0700` to the service user, with no carve-out for the home.
 
@@ -1315,8 +1422,8 @@ def _render_source(directory: Path) -> Iterator[Path]:
 
 
 def _ensure_admin_units(uid: int) -> None:
-    """Reconcile the existence of podman's uid-scoped search path and nothing
-    inside it: a regenerated unit must not clobber a root-owned drop-in, which is
+    """Reconcile the existence of podman's uid-scoped search path and create
+    nothing in it: a regenerated unit must not clobber a root-owned drop-in, which is
     what that path being searched after the home's own directory buys (ADR-0003).
 
     **The path's own directories are created with a stated mode**, because the
@@ -1330,6 +1437,16 @@ def _ensure_admin_units(uid: int) -> None:
     the admin's own `90-admin.conf` is the human's file, and the one file
     guarden writes in there is written where it is written — by the install,
     with the name it has.
+
+    **This is the mutator's half of the admin path, and the renderer reads
+    the directory too** (ADR-0024). `render._dropins` merges every `*.conf`
+    in a unit's drop-in directory into the unit before generation, so an
+    operator's `MemoryMax=` reaches the rendered unit. That read is the
+    renderer's and not this function's: the mutator reconciles the EXISTENCE
+    of the path and writes the one file it owns, and it neither copies the
+    admin's file in from somewhere else nor stages a copy of it anywhere.
+    The admin path is the only path to an admin's unit, and there is no
+    staging copy of it.
     """
     for parent in paths.admin_parents():
         parent.mkdir(parents=True, exist_ok=True)
