@@ -136,14 +136,14 @@ def discover(tree: Path) -> list[App]:
     return found
 
 
-def _app_label(name: str) -> str:
+def _app_or_root(name: str) -> str:
     """An app as a diagnostic names it: its name, or the tree root for the empty one."""
     return repr(name) if name else "<the repository root>"
 
 
 def shipped(apps: list[App]) -> str:
     """The apps of a tree as one line names them, for a refusal to carry."""
-    return ", ".join(_app_label(app.name) for app in apps)
+    return ", ".join(_app_or_root(app.name) for app in apps)
 
 
 def label(service: str, app: str) -> str:
@@ -317,7 +317,7 @@ def order(apps: list[App]) -> list[App]:
             owner = pods.get(document.pod_name)
             if owner is not None:
                 raise errors.GuardenError(
-                    f"the apps {_app_label(owner)} and {_app_label(app.name)} both name the "
+                    f"the apps {_app_or_root(owner)} and {_app_or_root(app.name)} both name the "
                     f"pod {document.pod_name!r}, and a pod never spans two services: two apps "
                     f"are two services, two Linux users and two podman pods, so one name "
                     f"cannot be one pod here. Give each app its own `[pod] name`",
