@@ -1001,6 +1001,8 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
                 f"{concrete!r} — the service that declared it: a self-edge has no consumer "
                 f"and is nearly always a copy-paste"
             )
+        if edge.tunnelled:
+            continue
         provider = registry.load(concrete)
         if provider is None:
             raise errors.GuardenError(
@@ -1055,6 +1057,8 @@ def edge_publications(
     """
     out: list[tuple[str, str, int]] = []
     for edge in document.needs:
+        if edge.tunnelled:
+            continue
         concrete = context.provider(edge.service)
         stored = _recorded(context.record, concrete, edge)
         numbers = [
@@ -1097,6 +1101,39 @@ def _recorded(record, concrete: str, edge) -> dict:
     return record.edges.get(keys[0]) or {}
 
 
+def tunnel_hosts(
+    document: manifest_mod.Manifest, context: Context
+) -> list[tuple[manifest_mod.Edge, str]]:
+    """`<AS>_HOST` for every `via: tunnel` edge, from the consumer's own registry.
+
+    The hostname was the **manifest's** — the producer is another host's service,
+    so nothing here can derive it — and the mutator recorded it when it installed
+    the edge. The record is the authority (spec 3.4) and the render reads it, for
+    the same reason it reads a publication rather than deriving one: a value with
+    one holder is a value with one answer.
+
+    A tunnel edge with no recorded hostname is exit `1` — the host has not been
+    asked yet — rather than a name the renderer invented and nobody else holds.
+    """
+    out: list[tuple[manifest_mod.Edge, str]] = []
+    for edge in document.needs:
+        if not edge.tunnelled:
+            continue
+        concrete = context.provider(edge.service)
+        stored = _recorded(context.record, concrete, edge)
+        hostname = stored.get("hostname")
+        if not isinstance(hostname, str) or not hostname:
+            raise errors.GuardenError(
+                f"{context.service} needs {edge.service!r} as {edge.prefix!r} over the "
+                f"tunnel, and its registry entry names no hostname for the edge; the "
+                f"mutator records the route hostname the entry states when it installs "
+                f"the edge, and the renderer does not invent one",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        out.append((edge, hostname))
+    return out
+
+
 def _is_this_edge(stored, edge) -> bool:
     """Whether a registry entry is this `needs:` entry under some provider name.
 
@@ -1121,9 +1158,11 @@ def check_ingress(document: manifest_mod.Manifest, context: Context) -> str:
     refused for a missing alias.
 
     **A service with a `siblings:` entry needs a name** — the sibling's own —
-    so the alias is required for it too (ADR-0023).
+    so the alias is required for it too (ADR-0023). A `via: tunnel` edge needs
+    none: the name it dials is in public DNS.
     """
-    if not document.needs and not document.siblings and not routed_names(context.service):
+    local = any(not edge.tunnelled for edge in document.needs)
+    if not local and not document.siblings and not routed_names(context.service):
         return context.config.alias
     if not context.config.alias:
         raise errors.GuardenError(
@@ -1261,10 +1300,12 @@ def build(
     edge_ports: list[tuple[str, str, int]] = []
     routed: list[str] = []
     sibling_ports: list[tuple[str, str, int]] = []
+    tunnelled: list[tuple[manifest_mod.Edge, str]] = []
     if context is not None:
         check_edges(document, context)
         check_ingress(document, context)
         edge_ports = edge_publications(document, context)
+        tunnelled = tunnel_hosts(document, context)
         routed = routed_names(context.service)
         sibling_ports = sibling_publications(document, context)
 
@@ -1305,6 +1346,7 @@ def build(
                 domain=domain,
                 siblings=[name for name, _, _ in sibling_ports],
                 owner=owner,
+                tunnelled=tunnelled,
             ),
         )
         plan.add(
@@ -1321,10 +1363,12 @@ def build(
                 ),
             )
 
-    if (edge_ports or sibling_ports) and context is not None:
+    if (edge_ports or sibling_ports or tunnelled) and context is not None:
         plan.add(
             f"units/{ENV_FILE}",
-            _environment_file(document, edge_ports, context.service, sibling_ports),
+            _environment_file(
+                document, edge_ports, context.service, sibling_ports, tunnelled
+            ),
         )
     plan.add(f"system/{ORDER_TARGET}", _order_target(document, context))
     plan.add("shared/routes.toml", _routes(document, context, ports))
@@ -1473,6 +1517,7 @@ def _container_unit(
     domain: str,
     siblings: list[str] | None = None,
     owner: str | None = None,
+    tunnelled: list[tuple[manifest_mod.Edge, str]] | None = None,
 ) -> str:
     """One container unit: the source's own fields, then every field guarden owns.
 
@@ -1488,6 +1533,14 @@ def _container_unit(
     unit = merged if merged is not None else _merged(source.units[container])
     service = context.service if context else ""
     sibling_names = list(siblings or [])
+    # **A tunnel edge allocates no publication, so it is not in `edge_ports`.**
+    # The set that decides whether this unit loads `units/guarden.env` therefore
+    # cannot be the published edges alone: a consumer whose ONLY edge is
+    # `via: tunnel` would render the file with its `API_HOST`/`API_PORT` — the
+    # build adds it for `tunnelled` — and reference it from no unit at all, so
+    # the container would start with neither value and the feature would be
+    # inert while both suites passed on the file's contents.
+    tunnelled_edges = list(tunnelled or [])
     for key in OWNED_KEYS:
         unit.drop("Container", key)
 
@@ -1542,7 +1595,7 @@ def _container_unit(
                 "AddHost",
                 [f"{name}:{context.config.alias}" for name in hosts],
             )
-        if edge_ports or sibling_names:
+        if edge_ports or sibling_names or tunnelled_edges:
             # **The value is escaped, and the path on disk is not.** Quadlet
             # reads `EnvironmentFile=` by C-unescaping its value, and the
             # instance's directory is named by the escaped ref — `feature/x` is
@@ -1713,6 +1766,7 @@ def _environment_file(
     edge_ports: list[tuple[str, str, int]],
     consumer: str,
     siblings: list[tuple[str, str, int]] | None = None,
+    tunnelled: list[tuple[manifest_mod.Edge, str]] | None = None,
 ) -> str:
     """`<AS>_HOST` and `<AS>_PORT` for every edge, plus what a database edge adds.
 
@@ -1735,9 +1789,17 @@ def _environment_file(
     name, which the unit resolves through the `AddHost=` the renderer writes,
     and the port is the **publication** (ADR-0023), so the pair is the address
     another container of this source dials.
+
+    **A tunnel edge's port is `443` and is not an allocation.** The consumer
+    dials the producer's public route hostname through that host's cloudflared
+    ingress, so there is no publication on either end and nothing for the
+    firewall to accept (spec 7.6): the traffic leaves as an ordinary client's
+    does. `tunnelled` is `(edge, hostname)` from `tunnel_hosts`.
     """
     rows: list[tuple[str, str]] = []
     for edge in document.needs:
+        if edge.tunnelled:
+            continue
         for logical, concrete, publication in edge_ports:
             if logical != edge.service:
                 continue
@@ -1753,6 +1815,9 @@ def _environment_file(
                     rows.append((f"{edge.variable}_{database.upper()}_DATABASE", name))
             else:
                 rows.append((f"{edge.variable}_DATABASE", edges.role_name(consumer)))
+    for edge, hostname in tunnelled or ():
+        rows.append((f"{edge.variable}_HOST", hostname))
+        rows.append((f"{edge.variable}_PORT", str(manifest_mod.TUNNEL_PORT)))
     variables = {sibling.container: sibling.variable for sibling in document.siblings}
     for container, host, publication in siblings or ():
         rows.append((f"{variables[container]}_HOST", host))
@@ -1810,6 +1875,8 @@ def _order_target(document: manifest_mod.Manifest, context: Context | None) -> s
     providers: list[str] = []
     if context is not None:
         for edge in document.needs:
+            if edge.tunnelled:
+                continue
             concrete = context.provider(edge.service)
             if concrete not in providers:
                 providers.append(concrete)

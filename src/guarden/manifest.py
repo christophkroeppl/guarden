@@ -59,7 +59,7 @@ TOP_LEVEL_KEYS = {
 # here — whether a container exists, whether a port is in range and whether a
 # host is a label are the checks of the tickets that consume those blocks.
 BLOCK_KEYS = {
-    "needs": {"service", "as", "port", "auth", "databases"},
+    "needs": {"service", "as", "port", "auth", "databases", "via", "hostname"},
     "ports": {"container", "port"},
     "routes": {"container", "port", "host", "auth"},
     "siblings": {"container", "port"},
@@ -158,6 +158,13 @@ AUTH_KINDS = ("database", "secret", "none")
 PORT_MIN = 1
 PORT_MAX = 65535
 
+# `pasta` reaches a provider in this host's loopback namespace; `tunnel` dials
+# the route hostname another host publishes, which this host cannot derive.
+VIA_PASTA = "pasta"
+VIA_TUNNEL = "tunnel"
+VIA_KINDS = (VIA_PASTA, VIA_TUNNEL)
+TUNNEL_PORT = 443
+
 
 @dataclass(frozen=True)
 class Edge:
@@ -181,10 +188,17 @@ class Edge:
     port: int
     auth: str
     databases: tuple[str, ...] = ()
+    via: str = VIA_PASTA
+    hostname: str = ""
 
     @property
     def variable(self) -> str:
         return self.prefix.upper()
+
+    @property
+    def tunnelled(self) -> bool:
+        """Whether this edge leaves the host, so nothing local is allocated for it."""
+        return self.via == VIA_TUNNEL
 
 
 @dataclass(frozen=True)
@@ -720,6 +734,13 @@ def _needs(value: Any, path: Path) -> list[Edge]:
     is the mutator's answer before it creates anything (`edges.check`) and the
     renderer's when a document is rendered directly — both against the provider's
     registry, and both exit `1` because the answer came from the host.
+
+    **A `via: tunnel` entry names its own hostname and states no port.** The
+    provider is another host's service, dialled through that host's cloudflared
+    ingress: its route hostname is a fact about that host, so the manifest states
+    it, and `443` is the only port such a route answers on. Everything else the
+    entry would need from a provider is a local lookup, and a tunnel edge has
+    none — no publication, no role, no name map.
     """
     entries = _entries(value, "needs", path)
     out: list[Edge] = []
@@ -750,6 +771,15 @@ def _needs(value: Any, path: Path) -> list[Edge]:
                 f"the manifest {path}: the needs entry for {service!r} has `auth: {auth!r}`, "
                 f"and there is no default: it is one of {', '.join(AUTH_KINDS)}"
             )
+        via = entry.get("via", VIA_PASTA)
+        if via not in VIA_KINDS:
+            raise errors.GuardenError(
+                f"the manifest {path}: the needs entry for {service!r} has `via: {via!r}`, "
+                f"and a transport is one of {', '.join(VIA_KINDS)}; a reachability kind "
+                f"belongs in `as:`"
+            )
+        port = _needs_port(entry, service, via, path)
+        hostname = _needs_hostname(entry, service, via, auth, path)
         databases = _databases(entry.get("databases"), service, path)
         if databases and auth != "database":
             raise errors.GuardenError(
@@ -761,12 +791,75 @@ def _needs(value: Any, path: Path) -> list[Edge]:
             Edge(
                 service=service,
                 prefix=prefix,
-                port=_port(entry.get("port"), f"the needs entry for {service!r}", path),
+                port=port,
                 auth=str(auth),
                 databases=databases,
+                via=str(via),
+                hostname=hostname,
             )
         )
     return out
+
+
+def _needs_port(entry: dict, service: str, via: str, path: Path) -> int:
+    """The port the edge dials: the container's, or `443` on a tunnel edge.
+
+    A tunnel edge's number is not the repository's to choose — the ingress
+    answers https on one port — so the key is a redundant spelling of the one
+    value, and a different number is refused rather than quietly overridden.
+    """
+    if via != VIA_TUNNEL:
+        return _port(entry.get("port"), f"the needs entry for {service!r}", path)
+    if "port" not in entry:
+        return TUNNEL_PORT
+    named = _port(entry.get("port"), f"the needs entry for {service!r}", path)
+    if named != TUNNEL_PORT:
+        raise errors.GuardenError(
+            f"the manifest {path}: the needs entry for {service!r} has `via: tunnel` and "
+            f"`port: {named}`, and a tunnel route answers https on {TUNNEL_PORT}: the port "
+            f"of a tunnel edge is not the repository's to choose"
+        )
+    return TUNNEL_PORT
+
+
+def _needs_hostname(entry: dict, service: str, via: str, auth, path: Path) -> str:
+    """`hostname:` — required on a tunnel edge and refused on every other one.
+
+    A pasta edge's name is the provider's service name, and the renderer writes
+    it: a repository writing its own host entry would have it dropped, which is
+    the same refusal `siblings:` carries. A tunnel edge is the one case where the
+    name is not guarden's to derive, so there it is the manifest's and it is
+    checked as a name.
+
+    A tunnel edge creates no role in a provider on another host, so
+    `auth: database` is refused here rather than at install: it is the manifest's
+    own vocabulary and the answer is the same on every host.
+    """
+    named = entry.get("hostname")
+    if via != VIA_TUNNEL:
+        if named is not None:
+            raise errors.GuardenError(
+                f"the manifest {path}: the needs entry for {service!r} states "
+                f"`hostname: {named!r}`, and the name a pasta edge dials is the provider's "
+                f"service name, which the renderer writes; a hostname here is `via: "
+                f"{VIA_TUNNEL}`'s key"
+            )
+        return ""
+    if not isinstance(named, str) or not HOST_RE.match(named):
+        raise errors.GuardenError(
+            f"the manifest {path}: the needs entry for {service!r} has `via: {VIA_TUNNEL}` "
+            f"and `hostname: {named!r}`, and it is the producer's route hostname — a name "
+            f"another host publishes, which nothing here can derive, so it must match "
+            f"{HOST_RE.pattern}"
+        )
+    if auth == "database":
+        raise errors.GuardenError(
+            f"the manifest {path}: the needs entry for {service!r} has `via: {VIA_TUNNEL}` "
+            f"and `auth: database`, and a database edge creates its role inside the "
+            f"provider — a service on another host is not reachable by the mutator that "
+            f"would create it; a tunnel edge is `auth: secret` or `auth: none`"
+        )
+    return named
 
 
 def _databases(value: Any, service: str, path: Path) -> tuple[str, ...]:
