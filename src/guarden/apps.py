@@ -259,8 +259,8 @@ def check(document: manifest_mod.Manifest, apps: list[App], path: Path) -> None:
             continue
         if named(apps, edge.app) is None:
             raise errors.GuardenError(
-                f"the manifest {path} needs the app {edge.app!r}, and this tree ships no app "
-                f"called that"
+                f"the manifest {path} needs the app {edge.app!r}, and the tree it sits in "
+                f"ships no such app"
                 + (f"; the apps it ships are: {shipped(apps)}" if apps else ""),
                 errors.REJECTED_INPUT,
             )

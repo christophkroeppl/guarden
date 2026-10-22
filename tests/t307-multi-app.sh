@@ -247,7 +247,9 @@ seed /var/lib/guarden/staging/shop/b0b0b0b/apps/api/.guarden/service.yml \
 run weedr service ingest shop-api-staging --from poke shop@b0b0b0b
 assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "no app called 'worker'"
+assert_stderr_has "needs the app 'worker'"
+assert_stderr_has "ships no such app"
+assert_stderr_has "'api'"
 
 # **Two app directories with one last component collide**, and the refusal names
 # both of them rather than picking one: the name is what a service is called, so
