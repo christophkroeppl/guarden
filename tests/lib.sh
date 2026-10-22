@@ -745,6 +745,13 @@ assert_no_snapper_config() {
 
 # snapper_configs_of <service>...: the configuration files whose SUBVOLUME is in
 # those trees — `snapper list-configs` named none of them when they existed as files.
+#
+# **The moved volume counts too.** `weedr service remove` does not destroy a
+# volume: it RENAMES it to `/var/lib/guarden/removed/<service>/<when>/<volume>`
+# and leaves the configuration in place, for `soil storage` to remove. A
+# teardown that only looked at the live tree would not see that
+# configuration, and the name would survive under a name a later suite
+# reuses — which is the whole defect ticket 354 measured.
 snapper_configs_of() {
     local path name subvolume service
     for path in /etc/snapper/configs/*; do
@@ -757,7 +764,8 @@ snapper_configs_of() {
         [ -n "$subvolume" ] || continue
         for service in "$@"; do
             case "$subvolume" in
-                "/var/lib/guarden/services/$service/"*)
+                "/var/lib/guarden/services/$service/"*|\
+                "/var/lib/guarden/removed/$service/"*)
                     printf '%s\n' "$name"
                     break
                     ;;
@@ -836,6 +844,75 @@ assert_no_snapper_configs() {
         [ -z "$orphan" ] \
             || _fail "snapper configuration name(s) still registered with no file, so a later create-config will refuse them: $orphan"
     fi
+}
+
+# purge <service>...: take a service off the machine, whole.
+#
+# **This is the ONE copy of the mechanism, lifted out of the suites that each
+# carried their own (ticket 357).** Five suites held a local `purge()` and the
+# copies had drifted into three variants; the full form is this one, and the
+# weaker ones are superseded by it.
+#
+# The paths are inlined rather than taken from a suite-local `registry` or
+# `creds` variable, because `lib.sh` defines neither and a helper that
+# depended on one would only work in the suites that happened to set it.
+#
+# The order is load-bearing:
+#
+#   1. **The credential trigger is held while the trees are removed.** Deleting
+#      a creds blob starts `guarden-creds.path`, which runs `podman secret
+#      create` as every service that still has one, inside that service's own
+#      `home` — the tree this loop is deleting. The collision is a race and
+#      does not reproduce on demand, so the removal is retried. The unit is put
+#      back only if this purge found it running.
+#   2. **The snapper configurations go before the trees**, because
+#      `snapper delete-config` refuses once the subvolume is gone.
+#   3. **The registry entry goes with the tree**, because the route-host
+#      allocator reads every registry to decide who holds a host: a leftover
+#      registry entry keeps the host claimed and the next suite that wants it
+#      is refused.
+#
+# A teardown that cannot remove the tree is a FAILURE, not a line in the log:
+# a `home` left behind reached whoever got the machine next and failed an
+# assertion there about something else (ticket 329).
+purge() {
+    local failed=0 service attempt path_was_active=0
+    local -a paths
+    if systemctl is-active --quiet guarden-creds.path; then
+        path_was_active=1
+    fi
+    systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
+    remove_snapper_configs "$@" || failed=1
+    for service in "$@"; do
+        paths=(
+            "/var/lib/guarden/services/$service"
+            "/etc/guarden/services/$service"
+            "/etc/guarden/creds/$service"
+            "/var/lib/guarden/registry/$service.toml"
+            "/var/lib/guarden/shared/$service"
+            "/var/lib/guarden/removed/$service"
+            "/var/lib/guarden/edge/basicauth/$service.htpasswd"
+            "/var/lib/guarden/edge/dynamic/$service.yml"
+        )
+        # A process may still be exiting (`podman` on its way out from a
+        # materialise), so the removal is retried before it is called a
+        # failure.
+        attempt=0
+        until rm -rf "${paths[@]}"; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 3 ]; then
+                failed=1
+                break
+            fi
+            sleep 1
+        done
+        userdel "$service" >/dev/null 2>&1 || :
+    done
+    if [ "$path_was_active" = 1 ]; then
+        systemctl start guarden-creds.path >/dev/null 2>&1 || :
+    fi
+    assert_no_snapper_configs "$@" || failed=1
+    [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
 }
 
 # assert_dpkg <pkg> / assert_no_dpkg <pkg>: what a converge actually installed.

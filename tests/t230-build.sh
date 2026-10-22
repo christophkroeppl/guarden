@@ -35,10 +35,6 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GUARDEN_PREFIX=/
 
-config=/etc/guarden/guarden.toml
-registry=/var/lib/guarden/registry
-creds=/etc/guarden/creds
-
 ensure_accounts
 stage_config guarden-measured.toml
 stage_podlet_release
@@ -52,18 +48,6 @@ assert_exit 0
 run podman --version
 assert_exit 0
 assert_stdout_has "podman version"
-
-purge() {
-    local failed=0 service
-    remove_snapper_configs "$@" || failed=1
-    for service in "$@"; do
-        rm -rf "/var/lib/guarden/services/$service" "/etc/guarden/services/$service" \
-            "$creds/$service" "$registry/$service.toml" || failed=1
-        userdel "$service" >/dev/null 2>&1 || :
-    done
-    assert_no_snapper_configs "$@" || failed=1
-    [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
-}
 
 cleanup() {
     # the images this build tagged, out of the service user's own store

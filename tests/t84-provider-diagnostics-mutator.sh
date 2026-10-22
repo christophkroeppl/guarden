@@ -36,14 +36,6 @@ export GUARDEN_PREFIX=/
 
 registry=/var/lib/guarden/registry
 
-purge() {
-    for service in "$@"; do
-        rm -rf "/var/lib/guarden/services/$service" "/etc/guarden/services/$service" \
-            "/etc/guarden/creds/$service" "$registry/$service.toml"
-        userdel "$service" >/dev/null 2>&1 || :
-    done
-}
-
 cleanup() {
     purge postgres-staging ghost-staging nowhere-staging
 }

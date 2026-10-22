@@ -45,6 +45,34 @@ stage_quadlet()
     mkdir -p "$GUARDEN_PREFIX/var/lib/guarden/staging/$project/HEAD"
 }
 
+cleanup() {
+    # **Every name this file creates, not most of them** (ticket 357). The list
+    # is this suite's own inventory, read out of this file:
+    #
+    #   postgres-staging   :86  the provider the consumer's edge resolves against
+    #   qapp-production    :91  the gated track
+    #   qapp-staging       :93  the ungated track
+    #   traefik-production :70  the edge, installed by `weedr module add
+    #                             gate-traefik` -- a module installs a SERVICE
+    #                             and a service is a tree, a registry entry, a
+    #                             user and a credential, so the module's service
+    #                             belongs in the list as much as an ingested one
+    #
+    # A teardown that leaves a service behind leaves its route host claimed:
+    # the allocator reads every registry to decide who holds a host, so a
+    # leftover registry entry refuses the next suite that wants the same host.
+    local rc=0
+    purge postgres-staging qapp-production qapp-staging traefik-production || rc=1
+    # The gate's own service was installed by a module, and the module stays
+    # enabled in `guarden.toml` while the service is gone. That is the state
+    # `weedr module add` converges from, and `t100-homepage.sh` proves the
+    # re-add works (it removes the dashboard's service and adds the module
+    # again). The module's own record is not a service, so it is not purged.
+    return "$rc"
+}
+trap cleanup EXIT
+
+cleanup
 # The machine's own tools. Nothing is faked (ADR-0014), so this line is a
 # statement rather than a mechanism: `useradd`, `loginctl`, `systemd-creds` and
 # `snapper` are the machine's, and `.venv/bin` is kept first because it is the

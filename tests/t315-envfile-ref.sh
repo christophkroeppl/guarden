@@ -36,55 +36,6 @@ export GUARDEN_PREFIX=/
 
 registry=/var/lib/guarden/registry
 
-purge() {
-    local failed=0 service attempt path_was_active=0
-    local -a paths
-    # **The host's credential trigger is held while the trees are removed.** The
-    # purge deletes `/etc/guarden/creds/<name>`, and `guarden-creds.path` watches
-    # that directory, so the removal itself starts the materialiser: a
-    # `podman secret create` per service that still has a blob, run in that
-    # service's own `home` — the tree this loop is deleting. The collision is a
-    # race and does not reproduce on demand (measured once, 2026-10-21:
-    # `rm: cannot remove '.../needful-production/home/.local/share/containers/
-    # storage': Directory not empty`); the retry below is the second line. The
-    # unit is put back only if this purge found it running.
-    if systemctl is-active --quiet guarden-creds.path; then
-        path_was_active=1
-    fi
-    systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
-    remove_snapper_configs "$@" || failed=1
-    for service in "$@"; do
-        paths=(
-            "/var/lib/guarden/services/$service"
-            "/etc/guarden/services/$service"
-            "/etc/guarden/creds/$service"
-            "$registry/$service.toml"
-        )
-        # A process may still be exiting (`podman` on its way out from a
-        # materialise), so the removal is retried twice before it is called a
-        # failure.
-        attempt=0
-        until rm -rf "${paths[@]}"; do
-            attempt=$((attempt + 1))
-            if [ "$attempt" -ge 3 ]; then
-                failed=1
-                break
-            fi
-            sleep 1
-        done
-        userdel "$service" >/dev/null 2>&1 || :
-    done
-    if [ "$path_was_active" = 1 ]; then
-        systemctl start guarden-creds.path >/dev/null 2>&1 || :
-    fi
-    # **A teardown that cannot remove the tree is a failure, not a line in the
-    # log.** A `home` left behind reached whoever got the machine next and failed
-    # an assertion there about something else (ticket 329), so what survives the
-    # removal is reported here, naming the purge.
-    assert_no_snapper_configs "$@" || failed=1
-    [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
-}
-
 cleanup() {
     # **The conf goes whatever the purge did.** A purge that cannot remove its
     # tree must not leave a second leftover behind as well, and the exit status

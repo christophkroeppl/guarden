@@ -17,6 +17,49 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GUARDEN_PREFIX=/
 
+# The marker that lets a gated-track service be removed. It is a file, not a
+# service, so it is not in the purge's inventory -- and it is removed HERE,
+# in the same `EXIT` trap that carries the teardown, because a second `trap
+# ... EXIT` further down would REPLACE this one and the teardown would never
+# run while the suite looked like it had one.
+marker=/etc/guarden/allow-gated-drop
+
+cleanup() {
+    # **Every name this file creates, not most of them** (ticket 357). The list
+    # is this suite's own inventory, read out of this file:
+    #
+    #   homepage-production  :64, :309  the dashboard, installed by
+    #                                 `weedr module add homepage` and added
+    #                                 AGAIN at the end, after the suite removes
+    #                                 it at :286
+    #   traefik-production   :137  the edge, installed by
+    #                            `weedr module add gate-traefik`
+    #   postgres-staging     :166  the provider the widget's project declares
+    #                                 an edge on
+    #   quadlet-app-staging  :176  the widget's own service
+    #
+    # A module installs a SERVICE, and a service is a tree, a registry entry, a
+    # user and a credential -- so the module's services belong in this list as
+    # much as the ingested ones do. `weedr module remove homepage` takes the
+    # dashboard's service and its shared directory away, but the module is
+    # added again at the end of this file, so the service is here twice over.
+    local rc=0
+    purge homepage-production traefik-production postgres-staging quadlet-app-staging \
+        || rc=1
+    # The dashboard's shared directory is the module's own (`weedr module
+    # remove homepage` removes it), and the card `twig` wrote for the widget's
+    # service goes with the service's own shared slice -- but the dashboard
+    # directory itself holds the card tree, and a leftover card is a leftover
+    # state in the same class as a leftover tree.
+    rm -rf /var/lib/guarden/shared/dashboard
+    # The marker is a file and not a service, so the purge does not carry it.
+    rm -f "$marker"
+    return "$rc"
+}
+trap cleanup EXIT
+
+cleanup
+
 # The host configuration below names `operator` as `host.admin_user`, and the
 # firewall renders the edge's API accept set with that account's uid. On a real
 # host `soil install` records the invoking user, so the account is the fixture's
@@ -279,10 +322,10 @@ rm -rf "$rejected"
 
 # `weedr module remove homepage` reverses the add without touching `gate-traefik`: the
 # edge keeps its account, its units, its publications and its forwarding rules,
-# and the dashboard goes.
-marker=/etc/guarden/allow-gated-drop
+# and the dashboard goes. The marker is the one above: it is what lets a
+# service on the gated production track be removed, and the teardown takes it
+# away again when the suite is done.
 touch "$marker"
-trap 'rm -f "$marker"' EXIT
 run weedr module remove homepage
 assert_exit 0
 assert_file_lacks /etc/guarden/guarden.toml '"homepage"'
