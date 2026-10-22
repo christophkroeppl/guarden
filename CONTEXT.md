@@ -16,6 +16,35 @@ One container inside a service. `compose.yaml` calls these `services:`; guarden 
 containers, and the two words never mean the same thing.
 _Avoid_: service (when you mean one process), unit, pod
 
+**app**:
+A directory in a project that holds `.guarden/service.yml`, and the containers that manifest
+declares. Discovery is by the file's location, never by a list at the project root, because a list
+is a second declaration that goes stale and an app it forgets silently never deploys. In a
+single-app project the app is the project root and carries the empty name. An app is not a
+container: its manifest names a quadlet directory, and that directory may hold two (`pgprov` runs a
+database and a vault). It is not a service either — how many services an app's containers become is
+`grouping`'s answer, not the app's.
+_Avoid_: service (when you mean the directory), container (when you mean the directory), project
+(when you mean one app of a multi-app project)
+
+**grouping**:
+How a project's apps become services. A declaration, never a heuristic: nothing infers this from
+the directory layout. `one-service` puts every app's containers into one service — one Linux user,
+one home, one pod — which is what a monorepo whose apps are one deployment wants.
+`one-service-per-app` gives each app its own service, and so its own Linux user and its own pod,
+which buys per-app isolation at the price of a user per app.
+_Avoid_: mode, layout, topology, default (when you mean the grouping)
+
+**pod**:
+A set of containers of ONE service that share a network namespace, so its members reach one another
+on `127.0.0.1` and only what a route or an edge publishes leaves the pod. A pod is a per-user podman
+object, so it never spans two services: two services are two Linux users, and no quadlet `Pod=` unit
+crosses a user manager. Its containers also share ONE user namespace, so a `keep-id` pin is a
+pod-level pin — one image uid and container root reach the service user, and every other uid lands
+on a subuid, which is why a pod whose members disagree on a uid is refused rather than rendered.
+Membership is declared; absent a declaration there is one pod per service.
+_Avoid_: network, group, stack, subnet
+
 **project**:
 A repository. The thing you promote through tracks. Its name is the manifest's `project` field,
 defaulting to the project the `--from` source belongs to. It is not the same thing as the
