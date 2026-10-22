@@ -138,9 +138,9 @@ the variable it becomes.
 _Avoid_: key, token, env var (when you mean the secret's value)
 
 **manifest**:
-`.guarden/service.yml` in a project repository. The only thing a project declares about
-itself: units, state, declared edges, requested ports, routes, widgets, the shape of its
-secrets, and the rule for a cloned copy of its data (`scrub:`).
+`.guarden/service.yml` at the root of an app, and an app is a directory in a project's tree. The
+only thing an app declares about itself: units, the pod, state, declared edges, requested ports,
+routes, widgets, the shape of its secrets, and the rule for a cloned copy of its data (`scrub:`).
 _Avoid_:  config, spec
 
 **state volume**:
