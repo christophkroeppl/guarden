@@ -220,22 +220,26 @@ units=$(find /var/lib/guarden/services/guidedprobe-staging -name '*.container' 2
 echo "MEASURE: the units it installed: $units"
 [ "$units" -ge 1 ] || _fail "the created service installed no unit"
 
-# The rendered unit carries the image and the loopback publication the
-# renderer owns — the creator's own unit carried neither.
+# The rendered unit carries the image and the pod the renderer owns — the
+# creator's own unit carried neither, and the publication is the pod's.
 rendered=$(find /var/lib/guarden/services/guidedprobe-staging -name 'web.container' | head -1)
-if [ -n "$rendered" ]; then
+rendered_pod=$(find /var/lib/guarden/services/guidedprobe-staging -name '*.pod' | head -1)
+if [ -n "$rendered" ] && [ -n "$rendered_pod" ]; then
     echo "MEASURE: the rendered unit: $rendered"
     grep -q "Image=docker.io/library/postgres:17-alpine" "$rendered" \
         && echo "MEASURE: the rendered unit carries the image" \
         || _fail "the rendered unit does not carry the image"
-    grep -q "PublishPort=127.0.0.1:" "$rendered" \
-        && echo "MEASURE: the rendered unit carries the loopback publication" \
-        || _fail "the rendered unit carries no loopback publication"
-    grep -q "Network=pasta" "$rendered" \
-        && echo "MEASURE: the rendered unit carries the pasta network" \
-        || _fail "the rendered unit carries no pasta network"
+    grep -q "Pod=" "$rendered" \
+        && echo "MEASURE: the rendered unit carries Pod=" \
+        || _fail "the rendered unit carries no Pod="
+    grep -q "PublishPort=127.0.0.1:" "$rendered_pod" \
+        && echo "MEASURE: the rendered pod carries the loopback publication" \
+        || _fail "the rendered pod carries no loopback publication"
+    grep -q "Network=pasta" "$rendered_pod" \
+        && echo "MEASURE: the rendered pod carries the pasta network" \
+        || _fail "the rendered pod carries no pasta network"
 else
-    _fail "no rendered web.container was installed"
+    _fail "no rendered web.container and .pod were installed"
 fi
 
 # The service's own copy of the manifest is what the gate and the renderer

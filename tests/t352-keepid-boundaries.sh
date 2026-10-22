@@ -217,7 +217,7 @@ stage_root_subject kidroot root
 unit_root=/var/lib/guarden/services/kidroot-staging/home/.config/containers/systemd/app.container
 # ADR-0019's drop-in model: the pin is a drop-in of guarden's own, and the
 # base unit carries no `UserNS=` line at all.
-pin_root=/etc/containers/systemd/users/"$(id -u kidroot-staging)"/app.container.d/50-guarden-keepid.conf
+pin_root=/etc/containers/systemd/users/"$(id -u kidroot-staging)"/kidroot.pod.d/50-guarden-keepid.conf
 record_root=$registry/kidroot-staging.toml
 [ "$(unit_line "$pin_root")" = "UserNS=keep-id:uid=3000,gid=3000" ] \
     || _fail "a USER root image whose entrypoint hands off to app renders $(unit_line "$pin_root"), and that handoff user is keep-id:uid=3000,gid=3000"
@@ -273,7 +273,7 @@ pid1_uid=$(awk '/^Uid:/ { print $2 }' "$GUARDEN_STDOUT")
 # covered. It already took the handoff, and the table is what keeps it there.
 stage_root_subject kidzero 0
 unit_zero=/var/lib/guarden/services/kidzero-staging/home/.config/containers/systemd/app.container
-pin_zero=/etc/containers/systemd/users/"$(id -u kidzero-staging)"/app.container.d/50-guarden-keepid.conf
+pin_zero=/etc/containers/systemd/users/"$(id -u kidzero-staging)"/kidzero.pod.d/50-guarden-keepid.conf
 record_zero=$registry/kidzero-staging.toml
 [ "$(unit_line "$pin_zero")" = "UserNS=keep-id:uid=3000,gid=3000" ] \
     || _fail "a USER 0 image whose entrypoint hands off to app renders $(unit_line "$pin_zero"), and that handoff user is keep-id:uid=3000,gid=3000"
@@ -322,7 +322,7 @@ assert_exit 0
 run weedr service start kidplain-staging
 assert_exit 0
 unit_plain=/var/lib/guarden/services/kidplain-staging/home/.config/containers/systemd/app.container
-pin_plain=/etc/containers/systemd/users/"$(id -u kidplain-staging)"/app.container.d/50-guarden-keepid.conf
+pin_plain=/etc/containers/systemd/users/"$(id -u kidplain-staging)"/kidplain.pod.d/50-guarden-keepid.conf
 record_plain=$registry/kidplain-staging.toml
 [ "$(unit_line "$pin_plain")" = "none" ] \
     || _fail "an image that declares no user and names no handoff renders $(unit_line "$pin_plain"), and it must render no line at all"
@@ -345,7 +345,7 @@ assert_exit 0
 run weedr service start kidrootplain-staging
 assert_exit 0
 unit_rootplain=/var/lib/guarden/services/kidrootplain-staging/home/.config/containers/systemd/app.container
-pin_rootplain=/etc/containers/systemd/users/"$(id -u kidrootplain-staging)"/app.container.d/50-guarden-keepid.conf
+pin_rootplain=/etc/containers/systemd/users/"$(id -u kidrootplain-staging)"/kidrootplain.pod.d/50-guarden-keepid.conf
 record_rootplain=$registry/kidrootplain-staging.toml
 [ "$(unit_line "$pin_rootplain")" = "none" ] \
     || _fail "a USER root image that names no handoff renders $(unit_line "$pin_rootplain"), and it must render no line at all — the same answer the empty spelling gives"

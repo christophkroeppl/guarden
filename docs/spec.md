@@ -163,13 +163,16 @@ to it.
 /etc/containers/systemd/users/<uid>/  podman's uid-scoped rootless quadlet path: the admin
   injection point for a service's own units and drop-ins, and the ONLY path
   to them (ADR-0024). There is no staging copy of them anywhere.
-  <unit>.container.d/  one directory per unit, holding the drop-ins
-  that are merged into that unit's base file. **The mutator writes
+  <pod>.pod.d/  one directory per pod unit, holding the drop-ins
+  that are merged into that pod's base file. **The mutator writes
   exactly one file in it** — `50-guarden-keepid.conf`, the keep-id
-  pin (§6.3) — and **the admin's own `90-admin.conf` beside it is
-  never written and never deleted by guarden**. The directory is
-  searched AFTER the home's own directory, so a drop-in survives a
-  regeneration of the unit (§6.3).
+  pin the pod's containers share (§6.3, §7.1) — and **the admin's own
+  `90-admin.conf` beside it is never written and never deleted by
+  guarden**. The directory is searched AFTER the home's own directory,
+  so a drop-in survives a regeneration of the unit (§6.3).
+  <unit>.container.d/  the container's own drop-in directory, which
+  guarden creates for its start-order drop-in and never writes a pin
+  into: a container in a pod cannot carry a `UserNS=` of its own.
 /etc/ssh/authorized_keys.d/hose  the poke keys, one forced command per project
 /etc/systemd/system/  soil's units and the units of the unprivileged programs
 /usr/lib/systemd/user/  not used; it is not uid-scoped and is not a search path
@@ -240,7 +243,7 @@ in the home's quadlet directory and are rewritten on regeneration.
 (ADR-0024). The admin path above is the whole of it: the admin writes the file where the
 generator reads it, the renderer reads it back and merges it into the rendered unit, and the
 mutator writes exactly one file beside it — `50-guarden-keepid.conf`, the keep-id pin
-(§6.3). **A path a document names is a path a program implements**, so this paragraph is the
+(§6.3) — in the POD's drop-in directory, `<pod>.pod.d/`, because the pin is the pod's. **A path a document names is a path a program implements**, so this paragraph is the
 answer to the question §2.1's mode table asks: the promised
 `/etc/guarden/services/<name>/units.d/` is not in the table because no program ever read or
 wrote it, and adding the copy would give the admin's own configuration two ways to reach a

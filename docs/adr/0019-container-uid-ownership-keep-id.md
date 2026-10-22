@@ -34,6 +34,13 @@ The line this ADR describes is now carried by
 base unit carries no `UserNS=` line at all. The three files and their three writers are
 the model, and the reasons are measured (`probe-quadlet-dropins.md`, podman 5.7.0):
 
+**Superseded in part by ADR-0026 (2026-10-22): the pin is the POD's.**
+A container in a pod cannot carry a `UserNS=` of its own (podman refuses `--userns` with
+`--pod`), so the file is now `<pod>.pod.d/50-guarden-keepid.conf` and there is exactly one
+per pod. Everything below about the drop-in model — the base unit carrying no line, the
+admin's `90-admin.conf` winning by name order, the generator reading the file as the
+service user — is unchanged.
+
 - **The base unit carries no line** because the renderer's own merge of the admin path
   and the generator's merge of the drop-in directory are two different merges — a base
   unit that carried the line would carry it twice over, and a key with two of them has

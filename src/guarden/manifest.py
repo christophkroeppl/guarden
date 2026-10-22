@@ -373,6 +373,7 @@ class Manifest:
     source: Path
     project: str | None
     units: str | None
+    pod_name: str | None = None
     state: list[str] = field(default_factory=list)
     bulk: list[str] = field(default_factory=list)
     provides: list[str] = field(default_factory=list)
@@ -481,6 +482,7 @@ def read(path: Path) -> Manifest:
         source=path,
         project=_project(document.get("project"), path),
         units=_units(document.get("units"), path),
+        pod_name=_pod(document.get("pod"), path),
         state=state,
         bulk=bulk,
         provides=provides,
@@ -737,6 +739,29 @@ def _units(value: Any, path: Path) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise errors.GuardenError(f"the manifest {path}: units is not a path")
     return value
+
+
+def _pod(value: Any, path: Path) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise errors.GuardenError(
+            f"the manifest {path}: pod is not a mapping; it takes `name:` and nothing else"
+        )
+    extra = sorted(set(value) - POD_KEYS)
+    if extra:
+        raise errors.GuardenError(
+            f"the manifest {path}: the pod block has an unknown key {extra[0]!r}; "
+            f"the keys are: {', '.join(sorted(POD_KEYS))}"
+        )
+    name = value.get("name")
+    if name is None:
+        return None
+    if not isinstance(name, str) or not names.NAME_RE.match(name):
+        raise errors.GuardenError(
+            f"the manifest {path}: pod name {name!r} must match {names.NAME_RE.pattern}"
+        )
+    return name
 
 
 def _schema(value: Any, path: Path) -> str | None:

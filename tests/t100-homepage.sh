@@ -166,17 +166,22 @@ publication=$(sed -n 's/^homepage = \([0-9]*\)$/\1/p' "$registry")
     || _fail "publication $publication is outside ingress.publication_range"
 assert_file_has "$registry" 'homepage = "homepage"'
 
-# The rendered dashboard unit: one loopback `PublishPort` in the range, no
-# capability anywhere, and no port below 1024 and no non-loopback address.
+# The rendered dashboard unit, and the pod it belongs to: one loopback
+# `PublishPort` in the range on the POD (podman binds a pod's ports on the pod),
+# no capability anywhere, and no port below 1024 and no non-loopback address.
 unit=/var/lib/guarden/services/homepage-production/home/.config/containers/systemd/homepage.container
+pod=/var/lib/guarden/services/homepage-production/home/.config/containers/systemd/homepage.pod
 assert_file_exists "$unit"
+assert_file_exists "$pod"
 assert_file_has "$unit" "Rendered by loom"
-assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2"
-assert_file_has "$unit" "PublishPort=127.0.0.1:$publication:3000"
+assert_file_has "$unit" "Pod=homepage.pod"
+assert_file_has "$pod" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2"
+assert_file_has "$pod" "PublishPort=127.0.0.1:$publication:3000"
 assert_file_lacks "$unit" "AmbientCapabilities"
 assert_file_lacks "$unit" "CapAdd"
 assert_file_lacks "$unit" "Privileged"
 assert_file_lacks "$unit" "0.0.0.0:$publication"
+assert_file_lacks "$pod" "0.0.0.0:$publication"
 # The dashboard reads `twig`'s directory and writes nothing into it.
 assert_file_has "$unit" "Volume=/var/lib/guarden/shared/dashboard:/app/config:ro"
 # And the host path is in this service's own root-owned `[mounts] allow`, which

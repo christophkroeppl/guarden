@@ -85,7 +85,7 @@ home=/var/lib/guarden/services/dropin-staging/home
 unit=$home/.config/containers/systemd/app.container
 record=$registry/dropin-staging.toml
 svc_uid=$(id -u dropin-staging)
-dropin_dir=/etc/containers/systemd/users/"$svc_uid"/app.container.d
+dropin_dir=/etc/containers/systemd/users/"$svc_uid"/dropin.pod.d
 guarden_dropin=$dropin_dir/50-guarden-keepid.conf
 admin_dropin=$dropin_dir/90-admin.conf
 
@@ -142,12 +142,12 @@ assert_owner "$guarden_dropin" "root:root"
 assert_mode "$dropin_dir" 755
 assert_mode "/etc/containers/systemd/users" 755
 
-# The generated unit is the thing that decides what the container runs under:
-# the `--userns` flag in `ExecStart` is the effective mapping, and the
-# `[X-Container]` section is inert (measured: probe-quadlet-dropins.md row 3).
-# So the flag is what this suite counts, and the base unit's own `UserNS=`
-# line is not what it reads.
-generated=/run/user/"$svc_uid"/systemd/generator/app.service
+# The generated POD unit is the thing that decides what the containers run
+# under: the `--userns` flag in its `ExecStart` is the effective mapping, and
+# the `[X-Container]` section is inert (measured: probe-quadlet-dropins.md row
+# 3). The flag is on the pod and on no container of it, which is the move
+# ADR-0026 made.
+generated=/run/user/"$svc_uid"/systemd/generator/dropin-pod.service
 assert_file_exists "$generated"
 run grep -c -- "--userns" "$generated"
 echo "MEASURE: --userns flags in the generated unit: $(cat "$GUARDEN_STDOUT")"
@@ -213,7 +213,7 @@ after_guarden=$(sha256sum "$guarden_dropin" | cut -d' ' -f1)
 # a second render leaves it byte-identical.
 
 seed "$admin_dropin" \
-    "[Container]" \
+    "[Pod]" \
     "UserNS=keep-id:uid=2002,gid=2002"
 before_admin=$(sha256sum "$admin_dropin" | cut -d' ' -f1)
 run weedr service start dropin-staging
@@ -290,9 +290,10 @@ echo "MEASURE: after the removal, the admin's file: $(cat "$admin_dropin" | tr '
 #
 # An instance's units are given an entry in the service's own quadlet
 # directory named `<unit>-<escaped-ref>`, and the generator reads THAT name —
-# so the instance's drop-in is in `<unit>-<escaped-ref>.container.d/`, which
-# is a directory of its own and not the service's `<unit>.container.d/`. Two
-# instances of one service have two pins, and neither lands in the other's.
+# so the instance's POD drop-in is in `<pod>-<escaped-ref>.pod.d/`, which
+# is a directory of its own and not the service's `<pod>.pod.d/`. Two
+# instances of one service have two pods and two pins, and neither lands in
+# the other's.
 #
 # The fixture is a preview track, so the service here is `dropin-preview` and
 # the ref is the escaped form the registry keys it by.
@@ -364,7 +365,7 @@ assert_stdout_has "localhost/dropin-preview:latest"
 # The escaped ref is what the registry and the directory are keyed by.
 escaped='feature\x2fx'
 preview_dir=/etc/containers/systemd/users/"$preview_uid"
-instance_dir=$preview_dir/app-"$escaped".container.d
+instance_dir=$preview_dir/dropin-"$escaped".pod.d
 instance_dropin=$instance_dir/50-guarden-keepid.conf
 
 run weedr service start dropin-preview/feature/x
@@ -373,7 +374,7 @@ assert_file_exists "$instance_dropin"
 assert_file_has "$instance_dropin" "UserNS=keep-id:uid=10001,gid=$drop_gid"
 # The instance's drop-in is in its OWN directory: the service's own directory
 # is a different one, and the instance's pin does not land in it.
-assert_file_missing "$preview_dir/app.container.d/50-guarden-keepid.conf"
+assert_file_missing "$preview_dir/dropin.pod.d/50-guarden-keepid.conf"
 echo "MEASURE: the instance's drop-in: $(cat "$instance_dropin" | tr '\n' '|')"
 
 # The instance that goes takes its own drop-in with it — a drop-in left behind

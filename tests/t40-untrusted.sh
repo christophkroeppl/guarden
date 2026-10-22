@@ -240,15 +240,18 @@ render=$GUARDEN_FIXTURES/render
 run loom render "$quadlet" --service myapp-staging --out "$render"
 assert_exit 0
 unit=$render/units/web.container
+pod=$render/units/myapp.pod
 
-# None of the four survives. The backend is the host's own option list, so the
-# repository's `--no-map-gw` is gone and the pinned set `guarden.toml` states is
-# written; the published-port set is the whole set from the allocation, so the
-# repository's `8080:80` is gone; and the host entries come from the declared
-# edges, of which this service has none, so the repository's own name for another
-# host is gone with the key.
-assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2"
-assert_file_lacks "$unit" "Network=pasta:--no-map-gw"
+# None of the four survives. The backend is the host's own option list — on the
+# POD, where the namespace's backend now lives — so the repository's
+# `--no-map-gw` is gone and the pinned set `guarden.toml` states is written; the
+# published-port set is the whole set from the allocation, so the repository's
+# `8080:80` is gone; and the host entries come from the declared edges, of which
+# this service has none, so the repository's own name for another host is gone
+# with the key.
+assert_file_has "$pod" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2"
+assert_file_lacks "$pod" "Network=pasta:--no-map-gw"
+assert_file_lacks "$unit" "Network="
 assert_file_lacks "$unit" "PublishPort=8080:80"
 assert_file_lacks "$unit" "elsewhere"
 assert_file_lacks "$unit" "AddHost"
@@ -257,7 +260,7 @@ assert_file_lacks "$unit" "AddHost"
 # loopback publication: nothing in a rendered unit binds a non-loopback address,
 # and a granted public port is a translation onto one of these written by the
 # mutator, never a bind (spec 7.5).
-assert_file_has "$unit" "PublishPort=127.0.0.1:20114:3000"
+assert_file_has "$pod" "PublishPort=127.0.0.1:20114:3000"
 # The `ContainerName` the repository chose is its own: guarden has no opinion
 # about a name, and rewriting it would break a repository's own volume naming for
 # no gain. That is the other half of "podlet owns the fields guarden has no

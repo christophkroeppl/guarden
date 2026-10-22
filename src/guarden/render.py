@@ -58,6 +58,7 @@ from guarden import (
     paths,
     registry,
     secretschema,
+    units,
     unitsource,
 )
 from guarden import config as config_mod
@@ -84,6 +85,7 @@ DROPDIN_SECTION = "Service"
 OWNED_KEYS = (
     "AddHost",
     "PodmanArgs",
+    "Pod",
     "PublishPort",
     "Network",
     "Secret",
@@ -227,6 +229,7 @@ ABSENT = Path("/nonexistent/guarden/nothing")
 # the line twice.
 GUARDEN_OWNED_ORDER = (
     "ContainerName",
+    "Pod",
     "Network",
     "AddHost",
     "EnvironmentFile",
@@ -262,6 +265,45 @@ def owner_line(record: Registry, unit: str, image: str) -> str | None:
     if uid and uid > 0 and gid is not None:
         return f"keep-id:uid={uid},gid={gid}"
     return None
+
+
+def pin_of(answers: list[tuple[str, str, tuple[int, int] | None]]) -> str | None:
+    """The pod's one `keep-id` line, or the refusal of a service its images split."""
+    pins: dict[tuple[int, int], list[str]] = {}
+    for container, image, pair in answers:
+        if pair is None:
+            continue
+        uid, gid = pair
+        if uid == 0 or gid is None:
+            continue
+        pins.setdefault((uid, gid), []).append(f"{container} ({image})")
+    if len(pins) > 1:
+        described = " and ".join(
+            f"{uid}:{gid} for {', '.join(members)}"
+            for (uid, gid), members in sorted(pins.items())
+        )
+        raise errors.GuardenError(
+            f"the pod's containers run as different users: {described}. A pod shares one user "
+            f"namespace, so its keep-id pin puts exactly one image uid on the service user and "
+            f"every other uid lands in the subuid band; apps that need different uids are "
+            f"separate services, which is what `grouping` is for",
+            errors.REJECTED_INPUT,
+        )
+    if not pins:
+        return None
+    (uid, gid), _ = next(iter(pins.items()))
+    return f"keep-id:uid={uid},gid={gid}"
+
+
+def pod_name(
+    document: manifest_mod.Manifest, context: Context | None, directory: Path
+) -> str:
+    """The pod's name: the manifest's, else the workload, else what `check` can know."""
+    if document.pod_name:
+        return document.pod_name
+    if context is not None:
+        return names.workload_of(context.service, context.track.name)
+    return document.project or directory.name
 
 
 def _unit_image(source: Source, container: str, context: Context) -> str:
@@ -591,6 +633,14 @@ def _compose_source(path: Path, known: set[str] | None = None) -> Source:
 
 
 def _quadlet_source(directory: Path, known: set[str] | None = None) -> Source:
+    shipped = sorted(directory.glob("*.pod"))
+    if shipped:
+        raise errors.GuardenError(
+            f"the unit source {directory} ships the pod unit {shipped[0].name}, and the pod is "
+            f"the renderer's: its name comes from the manifest's `[pod] name` and its members "
+            f"from the containers this source declares, so a repository that could ship the "
+            f"unit could put a container in a namespace it does not own"
+        )
     files = sorted(directory.glob("*.container"))
     if not files:
         raise errors.GuardenError(f"the unit source {directory} has no .container unit in it")
@@ -1258,8 +1308,8 @@ def ingress_ports(service: str) -> list[str]:
 # --- the render --------------------------------------------------------------
 
 
-def check_publish_ports(unit: unitsource.Unit) -> None:
-    """Refuse a `PublishPort` list that names one host port twice.
+def check_publish_ports(lines: list[str]) -> None:
+    """Refuse a `PublishPort` set that names one host port twice on one protocol.
 
     A publication names a **host-side** socket. `pasta` has one listener per
     protocol, `--tcp-ports` and `--udp-ports`, so the same host port on both
@@ -1276,7 +1326,7 @@ def check_publish_ports(unit: unitsource.Unit) -> None:
     difference between refusing a working configuration and catching a real one.
     """
     seen: dict[str, str] = {}
-    for line in unit.get("Container", "PublishPort"):
+    for line in lines:
         parts = line.split(":")
         if len(parts) < 3:
             continue
@@ -1287,7 +1337,7 @@ def check_publish_ports(unit: unitsource.Unit) -> None:
             raise errors.GuardenError(
                 f"{host} is published twice over {protocol} ({previous} and "
                 f"{line}), and pasta binds one listener per protocol per port: "
-                f"the container would not start. Publishing one host port on both "
+                f"the pod would not start. Publishing one host port on both "
                 f"tcp and udp is fine; publishing it twice on one protocol is not.",
                 errors.REJECTED_INPUT,
             )
@@ -1320,7 +1370,18 @@ def build(
 
     schema = secretschema.read(directory / document.schema if document.schema else ABSENT)
     plan.warnings.extend(_image_warnings(source, context))
+    containers = source.containers()
+    if not containers:
+        raise errors.GuardenError(
+            f"the unit source {source.origin} declares no container, and a pod with no "
+            f"container is not a namespace anything runs in",
+            errors.REJECTED_INPUT,
+        )
+    pod = pod_name(document, context, directory)
+    pod_entry = units.entry_stem(pod, context.instance if context is not None else None)
+    pin = _pod_pin(context, source)
     dropins = _dropins(context, source)
+    pod_dropin = _pod_dropin(context, pod_entry)
     ports = _publications(document, context)
     domain = context.config.domain if context else ""
     if context is not None:
@@ -1339,7 +1400,6 @@ def build(
         )
 
     for container in source.containers():
-        owner = _owner_of(context, source, container)
         plan.add(
             f"units/{container}.container",
             _container_unit(
@@ -1348,13 +1408,12 @@ def build(
                 container=container,
                 context=context,
                 merged=dropins.get(container),
-                ports=ports,
                 edge_ports=edge_ports,
                 routed=routed,
                 schema=schema,
                 domain=domain,
                 siblings=[name for name, _, _ in sibling_ports],
-                owner=owner,
+                pod=pod_entry,
                 tunnelled=tunnelled,
             ),
         )
@@ -1362,15 +1421,20 @@ def build(
             f"units/{container}.container.d/{ORDER_DROPIN}",
             render_template("quadlet-order-dropin.j2", service=context.service if context else ""),
         )
-        if owner is not None:
-            plan.add(
-                f"admin/{container}.container.d/{paths.KEEPID_DROPIN}",
-                render_template(
-                    "quadlet-keepid-dropin.j2",
-                    service=context.service if context else "",
-                    owner=owner,
-                ),
-            )
+
+    plan.add(
+        f"units/{pod}.pod",
+        _pod_unit(source, context, pod, ports, pod_dropin, domain),
+    )
+    if pin is not None:
+        plan.add(
+            f"admin/{pod}.pod.d/{paths.KEEPID_DROPIN}",
+            render_template(
+                "quadlet-keepid-dropin.j2",
+                service=context.service if context else "",
+                owner=pin,
+            ),
+        )
 
     if (edge_ports or sibling_ports or tunnelled) and context is not None:
         plan.add(
@@ -1484,33 +1548,85 @@ def _publications(
     return out
 
 
-def _owner_of(context: Context | None, source: Source, container: str) -> str | None:
-    """The keep-id line THIS unit's own image answers, or `None` (ADR-0019).
-
-    One reader for the answer, because the base unit's refusal and the
-    drop-in's content are the same question: the pair the registry holds for
-    this unit and for the image this unit names. The base unit carries no
-    line (the pin is a drop-in of its own), but the refusal of a source's own
-    `User=` still stands — a `User=` that is not the pinned pair runs where
-    the line maps nothing — so the answer is asked here, once, and the
-    refusal rides on it.
-
-    `None` is the whole of the other cases: no record to answer from, a
-    record that answers another image, and a pair probed to `0` (an image
-    that declares no user, whose container root the default map already
-    moves onto the service identity). No line in any of them.
-    """
+def _pod_pin(context: Context | None, source: Source) -> str | None:
+    """The pod's one pin, or `None`; a source's own `User=` is refused under it."""
     if context is None:
         return None
-    owner = owner_line(context.record, container, _unit_image(source, container, context))
-    if owner is None:
-        return None
-    refuse_pinned_user(
-        source.units[container],
-        owner,
-        f"the unit source {source.origin}: the container {container!r}",
+    pin = pin_of(
+        [
+            (container, image, context.record.answer_for(container, image))
+            for container in source.containers()
+            for image in [_unit_image(source, container, context)]
+        ]
     )
-    return owner
+    if pin is None:
+        return None
+    for container in source.containers():
+        refuse_pinned_user(
+            source.units[container],
+            pin,
+            f"the unit source {source.origin}: the container {container!r}",
+        )
+    return pin
+
+
+def _pod_dropin(context: Context | None, pod_entry: str) -> Unit | None:
+    """The admin's drop-in on the pod unit, merged before generation."""
+    if context is None or not context.record.uid:
+        return None
+    directory = paths.admin_pod_dropin_dir(context.record.uid, pod_entry)
+    if not directory.is_dir():
+        return None
+    merged = Unit(path=directory)
+    for path in sorted(directory.glob("*.conf")):
+        if path.name == paths.KEEPID_DROPIN:
+            continue
+        dropin = unitsource.parse(path)
+        for section in dropin.order:
+            for key, values in dropin.sections[section].items():
+                merged.put(section, key, values)
+    return merged
+
+
+def _pod_unit(
+    source: Source,
+    context: Context | None,
+    pod: str,
+    ports: dict[str, tuple[int, int]],
+    merged: Unit | None,
+    domain: str,
+) -> str:
+    """The `.pod` unit: the host's backend, the whole published set, and the admin's keys."""
+    service = context.service if context else ""
+    unit = merged if merged is not None else Unit(path=source.origin)
+    unit_keys = _lines(unit, "Unit", domain, drop=("Description",))
+    description = (unit.one("Unit", "Description") or "").strip() or f"{service} pod".strip()
+    unit_keys.insert(0, f"Description={description}")
+    pod_keys: list[str] = []
+    if context is not None:
+        pod_keys.append(f"Network={context.config.network}")
+    pod_keys.extend(
+        _lines(unit, "Pod", domain, drop=("Network", "PublishPort", "UserNS", "Userns"))
+    )
+    published = [
+        f"{LOOPBACK}:{publication}:{port}"
+        for _, (publication, port) in sorted(ports.items())
+    ]
+    if context is not None:
+        for line in ingress_ports(context.service):
+            if line not in published:
+                published.append(line)
+    check_publish_ports(published)
+    pod_keys.extend(f"PublishPort={line}" for line in published)
+    return render_template(
+        "quadlet-pod.j2",
+        service=service,
+        pod=pod,
+        origin=str(source.origin),
+        unit_keys=unit_keys,
+        pod_keys=pod_keys,
+        service_keys=_lines(unit, "Service", domain),
+    )
 
 
 def _container_unit(
@@ -1519,25 +1635,19 @@ def _container_unit(
     container: str,
     context: Context | None,
     merged: Unit | None,
-    ports: dict[str, tuple[int, int]],
     edge_ports: list[tuple[str, str, int]],
     routed: list[str],
     schema: secretschema.Schema,
     domain: str,
     siblings: list[str] | None = None,
-    owner: str | None = None,
+    pod: str = "",
     tunnelled: list[tuple[manifest_mod.Edge, str]] | None = None,
 ) -> str:
     """One container unit: the source's own fields, then every field guarden owns.
 
-    The order inside `[Container]` is the source's order, then guarden's own keys
-    in a fixed order, so a regenerated unit differs from the last one only where
-    something actually changed.
-
-    **The unit carries no `UserNS=` line** (ADR-0019): the keep-id pin is a
-    drop-in of guarden's own in the admin path, and `owner` — the answer for
-    this unit — is written there instead. A unit that carried the line as
-    well would have two writers for one key.
+    The container carries `Pod=`, no `Network=`, no `PublishPort=` and no
+    `UserNS=`: the namespace, the backend, the published set and the pin are the
+    pod unit's (§7.1).
     """
     unit = merged if merged is not None else _merged(source.units[container])
     service = context.service if context else ""
@@ -1588,8 +1698,8 @@ def _container_unit(
             "ContainerName",
             [f"{named}-{context.instance.encode().hex()}"],
         )
+    unit.put("Container", "Pod", [f"{pod}.pod"])
     if context is not None:
-        unit.put("Container", "Network", [context.config.network])
         # Every name this unit may have to resolve: the providers it declared an
         # edge to, the containers of its own source it may dial (ADR-0023), and
         # — for the edge itself — every routed service, because a route target
@@ -1623,27 +1733,9 @@ def _container_unit(
     volume_keys = _volume_lines(document, source, container, context)
     if volume_keys:
         unit.put("Container", "Volume", volume_keys)
-    if container in ports:
-        publication, port = ports[container]
-        unit.put("Container", "PublishPort", [f"{LOOPBACK}:{publication}:{port}"])
-    ingress = ingress_ports(service) if service else []
-    if ingress:
-        published = list(unit.get("Container", "PublishPort"))
-        for line in ingress:
-            if line not in published:
-                published.append(line)
-        unit.put("Container", "PublishPort", published)
-    check_publish_ports(unit)
     requests = _secret_requests(document, schema)
     if requests:
         unit.put("Container", "Secret", requests)
-    # ADR-0019: the keep-id line is NOT written here. The pin is a drop-in of
-    # guarden's own in the admin path (`50-guarden-keepid.conf`), written from
-    # the registry's probed owner and from nothing a repository can reach; the
-    # base unit carries no `UserNS=` line at all, so a regeneration of the
-    # unit cannot disturb the pin and an admin's own `90-admin.conf` can
-    # override it. `owner` was asked once, in `_owner_of`, and it is the
-    # drop-in's content there.
     container_keys.extend(_lines(unit, "Container", domain, only=GUARDEN_OWNED_ORDER))
 
     return render_template(
