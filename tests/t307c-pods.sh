@@ -324,4 +324,4 @@ assert_stderr_has "api"
 assert_stderr_has "worker"
 assert_file_missing "$GUARDEN_FIXTURES/split-render/units/splitpod.pod"
 
-say "a pod is one namespace, one pin, and one renderer"
+echo "MEASURE: a pod is one namespace, one pin, and one renderer"
