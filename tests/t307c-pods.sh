@@ -193,7 +193,7 @@ assert_stdout_has "$svc-worker"
 # one-shot `nc` listening on the pod's loopback — so the round-trip below is
 # between two containers and not between two `podman exec` calls.
 podman_as exec -d "$svc-web" sh -c \
-    'while true; do printf "HTTP/1.1 200 OK\r\nContent-Length: 17\r\nConnection: close\r\n\r\npod-roundtrip-307c" | nc -l -p 3000; done'
+    'while true; do printf "HTTP/1.1 200 OK\r\nContent-Length: 18\r\nConnection: close\r\n\r\npod-roundtrip-307c" | nc -l -p 3000; done'
 assert_exit 0
 
 # A container-to-container fetch over 127.0.0.1 is what the shared namespace
