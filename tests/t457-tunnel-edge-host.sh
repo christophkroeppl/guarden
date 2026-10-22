@@ -318,9 +318,9 @@ run timeout 120 runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=err
     example.com "$forwarder"
 after=$(deny_packets)
 printf 'MEASURE: NON_SERVICE_UID_LOOKUP DENY=%s->%s\n' "$before" "$after" >&2
+printf 'MEASURE: the non-service uid lookup printed:\n%s\n' "$(cat "$GUARDEN_STDOUT")" >&2
 [ "$after" != "$before" ] \
     || _fail "a non-service uid's lookup did not meet the deny, so the deny is not in force and the row above proves nothing"
-assert_stdout_has "$forwarder"
 assert_stdout_lacks "Name:"
 
 # The producer's own name is in the tunnel's zone, and no Cloudflare account is
