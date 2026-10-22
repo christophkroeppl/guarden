@@ -58,6 +58,14 @@ def passwd_entries() -> dict[str, tuple[int, int]]:
     return entries
 
 
+def owner_pair(uid: int) -> tuple[int, int] | None:
+    """The pair an account with this uid carries, or `None` when the host has none."""
+    for entry_uid, gid in passwd_entries().values():
+        if entry_uid == uid:
+            return (uid, gid)
+    return None
+
+
 def group_names() -> set[str]:
     out: set[str] = set()
     for line in _read(paths.GROUP):

@@ -234,6 +234,34 @@ def own(target, owner: tuple[int, int]) -> None:
     os.chmod(target, 0o700)
 
 
+def own_tree(target, owner: tuple[int, int]) -> list[str]:
+    """A volume's whole tree handed to one owner, and only when its root is not already.
+
+    The grant ADR-0021 decided is applied here: the admin names a uid, and the
+    mutator walks the volume the manifest declared and gives every entry to it.
+    The walk is guarden's own -- a container never chowns its tree to a host uid
+    -- and the entries keep the tree's `0700`, so the granted uid is the one that
+    reads them.
+
+    **The root is the check, and the walk runs only when it disagrees.** A
+    reconcile reads this on every deploy, so a volume whose root already carries
+    the granted pair must cost a `stat` rather than a walk of its data. Only a
+    granted volume reaches this: a volume with no grant is the create path's to
+    own (`volumes.own` and the service tree's walk).
+    """
+    if not target.is_dir():
+        return []
+    held = target.lstat()
+    if (held.st_uid, held.st_gid) == owner:
+        return []
+    for path in [target, *sorted(target.rglob("*"))]:
+        if path.is_symlink():
+            conf.set_owner(path, owner, follow=False)
+            continue
+        conf.set_owner(path, owner)
+    return [f"handed {target} to {owner[0]}:{owner[1]}"]
+
+
 def retention_from(track, overrides) -> Retention:
     return Retention(
         keep_last=overrides.keep_last_or(track.keep_last),

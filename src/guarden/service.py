@@ -387,6 +387,9 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # field was a value an instance's ingest wrote over the service's own
     # (review finding 1).
     source_hash = _source_hash(directory) if source.kind in ("poke", "service", "tree") else ""
+    # Before the convergence answer: a converged reconcile applies grants too.
+    granted = overrides_mod.load(resolved.name)
+    _check_volume_owners(manifest, resolved.name, granted)
     if existing is not None and _converged(
         existing, resolved, manifest, project, source_hash, hosts
     ):
@@ -404,6 +407,9 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
         # converged deploy installs nothing — so a repair placed there would
         # never run on the deploy it is for.
         outcome.notes += _repair(existing, resolved)
+        outcome.notes += _apply_volume_owners(
+            manifest, resolved.name, granted, resolved.escaped_ref
+        )
         return outcome
 
     fresh = bool(resolved.escaped_ref) and (
@@ -561,6 +567,10 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     for vol in manifest.bulk:
         volumes.create_bulk(resolved.name, vol, owner, resolved.escaped_ref)
         _record(record, vol, "bulk", None)
+
+    outcome.notes += _apply_volume_owners(
+        manifest, resolved.name, granted, resolved.escaped_ref
+    )
 
     # spec 5.3 step 10, after step 9: a `@sensitive` key nothing has planted for is
     # minted first, so an edge adopting `DB_PASSWORD` reuses that value rather than
@@ -1183,6 +1193,70 @@ def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None
             continue
         conf.set_owner(path, owner)
         os.chmod(path, TREE_MODE)
+
+
+def _check_volume_owners(manifest, name: str, granted) -> None:
+    """The `[ownership]` grants a service's manifest cannot host, refused by name.
+
+    A `state` volume is refused — its tree carries snapper's `.snapshots` and its
+    image may chown its data (ADR-0020), and whether an image chowns is not
+    knowable before it runs — and so is a name the manifest does not declare,
+    because a grant on no volume is a grant that does nothing.
+
+    Asked before the identity and the volumes, so the exit leaves no system user
+    and no subvolume behind on the way out.
+    """
+    declared = {volume: paths.STATE for volume in manifest.state}
+    declared.update({volume: paths.BULK for volume in manifest.bulk})
+    for volume in sorted(granted.volume_owners):
+        if volume not in declared:
+            raise errors.GuardenError(
+                f"{name}: overrides.toml grants [ownership] on the volume {volume!r}, "
+                f"which the manifest does not declare; the manifest names the volume and "
+                f"the admin names the owner, and a grant on no volume is a grant the "
+                f"operator would believe is in effect",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        if declared[volume] == paths.STATE:
+            raise errors.GuardenError(
+                f"{name}: overrides.toml grants [ownership] on the state volume "
+                f"{volume!r}; a state volume is refused, because its tree carries "
+                f"snapper's {paths.SNAPSHOTS} and its image may chown its data (ADR-0020), "
+                f"so an owner the service user does not hold is a chown that fails",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+
+
+def _apply_volume_owners(manifest, name: str, granted,
+                         escaped_ref: str | None) -> list[str]:
+    """The `[ownership]` walk: a granted volume's tree handed to the admin's uid.
+
+    Only the volumes a grant names are walked. A volume with no grant is the
+    service's own, and it is the CREATE path's walk (`_make_tree`, and the
+    volume's create) that puts it back — so a grant removed takes effect on the
+    next deploy that is not converged. Walking every volume here would be a
+    second statement of the tree's rule on the converged path, which is the
+    thing `_repair` is narrow to avoid.
+
+    `volumes.own_tree` walks only a tree whose root does not already carry the
+    pair, which is what makes this cheap on a converged deploy.
+    """
+    declared = {volume: paths.STATE for volume in manifest.state}
+    declared.update({volume: paths.BULK for volume in manifest.bulk})
+    notes: list[str] = []
+    for volume in sorted(granted.volume_owners):
+        pair = users.owner_pair(granted.volume_owners[volume])
+        if pair is None:
+            raise errors.GuardenError(
+                f"{name}: overrides.toml grants [ownership] on the volume {volume!r} "
+                f"to uid {granted.volume_owners[volume]}, which /etc/passwd no longer "
+                f"carries",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        notes += volumes.own_tree(
+            paths.mount_source(name, declared[volume], volume, escaped_ref), pair
+        )
+    return notes
 
 
 
