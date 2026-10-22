@@ -20,8 +20,13 @@ it but a refusal and a name map.
 accepted (2026-10-22). Supersedes the "no shared podman network" line as an absolute: AGENTS.md
 carries it in two places and §6.3 stated the refusal of `networks:`, and this decision replaces
 all three with the bounded form — no network *between services*, one namespace *inside* one.
-Narrows ADR-0023's "one repository is one service", which becomes "one app is one service", and
-leaves ADR-0019's user-namespace pin intact on the unit that now carries it.
+Narrows ADR-0023's "one repository is one service", which becomes "one app is one service" **under
+the default `grouping`**: a project that declares `grouping = "one-service"` puts several apps'
+containers into one service — and so one pod — instead, which is in `CONTEXT.md` and lands with the
+manifest key in the same change as this decision's §4 edit. What does not change either way is that
+an app is never a container and a pod never spans two services. It leaves ADR-0019's
+user-namespace pin intact on the unit that now carries it, with one addition the measurement forced:
+the pin is the POD's, so its containers share one user namespace.
 
 ## The decision
 
