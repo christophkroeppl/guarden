@@ -50,8 +50,10 @@ refused lookup from one that simply had none.
 
 The output `t457` recorded on 2026-10-22, a fresh cut of the golden:
 
-    MEASURE: SERVICE_UID_LOOKUP_DENY_COUNTER=0->0
-    MEASURE: NON_SERVICE_UID_LOOKUP_DENY_COUNTER=0->2
+    MEASURE: SERVICE_UID_LOOKUP DENY=0->0 ACCEPT=0->2
+    MEASURE: NON_SERVICE_UID_LOOKUP DENY=0->4
+    MEASURE: the non-service uid lookup printed:
+    ;; connection timed out; no servers could be reached
     MEASURE: the producer hostname from inside a pasta container:
     Server:		169.254.1.1
     Address:	169.254.1.1:53
@@ -60,11 +62,31 @@ The output `t457` recorded on 2026-10-22, a fresh cut of the golden:
 
     Non-authoritative answer:
 
-`169.254.1.1` is pasta's own forwarder on both rows, so both queries left the
-container and reached the host's resolver path — and only the consumer's uid's
-answer came back. The producer's hostname has no `Name:` line because no Cloudflare
-zone publishes it here; that is the harness saying it could not have made the trip,
-not evidence about the vendor.
+Row by row:
+
+- **The consumer's uid: the deny's counter did not move and its own accept's did
+  (`0->2`)**, and `Name:` came back. The query left the container, pasta
+  forwarded it from the consumer's uid, and the udp accept at `127.0.0.53:53`
+  took it. That is §7.6's composition measured rather than inferred — the accept
+  counter is what says the answer came through the path under test and not
+  around it.
+- **`ubuntu`: the deny's counter moved (`0->4`) and the lookup timed out.** uid
+  1000 is not a service uid, the deny names no uid, and nothing accepts it.
+- **The producer's hostname: no `Name:` line**, from the consumer's uid, at the
+  same forwarder. No Cloudflare zone publishes that name here, so nothing
+  answers: that is the harness saying it could not have made the trip, not
+  evidence about the vendor.
+
+**Every row passes `169.254.1.1` as the server explicitly, and that is
+load-bearing.** podman writes the container's `resolv.conf` with pasta's
+forwarder **and the host's own nameserver beside it** (measured on the golden:
+`nameserver 169.254.1.1`, then the machine's), so an unqualified `nslookup`
+falls back to the second one and answers a uid the deny has just refused. The
+first cut of this measurement did exactly that — `ubuntu` printed `Name:` and
+`Server: 10.26.102.1` while the deny's counter moved — so the row read as
+"accepted" whatever the policy said: the same "green because the environment
+provides it" failure the suite exists to avoid. Naming the forwarder is what
+makes the row a measurement of pasta's path.
 
 ## The procedure, for the operator who has the account
 
