@@ -219,10 +219,8 @@ echo "MEASURE: the backslashes in the volume path: $vol_backslashes"
 # container is asked for.
 run weedr service start envconsumer-preview/feature/x
 if [ "$GUARDEN_EXIT" != 0 ]; then
-    run systemctl --user --machine envconsumer-preview@ status 'web-feature\x2fx.service'
-    echo "MEASURE: the container unit's status: $(tr '\n' '|' <"$GUARDEN_STDOUT" | tail -c 3000)"
-    run systemctl --user --machine envconsumer-preview@ status 'envconsumer-666561747572655c78326678-pod.service'
-    echo "MEASURE: the pod unit's status: $(tr '\n' '|' <"$GUARDEN_STDOUT" | tail -c 3000)"
+    run journalctl --user --machine envconsumer-preview@ -n 40 -o cat -u 'web-feature\x2fx.service'
+    echo "MEASURE: the container unit's journal: $(tr '\n' '|' <"$GUARDEN_STDOUT" | tail -c 3000)"
 fi
 assert_exit 0
 assert_stdout_has "started envconsumer-preview"
