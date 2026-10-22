@@ -89,8 +89,9 @@ assert_exit 0
 assert_stderr_empty
 assert_file_exists "$registry/solo-staging.toml"
 # **The absence is the fact.** The tree-root app's name is empty, and a record
-# that wrote `app = ""` would be a second spelling of it (spec 3.4).
-assert_file_lacks "$registry/solo-staging.toml" "^app"
+# that wrote `app = ""` would be a second spelling of it (spec 3.4). `grep -F`,
+# so the needle is the line a record would carry and not a regular expression.
+assert_file_lacks "$registry/solo-staging.toml" 'app = '
 
 # The manifest, the unit source and the Containerfile are read from the root of
 # the home, which is what every repository that is one service has always done.
