@@ -684,6 +684,12 @@ tunnel = ["web"]  # route labels published through the tunnel instead of the ser
 required = false  # the default basic-auth middleware (§6.2 `weedr basicauth off`)
   # is NOT attached to this service's edge routers. Absent is the
   # default: the middleware is on. ADR-0024
+
+[ownership]
+volumes = { "scratch" = 999 }  # the host uid that owns a bulk volume's tree
+  # (ADR-0021). A uid `/etc/passwd` does not carry, a
+  # name the manifest does not declare, and a `state`
+  # volume are each refused
 ```
 
 `keep_last` and `free_limit` override the track's defaults. `groups.add` gives the service
@@ -707,17 +713,32 @@ for the same position (§3.4, §6.2 `weedr expose set`).
 Nothing else is overridable. Routes, edges, state volumes, the unit source and the credential
 schema are the repository's, and this file does not touch them.
 
-**`[ownership]` is DECIDED and NOT YET IMPLEMENTED, and a file carrying it is REFUSED.** It
-is not in the sample above for that reason: the sample is what an operator copies into a file,
-and a table the program refuses has no place in it. ADR-0021 decided that a volume shared by
-two image uids needs an owner the admin names, and that the grant belongs in this file because
-this file is what an operator reads to know every way the host has been widened; the ADR holds
-the shape. **The table does not exist in the program yet**, so
-`overrides.load()` refuses the key `ownership` by name and the verb that read it exits `1`
-(spec 1.2: the host is not in the state the request assumed). The implementation is ticket
-308's item 2. **Until it lands, the answer to "a volume is owned by the service uid and the
-container runs as another" is not this table** — it is the keep-id pin (ADR-0019), which maps
-the image's uid onto the service identity and leaves the volume owned by the service uid.
+**`[ownership] volumes` names the host uid that owns a volume's tree** (ADR-0021), and it is
+the eighth table. The manifest names the volume and the admin names the uid, so a repository
+cannot declare one (§7.7); a name the manifest does not declare is refused, because a grant on
+no volume is a grant an operator would believe is in effect; a uid `/etc/passwd` does not carry
+is refused, because a number nobody owns is not an owner; and a `state` volume is refused,
+because its tree carries snapper's `.snapshots` and its image may chown its data (ADR-0020),
+and whether an image chowns is not knowable before it runs. The owner is applied by guarden's
+own walk at the reconcile (§5.3), never by a chown the container performs, and the walk runs on
+a converged reconcile too — the grant has no verb of its own, so writing the file and re-running
+the reconcile is how an operator applies it. A grant REMOVED is the create path's walk — the
+tree rule that owns every volume on a create that is not converged — so it takes effect on the
+next deploy that is not converged, and the reconcile walks only the volumes a grant names.
+
+**What the grant buys is host-side ownership, and nothing more.** The subtree is owned on the
+host by the named uid, and a process running as that uid reads it — a backup agent run as that
+user, another service's container whose own service uid is the granted one, an operator
+inspecting as root. **A container cannot act as that uid**: a unit whose image declares a user
+carries `UserNS=keep-id:uid=<image uid>,gid=<gid>` (§6.3, ADR-0019), which maps exactly one
+image uid onto the service identity and leaves every other host uid unmapped inside the
+container, so the granting service's own container does not read the subtree and
+**cross-service volume sharing is not something this table provides** unless the admin names
+the other service's own uid. The service user loses the volume's tree — it stays `0700` and it
+is the granted uid's — and the tree above the volume is still the service's, so a process
+running as the granted uid reaches the volume through a path the host allows it (a bind mount
+guarden made, an operator's root shell); guarden does not widen the tree above a volume to make
+one.
 
 **`[basicauth] required = false` is the operator's per-service opt-out from the default
 basic-auth middleware** (ADR-0024), and it is a widening in the same sense: the service's

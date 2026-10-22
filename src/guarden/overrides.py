@@ -1,7 +1,7 @@
 """`/etc/guarden/services/<name>/overrides.toml`: the admin's grant surface, and
 the whole of it (spec 3.3).
 
-Seven tables and nothing else. `[ports] open` is a public port the admin granted;
+Eight tables and nothing else. `[ports] open` is a public port the admin granted;
 `[retention] keep_last` and `[retention] free_limit` override the track's
 defaults; `[groups] add` gives the service user supplementary groups, which is
 how a hardware-transcoding service reaches `/dev/dri` without the renderer
@@ -9,10 +9,11 @@ knowing anything about video; `[mounts] allow` is the only way a host path
 outside the service's own volumes and `/etc/guarden` becomes bind-mountable;
 `[firewall] allow` names the requested firewall rules the admin agreed to
 install; `[expose] tunnel` names route LABELS published through the tunnel
-INSTEAD of the edge; and `[basicauth] required` is the operator's per-service
-opt-out from the default basic-auth middleware (ADR-0024). There is deliberately
-no `[expose] edge` because "not through the tunnel" is what the track's `expose`
-already says.
+INSTEAD of the edge; `[basicauth] required` is the operator's per-service
+opt-out from the default basic-auth middleware (ADR-0024); and `[ownership]
+volumes` names the host uid that owns a volume's tree ON THE HOST (ADR-0021).
+There is deliberately no `[expose] edge` because
+"not through the tunnel" is what the track's `expose` already says.
 
 `[basicauth] required` is the one table here that takes a default AWAY rather
 than granting more of one, and it is in this file for the same reason the rest
@@ -23,14 +24,19 @@ renders exactly what it rendered before the table existed.
 
 **Nothing else is overridable.** Routes, edges, state volumes, the unit source
 and the credential schema are the repository's, and this file does not touch
-them — so a key here that is not one of the seven tables is refused by name
+them — so a key here that is not one of the eight tables is refused by name
 rather than ignored, because a silently ignored grant is a grant an operator
 believes is in effect.
 
-**`[ownership]` is the eighth, and it is DECIDED and NOT YET IMPLEMENTED**
-(ADR-0021; ticket 308's item 2). A file carrying it is refused by name here
-rather than read and ignored, and the refusal is the honest answer until the
-table lands. The spec's §3.3 says so where an operator reads it.
+**`[ownership] volumes = { "<vol>" = <uid> }` is the eighth table** (ADR-0021).
+The manifest names the volume and this file names the uid, so a repository
+cannot declare one; a name the manifest does not declare is refused, because a
+grant on no volume is a grant an operator would believe is in effect; a uid the
+host does not have is refused, because a number nobody owns is not an owner; and
+a `state` volume is refused, because its tree carries snapper's `.snapshots` and
+its image may chown its data (ADR-0020) — whether an image chowns is not knowable
+before it runs. The owner is applied by guarden's own walk at the reconcile,
+never by a chown a container performs.
 
 `keep_last` is the ladder's **daily bucket maximum** and nothing else (spec 8.1):
 it is not a mark count, and it does not move `NUMBER_LIMIT_IMPORTANT`. The other
@@ -47,11 +53,20 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from guarden import conf, errors, paths
+from guarden import conf, errors, manifest, paths, users
 
 OVERRIDES_MODE = 0o640
 
-KEYS = {"ports", "retention", "groups", "mounts", "firewall", "expose", "basicauth"}
+KEYS = {
+    "ports",
+    "retention",
+    "groups",
+    "mounts",
+    "firewall",
+    "expose",
+    "basicauth",
+    "ownership",
+}
 PORT_KEYS = {"open"}
 RETENTION_KEYS = {"keep_last", "free_limit", "weekly", "monthly", "quarterly"}
 GROUP_KEYS = {"add"}
@@ -59,6 +74,7 @@ MOUNT_KEYS = {"allow"}
 FIREWALL_KEYS = {"allow"}
 EXPOSE_KEYS = {"tunnel"}
 BASICAUTH_KEYS = {"required"}
+OWNERSHIP_KEYS = {"volumes"}
 
 WEEKLY = 4
 MONTHLY = 6
@@ -78,6 +94,7 @@ class Overrides:
     firewall: list[str] = field(default_factory=list)
     expose_tunnel: list[str] = field(default_factory=list)
     basicauth_required: bool | None = None
+    volume_owners: dict[str, int] = field(default_factory=dict)
 
     def to_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {}
@@ -106,6 +123,10 @@ class Overrides:
             document["expose"] = {"tunnel": list(self.expose_tunnel)}
         if self.basicauth_required is not None:
             document["basicauth"] = {"required": self.basicauth_required}
+        if self.volume_owners:
+            document["ownership"] = {
+                "volumes": {name: self.volume_owners[name] for name in sorted(self.volume_owners)}
+            }
         return document
 
     def keep_last_or(self, track_default: int) -> int:
@@ -174,6 +195,32 @@ def _bool(table: dict, key: str, where: str) -> bool | None:
     return value
 
 
+def _volume_owners(table: dict, where: str) -> dict[str, int]:
+    """`[ownership] volumes`: a volume name to the host uid that owns its tree."""
+    value = table.get("volumes", {})
+    if not isinstance(value, dict):
+        raise errors.GuardenError(f"{where}: volumes is not a table", errors.HOST_NOT_AS_ASSUMED)
+    owners: dict[str, int] = {}
+    for volume in sorted(value):
+        if not isinstance(volume, str) or not manifest.VOLUME_RE.match(volume):
+            raise errors.GuardenError(
+                f"{where}: {volume!r} is not a volume name", errors.HOST_NOT_AS_ASSUMED
+            )
+        uid = value[volume]
+        if isinstance(uid, bool) or not isinstance(uid, int):
+            raise errors.GuardenError(
+                f"{where}: volumes[{volume!r}] is not a uid", errors.HOST_NOT_AS_ASSUMED
+            )
+        if users.owner_pair(uid) is None:
+            raise errors.GuardenError(
+                f"{where}: volumes[{volume!r}] names uid {uid}, which this host does not "
+                f"have; an owner is a uid in /etc/passwd and not any number",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        owners[volume] = uid
+    return owners
+
+
 def load(service: str) -> Overrides:
     """An absent file is an empty grant surface: nothing has been granted yet."""
     where = paths.overrides(service)
@@ -207,6 +254,7 @@ def load(service: str) -> Overrides:
         ("firewall", FIREWALL_KEYS),
         ("expose", EXPOSE_KEYS),
         ("basicauth", BASICAUTH_KEYS),
+        ("ownership", OWNERSHIP_KEYS),
     ):
         section = document.get(table, {})
         if not isinstance(section, dict):
@@ -236,6 +284,9 @@ def load(service: str) -> Overrides:
         ),
         basicauth_required=_bool(
             document.get("basicauth", {}), "required", f"{where} [basicauth]"
+        ),
+        volume_owners=_volume_owners(
+            document.get("ownership", {}), f"{where} [ownership]"
         ),
     )
 
