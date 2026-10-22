@@ -189,6 +189,14 @@ echo "MEASURE: the containers of the pod: $(cat "$GUARDEN_STDOUT")"
 assert_stdout_has "$svc-web"
 assert_stdout_has "$svc-worker"
 
+# **Does a member accept `--add-host`?** §7.3's name map is `AddHost=` on the
+# member container, and ADR-0026 keeps it there because `/etc/hosts` belongs to
+# the container. That is measured here rather than assumed: if podman refuses
+# the flag on a container joining a pod, the name map has to move to the pod.
+podman_as run --rm --pod systemd-podprobe --add-host edge:10.0.2.2 \
+    docker.io/library/alpine:3.20 true
+echo "MEASURE: a member container's --add-host: exit $GUARDEN_EXIT, $(tr '\n' '|' <"$GUARDEN_STDERR")"
+
 # The server is the container's OWN init process — a `while` loop around a
 # one-shot `nc` listening on the pod's loopback — so the round-trip below is
 # between two containers and not between two `podman exec` calls.
