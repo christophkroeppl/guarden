@@ -10,7 +10,9 @@ answered by two suites:
   unchanged. Staged host, no VM state.
 - `tests/t457-tunnel-edge-host.sh` — the mutator's half and the machine's: the
   registry record, the refusal for a producer recorded `loopback`, `50-services.conf`
-  naming no `443`, and a real container in a pasta namespace resolving a public name.
+  naming no `443`, and a real container in a pasta namespace, with the firewall
+  loaded: the consumer's own uid resolves a public name through its stub-resolver
+  accept and a uid with no accept is dropped.
 
 ## What they cannot answer
 
