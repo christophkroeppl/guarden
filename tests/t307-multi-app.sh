@@ -67,7 +67,7 @@ run soil install --apply
 assert_not_rejected
 
 registry=/var/lib/guarden/registry
-services=/var/lib/guarden/services
+homes=/var/lib/guarden/services
 fixtures=$GUARDEN_ROOT/fixtures/projects
 
 # stage_tree <fixture> <project> <sha>: the fixture into the poke's staging tree.
@@ -95,9 +95,9 @@ assert_file_lacks "$registry/solo-staging.toml" 'app = '
 
 # The manifest, the unit source and the Containerfile are read from the root of
 # the home, which is what every repository that is one service has always done.
-assert_file_exists "$services/solo-staging/.guarden/service.yml"
+assert_file_exists "$homes/solo-staging/home/.guarden/service.yml"
 assert_file_exists \
-    "$services/solo-staging/.config/containers/systemd/app.container"
+    "$homes/solo-staging/home/.config/containers/systemd/app.container"
 
 # A second ingest converges: nothing about the app machinery made the tree root
 # look like a change.
@@ -139,8 +139,8 @@ assert_file_has "$registry/shop-api-staging.toml" 'environment = "staging"'
 # **The whole tree is the home, and the app root is a path inside it.** The
 # build context is the home (spec 6.6), so the api app's own files are in the web
 # service's home too, and a Containerfile that copies a sibling path resolves.
-assert_file_exists "$services/shop-web-staging/apps/web/.guarden/service.yml"
-assert_file_exists "$services/shop-web-staging/apps/api/.guarden/service.yml"
+assert_file_exists "$homes/shop-web-staging/home/apps/web/.guarden/service.yml"
+assert_file_exists "$homes/shop-web-staging/home/apps/api/.guarden/service.yml"
 
 # Two services, two users, two homes: the api app is not a container inside the
 # web service (spec 5.3).
@@ -152,8 +152,8 @@ assert_passwd shop-api-staging
 
 # --- 3. an app edge renders what a sibling renders --------------------------
 
-api_units=$services/shop-api-staging/.config/containers/systemd
-web_units=$services/shop-web-staging/.config/containers/systemd
+api_units=$homes/shop-api-staging/home/.config/containers/systemd
+web_units=$homes/shop-web-staging/home/.config/containers/systemd
 
 # The provider's publication, out of the provider's own record: the app edge
 # dials the publication and never the container port (spec 7.4).
