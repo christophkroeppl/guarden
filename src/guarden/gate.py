@@ -20,7 +20,8 @@ in JSON rather than `ready`: a verdict nobody took is not a passing one.
 
 The three states are the ones spec 3.4 records, and the two paths into them are the
 two tracks. A gated track mints no value (spec 5.3 step 9) because a generated
-value would hide exactly the condition this exists to catch.
+value would hide exactly the condition this exists to catch — and a `via: tunnel`
+edge plants nothing on either track for the same reason (ADR-0027).
 """
 
 from __future__ import annotations

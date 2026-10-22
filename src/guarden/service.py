@@ -556,8 +556,9 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
 
     # spec 5.3 step 10, after step 9: a `@sensitive` key nothing has planted for is
     # minted first, so an edge adopting `DB_PASSWORD` reuses that value rather than
-    # minting a second one over it. On a gated track step 9 mints nothing and the
-    # edge's own value is what exists.
+    # minting a second one over it. On a gated track step 9 mints nothing and a local
+    # edge's own value is what exists; a `via: tunnel` edge plants nothing at all
+    # (ADR-0027).
     outcome.warnings += edges.install(record, manifest, config)
 
     with conf.lock("registry"):
