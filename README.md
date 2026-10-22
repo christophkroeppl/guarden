@@ -200,7 +200,7 @@ needs:
 
 routes:
   - container: web                  # routes and widgets name a container in this service
-    host: "web.${domain}"
+    host: "web"                     # a label; the host allocates the name from it
     port: 3000
 
 widgets:
@@ -240,13 +240,15 @@ and needs no code change.
 
 | track | route host | gated | weight | kind |
 |---|---|---|---|---|
-| `production` | `myapp.$DOMAIN`, the bare domain | yes | 1000 | one service per workload |
-| `staging` | `staging.myapp.$DOMAIN` | no | 100 | one service per workload |
-| `preview` | `preview.$DOMAIN/<ref>` | no | 10 | up to `cap = 3` per service |
+| `production` | `web`, the bare label | yes | 1000 | one service per workload |
+| `staging` | `staging.web` | no | 100 | one service per workload |
+| `preview` | `preview.web`, one host and the ref as a path on it | no | 10 | up to `cap = 3` per service |
 
 `host_prefix` is where a host name comes from: empty for production, `staging.` for staging,
 and for a preview a **path prefix on one host** rather than a host per ref — which is why
-previews need no wildcard certificate and no per-ref DNS. `gated` is what makes a service in that
+previews need no wildcard certificate and no per-ref DNS. A route published through the tunnel
+adds the tunnel's own zone to that name (`staging.web.example.net`); a route served by the edge
+has no domain in its name at all. `gated` is what makes a service in that
 track refuse to start on a missing or placeholder credential. A project that needs a different
 host name says so in its own manifest, and that is the only place it can. `cap` belongs to an
 instance track and to nothing else: a `kind = "slot"` track must not carry one.
@@ -439,7 +441,7 @@ weedr service add myapp-preview/feature-login --from myapp-staging
 weedr service remove myapp-preview/feature-login      # one instance; alias: rm
 ```
 
-It appears at `preview.$DOMAIN/feature-login`, it is capped at three concurrent instances per
+It appears at `preview.web/feature-login`, it is capped at three concurrent instances per
 service with the oldest evicted first, and when it is evicted its directory and its claim on
 the snapshot it was forked from go away — while any other branch forked from the same snapshot
 keeps it. `weedr service remove <name>/<ref>` is the verb that does it: it stops that instance's

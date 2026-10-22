@@ -941,9 +941,9 @@ first, so the cap is never briefly exceeded.
 not carry one and a `kind = "instance"` track must; either mistake is exit 2 naming the track,
 and there is no top-level `[preview]` table to disagree with it.
 
-A preview appears at a **path** on one host, not at a host of its own: `preview.$DOMAIN/<ref>`.
+A preview appears at a **path** on one host, not at a host of its own: `preview.web/<ref>`.
 The `host_prefix` for the track is `preview.` and the ref is a path segment, which is why
-previews need no wildcard certificate and no per-ref DNS. Production is the bare domain and
+previews need no wildcard certificate and no per-ref DNS. Production is the bare label and
 staging takes the `staging.` prefix.
 
 Every instance of one preview service shares the service's uid, home, image store, podman secret

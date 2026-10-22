@@ -39,6 +39,7 @@
 # reads: packages/packages.toml
 # reads: docs/spec.md CONTEXT.md AGENTS.md docs/PRD.md SECURITY.md
 # reads: src/guarden/publications.py src/guarden/service.py tests/t50-route.sh
+# reads: tests/routename.py
 
 . "$(dirname "$0")/lib.sh"
 
@@ -283,6 +284,34 @@ assert_stdout_has "git"
 # any of them is caught.
 run python3 "$GUARDEN_ROOT/tests/docfragments.py" \
     "$SPEC" "$DOC" "$CONTEXT" "$AGENTS" "$PRD" "$SECURITY"
+assert_exit 0
+
+# --- 358: the spec's route name, against the allocator that computes it ------
+#
+# **A document that says what a program computes has to be checked against
+# that program, not against a copy of its answer.** Spec §4 said a route's full
+# name was `<track host_prefix><host:>` inside the host's domain, and gave
+# `web.myapp.com` as the example — while the allocator computes
+# `<host_prefix><label><zone>` and `service._zone` returns `""` for every
+# non-tunnel destination, so an edge route is `staging.web` with no domain at
+# all. The spec's own formula and its own example disagreed with each other
+# AND with the code, and three suites (`t50-route.sh`, `t50-slice.sh`,
+# `t455-tunnel-hostname.sh`) pinned the allocator's answer while the contract
+# said otherwise.
+#
+# **So the check asks the allocator.** `tests/routename.py` imports
+# `publications.claim_host` and `service._zone` and calls them with the real
+# arguments, then asks whether the spec says what those calls returned. An
+# assertion written as a string copied out of the spec would be green the
+# moment the two drifted apart — which is the defect itself — so the examples
+# are checked by ALLOCATING them rather than by reading them.
+#
+# **`host.domain` is checked the same way.** It reaches exactly one thing, the
+# `${domain}` manifest substitution, and it is in no allocated name — so the
+# spec's old sentence that a repository "cannot claim a name outside
+# `host.domain`" named a boundary the name does not have. That claim is
+# asserted absent, and the absence is what the allocator's answers support.
+run python3 "$GUARDEN_ROOT/tests/routename.py" "$SPEC"
 assert_exit 0
 
 echo "t480-doc-claims: ok"

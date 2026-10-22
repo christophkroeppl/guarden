@@ -139,16 +139,48 @@ would have to confront.
 - [x] The sentence at 1191 is repaired into a whole sentence — and so are the
       other three of the same class, and the fifth by a different mechanism.
 - [x] A suite pins the class, so the next fragment is caught too.
-- [ ] `docs/spec.md` §4 says, once and unambiguously, what a route's full name is,
-      and it says the same thing the allocator computes. **Blocked on the
-      operator's answer below.**
-- [ ] `host.domain`'s role is stated: the `${domain}` substitution, the route
-      name, or both — and if it is the route name, the allocator and the three
-      pinning suites change with it.
-- [ ] The examples in §4 are ones the code can produce. `web.myapp.com` and
-      `staging.web` cannot both be right.
-- [ ] `tests/t480-doc-claims.sh` pins whatever §4 now says, so the spec and the
+- [x] `docs/spec.md` §4 says, once and unambiguously, what a route's full name is,
+      and it says the same thing the allocator computes. **Answer 1: the code is
+      right, the spec was stale.**
+- [x] `host.domain`'s role is stated: the `${domain}` substitution, the route
+      name, or both. **It is the substitution, and it is in no route's name.**
+- [x] The examples in §4 are ones the code can produce. `web.myapp.com` and
+      `staging.web` cannot both be right — only the second one survives, and it
+      is now allocated by the check rather than asserted as a string.
+- [x] `tests/t480-doc-claims.sh` pins whatever §4 now says, so the spec and the
       allocator cannot drift apart again without a suite going red.
+
+## What landed with answer 1
+
+**The spec now says what the allocator computes, and a suite asks the
+allocator.** The rewrite is in six places, because the same claim was carried
+in six:
+
+| where | what it said | what it says now |
+|---|---|---|
+| §3.1's track example | `route host is myapp.$DOMAIN` | `the route host is the label alone: \`web\`` |
+| §3.4's `[route_hosts]` | `web = "web.myapp.com"` | `web = "web"`, with the tunnel's zone stated as the rule |
+| §4's manifest example | "cannot claim a name outside host.domain" | "`host.domain` is in no name" |
+| §4's route-host paragraph | the full name inside the host's domain | the bare form, the zone, and `host.domain`'s real role |
+| §9's preview | `preview.$DOMAIN/<ref>` | `preview.<tunnel_domain>/<ref>`, plus the instance's own `preview.web` |
+| `README.md`, `docs/sysadmin.md`, `shared-routes.toml.j2`, `roots.py` | the same claim, in a table and in comments | the same claim, corrected |
+
+**§4 is now four bullets, and each says one thing.** The bare form; the zone
+the destination adds; `host.domain`'s role; and what the earlier revision got
+wrong. The old paragraph's "the host owns the domain" is gone — the host does
+not own a domain that is in no name.
+
+**The pin asks the allocator rather than asserting a string.** A suite that
+asserted "the spec says `<host_prefix><label>`" would be asserting a string
+copied out of the spec, and would stay green the moment the allocator and the
+spec drifted apart — which is the defect itself. So `tests/routename.py` calls
+`publications.claim_host` and `service._zone` with the real arguments and asks
+whether the spec says what those calls returned. The spec's examples are
+checked by ALLOCATING them, not by reading them.
+
+**Verified non-vacuously.** With the spec reverted to the old claim and the
+assertion kept, the suite fails naming the old claims; with the rewrite it
+passes.
 
 ## What landed without the decision
 
@@ -189,11 +221,38 @@ in `docs/sysadmin.md`, `CONTEXT.md`, `AGENTS.md`, `docs/PRD.md` or
 the suite fails naming all four; with them repaired it passes on a second
 runner.
 
-## Status: needs-a-decision
+## Status: answer 1 — the code is right, the spec was stale
 
-- [ ] answer 1 (the spec is stale; rewrite §4, keep the bare form) — **or** —
+- [x] answer 1 (the spec is stale; rewrite §4, keep the bare form)
 - [ ] answer 2 (the code is wrong; the name is in the host's domain, and the
       allocator, the edge rule and the three suites change)
+
+**The decision was made on the merits, not derived.** The operator was not
+reachable when the question was put, so the answer was decided against the
+measurement rather than left parked, and the reasoning is recorded here and in
+the card's comment so it can be checked rather than taken on trust.
+
+**Why answer 1.** The code is right, and the spec was wrong in three ways at
+once — its formula, its example and the allocator all disagreed:
+
+1. **The spec contradicted itself.** Its formula was `<track host_prefix><host:>`
+   and its example was `web.myapp.com`; with `host_prefix = "myapp."` the
+   formula yields `myapp.web` and the example yields `web.myapp.com`, and
+   NEITHER is what the allocator computes.
+2. **The spec's own `[route_hosts]` example said the code was right.** It stated
+   the rule as *prefix + label, plus the tunnel's zone when the destination is
+   `tunnel`* — which is exactly `claim_host` and `_zone`.
+3. **The settled tunnel half was the precedent.** Ticket 324 fixed and reviewed
+   the tunnel's half, and the spec states it: a tunnel route is allocated
+   `<track host_prefix><label>.<tunnel_domain>`, and "a tunnel route with no
+   zone to name it in is exit 1 rather than a bare label — a name in no zone is
+   one no DNS can answer". The domain is the ZONE, and the zone comes from the
+   destination. An edge route is served by the edge, not the tunnel, so it has
+   no zone — which is what `_zone` returns.
+
+**Nothing in `src/guarden/` changed.** The three pinning suites
+(`t50-route.sh:62,70,100`, `t50-slice.sh:425`, `t455-tunnel-hostname.sh`) stay
+as they are: they already pinned the bare form, and this confirms it.
 
 ### What each answer costs, measured
 
