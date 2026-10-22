@@ -267,49 +267,60 @@ assert_file_has "$services" \
 
 pinned=--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2
 
-run runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error \
-    --network "pasta:$pinned" localhost/probe-bb /bin/busybox cat /etc/resolv.conf
-printf 'PROBE ubuntu resolv.conf:\n%s\n' "$(cat "$GUARDEN_STDOUT")" >&2
-run_in "$home" setpriv --reuid="$consumer" --regid="$consumer" --clear-groups \
-    env -u OLDPWD HOME="$home" PWD="$home" USER="$consumer" LOGNAME="$consumer" \
-    XDG_RUNTIME_DIR="$runtime" podman run --rm --log-level=error \
-    --network "pasta:$pinned" localhost/probe-bb /bin/busybox cat /etc/resolv.conf
-printf 'PROBE consumer resolv.conf:\n%s\n' "$(cat "$GUARDEN_STDOUT")" >&2
+# **The server is named on every row.** podman writes the container's
+# `resolv.conf` with pasta's forwarder **and the host's own nameserver beside
+# it** (measured: `169.254.1.1`, then the machine's), so an unqualified
+# `nslookup` falls back to the second and answers a uid the deny just refused —
+# the row would read as "accepted" whatever the policy said. Naming the forwarder
+# asks pasta and nothing else, which is the path under test.
+forwarder=169.254.1.1
 
-# `iptables -nvx -L` prints `pkts bytes target prot …`, so the DROP rule's
-# counter is the first field and its destination is `127.0.0.0/8`. One function,
-# so the readings cannot differ in how they were taken.
+# `iptables -nvx -L` prints `pkts bytes target prot …`, so a rule's counter is
+# the first field. Two readings — the deny, and the uid's own stub-resolver
+# accept — one function each, so no two readings differ in how they were taken.
 deny_packets() {
     iptables-legacy -nvx -L guarden-svc 2>/dev/null \
         | awk '$3 == "DROP" && $NF ~ /^127\.0\.0\.0\/8/ {print $1; exit}'
 }
+accept_packets() {
+    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
+        | awk -v uid="$svc_uid" \
+            '$0 ~ ("owner UID match " uid " udp dpt:53") {print $1; exit}'
+}
 
-before=$(deny_packets)
-[ -n "$before" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"
+before_deny=$(deny_packets)
+before_accept=$(accept_packets)
+[ -n "$before_deny" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"
+[ -n "$before_accept" ] || _fail "uid $svc_uid has no stub-resolver accept to measure"
 run_in "$home" setpriv --reuid="$consumer" --regid="$consumer" --clear-groups \
     env -u OLDPWD HOME="$home" PWD="$home" USER="$consumer" LOGNAME="$consumer" \
     XDG_RUNTIME_DIR="$runtime" podman run --rm --log-level=error \
-    --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup example.com
+    --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup \
+    example.com "$forwarder"
 assert_exit 0
 assert_stdout_has "Name:"
-after=$(deny_packets)
-printf 'MEASURE: SERVICE_UID_LOOKUP_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
-[ "$after" = "$before" ] \
+after_deny=$(deny_packets)
+after_accept=$(accept_packets)
+printf 'MEASURE: SERVICE_UID_LOOKUP DENY=%s->%s ACCEPT=%s->%s\n' \
+    "$before_deny" "$after_deny" "$before_accept" "$after_accept" >&2
+[ "$after_deny" = "$before_deny" ] \
     || _fail "the consumer uid's lookup met the loopback deny, so its stub-resolver accept is not above it"
+[ "$after_accept" != "$before_accept" ] \
+    || _fail "the consumer uid's query never reached its stub-resolver accept, so the answer came from somewhere else"
 
 # **The same lookup as a uid with no accept.** uid 1000 is not a service and the
-# deny names no uid, so the forwarded query is dropped: no `Name:` line, and the
-# deny's counter moves.
+# deny names no uid, so the query pasta forwards is dropped: no `Name:` line, and
+# the deny's counter moves. Both halves are asserted — a name that failed to
+# resolve for some other reason would leave the counter still.
 before=$(deny_packets)
 run timeout 120 runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error \
-    --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup example.com
+    --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup \
+    example.com "$forwarder"
 after=$(deny_packets)
-printf 'MEASURE: NON_SERVICE_UID_LOOKUP_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
-printf 'PROBE ubuntu lookup stdout:\n%s\nPROBE ubuntu lookup stderr:\n%s\n' \
-    "$(cat "$GUARDEN_STDOUT")" "$(cat "$GUARDEN_STDERR")" >&2
-printf 'PROBE rules:\n%s\n' "$(iptables-legacy -nvx -L guarden-svc | head -40)" >&2
+printf 'MEASURE: NON_SERVICE_UID_LOOKUP DENY=%s->%s\n' "$before" "$after" >&2
 [ "$after" != "$before" ] \
     || _fail "a non-service uid's lookup did not meet the deny, so the deny is not in force and the row above proves nothing"
+assert_stdout_has "$forwarder"
 assert_stdout_lacks "Name:"
 
 # The producer's own name is in the tunnel's zone, and no Cloudflare account is
@@ -325,7 +336,7 @@ run_in "$home" setpriv --reuid="$consumer" --regid="$consumer" --clear-groups \
     env -u OLDPWD HOME="$home" PWD="$home" USER="$consumer" LOGNAME="$consumer" \
     XDG_RUNTIME_DIR="$runtime" podman run --rm --log-level=error \
     --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup \
-    orders.tunnel.example.net
+    orders.tunnel.example.net "$forwarder"
 printf 'MEASURE: the producer hostname from inside a pasta container:\n%s\n' \
     "$(cat "$GUARDEN_STDOUT")"
 assert_stdout_lacks "Name:"
