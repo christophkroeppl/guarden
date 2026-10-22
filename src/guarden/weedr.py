@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from guarden import (
+    apps,
     basicauth,
     cli,
     clone,
@@ -238,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
             required=True,
             help=from_help,
         )
+        if verb == "ingest":
+            creator.add_argument(
+                "--check",
+                action="store_true",
+                help="answer whether this ingest would change anything, and change nothing",
+            )
 
     create = top["service"]["verbs"]["create"]
     cli.add_name(create, "the service to create; a name with no environment resolves a default")
@@ -540,7 +547,8 @@ def _emit(outcome: service.Outcome, verb: str) -> int:
         return 0
     if outcome.resolved.defaulted:
         sys.stdout.write(f"{outcome.resolved.name}\n")
-    sys.stdout.write(f"{verb} {outcome.resolved.name} uid {outcome.uid}\n")
+    named = apps.label(outcome.resolved.name, outcome.app)
+    sys.stdout.write(f"{verb} {named} uid {outcome.uid}\n")
     return 0
 
 
@@ -549,13 +557,26 @@ def _create(args, allow_default: bool, verb: str) -> int:
     source = service.parse_from(args.source, verb)
     resolved = names.resolve(args.name, list(config.tracks), allow_default)
     now = _now()
-    outcome = service.create(resolved, source, config, now)
+    check = bool(getattr(args, "check", False))
+    outcome = service.create(resolved, source, config, now, check=check)
+    if check:
+        return _checked(outcome)
     if outcome.fresh_instance:
         outcome.notes += lineage.seed_instance(resolved, now)
     _filter_set(resolved.name)
     _edge_units(resolved.name)
     _sync_dashboard()
     return _emit(outcome, "created" if not outcome.converged else "converged")
+
+
+def _checked(outcome: service.Outcome) -> int:
+    """What `--check` answers: `converged` and exit 0, or the app and exit 1."""
+    label = apps.label(outcome.resolved.name, outcome.app)
+    if outcome.converged:
+        sys.stdout.write("converged\n")
+        return 0
+    sys.stdout.write(f"{label} would deploy\n")
+    return 1
 
 
 def _edge_units(name: str) -> None:

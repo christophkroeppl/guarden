@@ -123,6 +123,9 @@ service nobody wants any more.
 
 - **Per-app image digests and `dependencies:`** — ticket 307e. Until then the
   whole-tree hash defines convergence, so any change in the tree redeploys every app
-  of it.
+  of it. What it does *not* do is restart every app: a deploy asks
+  `weedr service ingest --check` before it stops anything, and an app already at the
+  tree it was given is not stopped (spec §6.6 step 0). 307e narrows what the hash
+  covers; the question and its answer stay the mutator's.
 - **Pods.** One container per unit, one user per service, is unchanged; grouping
   app containers into a pod is 307c and is a decision about a uid, not about this.

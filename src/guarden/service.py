@@ -195,6 +195,7 @@ class Outcome:
     resolved: names.Resolved
     converged: bool = False
     uid: int = 0
+    app: str = ""
     fresh_instance: bool = False
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -409,7 +410,9 @@ def _source_label(source: Source) -> tuple[str, list[str]]:
     return (registry.SOURCE_MANUAL, [])
 
 
-def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcome:
+def create(
+    resolved: names.Resolved, source: Source, config, now: str, check: bool = False
+) -> Outcome:
     existing = registry.load(resolved.name)
     tree = _deploy_tree(source, resolved.name)
     app = _deploy_root(source, resolved, tree)
@@ -431,7 +434,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     manifest = manifest_mod.accept(_manifest_in(directory), held=held)
     apps_mod.check(manifest, apps_mod.discover(tree), _manifest_in(directory))
     project = manifest.project or _project_from(source)
-    outcome = Outcome(resolved=resolved)
+    outcome = Outcome(resolved=resolved, app=app)
 
     # Before identity, before the volumes, before the home: an edge the provider
     # does not offer, a route host another service already holds, and a tunnel
@@ -458,9 +461,14 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # Before the convergence answer: a converged reconcile applies grants too.
     granted = overrides_mod.load(resolved.name)
     _check_volume_owners(manifest, resolved.name, granted)
-    if existing is not None and _converged(
+    converged = existing is not None and _converged(
         existing, resolved, manifest, project, source_hash, hosts, app
-    ):
+    )
+    if check:
+        outcome.converged = converged
+        outcome.uid = existing.uid if existing is not None else 0
+        return outcome
+    if converged and existing is not None:
         outcome.converged = True
         outcome.uid = existing.uid
         # **A converged create still REPAIRS the tree (ticket 334).** The

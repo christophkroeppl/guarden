@@ -585,11 +585,9 @@ def _preview_drop(args) -> int:
     return 0
 
 
-def _render(entry: dict, resolved: names.Resolved) -> Path:
+def _render(entry: dict, resolved: names.Resolved, app: str) -> Path:
     """`loom` as `guarden`, into the directory the mutator installs from."""
     source = paths.STAGING / str(entry["project"]) / str(entry["sha"])
-    record = registry.load(resolved.name)
-    app = record.app if record is not None else ""
     if app:
         source = source.joinpath(*app.split("/"))
     if not paths.LIB.is_dir():
@@ -766,56 +764,95 @@ def _sequence(entry: dict, resolved: names.Resolved, target: str) -> int:
     A step that raises ends the sequence there, and the build and the gate both
     land before the stop, so a failed either leaves the running container
     running (ADR-0011).
+
+    An app already at this tree is not stopped: the convergence question is
+    asked before the stop, not after it (§6.6 step 0), so a poke of an unchanged
+    tree restarts nothing. The install still runs, because that is where a
+    converged create repairs the tree, and the start is idempotent.
     """
     existing = registry.load(resolved.name)
     missing = existing is None or (
         resolved.escaped_ref is not None and resolved.escaped_ref not in existing.instances
     )
     if missing:
-        _step("ensure", f"{resolved.name}: weedr service ingest --from poke")
         _weedr(
             "ingest", target, f"{resolved.name} could not be created from its staged tree",
             *_ingest_argv(entry),
         )
+        unchanged = False
     else:
-        _step("ensure", f"{resolved.name}: the registry already has an entry")
+        unchanged = not _would_change(entry, target)
 
-    out = _render(entry, resolved)
-    _step("render", f"{target}: {sum(1 for _ in out.rglob('*'))} files")
-
-    if entry.get("build"):
-        _step("build", f"{resolved.name}: weedr service build")
-        _weedr("build", resolved.name, f"the build of {resolved.name} failed")
+    record = registry.load(resolved.name)
+    app = record.app if record is not None else ""
+    label = apps.label(target, app)
+    _step("ensure", f"{label}: " + (
+        "weedr service ingest --from poke" if missing else "the registry already has an entry"
+    ))
+    if unchanged:
+        _step("render", f"{label}: nothing changed, so nothing to render")
     else:
-        _step("build", f"{target}: no build instruction, so no build call")
+        out = _render(entry, resolved, app)
+        _step("render", f"{label}: {sum(1 for _ in out.rglob('*'))} files")
+
+        if entry.get("build"):
+            _step("build", f"{label}: weedr service build")
+            _weedr("build", resolved.name, f"the build of {resolved.name} failed")
+        else:
+            _step("build", f"{label}: no build instruction, so no build call")
 
     state, reason = _gate(resolved)
-    _step("gate", f"{resolved.name}: {state}")
+    _step("gate", f"{label}: {state}")
 
     if state == "blocked":
-        _install(entry, resolved, target)
+        _install(entry, resolved, target, app)
         message = (
-            f"{resolved.name} deployed, waiting for the credential gate — reason: {reason}"
+            f"{label} deployed, waiting for the credential gate — reason: {reason}"
         )
         sys.stderr.write(errors.warn(message) + "\n")
         entry["outcome"] = 0
         entry["error"] = message
         return 0
 
-    _step("stop", f"{target}: weedr service stop")
-    _weedr("stop", target, f"the units of {target} did not stop")
+    if not unchanged:
+        _step("stop", f"{label}: weedr service stop")
+        _weedr("stop", target, f"the units of {target} did not stop")
 
-    _install(entry, resolved, target)
+    _install(entry, resolved, target, app)
 
-    _step("start", f"{target}: weedr service start")
+    _step("start", f"{label}: weedr service start")
     _weedr("start", target, f"{target} did not start")
     entry["outcome"] = 0
     entry["error"] = None
-    sys.stdout.write(f"deployed {target} at {entry['sha']}\n")
+    sys.stdout.write(
+        f"{'unchanged' if unchanged else 'deployed'} {label} at {entry['sha']}\n"
+    )
     return 0
 
 
-def _install(entry: dict, resolved: names.Resolved, target: str) -> None:
+def _would_change(entry: dict, target: str) -> bool:
+    """Whether the ingest of this tree would change the app.
+
+    The mutator's own convergence answer, asked before the stop rather than
+    after it: a hash computed here would be a second answer to the question.
+    Exit `0` is converged, `1` is not, and anything else is a refusal.
+    """
+    result = tool.call(
+        _root("service", "ingest", target, "--check", *_ingest_argv(entry))
+    )
+    if result.returncode == 0:
+        return False
+    if result.returncode == 1:
+        return True
+    detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
+    raise errors.GuardenError(
+        f"asking whether {target} would change: weedr service ingest --check exited "
+        f"{result.returncode}" + (f": {detail}" if detail else ""),
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
+def _install(entry: dict, resolved: names.Resolved, target: str, app: str) -> None:
     """The mutator verb that installs the rendered units and records the sha.
 
     `weedr service ingest` is the reconcile verb on the grant and it re-renders
@@ -824,7 +861,7 @@ def _install(entry: dict, resolved: names.Resolved, target: str) -> None:
     order has: the units on disk come from the mutator's own render of the
     service's home, not from the unprivileged render this program held.
     """
-    _step("install", f"{target}: weedr service ingest --from poke")
+    _step("install", f"{apps.label(target, app)}: weedr service ingest --from poke")
     _weedr(
         "ingest", target, f"the rendered units of {target} did not install",
         *_ingest_argv(entry),

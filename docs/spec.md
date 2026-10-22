@@ -1594,7 +1594,7 @@ who can push to the repository, which is the case that actually matters.
 A service's tree comes from exactly one of three places, and never from a path an argument names.
 
 ```
-  weedr service ingest <name[/ref]> --from poke <project>@<sha>  on the guarden rule
+  weedr service ingest <name[/ref]> --from poke <project>@<sha> [--check]  on the guarden rule
   └ CI's tree, already on the box. The system builds the path.
 
   weedr service add <name[/ref]> --from <service>  root only
@@ -1761,6 +1761,22 @@ In order:
 
 Every step is idempotent. A second `ingest` or `add` of a converged service exits `0`, says it
 converged, and changes nothing — except the one thing below, which is a mode and not a deploy.
+
+**`weedr service ingest --check` asks that question without acting on the answer.** It runs the
+comparison a converged `ingest` runs — the manifest, the project, the app root, the hosts, the
+source hash — writes nothing at all, and answers with its exit code: `0` and `converged` when the
+ingest would change nothing, `1` and one line naming the service when it would. It takes the same
+`--from poke <project>@<sha>`, because the tree being asked about is the poke's, and it is the
+**same** comparison rather than a second one: a caller that computed its own hash would be a
+second answer to "did this tree change", and the two would disagree the first time either was
+edited. `furrow` is that caller, and §6.6 step 0 is what it asks for.
+
+**It widens nothing, and that is why a granted verb may carry it.** The rule `guarden` holds
+names the program, so a flag on any verb is reachable through it; this one writes nothing, starts
+nothing and reads only what the verb itself already reads, so a `guarden` caller holding `ingest`
+gains no authority it did not have by calling `ingest`. The verbs whose authority is the point —
+`purge`, `rollback`, `port open`, `firewall open` — are separate verbs, and the policy list inside
+the mutator is what refuses them to a `guarden` caller (§6.6).
 
 **The one thing a converged `ingest` or `add` does change is a mode.** The tree's rule is `0700`
 to the service user (§2.1), and a host that ran an older guarden carries directories that do not
@@ -1998,7 +2014,7 @@ still converge and the run still exits `1`.
 ### 6.2 `weedr` — the privileged mutator
 
 ```
-weedr service ingest <name[/ref]> --from poke <project>@<sha>
+weedr service ingest <name[/ref]> --from poke <project>@<sha> [--check]
 weedr service add <name[/ref]> --from <service>
 weedr service remove <name[/ref]>
 weedr service purge <name>  # the only destructive verb; not on any sudoers rule
@@ -2640,6 +2656,22 @@ every app the tree ships. **A repository with one app at its root is the same ru
 special case**: its one app is the tree root, the name carries no app, and the deploy is what it
 always was.
 
+**Every line the deploy writes about an app names the app root as well as the service** —
+`shop-api-production (app apps/api)` — because the service name is what the queue and the registry
+key on and the root is the directory an operator looking at the repository sees. The tree-root app
+adds nothing, because its service name is the whole of it: a one-app repository's report is what it
+has always been, and `weedr service ingest`'s own `created … uid …` line carries the same suffix
+on the same rule.
+
+**A refusal the tree itself produces refuses the whole poke, and a failure at deploy time does
+not.** Two app directories with one last component, a `needs: app:` naming an app the tree does
+not ship, and a service name longer than a name may be are all facts about the repository, and
+they are exit `2` before any request is written — the apps that would have worked cannot deploy
+into a repository that can never be whole, and a half of a poke that a re-poke would complete is
+a state nobody asked for. A deploy that fails *after* that — a build, a gate that cannot be
+evaluated, a start — is one app's: its request is kept with its message, the requests after it are
+still drained, and the poke exits non-zero. `furrow queue list` is where the failure is read.
+
 **`--from` is required when the service does not exist, and it never takes a path.** The only
 form is `poke <project>@<sha>`, and the mutator builds
 `/var/lib/guarden/staging/<project>/<sha>` itself. `<project>` is checked against the project's
@@ -2665,6 +2697,16 @@ The steps, in this order, and the order is the point :
   The mutator resolves that pair to `/var/lib/guarden/staging/<project>/<sha>` itself; `furrow`
   never names a path, and neither does any other caller. This is where a poke creates a service,
   which is why `hose` needs no `weedr` verb at all.
+
+  **If it has one, ask whether this tree would change it**, with `weedr service ingest <name>
+  --from poke <project>@<sha> --check` (§5.3): exit `0` is `converged`, and it means the render,
+  the build and the stop have nothing to do and the install writes nothing. The app is still
+  gated, and it is started if it is not running — a converged deploy of a stopped service is that
+  — but an app already at this tree is **not stopped and not restarted**, which is what makes a
+  poke of an unchanged tree a no-op for it. The question is asked here rather than at step 5
+  because step 4 is the destructive one and the answer has to arrive before it. The answer is the
+  whole tree's until ticket 307e narrows it to the app's own subtree, so an edit anywhere in a
+  multi-app repository redeploys every app of it today.
 1. Render with `loom`.
 2. Build, if the unit source has a build instruction: `weedr service build <name>`, which runs
   `podman build` **as the service user** on the service's own tree, tagged with the image
