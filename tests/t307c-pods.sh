@@ -293,7 +293,7 @@ seed "$inst_staged/.guarden/quadlet/app.container" \
     "Exec=sleep 3600"
 run weedr service ingest instprobe-preview/feature/x --from poke instprobe@0000001
 assert_exit 0
-inst_units=/var/lib/guarden/services/instprobe-preview/instances/feature\\x2fx/.config/containers/systemd
+inst_units=/var/lib/guarden/services/instprobe-preview/home/feature\\x2fx/.config/containers/systemd
 assert_file_exists "$inst_units/instprobe.pod"
 assert_file_has "$inst_units/instprobe.pod" "PodName="
 assert_file_has "$inst_units/app.container" "Pod=instprobe-feature\\x2fx.pod"
