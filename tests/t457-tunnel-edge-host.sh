@@ -21,10 +21,10 @@
 # pasta's DNS behaviour is not obvious from the pin, and the loopback deny is
 # between a service uid and the stub resolver (§7.6). What is measured is the
 # mechanism the edge relies on: an unprivileged container resolves a public name
-# through pasta's forwarder. The producer's own name is NOT resolved here — the
-# harness has no Cloudflare account and no zone — and the manual round trip is
-# recorded in `docs/notes/tunnel-edge-manual-check.md`. This suite does not
-# pretend to have made it.
+# through pasta's forwarder, and the producer's own name does NOT resolve here
+# because this machine has no zone and no Cloudflare account. The manual round
+# trip is recorded in `docs/notes/tunnel-edge-manual-check.md`, and this suite
+# does not pretend to have made it.
 #
 # Real host, real uid, real render: `GUARDEN_PREFIX=/`, as `t84` and `t455` do.
 # The container probe needs a package and an image in `ubuntu`'s own store, so
@@ -228,11 +228,17 @@ assert_exit 0
 assert_stdout_has "Name:"
 
 # The producer's own name is in the tunnel's zone, and no Cloudflare account is
-# reachable from a test machine: the lookup answers nothing, and the suite says
-# so rather than reading silence as success. The live round trip is a MANUAL
-# check — `docs/notes/tunnel-edge-manual-check.md` carries the procedure and the
-# result — and nothing here claims to have made it.
+# reachable from a test machine — so the lookup is the evidence that this suite
+# did NOT make the round trip, and the output is printed rather than an exit
+# code: busybox's `nslookup` returns 0 on a name it cannot resolve, so a status
+# would read as success and mean nothing.
+#
+# The live round trip is a MANUAL check —
+# `docs/notes/tunnel-edge-manual-check.md` carries the procedure and the result
+# — and nothing here claims to have made it.
 run runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error \
     --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup \
     orders.tunnel.example.net
-echo "MEASURE: the producer's hostname from inside a pasta container: exit $GUARDEN_EXIT"
+printf 'MEASURE: the producer hostname from inside a pasta container:\n%s\n' \
+    "$(cat "$GUARDEN_STDOUT")"
+assert_stdout_lacks "Name:"

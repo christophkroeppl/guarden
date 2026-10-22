@@ -24,8 +24,11 @@ asserting a fake. So it is not asserted anywhere.
 
 **Result: not run.** No Cloudflare account, no second guarden host, and no tunnel
 zone are available to the machine these suites run on. Nothing in the two suites
-above claims otherwise, and `t457` prints the failed lookup of the tunnel hostname
-as its own measurement rather than reading silence as success.
+above claims otherwise, and `t457` prints the lookup of the producer's hostname as
+its own measurement and asserts that the name does **not** resolve there — the
+positive half (`example.com` resolving from inside a pasta container) is the
+mechanism the edge relies on, and the negative half is the harness saying it could
+not have made the trip.
 
 ## The procedure, for the operator who has the account
 
