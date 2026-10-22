@@ -2550,8 +2550,18 @@ def _unit_source(name: str, record, escaped_ref: str | None = None) -> Iterator[
     if escaped_ref:
         homes.insert(0, paths.instance_home(name, escaped_ref))
     for home in homes:
-        if _manifest_in(home).is_file():
-            with _render_source(home) as staged:
+        # **The manifest is at the app's root, not at the home's.** A service
+        # that deploys one app of a multi-app repository has its whole tree in
+        # `home` and its manifest at `home/apps/web/.guarden/service.yml`, so a
+        # lookup that only tried `<home>/.guarden/service.yml` found nothing and
+        # answered "no manifest in <home> and no module source" — on the first
+        # `start` of every such service. `record.app` is where the registry says
+        # the app sits (empty for a single-app repository, which is the tree
+        # root), and `paths.app_root` is the one rule for turning that into a
+        # path.
+        root = paths.app_root(home, record.app)
+        if _manifest_in(root).is_file():
+            with _render_source(root) as staged:
                 yield staged
             return
     if record.installed_by:
