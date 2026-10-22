@@ -196,6 +196,8 @@ assert_stdout_has "$svc-worker"
 podman_as run --rm --pod systemd-podprobe --add-host edge:10.0.2.2 \
     docker.io/library/alpine:3.20 true
 echo "MEASURE: a member container's --add-host: exit $GUARDEN_EXIT, $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 125
+assert_stderr_has "extra host entries must be specified on the pod"
 
 # The server is the container's OWN init process — a `while` loop around a
 # one-shot `nc` listening on the pod's loopback — so the round-trip below is

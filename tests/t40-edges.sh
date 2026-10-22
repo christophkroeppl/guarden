@@ -51,9 +51,11 @@ assert_exit 0
 assert_stderr_empty
 
 # There is no name map and no /etc/hosts. For each edge the renderer writes
-# `AddHost=<provider>:<alias>` into *every* unit of the consumer, and the name is
-# the provider's own service name, with no suffix and no alias.
-assert_file_has "$render/units/web.container" "AddHost=postgres-staging:10.0.2.2"
+# `AddHost=<provider>:<alias>` into the consumer's POD — podman refuses
+# `--add-host` on a container joining a pod ("extra host entries must be
+# specified on the pod") — and the name is the provider's own service name, with
+# no suffix and no alias.
+assert_file_has "$render/units/myapp.pod" "AddHost=postgres-staging:10.0.2.2"
 assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-staging"
 assert_file_has "$render/units/guarden.env" "DB_PORT=20007"
 # The provider's service name must not appear in the real /etc/hosts.
@@ -217,7 +219,7 @@ run loom render "$project" --service myapp-latepin --out "$render"
 assert_exit 0
 assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-pinned"
 assert_file_has "$render/units/guarden.env" "DB_PORT=20007"
-assert_file_has "$render/units/web.container" "AddHost=postgres-pinned:10.0.2.2"
+assert_file_has "$render/units/myapp.pod" "AddHost=postgres-pinned:10.0.2.2"
 assert_file_lacks "$render/units/guarden.env" "DB_HOST=postgres-staging"
 
 # Without the pin, `postgres-staging` is the provider: no `[providers]` table is
@@ -228,7 +230,7 @@ seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/"
 run loom render "$project" --service myapp-staging --out "$render"
 assert_exit 0
 assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-staging"
-assert_file_has "$render/units/web.container" "AddHost=postgres-staging:10.0.2.2"
+assert_file_has "$render/units/myapp.pod" "AddHost=postgres-staging:10.0.2.2"
 assert_file_has "$render/system/guarden-order.target" "Wants=postgres-staging.target"
 
 # The pin is written, and the **same manifest** renders the pinned provider on
@@ -239,7 +241,7 @@ seed "$GUARDEN_PREFIX/etc/guarden/overrides.toml" \
 run loom render "$project" --service myapp-staging --out "$render"
 assert_exit 0
 assert_file_has "$render/units/guarden.env" "DB_HOST=postgres-pinned"
-assert_file_has "$render/units/web.container" "AddHost=postgres-pinned:10.0.2.2"
+assert_file_has "$render/units/myapp.pod" "AddHost=postgres-pinned:10.0.2.2"
 assert_file_has "$render/system/guarden-order.target" "Wants=postgres-pinned.target"
 assert_file_lacks "$render/units/guarden.env" "DB_HOST=postgres-staging"
 

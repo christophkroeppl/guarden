@@ -72,7 +72,7 @@ assert_file_has "$render/units/web.container" "Secret=API_SECRET,type=mount"
 # Nothing local is written for the edge: no name map entry, no ordering edge, no
 # publication. A name that reached `AddHost=` would resolve to this host's own
 # loopback alias and dial a service that is not here.
-assert_file_lacks "$render/units/web.container" "AddHost="
+assert_file_lacks "$render/units/myapp.pod" "AddHost="
 assert_file_exists "$render/system/guarden-order.target"
 assert_file_lacks "$render/system/guarden-order.target" "orders"
 assert_file_lacks "$render/units/web.container" "PublishPort="
@@ -102,7 +102,7 @@ grep -vE '^[[:space:]]*#' "$render/units/guarden.env" >"$GUARDEN_FIXTURES/rows"
 seed "$GUARDEN_FIXTURES/expected" "DB_HOST=postgres-staging" "DB_PORT=20007"
 run diff -u "$GUARDEN_FIXTURES/expected" "$GUARDEN_FIXTURES/rows"
 assert_exit 0
-assert_file_has "$render/units/web.container" "AddHost=postgres-staging:10.0.2.2"
+assert_file_has "$render/units/myapp.pod" "AddHost=postgres-staging:10.0.2.2"
 assert_file_has "$render/system/guarden-order.target" "Wants=postgres-staging.target"
 
 # --- the manifest's own vocabulary ------------------------------------------

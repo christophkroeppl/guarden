@@ -214,7 +214,8 @@ run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 assert_file_has /var/lib/guarden/edge/dynamic/homepage-production.yml 'Host(`homepage`)'
 edge_unit=/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.container
-assert_file_has "$edge_unit" "AddHost=homepage-production:"
+edge_pod=/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.pod
+assert_file_has "$edge_pod" "AddHost=homepage-production:"
 
 # The provider the project below declares an edge on, staged and ingested first.
 # Its registry entry is what the renderer's edge check reads, so without this the

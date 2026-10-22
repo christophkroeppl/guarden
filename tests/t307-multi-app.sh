@@ -174,7 +174,7 @@ web_pub=$(python3 "$GUARDEN_ROOT/tests/registryfield.py" \
 # The app's edge, in the consumer's own environment file and its own units.
 assert_file_has "$api_units/guarden.env" "WEB_HOST=shop-web-staging"
 assert_file_has "$api_units/guarden.env" "WEB_PORT=$web_pub"
-assert_file_has "$api_units/api.container" "AddHost=shop-web-staging:10.0.2.2"
+assert_file_has "$api_units/shop-api.pod" "AddHost=shop-web-staging:10.0.2.2"
 # The container port the manifest wrote is not what the consumer dials.
 assert_file_lacks "$api_units/guarden.env" "WEB_PORT=3000"
 
@@ -185,7 +185,7 @@ cache_pub=$(python3 "$GUARDEN_ROOT/tests/registryfield.py" \
 [ -n "$cache_pub" ] || _fail "shop-web-staging allocates no publication for cache"
 assert_file_has "$web_units/guarden.env" "CACHE_HOST=cache"
 assert_file_has "$web_units/guarden.env" "CACHE_PORT=$cache_pub"
-assert_file_has "$web_units/web.container" "AddHost=cache:10.0.2.2"
+assert_file_has "$web_units/shop-web.pod" "AddHost=cache:10.0.2.2"
 assert_file_lacks "$web_units/guarden.env" "CACHE_PORT=6379"
 
 # **The two paths agree on the SHAPE, which is what makes them one rule.** An

@@ -1377,6 +1377,12 @@ def build(
             f"container is not a namespace anything runs in",
             errors.REJECTED_INPUT,
         )
+    hosts: list[str] = []
+    if context is not None:
+        hosts = [concrete for _, concrete, _ in sorted(edge_ports)]
+        for name in [name for name, _, _ in sibling_ports] + list(routed):
+            if name not in hosts:
+                hosts.append(name)
     pod = pod_name(document, context, directory)
     instance = context.instance if context is not None else None
     pod_entry = units.entry_stem(pod, instance)
@@ -1411,7 +1417,6 @@ def build(
                 context=context,
                 merged=dropins.get(container),
                 edge_ports=edge_ports,
-                routed=routed,
                 schema=schema,
                 domain=domain,
                 siblings=[name for name, _, _ in sibling_ports],
@@ -1426,7 +1431,7 @@ def build(
 
     plan.add(
         f"units/{pod}.pod",
-        _pod_unit(source, context, pod, podman_name, ports, pod_dropin, domain),
+        _pod_unit(source, context, pod, podman_name, ports, hosts, pod_dropin, domain),
     )
     if pin is not None:
         plan.add(
@@ -1596,6 +1601,7 @@ def _pod_unit(
     pod: str,
     podman_name: str,
     ports: dict[str, tuple[int, int]],
+    hosts: list[str],
     merged: Unit | None,
     domain: str,
 ) -> str:
@@ -1610,6 +1616,7 @@ def _pod_unit(
         pod_keys.append(f"PodName={podman_name}")
     if context is not None:
         pod_keys.append(f"Network={context.config.network}")
+        pod_keys.extend(f"AddHost={name}:{context.config.alias}" for name in hosts)
     pod_keys.extend(
         _lines(unit, "Pod", domain, drop=("Network", "PublishPort", "UserNS", "Userns"))
     )
@@ -1641,7 +1648,6 @@ def _container_unit(
     context: Context | None,
     merged: Unit | None,
     edge_ports: list[tuple[str, str, int]],
-    routed: list[str],
     schema: secretschema.Schema,
     domain: str,
     siblings: list[str] | None = None,
@@ -1705,20 +1711,6 @@ def _container_unit(
         )
     unit.put("Container", "Pod", [f"{pod}.pod"])
     if context is not None:
-        # Every name this unit may have to resolve: the providers it declared an
-        # edge to, the containers of its own source it may dial (ADR-0023), and
-        # — for the edge itself — every routed service, because a route target
-        # is `<service>:<publication>` and the edge has no other way to turn
-        # that name into an address.
-        hosts = [concrete for _, concrete, _ in sorted(edge_ports)]
-        hosts.extend(name for name in sibling_names if name not in hosts)
-        hosts.extend(name for name in routed if name not in hosts)
-        if hosts:
-            unit.put(
-                "Container",
-                "AddHost",
-                [f"{name}:{context.config.alias}" for name in hosts],
-            )
         if edge_ports or sibling_names or tunnelled_edges:
             # **The value is escaped, and the path on disk is not.** Quadlet
             # reads `EnvironmentFile=` by C-unescaping its value, and the

@@ -172,7 +172,7 @@ assert_file_has "$unit_dir/web.container" "guarden.env"
 assert_file_has "$unit_dir/web.container" "Secret=API_SECRET,type=mount"
 # Nothing resolves a public name through this host's alias, and there is no
 # local unit for the edge to start.
-assert_file_lacks "$unit_dir/web.container" "AddHost="
+assert_file_lacks "$unit_dir/tunneled.pod" "AddHost="
 assert_file_exists /etc/systemd/system/guarden-order.target
 assert_file_lacks /etc/systemd/system/guarden-order.target "orders"
 

@@ -61,8 +61,8 @@ render=$GUARDEN_FIXTURES/render
 run loom render "$project" --service myapp-staging --out "$render"
 assert_exit 0
 assert_stderr_empty
-assert_file_has "$render/units/nuxt.container" "AddHost=api:10.0.2.2"
-assert_file_has "$render/units/api.container" "AddHost=api:10.0.2.2"
+assert_file_has "$render/units/myapp.pod" "AddHost=api:10.0.2.2"
+assert_file_lacks "$render/units/nuxt.container" "AddHost="
 
 # **The port is the PUBLICATION and not the container's own port.** The value in
 # the repository says 3000, which is the port inside the api container; what the
@@ -79,7 +79,7 @@ assert_file_lacks "$render/units/guarden.env" "API_PORT=3000"
 # **The name is scoped to the source.** A sibling name is never a service name
 # and never reaches another service's units, so two sources each naming a
 # container `api` cannot collide.
-assert_file_lacks "$render/units/nuxt.container" "AddHost=myapp-staging:"
+assert_file_lacks "$render/units/myapp.pod" "AddHost=myapp-staging:"
 
 # --- the boundary: a container of the source that is NOT declared ------------
 #
