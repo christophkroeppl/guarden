@@ -56,6 +56,11 @@ cleanup() {
     # and counts.
     rm -f /var/lib/guarden/queue/qapp-production@8a1d2f0.json \
         /var/lib/guarden/queue/qapp-staging@8a1d2f0.json
+    # **The machine is left as this suite found it.** The four directories are
+    # where a service lives, and an entry left in one of them is a service the
+    # next suite inherits -- which is the whole defect this teardown exists to
+    # end.
+    assert_no_service_left || rc=1
     return "$rc"
 }
 trap cleanup EXIT

@@ -68,6 +68,12 @@ cleanup() {
     # `weedr module add` converges from, and `t100-homepage.sh` proves the
     # re-add works (it removes the dashboard's service and adds the module
     # again). The module's own record is not a service, so it is not purged.
+    #
+    # **The machine is left as this suite found it.** The four directories are
+    # where a service lives, and an entry left in one of them is a service the
+    # next suite inherits -- which is the whole defect this teardown exists to
+    # end.
+    assert_no_service_left || rc=1
     return "$rc"
 }
 trap cleanup EXIT

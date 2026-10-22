@@ -912,7 +912,73 @@ purge() {
         systemctl start guarden-creds.path >/dev/null 2>&1 || :
     fi
     assert_no_snapper_configs "$@" || failed=1
+    # **The promise is ASSERTED, not assumed.** A teardown that removes what it
+    # knows about and says nothing about what it did not is the same shape as
+    # the defect this helper exists to end: a service that survives the run
+    # reaches whoever got the machine next and fails an assertion there about
+    # something else. So each of this purge's own names is checked, in the
+    # places a service of that name lives.
+    #
+    # **The check is per NAME and not per DIRECTORY.** A directory-wide check
+    # would fail a suite that ran on a machine where another suite's service
+    # was still there -- which is the very contamination this work ends, and
+    # not a fact about this purge. A name that survives is this purge's
+    # failure; a name this purge never touched is not.
+    local service path
+    for service in "$@"; do
+        for path in \
+            "/var/lib/guarden/services/$service" \
+            "/etc/guarden/services/$service" \
+            "/etc/guarden/creds/$service" \
+            "/var/lib/guarden/registry/$service.toml" \
+            "/var/lib/guarden/shared/$service" \
+            "/var/lib/guarden/removed/$service" \
+            "/var/lib/guarden/edge/basicauth/$service.htpasswd" \
+            "/var/lib/guarden/edge/dynamic/$service.yml"
+        do
+            if [ -e "$path" ]; then
+                _fail "$path survived the purge of $service"
+                failed=1
+            fi
+        done
+    done
     [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
+}
+
+# assert_no_service_left: the machine carries no service this run created.
+#
+# **This is the whole of what a teardown promises, stated about the machine
+# rather than about a name.** The four directories are where a service lives,
+# and an entry left in one of them is a service the NEXT suite inherits --
+# which is the defect ticket 357 measured: one suite's deploy left a route
+# host claimed, and the suite after it was refused by the allocator for a
+# reason that named neither.
+#
+# `root` is snapper's own configuration and belongs to no service, so it
+# stays; every other configuration is a service's.
+#
+# It is a separate helper from `purge` because it is a different claim: a
+# purge removes the names it was given, and this asks about the MACHINE. A
+# suite that has a teardown and no service of its own still wants the second.
+assert_no_service_left() {
+    local failed=0 dir config
+    for dir in /var/lib/guarden/services /var/lib/guarden/registry /etc/guarden/creds; do
+        [ -d "$dir" ] || continue
+        if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+            _fail "$dir still holds $(ls -A "$dir" | tr '\n' ' ')after the suite"
+            failed=1
+        fi
+    done
+    if [ -d /etc/snapper/configs ]; then
+        for config in /etc/snapper/configs/*; do
+            [ -e "$config" ] || continue
+            [ "${config##*/}" = root ] && continue
+            _fail "snapper configuration ${config##*/} survived the suite"
+            failed=1
+        done
+    fi
+    [ "$failed" = 0 ] || return 1
+    return 0
 }
 
 # assert_dpkg <pkg> / assert_no_dpkg <pkg>: what a converge actually installed.
