@@ -130,8 +130,7 @@ assert_stderr_has "443"
 # would create it is not on the other host.
 seed "$project/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/" \
     "state:" "  - data" "needs:" "  - service: orders" "    as: db" \
-    "    port: 5432" "    auth: database" "    via: tunnel" \
-    "    hostname: orders.tunnel.example.net"
+    "    auth: database" "    via: tunnel" "    hostname: orders.tunnel.example.net"
 run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
