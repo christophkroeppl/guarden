@@ -775,6 +775,17 @@ port = 5432
 as  = "db"
 auth = "database"  # database | secret | none
 
+[edges."orders:443:api"]  # a `via: tunnel` edge: the key is provider, port, `as:`
+port = 443
+as  = "api"
+auth = "secret"
+via  = "tunnel"  # absent is `pasta`. A pasta edge also carries
+  # `publications`, the provider's own allocation copied in; a tunnel
+  # edge carries none, because nothing on this host carries that
+  # traffic and the consumer is a client of the other host's ingress
+hostname = "orders.tunnel.example.net"  # the name the manifest stated, recorded
+  # so the render and `weedr service list` answer from one place
+
 [provides]
 kinds = [ "db" ]  # what the manifest's provides: listed, and only that. Written by
   # the mutator at creation from the manifest, and this is the ONLY
@@ -1031,6 +1042,17 @@ needs:  # declared edges to other services
   databases:  # OPTIONAL, `auth: database` only: the databases this edge owns
     - odoo  # each is `<consumer>-<name>`, owned by the edge's one role
     - btcpay
+  # via : pasta | tunnel — how the provider is reached. Absent is `pasta`: the
+  # provider is this host's, dialled on its allocated loopback publication.
+  # `tunnel` is a provider on ANOTHER host, dialled at the route hostname that
+  # host publishes; see the entry below.
+  - service: orders  # another host's service; no registry entry here
+  as: api
+  auth: secret  # a tunnel route's credential is `secret` or `none`
+  via: tunnel
+  hostname: orders.tunnel.example.net  # that host's route hostname, and the
+  # only name guarden cannot derive: it is a fact about the other machine.
+  # `port:` is refused here — the ingress answers https on 443
 
 provides:  # what this service can offer a consumer, as KINDS
   - db  # consumed as `as: db`, which also gives DB_HOST/DB_PORT
@@ -1095,10 +1117,10 @@ because it required reading two manifests the renderer cannot reach.
 Validation rules:
 
 - Unknown top-level keys are refused, and so are unknown keys **inside** a known one. Each
-  block has a closed key set: a `needs` entry takes `service`, `as`, `port`, `auth` and
-  `databases` and nothing else; a `routes`, `ports` or `siblings` entry takes `container` and
-  `port`; a `pod` block takes `name` and nothing else, and `name` is a name and not a path; a
-  `firewall` entry
+  block has a closed key set: a `needs` entry takes `service`, `as`, `port`, `auth`,
+  `databases`, `via` and `hostname` and nothing else; a `routes`, `ports` or `siblings` entry
+  takes `container` and `port`; a `pod` block takes `name` and nothing else, and `name` is a name
+  and not a path; a `firewall` entry
   takes `name`, `chain` and `rule` and nothing else; a
   `widgets` entry
   takes `container` and `file`; a `scrub:` entry takes `tables` and `keys` and nothing else, a
@@ -1175,6 +1197,18 @@ Validation rules:
   record, no units and no tree. A poke creates services in dependency order: the provider first.
   The one refusal that is `2` rather than `1` is a self-edge — a `needs:` entry that resolves to
   the service declaring it has no consumer, and the manifest named it itself.
+- **None of that holds for `via: tunnel`, which is a service on another host.** There is no
+  registry entry here to read, no container of the provider's on this host and no publication to
+  copy, so the entry states what only the other machine knows — the route hostname its ingress
+  publishes — and dials it on `443`. `hostname:` is required there and refused on every other
+  edge, because a pasta edge's name is the provider's service name and the renderer writes it
+  (§7.3); `port:` is optional and, when stated, must be `443`; `auth:` is `secret` or `none`,
+  because a `database` edge creates its role *inside* the provider and the mutator that would is
+  not on that machine. The provider **registered here** is checked rather than trusted: the
+  hostname must be one of its `[route_hosts]` values and that route must be published `tunnel`, so
+  a producer recorded `loopback` — which publishes no name a consumer could dial — is refused by
+  name. A provider absent from this host's registry is another machine's, and nothing local is
+  asked of it: exit `0` and an edge, not a guess.
 - **The provider's `provides:` is read from the provider's registry, never from its manifest.** A
   manifest that declared both sides of every edge would be one document the renderer cannot
   reach: the consumer's tree is `0700` to the consumer and `loom` runs as `guarden`, so the
@@ -3061,6 +3095,23 @@ logical provider and the host says which service answers it per track; the repos
 name the environment (§4), so the resolution is the host's and the host's alone. A name the
 table does not map is the name as written, so a manifest that names a full service name keeps
 working and a host with no `[providers]` table behaves exactly as it did before.
+
+**A `needs:` entry may name a service on another host, and then the name is that host's.** With
+`via: tunnel` the consumer dials the producer's **route hostname** through the cloudflared
+ingress the producing host runs, on `443`: `<AS>_HOST` is the hostname the manifest stated,
+`<AS>_PORT` is `443`, and there is no `AddHost=` entry, no publication, no accept in §7.6 and no
+ordering edge, because none of those exist on this host. The peer's name is the one value here
+that guarden cannot derive — it is a fact about the other machine — so the manifest states it and
+the mutator records it; a name the producing host does not publish is a name nothing answers.
+The consumer resolves it as any client resolves a public name, through pasta's DNS forward
+(§7.1), and the request reaches the vendor's edge rather than a loopback publication.
+
+**It is not a private link, and on one host it is the wrong answer.** The traffic leaves the host,
+crosses the vendor's edge and comes back, so two services on one machine use the pasta edge and a
+tunnel edge between them is a detour through the internet that no design here needs. What the
+tunnel buys is reachability across hosts; what it costs is that the producer's route must be
+exposed `tunnel` (§3.3), because a route recorded `loopback` publishes no name at all and a
+`needs:` entry naming one is refused rather than left to time out.
 
 **A name inside a unit source is a name — but only a declared one.** The containers of one service
 share their pod's namespace (§7.1), so one of them can dial another's port on the pod's own
