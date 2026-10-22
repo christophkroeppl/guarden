@@ -139,7 +139,7 @@ def resolve(name_argument: str, tracks) -> Service:
             f"{resolved.name} has no registry entry, so there is nothing to do",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    document = manifest_mod.read(paths.manifest_in_home(resolved.name))
+    document = manifest_mod.read(paths.manifest_in_home(resolved.name, record.app))
     if DB_KIND not in record.provides and DB_KIND not in document.provides:
         raise errors.GuardenError(
             f"{resolved.name} provides no {DB_KIND!r} kind, so it holds no database these "

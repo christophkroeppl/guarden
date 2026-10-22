@@ -167,20 +167,23 @@ def write(entry: registry.Registry, verdict: Verdict, now: str) -> None:
         registry.save(entry, (0, users.group_id(GUARDEN_GROUP)))
 
 
-def schema_for(service: str) -> secretschema.Schema:
+def schema_for(service: str, app: str = "") -> secretschema.Schema:
     """The service's own schema, from the copy in its home.
 
     A poke's staging tree is removed once the deploy returns, so the home is the
     only place the shape of a service's credentials outlives the deploy that
-    carried it, and it is the same file the renderer reads.
+    carried it, and it is the same file the renderer reads. `app` is the app root
+    the record carries (spec 5.3): a repository that ships several apps holds one
+    manifest per app, so the home's root holds no manifest at all for one of
+    them.
     """
-    manifest_path = paths.manifest_in_home(service)
+    manifest_path = paths.manifest_in_home(service, app)
     if not manifest_path.is_file():
         return secretschema.Schema(path=ABSENT)
     manifest = manifest_mod.read(manifest_path)
     if not manifest.schema:
         return secretschema.Schema(path=ABSENT)
-    return secretschema.read(paths.service_home(service) / manifest.schema)
+    return secretschema.read(paths.app_home(service, app) / manifest.schema)
 
 
 def mint_generated(entry: registry.Registry, schema: secretschema.Schema, now: str) -> list[str]:

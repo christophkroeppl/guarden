@@ -1,0 +1,9 @@
+# A repository that ships ONE app, at its root — every repository that is one
+# service. It is the regression case of ticket 307a, and it is a fixture beside
+# `multi/` so the two are read by the same suite and the same verbs: the
+# tree-root app's name is empty, its service is `<project>-<environment>`, and
+# its record carries no `app` key at all (spec 5.3).
+project: solo
+units: .guarden/quadlet/
+
+schema: .guarden/.env.schema

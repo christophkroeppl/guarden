@@ -185,9 +185,23 @@ def unit_dir(name: str) -> Path:
     return service_home(name) / QUADLET
 
 
-def manifest_in_home(name: str) -> Path:
+def app_home(name: str, app: str = "") -> Path:
+    """A service's app root: the tree's root, or the app's directory inside it.
+
+    A repository that ships several apps deploys one service per app, each with
+    its own manifest and unit source in a subdirectory of the source tree
+    (spec 5.3). The home holds the WHOLE tree, because the home is the build
+    context (§6.6), so the app root is a path inside it and not a copy of it.
+    `app` is the root as the tree spells it (`apps/web`), and the empty string
+    is the tree root, which is the shape every single-app repository has.
+    """
+    home = service_home(name)
+    return home.joinpath(*app.split("/")) if app else home
+
+
+def manifest_in_home(name: str, app: str = "") -> Path:
     """The service's own copy of its manifest, which is where it lives (spec 6.6)."""
-    return service_home(name) / ".guarden" / "service.yml"
+    return app_home(name, app) / ".guarden" / "service.yml"
 
 
 def instance_home(name: str, escaped_ref: str) -> Path:

@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from guarden import (
+    apps as apps_mod,
     compose,
     conf,
     edgeconf,
@@ -335,8 +336,8 @@ class Context:
                 return dict(instance.publication)
         return dict(self.record.publication)
 
-    def provider(self, logical: str) -> str:
-        """The concrete service `logical` names on this host and track.
+    def provider(self, edge: manifest_mod.Edge) -> str:
+        """The concrete service this `needs:` entry names on this host and track.
 
         The renderer's half of the one consult point: the mutator resolved the
         same name when it wrote the edge's registry key, so `edge_publications`
@@ -344,8 +345,15 @@ class Context:
         file here is what makes a pin effective on the very next render, which
         is the property the file exists for — a pin an operator has to re-ingest
         to apply is not a pin.
+
+        **An `app:` entry names a sibling of this repository and no table is
+        consulted**, because there is nothing for a host to move: the name is
+        the consumer's own project, the app the manifest wrote, and the track
+        this render is on (spec 4, §7.3).
         """
-        return edgeresolve.resolve(self.config, self.track.name, logical)
+        if edge.app is not None:
+            return apps_mod.sibling(self.record.project, edge.app, self.track.name)
+        return edgeresolve.resolve(self.config, self.track.name, str(edge.service))
 
     def instance_ref(self) -> str:
         """This render's instance, as the ref the operator typed.
@@ -994,27 +1002,28 @@ def check_edges(document: manifest_mod.Manifest, context: Context) -> None:
     exit `1` naming both services and both kinds.
     """
     for edge in document.needs:
-        concrete = context.provider(edge.service)
+        concrete = context.provider(edge)
         if concrete == context.service:
             raise errors.GuardenError(
-                f"the manifest {document.source} needs {edge.service!r}, which resolves to "
+                f"the manifest {document.source} needs {edge.declared}, which resolves to "
                 f"{concrete!r} — the service that declared it: a self-edge has no consumer "
                 f"and is nearly always a copy-paste"
             )
         provider = registry.load(concrete)
         if provider is None:
             raise errors.GuardenError(
-                f"{context.service} needs {edge.service!r} as {edge.prefix!r}, and there is "
+                f"{context.service} needs {edge.declared} as {edge.prefix!r}, and there is "
                 f"no registry entry for {concrete}; a service that does not exist yet is "
                 f"created by a later deploy, and one that never is names a service this host "
                 f"has never heard of",
                 errors.HOST_NOT_AS_ASSUMED,
             )
-        if edge.prefix not in provider.provides:
+        kind = "http" if edge.app is not None else edge.prefix
+        if kind not in provider.provides:
             raise errors.GuardenError(
-                f"{context.service} needs {edge.service!r} as {edge.prefix!r}, and "
+                f"{context.service} needs {edge.declared} as {edge.prefix!r}, and "
                 f"{concrete} offers {', '.join(provider.provides) or 'nothing'}: the "
-                f"consumer wants the kind {edge.prefix!r} and the provider does not list it",
+                f"consumer wants the kind {kind!r} and the provider does not list it",
                 errors.HOST_NOT_AS_ASSUMED,
             )
 
@@ -1055,7 +1064,7 @@ def edge_publications(
     """
     out: list[tuple[str, str, int]] = []
     for edge in document.needs:
-        concrete = context.provider(edge.service)
+        concrete = context.provider(edge)
         stored = _recorded(context.record, concrete, edge)
         numbers = [
             value for value in (stored.get("publications") or [])
@@ -1069,7 +1078,7 @@ def edge_publications(
                 f"installs the edge, and the renderer does not guess a loopback port",
                 errors.HOST_NOT_AS_ASSUMED,
             )
-        out.append((edge.service, concrete, min(numbers)))
+        out.append((edge.logical, concrete, min(numbers)))
     return out
 
 
@@ -1739,7 +1748,7 @@ def _environment_file(
     rows: list[tuple[str, str]] = []
     for edge in document.needs:
         for logical, concrete, publication in edge_ports:
-            if logical != edge.service:
+            if logical != edge.logical:
                 continue
             rows.append((f"{edge.variable}_HOST", concrete))
             rows.append((f"{edge.variable}_PORT", str(publication)))
@@ -1810,7 +1819,7 @@ def _order_target(document: manifest_mod.Manifest, context: Context | None) -> s
     providers: list[str] = []
     if context is not None:
         for edge in document.needs:
-            concrete = context.provider(edge.service)
+            concrete = context.provider(edge)
             if concrete not in providers:
                 providers.append(concrete)
     return render_template(

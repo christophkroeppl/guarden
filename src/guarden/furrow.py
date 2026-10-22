@@ -23,6 +23,7 @@ import sys
 import time
 from pathlib import Path
 
+from guarden import apps
 from guarden import cli, compose, conf, errors, names, paths, projects, registry, tool, unitsource
 from guarden import config as config_mod
 from guarden import manifest as manifest_mod
@@ -232,6 +233,7 @@ def _ordered(entries: list[dict]) -> list[dict]:
             0 if entry.get("now") else 1,
             -int(entry.get("weight") or 0),
             str(entry.get("queued_at") or ""),
+            int(entry.get("order") or 0),
             str(entry.get("name") or ""),
         ),
     )
@@ -402,7 +404,7 @@ def _wants_build(source: Path) -> bool:
     )
 
 
-def _enqueue(args) -> dict:
+def _enqueue(args) -> list[dict]:
     config = config_mod.load()
     resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
     if resolved.track.kind == "instance" and not resolved.ref:
@@ -422,7 +424,8 @@ def _enqueue(args) -> dict:
     project, sha = _poke(args.from_values, args.sha, known, resolved.name)
     _require_granted_project(project)
     source = paths.STAGING / project / sha
-    if not (source / manifest_mod.MANIFEST_REL).is_file():
+    shipped = apps.discover(source)
+    if not shipped:
         raise errors.GuardenError(
             f"the staged tree {source} carries no {manifest_mod.MANIFEST_REL}, so there is "
             f"nothing to deploy; `weedr service ingest` resolves the same pair and would "
@@ -430,6 +433,62 @@ def _enqueue(args) -> dict:
             errors.HOST_NOT_AS_ASSUMED,
         )
 
+    entries: list[dict] = []
+    for position, app in enumerate(_wanted(shipped, resolved, project)):
+        name = apps.sibling(project, app.name, resolved.track.name)
+        try:
+            entry_resolved = names.resolve(
+                f"{name}/{resolved.ref}" if resolved.ref else name,
+                list(config.tracks),
+                allow_default=False,
+            )
+        except errors.GuardenError as failure:
+            raise errors.GuardenError(
+                f"{failure.message}; the app {app.name or '<the repository root>'!r} of "
+                f"{project} deploys as {name}, and a service name is at most 31 characters",
+                failure.code,
+            ) from None
+        entries.append(
+            _write_request(
+                entry_resolved, project, sha, position, _wants_build(app.root), bool(args.now)
+            )
+        )
+    return entries
+
+
+def _wanted(shipped: list, resolved: names.Resolved, project: str) -> list:
+    """The apps one request deploys, providers before consumers.
+
+    **A repository that ships one app at its root answers that app whatever the
+    request is called**, which is every repository that is a single service: the
+    name is the service's whole identity and nothing about it selects an app
+    (spec 5.1). A repository that ships its apps in subdirectories has one
+    service per app, so the name selects: `<project>-<app>-<environment>` names
+    one app, and the bare `<project>-<environment>` names the project, which is
+    all of them.
+    """
+    if len(shipped) == 1 and not shipped[0].name:
+        return list(shipped)
+    app = apps.of(resolved.name, project, resolved.track.name)
+    if app:
+        return [_named(shipped, app, resolved.name)]
+    return apps.order(shipped)
+
+
+def _named(shipped: list, app: str, service: str):
+    for item in shipped:
+        if item.name == app:
+            return item
+    raise errors.GuardenError(
+        f"the staged tree ships no app called {app!r}, and {service} names it; the apps it "
+        f"ships are: {apps.shipped(shipped)}",
+        errors.REJECTED_INPUT,
+    )
+
+
+def _write_request(resolved: names.Resolved, project: str, sha: str, position: int,
+                   build: bool, now: bool) -> dict:
+    """One queue file per app, written under the `queue` lock."""
     name = _request_name(resolved, sha)
     with conf.lock("queue"):
         _require_queue()
@@ -445,8 +504,9 @@ def _enqueue(args) -> dict:
         entry["sha"] = sha
         entry["project"] = project
         entry["weight"] = resolved.track.weight
-        entry["now"] = bool(args.now)
-        entry["build"] = _wants_build(source)
+        entry["order"] = position
+        entry["now"] = now
+        entry["build"] = build
         entry["state"] = QUEUED
         entry["lane"] = None
         entry["pid"] = None
@@ -504,6 +564,10 @@ def _preview_drop(args) -> int:
 def _render(entry: dict, resolved: names.Resolved) -> Path:
     """`loom` as `guarden`, into the directory the mutator installs from."""
     source = paths.STAGING / str(entry["project"]) / str(entry["sha"])
+    record = registry.load(resolved.name)
+    app = record.app if record is not None else ""
+    if app:
+        source = source.joinpath(*app.split("/"))
     if not paths.LIB.is_dir():
         raise errors.GuardenError(
             f"{paths.LIB} does not exist; `soil install` creates the render directory "
@@ -894,8 +958,24 @@ def _status(args) -> int:
     return 0
 
 
+def _deploy_all(args) -> int:
+    """Every request one poke enqueues, drained in the order it was written.
+
+    One request is one app, and a repository may ship several (spec 5.3): the
+    enqueue has already ordered them providers-first, and `order` is what keeps
+    that order in the queue, because the track's weight and the second-resolution
+    `queued_at` are the same for all of them.
+    """
+    entries = _enqueue(args)
+    outcomes = [_drain(str(entry["name"])) for entry in entries]
+    for code in outcomes:
+        if code:
+            return code
+    return 0
+
+
 HANDLERS = {
-    "furrow deploy": lambda args: _drain(str(_enqueue(args)["name"])),
+    "furrow deploy": _deploy_all,
     "furrow preview drop": _preview_drop,
     "furrow queue list": _list,
     "furrow queue show": _show,

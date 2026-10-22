@@ -376,6 +376,12 @@ class Registry:
     owner_units: dict[str, OwnerUnit] = field(default_factory=dict)
     source: str = SOURCE_MANUAL
     installed_by: str | None = None
+    # Where the service's app sits inside the source tree, as the tree spells it
+    # (`apps/web`), and the empty string for the tree root — which is the shape
+    # every single-app repository has, and the value an older guarden's record
+    # reads back as (spec 5.3). It is a PATH and not the app's name, because it
+    # is what locates the manifest and the unit source in the home.
+    app: str = ""
     deployed_sha: str | None = None
     source_hash: str | None = None
     publication: dict[str, int] = field(default_factory=dict)
@@ -458,6 +464,8 @@ class Registry:
         }
         if self.installed_by:
             document["installed_by"] = self.installed_by
+        if self.app:
+            document["app"] = self.app
         if self.deployed_sha:
             document["deployed_sha"] = self.deployed_sha
         if self.source_hash:
@@ -542,6 +550,7 @@ class Registry:
             created=document.get("created", ""),
             source=document.get("source", SOURCE_MANUAL),
             installed_by=document.get("installed_by"),
+            app=_app_of_document(document),
             deployed_sha=document.get("deployed_sha"),
             source_hash=document.get("source_hash"),
             owner_uid=_owner_id(document, "owner_uid"),
@@ -566,6 +575,28 @@ class Registry:
             basicauth=bool(document.get("basicauth")),
             exposure=_exposure(document.get("exposure")),
         )
+
+
+def _app_of_document(document: dict) -> str:
+    """The recorded app root, refused unless it is a path inside a tree.
+
+    An absent key is the tree root — the shape every record written before a
+    repository could hold several apps has, and the shape a single-app
+    repository still has — so absence is a state and not a gap. A value that is
+    not a string, or a path that leaves the tree, is host state that does not
+    hold what guarden wrote (spec 1.2, exit 1): the value is a directory the
+    mutator reads with root's sight.
+    """
+    value = document.get("app", "")
+    if not isinstance(value, str):
+        raise errors.GuardenError(
+            f"the registry entry for {document.get('service', 'a service')} records an app "
+            f"root that is not a path inside its tree",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    from guarden import apps as apps_mod
+
+    return apps_mod.clean(value)
 
 
 def _owner_id(document: dict, key: str) -> int | None:

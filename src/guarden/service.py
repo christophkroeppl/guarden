@@ -34,6 +34,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from guarden import apps as apps_mod
 from guarden import basicauth as basicauth_mod
 from guarden import (
     conf,
@@ -278,16 +279,69 @@ def _manifest_in(directory: Path) -> Path:
     return directory / manifest_mod.MANIFEST_REL
 
 
-def _manifest_directory(source: Source, name: str) -> Path:
-    """A fresh tree when there is one, and the service's own home otherwise.
+def _deploy_tree(source: Source, name: str) -> Path:
+    """The tree a deploy reads: the source's own if it ships an app, its home otherwise.
 
-    The home is where a service's manifest lives (spec 6.6), and a poke's staging
-    tree is removed once the deploy returns — so a second `ingest` of a converged
-    service has to be able to read its manifest with the staging directory gone.
+    A poke's staging tree is removed once the deploy returns, so a second
+    `ingest` of a converged service has to be able to read its manifest with the
+    staging directory gone (spec 5.3's idempotency) — and the home holds the
+    whole copied tree, so it is the same tree a poke carried.
     """
-    if _manifest_in(source.directory()).is_file():
-        return source.directory()
+    tree = source.directory()
+    if tree.is_dir():
+        return tree
     return paths.service_home(name)
+
+
+def _app_name(source: Source, resolved, tree: Path) -> str:
+    """The app this deploy is of, by name, from the one thing that says it.
+
+    **The service name says it** (spec 5.1: the name carries the environment,
+    and `<project>-<app>-<environment>` carries the app), so a poke resolves the
+    app out of the name it was given rather than taking a second argument. The
+    project half comes from the poke's own `--from` pair, because that is the
+    name `furrow` and `hose` built the service name from.
+
+    `add --from <service>` copies a service's tree, so it copies that service's
+    app root, and the new name must carry the same app: a name that did not
+    would be a service whose own later `ingest` resolves an app it does not
+    hold.
+    """
+    if source.kind == "service":
+        origin = registry.load(str(source.service))
+        if origin is None:
+            raise errors.GuardenError(
+                f"--from {source.service} has no registry entry, so there is no app root "
+                f"to copy",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        name = origin.app.rsplit("/", 1)[-1] if origin.app else apps_mod.ROOT_APP
+        if origin.project:
+            wanted = apps_mod.of(resolved.name, origin.project, resolved.track.name)
+            if wanted != name:
+                raise errors.GuardenError(
+                    f"--from {source.service} deploys the app {name or '<the repository root>'!r} "
+                    f"of the project {origin.project!r}, and {resolved.name} names the app "
+                    f"{wanted or '<the repository root>'!r} on the track "
+                    f"{resolved.track.name!r}: a copied service carries the app it was copied "
+                    f"from, so its name must carry it too",
+                    errors.REJECTED_INPUT,
+                )
+        return name
+    if source.kind == "poke":
+        return apps_mod.of(resolved.name, str(source.project), resolved.track.name)
+    return apps_mod.ROOT_APP
+
+
+def _deploy_root(source: Source, resolved, tree: Path) -> str:
+    """The app root inside the tree, refused unless that tree ships the app.
+
+    Discovery is by the manifest's location (spec 5.3), so the refusal names the
+    apps the tree does ship: renaming an app directory renames its service, and
+    a deploy that asked for the old name meets the list rather than a service
+    nobody deployed.
+    """
+    return apps_mod.resolve(tree, _app_name(source, resolved, tree)).relative(tree)
 
 
 def _source_label(source: Source) -> tuple[str, list[str]]:
@@ -345,7 +399,10 @@ def _source_label(source: Source) -> tuple[str, list[str]]:
 
 
 def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcome:
-    directory = _manifest_directory(source, resolved.name)
+    existing = registry.load(resolved.name)
+    tree = _deploy_tree(source, resolved.name)
+    app = _deploy_root(source, resolved, tree)
+    directory = tree.joinpath(*app.split("/")) if app else tree
     # **The ACCEPTANCE, and it is `accept()` and not `read()`.** This is where
     # guarden takes a manifest as the shape of a service, and the `db`-provider
     # rule is about the declaration rather than about the document (spec 4):
@@ -361,6 +418,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # the path says so.
     held = source.kind == "service"
     manifest = manifest_mod.accept(_manifest_in(directory), held=held)
+    apps_mod.check(manifest, apps_mod.discover(tree), _manifest_in(directory))
     project = manifest.project or _project_from(source)
     outcome = Outcome(resolved=resolved)
 
@@ -372,8 +430,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # carry: a name an older guarden allocated without the tunnel's zone makes a
     # re-ingest deploy rather than converge, which is the only way such a record
     # is ever repaired.
-    existing = registry.load(resolved.name)
-    edges.check(resolved.name, manifest, resolved.track.name, config)
+    edges.check(resolved.name, manifest, resolved.track.name, config, project)
     destinations = _destinations(existing, resolved.track, manifest, config, resolved.name)
     hosts = check_hosts(resolved.name, manifest, resolved.track, config, destinations)
     # spec 5.3: "`add` requires `--from`, and is also the reconcile command: run
@@ -386,9 +443,9 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # under its ref — the registry is one file per service, and one shared
     # field was a value an instance's ingest wrote over the service's own
     # (review finding 1).
-    source_hash = _source_hash(directory) if source.kind in ("poke", "service", "tree") else ""
+    source_hash = _source_hash(tree) if source.kind in ("poke", "service", "tree") else ""
     if existing is not None and _converged(
-        existing, resolved, manifest, project, source_hash, hosts
+        existing, resolved, manifest, project, source_hash, hosts, app
     ):
         outcome.converged = True
         outcome.uid = existing.uid
@@ -441,7 +498,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     root_owner = (0, users.group_id(GUARDEN_GROUP))
 
     _make_tree(resolved.name, owner, resolved.escaped_ref)
-    _copy_source(directory, resolved.name, owner)
+    _copy_source(tree, resolved.name, owner)
 
     # **The read, the seed and the write are one act under the `overrides`
     # lock.** Every other writer of this file takes it — `weedr port open`,
@@ -479,6 +536,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     record.project = project
     record.environment = resolved.track.name
     record.uid = identity.uid
+    record.app = app
     # `provides` is written by the mutator at creation from the manifest, and it
     # is the only copy a consumer can read: the provider's own tree is 0700 to
     # the provider and loom runs as guarden.
@@ -529,7 +587,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # A gated track gets none — there a missing key is a gate failure, and
     # generating one would hide exactly what the gate is for.
     if not resolved.track.gated:
-        gate.mint_generated(record, gate.schema_for(resolved.name), now)
+        gate.mint_generated(record, gate.schema_for(resolved.name, app), now)
 
     retention = volumes.retention_from(resolved.track, granted)
     for vol in manifest.state:
@@ -1032,8 +1090,14 @@ def _converged(
     project: str,
     source_hash: str = "",
     hosts: dict[str, str] | None = None,
+    app: str = "",
 ) -> bool:
     if record.project != project or record.environment != resolved.track.name:
+        return False
+    # The app root is part of what the record IS: two apps of one project are
+    # two services, and a record whose root no longer matches the one its name
+    # resolves is a record for a tree this deploy is not.
+    if record.app != app:
         return False
     if source_hash and _deployed_hash(record, resolved.escaped_ref) != source_hash:
         return False

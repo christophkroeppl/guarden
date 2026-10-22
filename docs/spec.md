@@ -741,6 +741,13 @@ project  = "myapp"  # the manifest's project, or the project its --from source
   # belongs to. Never a path basename: under the new layout the
   # staging directory's basename is a sha
 environment  = "production"
+app  = "apps/web"  # where the service's app sits inside its own source tree, as the
+  # tree spells it: a relative path, `""` for the tree root, and absent in
+  # every record written before a repository could hold several apps — which
+  # is the tree root and is therefore a state and not a gap (§5.3). Written
+  # by the mutator at creation, refused unless it is a path inside the tree,
+  # and it is what locates the manifest, the schema and the unit source in
+  # the home
 uid  = 1004
 created  = "2026-09-29T10:12:00Z"
 source  = "manual"  # or "gitops"; recorded, and it changes nothing
@@ -994,10 +1001,15 @@ needs:  # declared edges to other services
   databases:  # OPTIONAL, `auth: database` only: the databases this edge owns
     - odoo  # each is `<consumer>-<name>`, owned by the edge's one role
     - btcpay
+  - app: api  # the OTHER spelling: another app of THIS repository (§5.3)
+    as: api  # its service is `<project>-api-<environment>`, and no host table moves it
+    port: 3000  # the container port it serves inside its own unit
+    auth: none  # a sibling app is reached, never provisioned
 
 provides:  # what this service can offer a consumer, as KINDS
   - db  # consumed as `as: db`, which also gives DB_HOST/DB_PORT
   - secret  # consumed as `as: secret`, verified with a shared credential
+  - http  # what a sibling app offers: consumed as `needs: app:`, any `as:` (§7.3)
 
 ports:  # public ports requested from outside the host
   - container: web  # a container in THIS service, exactly as under routes:
@@ -1038,13 +1050,25 @@ scrub:  # the operator's policy for a CLONED copy of this database (ADR-0025).
       prefix: "mail."
 ```
 
-`service:` names a guarden service; `container:` names a container inside this service. A
-`service:` key inside a `routes:` or `widgets:` block is a validation error, because the
-manifest's whole point is that a developer can tell which is which. `port:` under `routes:` is
+`service:` names a guarden service; `container:` names a container inside this service; `app:`
+names another app of the same repository (§5.3). A `service:` or `app:` key inside a `routes:`
+or `widgets:` block is a validation error, because the manifest's whole point is that a developer
+can tell which is which. `port:` under `routes:` is
 the **container's** port and is required: guarden allocates the loopback publication that
 Traefik dials, and the manifest never names it. `port:` under `siblings:` is the **container's**
 port too, and it is required for the same reason (§7.3): it is what guarden translates into the
 publication the sibling is dialled on, and the manifest never names that either.
+
+**A `needs:` entry names its provider with exactly one of `service:` or `app:`, and the two are
+not the same question.** `service:` is a name the **host** resolves per track through
+`[providers]` (§3.1); `app:` is another app of the same **repository**, and guarden resolves it
+to `<project>-<app>-<environment>` — the consumer's own project and the track its own deploy is
+on. Nothing on the host can move it, because there is nothing for a host to decide: the pair is
+a fact about the repository. A `service:` entry's `as:` prefix is a **kind** and is compared
+kind to kind against the provider's `provides:`; an `app:` entry's `as:` is only the prefix of
+its generated variables, because the sibling's kind is `http` and one app may offer several
+ports. `auth: database` and `databases:` are refused on an `app:` entry: a sibling app is
+reached, and provisioning into another app's engine is a `db` provider's job.
 
 `needs` and `provides` must agree, and they are compared **kind to kind**: a consumer's
 `as: db` requires a provider whose `provides:` lists `db`, and its `as: secret` requires one
@@ -1058,16 +1082,16 @@ because it required reading two manifests the renderer cannot reach.
 Validation rules:
 
 - Unknown top-level keys are refused, and so are unknown keys **inside** a known one. Each
-  block has a closed key set: a `needs` entry takes `service`, `as`, `port`, `auth` and
-  `databases` and nothing else; a `routes`, `ports` or `siblings` entry takes `container` and
-  `port`; a `firewall` entry
+  block has a closed key set: a `needs` entry takes `service`, `app`, `as`, `port`, `auth` and
+  `databases` and nothing else, and exactly one of `service` and `app`; a `routes`, `ports` or
+  `siblings` entry takes `container` and `port`; a `firewall` entry
   takes `name`, `chain` and `rule` and nothing else; a
   `widgets` entry
   takes `container` and `file`; a `scrub:` entry takes `tables` and `keys` and nothing else, a
   `tables` entry takes `name` and nothing else, and a `keys` entry takes `table`, `column` and
   **exactly one** of `prefix` and `equals` — a rule that named neither would match every row of
   the table, which is what a `tables` entry is for; a `provides` entry is a **single string naming a kind** — `db`,
-  `secret` — and nothing else, because a `provides` entry carries no value and no structure; a
+  `secret`, `http` — and nothing else, because a `provides` entry carries no value and no structure; a
   `state`/`bulk` entry is a string. An unknown key inside one
   of them is refused **by name**, the same as an unknown top-level key. This was a gap: the
   rule covered only the top level, so a typo in a nested key was silently dropped and a
@@ -1333,7 +1357,20 @@ exceed 31 characters — the Linux user-name limit — and must not contain `..`
 
 `other-app-production` parses as workload `other-app` in `production`. There is no `--env`
 flag on `ingest` or `add`: the name carries the environment, so a name and an environment
-cannot disagree. `weedr service create` is the one verb that carries an `--env` flag, and it is
+cannot disagree.
+
+**A repository that ships several apps ships one service per app, and the app is a segment of
+the name: `<project>-<app>-<environment>`** (§5.3). The tree-root app is the exception on the
+evidence rather than on principle: `<project>-<environment>` is a service name with no app
+segment, and `<project>--<environment>` is not a name at all. The **last** `-`-separated
+segment is still the environment, so an app whose own name carries dashes is unambiguous —
+`shop-api-production` is the app `api` of the project `shop`, or the tree-root app of
+`shop-api`; which one it is is answered by the project the deploy came from, never by
+counting segments. A name whose app segment is empty in the middle — `<project>--<environment>`
+— is refused, because an empty middle is how the tree-root app is spelled and that spelling is
+the one without a second hyphen.
+
+`weedr service create` is the one verb that carries an `--env` flag, and it is
 covered after this paragraph. A name with no recognised environment segment is exit `2` —
 **except** that `weedr service add` with no environment in the name resolves a default and
 prints the resolved name. The default is
@@ -1473,6 +1510,28 @@ mean something other than what it says, and every mitigation for it was a check 
 confinement, a `realpath` resolution, a symlink refusal, a uid-conditional allowance. A service
 name and a `<project>@<sha>` pair are not paths. The system resolves them to locations it already
 owns, and there is nothing left to confine.
+
+**A repository holds apps, and one app is one service.** An app is a directory holding
+`.guarden/service.yml`, and **discovery is by the file's location and never by an index at the
+root**: a list is a second declaration that can go stale, so an app the tree ships and the list
+forgets would be an app that silently never deploys. The tree's own shape is the index. A
+repository with one app at its root — every repository that is one service — behaves exactly as
+it always has: the tree-root app's name is empty, and its service is
+`<project>-<environment>`.
+
+Three consequences, stated once. **The app name is the app root's last path component**, so two
+app directories that share a last component (`apps/web` and `services/web`) name the same service
+twice, and that is refused by name rather than resolved by picking one. **The app root is part of
+the record** (`app` in §3.4): it is a path inside the tree — the empty string for the tree root —
+and the manifest, the schema and the unit source are read from it, because the home holds the
+**whole** tree and only the app root holds that service's declaration. **Renaming an app directory
+renames its service**, so a deploy that asks for the old name is refused with the apps the tree now
+ships, and nothing is silently orphaned: the inventory is `weedr service list`, and the old
+service is removed by `weedr service remove` if it is no longer wanted.
+
+The **build context stays the whole staged tree**, because the home holds it and a Containerfile
+that `COPY`s a path outside its own app must still build (§6.6, step 2). What changes for an app
+is where the **Containerfile is read from**: the app root, like the manifest.
 
 Each verb accepts exactly one `--from` form, and the error names the alternatives. `ingest`
 accepts only `poke <project>@<sha>`; `add` accepts only `<service>`; `create` takes no `--from`
@@ -2424,6 +2483,16 @@ one. `--now` skips queue position for this request only. Queue state is a direct
 under `/var/lib/guarden/queue`, so `ls` answers what is waiting and a reboot does not lose an
 accepted request.
 
+**One poke of a repository that ships several apps becomes one request per app.** The staged tree
+is read for its apps (§5.3), each app's service name is `<project>-<app>-<environment>`, and the
+requests are written providers-first, in the order the apps' own `needs: app:` graph gives; the
+queue's sort keeps that order for requests that arrived together (`queued_at` has one-second
+resolution and every app of one poke shares it). A request naming an app deploys that app; a
+request naming the project — `<project>-<environment>`, which is what `hose` asks for — deploys
+every app the tree ships. **A repository with one app at its root is the same rule and needs no
+special case**: its one app is the tree root, the name carries no app, and the deploy is what it
+always was.
+
 **`--from` is required when the service does not exist, and it never takes a path.** The only
 form is `poke <project>@<sha>`, and the mutator builds
 `/var/lib/guarden/staging/<project>/<sha>` itself. `<project>` is checked against the project's
@@ -2457,7 +2526,10 @@ The steps, in this order, and the order is the point :
   **The build context is the service's own tree, and the tree is the whole staged source.**
   `podman build` reads the service's home directory as its context, and the home holds the
   staged source tree the service was created from — the unit source, the compose file, the
-  Containerfile, the `.dockerignore`, and the application's own files. A Containerfile that
+  Containerfile, the `.dockerignore`, and the application's own files. **The Containerfile is
+  the APP's** (§5.3): a repository that ships several apps has one per app, and the verb reads
+  it from the app root the record carries while the context stays the home — so a Containerfile
+  that copies a path outside its own app still builds. A Containerfile that
   copies its source (`COPY Cargo.toml Cargo.lock ./`) needs those files **in the context**, and
   a context of four files cannot satisfy it: the build dies with `125` and a `COPY` of a
   file that is not there. So the staged tree is copied whole into the home, the source's own
@@ -2935,6 +3007,18 @@ logical provider and the host says which service answers it per track; the repos
 name the environment (§4), so the resolution is the host's and the host's alone. A name the
 table does not map is the name as written, so a manifest that names a full service name keeps
 working and a host with no `[providers]` table behaves exactly as it did before.
+
+**A sibling app is the same mechanism with a name the repository decides.** `needs: app: api`
+renders `AddHost=<project>-api-<environment>:<ingress.alias>` into every unit of the consumer, and
+its `<AS>_HOST` and `<AS>_PORT` carry that same name and the **publication** the mutator allocated
+for the container of the sibling that serves `port:` — the same two keys and the same `AddHost=`
+shape a `siblings:` entry gets, written by the same code, so a sibling inside a unit source and a
+sibling app of the repository cannot disagree about what a name and a port mean. What differs is
+only who resolves the name: `siblings:` names a container of the same unit source, and `app:`
+names another **service** of the same repository, whose name is `<project>-<app>-<environment>`
+and which no `[providers]` or `[edge_overrides]` entry can move (§5.3). Its `as:` is a variable
+prefix and not a kind, so one provider app may be dialled by two consumers under two prefixes and
+on two ports.
 
 **A name inside a unit source is a name — but only a declared one.** Every container of one service
 runs in its own pasta namespace and there is no shared network (§7.1), so the containers of one unit

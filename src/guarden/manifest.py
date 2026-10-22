@@ -58,7 +58,7 @@ TOP_LEVEL_KEYS = {
 # here — whether a container exists, whether a port is in range and whether a
 # host is a label are the checks of the tickets that consume those blocks.
 BLOCK_KEYS = {
-    "needs": {"service", "as", "port", "auth", "databases"},
+    "needs": {"service", "app", "as", "port", "auth", "databases"},
     "ports": {"container", "port"},
     "routes": {"container", "port", "host", "auth"},
     "siblings": {"container", "port"},
@@ -144,8 +144,10 @@ HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0
 # a consumer edges to them with `auth: none` and receives only the host and the
 # port, which is what one service needs from a sibling that serves an HTTP or an
 # RPC API. A kind is in this tuple or a provider cannot name it, so adding a
-# service to the stack is adding a name here.
-PROVIDES_KINDS = ("db", "secret", "bitcoin", "nbxplorer", "btcpay", "nostr")
+# service to the stack is adding a name here. `http` is the reachability kind a
+# sibling app of the same repository offers (spec 4, §7.3): the provider names it
+# once and every consumer of it sets its own `as:` prefix.
+PROVIDES_KINDS = ("db", "secret", "bitcoin", "nbxplorer", "btcpay", "nostr", "http")
 AUTH_KINDS = ("database", "secret", "none")
 PORT_MIN = 1
 PORT_MAX = 65535
@@ -153,13 +155,20 @@ PORT_MAX = 65535
 
 @dataclass(frozen=True)
 class Edge:
-    """One `needs:` entry: an edge to another service.
+    """One `needs:` entry: an edge to another service, or to a sibling app.
 
     `service` is a logical provider name. The host resolves it to a concrete
     service name per track via `[providers]` in `guarden.toml` — a manifest
     that names `postgres` resolves to `postgres-staging` in staging and
     `postgres-production` in production. An unresolved name is used unchanged,
     so a manifest naming a full service name keeps working.
+
+    **`app` is the other spelling, and the two are exclusive.** An `app:` entry
+    names another app of the SAME repository, and guarden resolves it to
+    `<project>-<app>-<environment>` — the consumer's own project and the track
+    its deploy is on. Nothing on the host can move it: a sibling is a fact about
+    the repository, so `[providers]` and `[edge_overrides]` are not consulted for
+    it, and a staging deploy cannot dial a production sibling (spec 4, §6.3).
 
     `databases` names the databases this edge owns in the provider. The role is
     one per consumer, named after it; each entry here is a database owned by that
@@ -168,15 +177,27 @@ class Edge:
     consumer.
     """
 
-    service: str
     prefix: str
     port: int
     auth: str
+    service: str | None = None
+    app: str | None = None
     databases: tuple[str, ...] = ()
 
     @property
     def variable(self) -> str:
         return self.prefix.upper()
+
+    @property
+    def declared(self) -> str:
+        """What the manifest wrote, for a diagnostic to quote back at it."""
+        return f"app {self.app!r}" if self.app is not None else repr(self.service)
+
+    @property
+    def logical(self) -> str:
+        """The manifest's own spelling of the provider: what a render matches a
+        row back to, because it is the half the manifest holds."""
+        return str(self.service) if self.service is not None else str(self.app)
 
 
 @dataclass(frozen=True)
@@ -718,15 +739,35 @@ def _needs(value: Any, path: Path) -> list[Edge]:
     seen: dict[str, int] = {}
     for entry in entries:
         service = entry.get("service")
-        if not isinstance(service, str) or not names.NAME_RE.match(service):
+        app = entry.get("app")
+        # **Exactly one of the two, and the refusal names the one that was
+        # written.** Both is two providers for one edge and neither is no
+        # provider at all, and a parser that preferred one would make the
+        # manifest's meaning depend on a key order nobody wrote down.
+        if (service is None) == (app is None):
             raise errors.GuardenError(
-                f"the manifest {path}: a needs entry names {service!r} as its service, and "
-                f"a service is a name matching {names.NAME_RE.pattern}"
+                f"the manifest {path}: a needs entry names a provider with `service:` (a "
+                f"service on this host) or with `app:` (another app of this repository), and "
+                f"this one names {'both' if service is not None else 'neither'}"
             )
+        if app is not None:
+            if not isinstance(app, str) or not names.NAME_RE.match(app):
+                raise errors.GuardenError(
+                    f"the manifest {path}: a needs entry names {app!r} as its app, and an app "
+                    f"is named after its directory, so it must match {names.NAME_RE.pattern}"
+                )
+            subject = f"the app {app!r}"
+        else:
+            if not isinstance(service, str) or not names.NAME_RE.match(service):
+                raise errors.GuardenError(
+                    f"the manifest {path}: a needs entry names {service!r} as its service, and "
+                    f"a service is a name matching {names.NAME_RE.pattern}"
+                )
+            subject = repr(service)
         prefix = entry.get("as")
         if not isinstance(prefix, str) or not AS_RE.match(prefix):
             raise errors.GuardenError(
-                f"the manifest {path}: the needs entry for {service!r} has `as: "
+                f"the manifest {path}: the needs entry for {subject} has `as: "
                 f"{prefix!r}`, and it is the prefix of the generated variables, so it must "
                 f"match {AS_RE.pattern}"
             )
@@ -739,21 +780,37 @@ def _needs(value: Any, path: Path) -> list[Edge]:
         auth = entry.get("auth")
         if auth not in AUTH_KINDS:
             raise errors.GuardenError(
-                f"the manifest {path}: the needs entry for {service!r} has `auth: {auth!r}`, "
+                f"the manifest {path}: the needs entry for {subject} has `auth: {auth!r}`, "
                 f"and there is no default: it is one of {', '.join(AUTH_KINDS)}"
             )
-        databases = _databases(entry.get("databases"), service, path)
+        # **A sibling app is reached, never provisioned.** `auth: database` makes
+        # guarden run psql inside the provider to create a role, which is a
+        # database and not an app: a sibling that wanted to offer one would offer
+        # the `db` kind through a provider of its own.
+        if app is not None and auth == "database":
+            raise errors.GuardenError(
+                f"the manifest {path}: the needs entry for {subject} has `auth: database`, "
+                f"and a sibling app is not a database; an app edge carries `auth: none`, or "
+                f"`auth: secret` when the two share a token"
+            )
+        databases = _databases(entry.get("databases"), subject, path)
+        if app is not None and databases:
+            raise errors.GuardenError(
+                f"the manifest {path}: the needs entry for {subject} names `databases:`, and "
+                f"a sibling app is reached over HTTP and provisions nothing"
+            )
         if databases and auth != "database":
             raise errors.GuardenError(
-                f"the manifest {path}: the needs entry for {service!r} has `auth: {auth}` "
+                f"the manifest {path}: the needs entry for {subject} has `auth: {auth}` "
                 f"and a `databases:` list, and a database is created by a `database` edge "
                 f"alone: an edge of another kind would carry the list and create nothing"
             )
         out.append(
             Edge(
-                service=service,
+                service=None if app is not None else service,
+                app=app,
                 prefix=prefix,
-                port=_port(entry.get("port"), f"the needs entry for {service!r}", path),
+                port=_port(entry.get("port"), f"the needs entry for {subject}", path),
                 auth=str(auth),
                 databases=databases,
             )

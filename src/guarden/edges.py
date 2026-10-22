@@ -14,6 +14,7 @@ against, so the variable, the rule and the bind cannot disagree.
 
 from __future__ import annotations
 
+from guarden import apps as apps_mod
 from guarden import config as config_mod
 from guarden import credentials, edgeresolve, errors, paths, registry, tool
 from guarden import manifest as manifest_mod
@@ -98,19 +99,29 @@ def database_names(consumer: str, databases: tuple[str, ...] = ()) -> tuple[str,
     return tuple(f"{consumer}-{name}" for name in databases)
 
 
-def resolve_name(config: config_mod.Config, environment: str, edge: manifest_mod.Edge) -> str:
+def resolve_name(config: config_mod.Config, environment: str, edge: manifest_mod.Edge,
+                 project: str = "") -> str:
     """The concrete provider this edge dials: the host's pin, then the track's.
 
     The one consult point for a `needs:` entry's provider name, because the
     mutator writes the registry key from it and the renderer reads it back by
     the same name. See `edgeresolve` for the two tables and the order between
     them.
+
+    **An `app:` entry never reaches either table.** It resolves to
+    `<project>-<app>-<environment>` and nothing on the host can move it: a
+    sibling is a fact about the repository, and an operator's pin that could
+    point staging's `api` at production's would be the promotion this design
+    refuses everywhere else (spec 4). `project` is the consumer's own, recorded
+    in its registry, and `environment` is the track its deploy is on.
     """
-    return edgeresolve.resolve(config, environment, edge.service)
+    if edge.app is not None:
+        return apps_mod.sibling(project, edge.app, environment)
+    return edgeresolve.resolve(config, environment, str(edge.service))
 
 
 def check(consumer: str, document: manifest_mod.Manifest, environment: str,
-          config: config_mod.Config) -> None:
+          config: config_mod.Config, project: str = "") -> None:
     """Refuse every edge the render would refuse, before anything is created.
 
     **The render runs in the same command that creates the service**, and it reads
@@ -140,7 +151,7 @@ def check(consumer: str, document: manifest_mod.Manifest, environment: str,
     """
     for edge in document.needs:
         _identifiers(consumer, edge)
-        _installable(consumer, edge, environment, config)
+        _installable(consumer, edge, environment, config, project)
 
 
 def _identifiers(consumer: str, edge: manifest_mod.Edge) -> None:
@@ -184,25 +195,33 @@ def provider_of(key: str) -> str:
 
 
 def _offered(consumer: str, edge, provider) -> None:
-    """Raise unless the provider's `provides:` lists the kind the consumer wants.
+    """Raise unless the provider offers the kind the consumer wants.
 
     **The diagnostic names the CONCRETE provider, because that is the service
     the operator has to fix.** The manifest's `needs:` entry may carry a
     logical name, and the host resolves it per track; a refusal that named the
     logical name would send the operator looking for a service that does not
     exist on this host.
+
+    **An `app:` entry is checked against `http`, not against its `as:` prefix.**
+    For a credential edge the prefix IS the kind (`as: db` wants `db`); for an
+    app edge the prefix only names the variables, because two HTTP edges from one
+    provider are two ports and not two kinds. So the provider declares `http`
+    once and each consumer of it chooses its own prefix (spec 4).
     """
-    if edge.prefix in provider.provides:
+    kind = "http" if edge.app is not None else edge.prefix
+    if kind in provider.provides:
         return
     raise errors.GuardenError(
-        f"{consumer} needs {edge.service!r} as {edge.prefix!r}, and {provider.service} offers "
+        f"{consumer} needs {edge.declared} as {edge.prefix!r}, and {provider.service} offers "
         f"{', '.join(provider.provides) or 'nothing'}: the consumer wants the kind "
-        f"{edge.prefix!r} and the provider does not list it",
+        f"{kind!r} and the provider does not list it",
         errors.HOST_NOT_AS_ASSUMED,
     )
 
 
 def _installable(consumer: str, edge, environment: str, config: config_mod.Config,
+                 project: str = "",
                  ) -> tuple[str, registry.Registry, str, int]:
     """The concrete provider, the container serving the edge's port, and the
     publication the consumer dials — or the refusal that says why it cannot.
@@ -214,17 +233,17 @@ def _installable(consumer: str, edge, environment: str, config: config_mod.Confi
     manifest is readable here and nowhere else: its tree is `0700` to the provider
     and the mutator is root.
     """
-    name = resolve_name(config, environment, edge)
+    name = resolve_name(config, environment, edge, project)
     if name == consumer:
         raise errors.GuardenError(
-            f"{consumer} needs {edge.service!r} as {edge.prefix!r} on port {edge.port}, which "
+            f"{consumer} needs {edge.declared} as {edge.prefix!r} on port {edge.port}, which "
             f"resolves to {name!r} — the service that declared it: a self-edge has no consumer "
             f"and is nearly always a copy-paste"
         )
     provider = registry.load(name)
     if provider is None:
         raise errors.GuardenError(
-            f"{consumer} needs {edge.service!r} as {edge.prefix!r} on port {edge.port}, and there "
+            f"{consumer} needs {edge.declared} as {edge.prefix!r} on port {edge.port}, and there "
             f"is no registry entry for {name}: an edge dials the provider's own allocated "
             f"publication, so {name} has to exist before the service that dials it — a poke "
             f"creates services in dependency order",
@@ -265,7 +284,7 @@ def install(entry: registry.Registry, document: manifest_mod.Manifest,
     warnings: list[str] = []
     for edge in document.needs:
         name, provider, container, publication = _installable(
-            entry.service, edge, entry.environment, config)
+            entry.service, edge, entry.environment, config, entry.project)
         warnings += _credential(entry, edge, provider, container, publication)
         entry.edges[edge_key(name, edge.port, edge.prefix)] = {
             "port": edge.port,
@@ -283,7 +302,7 @@ def _serving(provider: registry.Registry, port: int) -> str | None:
     readable here and nowhere else — and it is read from the provider, never from the
     consumer, because a consumer cannot know which container answers a port it does
     not own."""
-    path = paths.manifest_in_home(provider.service)
+    path = paths.manifest_in_home(provider.service, provider.app)
     if not path.is_file():
         return None
     document = manifest_mod.read(path)

@@ -1164,7 +1164,7 @@ def _gate(args) -> int:
     record = _record_for(resolved.name)
     now = _now()
     verdict = gate.evaluate(
-        resolved.name, gate.schema_for(resolved.name), resolved.track.gated, now
+        resolved.name, gate.schema_for(resolved.name, record.app), resolved.track.gated, now
     )
     gate.write(record, verdict, now)
     for warning in verdict.warnings:
@@ -1187,7 +1187,7 @@ def _start(args) -> int:
     record = _record_for(resolved.name)
     now = _now()
     verdict = gate.evaluate(
-        resolved.name, gate.schema_for(resolved.name), resolved.track.gated, now
+        resolved.name, gate.schema_for(resolved.name, record.app), resolved.track.gated, now
     )
     gate.write(record, verdict, now)
     for warning in verdict.warnings:
@@ -1338,7 +1338,7 @@ def _restart(args) -> int:
     service.stop_units(resolved.name, resolved.escaped_ref)
     now = _now()
     verdict = gate.evaluate(
-        resolved.name, gate.schema_for(resolved.name), resolved.track.gated, now
+        resolved.name, gate.schema_for(resolved.name, record.app), resolved.track.gated, now
     )
     gate.write(record, verdict, now)
     for warning in verdict.warnings:
@@ -1413,8 +1413,14 @@ def _build(args) -> int:
         )
 
     # Read the manifest to find the unit source and the containers it declares.
-    manifest = manifest_mod.read(home / manifest_mod.MANIFEST_REL)
-    source = render.resolve_unit_source(home, manifest)
+    # The app root is where a service's manifest and its Containerfile live
+    # (spec 5.3): a repository that ships several apps holds one of each per app,
+    # and the home's root holds neither. The BUILD CONTEXT stays the home — the
+    # whole copied tree — so a Containerfile that COPYs a path outside its app
+    # still builds (spec 6.6).
+    app_dir = paths.app_home(resolved.name, record.app)
+    manifest = manifest_mod.read(app_dir / manifest_mod.MANIFEST_REL)
+    source = render.resolve_unit_source(app_dir, manifest)
 
     built: list[str] = []
     for container in source.containers():
@@ -1430,7 +1436,11 @@ def _build(args) -> int:
         # the one shape guarden allows: a unit that declares Image= AND carries
         # a Containerfile.
         context_file = next(
-            (home / name for name in ("Containerfile", "Dockerfile") if (home / name).is_file()),
+            (
+                app_dir / name
+                for name in ("Containerfile", "Dockerfile")
+                if (app_dir / name).is_file()
+            ),
             None,
         )
         if context_file is None:
@@ -1438,7 +1448,7 @@ def _build(args) -> int:
 
         # Get the reference the build should tag — the one the unit source
         # declares, or the local one for a pure build with no image:.
-        image_ref = images_mod.declared_or_built(home, resolved.name, container)
+        image_ref = images_mod.declared_or_built(app_dir, resolved.name, container)
 
         # **Guarden's exclusion goes into the context's own ignore file before
         # the build reads it.** The podman store — which holds the per-user
@@ -1551,7 +1561,7 @@ def _secret_list(args) -> int:
     """Names and booleans, and never a value (spec 1.2, 6.2)."""
     names.validate(args.name)
     record = _record_for(args.name)
-    schema = gate.schema_for(args.name)
+    schema = gate.schema_for(args.name, record.app)
     declared = {key.name: key for key in schema.keys}
     wanted = list(dict.fromkeys([*declared, *credentials.keys(args.name)]))
     secrets = []

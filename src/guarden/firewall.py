@@ -91,7 +91,7 @@ def parse_selector(value: str) -> tuple[int, str]:
 
 
 def requested_container(record, number: int) -> str:
-    path = paths.manifest_in_home(record.service)
+    path = paths.manifest_in_home(record.service, record.app)
     if not path.is_file():
         raise errors.GuardenError(
             f"{record.service} has no manifest in its home at {path}, so the container behind "
@@ -209,7 +209,7 @@ def route_publications(record, destination: str | None = None) -> set[str]:
     the box. A host the record says nothing about is an edge route — the same
     pre-293 reading `tunnel_publications` gives it.
     """
-    path = paths.manifest_in_home(record.service)
+    path = paths.manifest_in_home(record.service, record.app)
     if not path.is_file():
         return set()
     try:
@@ -267,7 +267,7 @@ def tunnel_publications(record) -> set[str]:
     is keyed by that name, so one answer serves both publications. What
     distinguishes them is the port, and the port is the instance's own.
     """
-    path = paths.manifest_in_home(record.service)
+    path = paths.manifest_in_home(record.service, record.app)
     if not path.is_file():
         return set()
     try:

@@ -1,0 +1,17 @@
+# The consumer app of a two-app repository (ticket 307a).
+#
+# Its service is `shop-api-<environment>`, and its edge names the OTHER APP of
+# this repository with `app:`. Guarden resolves that to `shop-web-<environment>`
+# — this app's own project and its own track — and no `[providers]` entry can
+# move it. `as:` is the variable prefix here, not a kind: a sibling app's kind
+# is `http`, and one app may offer several ports.
+project: shop
+units: .guarden/quadlet/
+
+needs:
+  - app: web
+    as: web
+    port: 3000
+    auth: none
+
+schema: .guarden/.env.schema

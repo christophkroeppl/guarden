@@ -63,6 +63,15 @@ they are never a door from outside: a granted public port is translated to one o
 publication carries a uid-matched accept set and a drop for every other uid.
 _Avoid_: port (when you mean the allocated loopback number), ingress, endpoint
 
+**app**:
+A directory holding `.guarden/service.yml`, discovered by that file's location and never by a list.
+One app is one service: its name is the directory's last path component, and its service is
+`<project>-<app>-<environment>` — or `<project>-<environment>` for the app at the repository root,
+whose name is empty. The repository holds the whole tree; the app root holds that service's
+manifest, schema, unit source and Containerfile.
+_Avoid_: service (one repository may hold several apps), sibling (a **sibling app** is another app
+of the same repository, dialled with `needs: app:`, and is not a `siblings:` entry)
+
 **sibling**:
 A container of the *same* unit source that another container of it may dial, declared under the
 manifest's `siblings:` block with the port it serves **inside** its own container. The renderer
