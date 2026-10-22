@@ -54,6 +54,16 @@ assert_stderr_empty
 assert_file_has "$render/units/guarden.env" "API_HOST=orders.tunnel.example.net"
 assert_file_has "$render/units/guarden.env" "API_PORT=443"
 
+# **And the unit LOADS it.** The two assertions above are about the file's
+# contents, and a file no unit references is a file the container never reads.
+# The edge allocates no publication, so it is not in the published set that
+# decides whether a unit carries `EnvironmentFile=` — measured before this
+# assertion existed: the render wrote both rows here and `web.container` carried
+# no `EnvironmentFile=` at all, so the container started with neither variable
+# and the transport delivered nothing while this suite passed.
+assert_file_has "$render/units/web.container" "EnvironmentFile="
+assert_file_has "$render/units/web.container" "guarden.env"
+
 # The credential the `auth:` names is a REQUEST the unit makes, and the value is
 # the operator's: a vendor's Access service token is minted by the vendor, so
 # guarden names the key and never writes a value.

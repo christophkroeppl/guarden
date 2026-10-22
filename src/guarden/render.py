@@ -1346,6 +1346,7 @@ def build(
                 domain=domain,
                 siblings=[name for name, _, _ in sibling_ports],
                 owner=owner,
+                tunnelled=tunnelled,
             ),
         )
         plan.add(
@@ -1516,6 +1517,7 @@ def _container_unit(
     domain: str,
     siblings: list[str] | None = None,
     owner: str | None = None,
+    tunnelled: list[tuple[manifest_mod.Edge, str]] | None = None,
 ) -> str:
     """One container unit: the source's own fields, then every field guarden owns.
 
@@ -1531,6 +1533,14 @@ def _container_unit(
     unit = merged if merged is not None else _merged(source.units[container])
     service = context.service if context else ""
     sibling_names = list(siblings or [])
+    # **A tunnel edge allocates no publication, so it is not in `edge_ports`.**
+    # The set that decides whether this unit loads `units/guarden.env` therefore
+    # cannot be the published edges alone: a consumer whose ONLY edge is
+    # `via: tunnel` would render the file with its `API_HOST`/`API_PORT` — the
+    # build adds it for `tunnelled` — and reference it from no unit at all, so
+    # the container would start with neither value and the feature would be
+    # inert while both suites passed on the file's contents.
+    tunnelled_edges = list(tunnelled or [])
     for key in OWNED_KEYS:
         unit.drop("Container", key)
 
@@ -1585,7 +1595,7 @@ def _container_unit(
                 "AddHost",
                 [f"{name}:{context.config.alias}" for name in hosts],
             )
-        if edge_ports or sibling_names:
+        if edge_ports or sibling_names or tunnelled_edges:
             # **The value is escaped, and the path on disk is not.** Quadlet
             # reads `EnvironmentFile=` by C-unescaping its value, and the
             # instance's directory is named by the escaped ref — `feature/x` is

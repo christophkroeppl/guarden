@@ -154,6 +154,13 @@ unit_dir=/var/lib/guarden/services/$consumer/home/.config/containers/systemd
 env_file=$unit_dir/guarden.env
 assert_file_has "$env_file" "API_HOST=orders.tunnel.example.net"
 assert_file_has "$env_file" "API_PORT=443"
+# **And the unit LOADS it.** A file the unit does not reference is a file the
+# container never reads. The edge allocates no publication, so it is absent from
+# the published set that used to decide whether a unit carries
+# `EnvironmentFile=`, and a consumer whose only edge is this one got the rows
+# above and no `EnvironmentFile=` — the container started with neither variable.
+assert_file_has "$unit_dir/web.container" "EnvironmentFile="
+assert_file_has "$unit_dir/web.container" "guarden.env"
 # The credential is a REQUEST; the value is the operator's, because a vendor's
 # Access token is minted by the vendor.
 assert_file_has "$unit_dir/web.container" "Secret=API_SECRET,type=mount"
