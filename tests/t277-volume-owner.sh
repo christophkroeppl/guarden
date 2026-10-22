@@ -33,10 +33,14 @@
 #     `state` volume the chown FAILS on snapper's root-owned `.snapshots` —
 #     and it has already moved the volume's own owner when it does, so a
 #     command that reports failure still breaks the deployment.
-#   * **the spec's `[ownership]` sentence, measured**: §3.3 now records that the
-#     table ADR-0021 decided is refused by the program until it lands. A
-#     sentence about an exit code is a claim about a machine, so the file the
-#     spec names is written here and the verb that reads it is asked.
+#   * **the spec's `[ownership]` grant, measured**: §3.3 records that ADR-0021's
+#     table is implemented, and an owner is a claim about a machine — so the file
+#     the spec documents is written here, the reconcile verb is asked, and the
+#     volume's tree is read back off the host. A `bulk` volume's tree is handed
+#     to the uid the admin named (root AND a nested entry), the container cannot
+#     act as that uid, and each of the three refusals — a `state` volume, a name
+#     the manifest does not declare, a uid `/etc/passwd` does not carry — is one
+#     exit code and one line.
 #   * **the tree does not prescribe it any more**: a grep over the standing
 #     documents and the programs for the step, the same shape as t350's
 #     refuted-claims block. A runbook that tells an operator to break a
@@ -217,29 +221,6 @@ for volume in "$state_vol" "$bulk_vol"; do
         || _fail "the volume $volume is owned by host uid $owner after the start, not the service uid $svc_uid — the pin makes the write possible without touching the owner"
 done
 
-# --- the spec's §3.3 sentence, measured --------------------------------------
-#
-# ADR-0021 decided `[ownership]` and ticket 308's item 2 implements it. Until
-# then §3.3 says a file carrying the table is REFUSED by name, with exit 1 —
-# and a sentence about an exit code is a claim about a machine. So the file the
-# spec documents is written here, and the verb that reads `overrides.toml` is
-# asked. `weedr expose set` is the cheapest caller: it loads the grants before
-# it writes anything, so a refused file leaves the record untouched.
-#
-# The day the table lands this section fails with "expected exit 1, got 0", and
-# that failure is the reminder that §3.3 and the ADR both have to stop calling
-# it unimplemented in the same change.
-
-mkdir -p /etc/guarden/services/kidv-staging
-seed /etc/guarden/services/kidv-staging/overrides.toml \
-    "[ownership]" \
-    'volumes = { "data" = 999 }'
-run weedr expose set kidv-staging loopback
-echo "MEASURE: a file carrying the table §3.3 records: exit=$GUARDEN_EXIT $(tr '\n' '|' <"$GUARDEN_STDERR")"
-assert_exit 1
-assert_stderr_has "unknown key 'ownership'"
-rm -f /etc/guarden/services/kidv-staging/overrides.toml
-
 # --- claim 2: what the runbook's step costs ---------------------------------
 #
 # The step the runbook prescribed, verbatim: `podman unshare chown -R <image
@@ -297,6 +278,92 @@ run_in "$home" setpriv --reuid=kidv-staging --regid=kidv-staging --clear-groups 
 echo "MEASURE: the write into the state volume after the failed chown: $(tr '\n' '|' <"$GUARDEN_STDERR")"
 assert_exit 1
 assert_stderr_has "Permission denied"
+
+# --- the spec's §3.3 grant, measured ----------------------------------------
+#
+# ADR-0021 decided `[ownership]` and ticket 308's item 2 implements it: the admin
+# names a host uid in `overrides.toml`, and guarden's own walk gives that uid a
+# volume's tree. An owner is a claim about a machine, so the file §3.3 documents
+# is written here, the reconcile verb is asked, and the host is read back.
+#
+# **It is read on the CONVERGED path, and that is the path an operator has.**
+# The grant has no verb of its own (§3.3 — there is no `weedr ownership set`), so
+# it is applied by writing the file and re-running the reconcile; a verb that
+# answered "converged" without reading the file would leave the grant unapplied.
+#
+# **A `bulk` volume only, and the refusals are half of this section.** A `state`
+# volume is refused — its tree carries snapper's `.snapshots` and its image may
+# chown its data (ADR-0020), and whether an image chowns is not knowable before
+# it runs — as is a name the manifest does not declare and a uid `/etc/passwd`
+# does not carry.
+#
+# The grant is written AFTER claim 2, because a granted bulk volume is owned by
+# the granted uid from then on and claim 2's chown (as the service user) has to
+# be measured on a volume the service owns.
+
+granted_uid=$(id -u nobody)
+echo "MEASURE: the granted owner is uid $granted_uid (nobody); the service is uid $svc_uid"
+
+# A nested entry, so the assertion is about the WALK and not about the one chown
+# `volumes.own` already does to a volume's root. Written as root, because the
+# bulk volume is owned by the subuid-aliased uid after claim 2.
+mkdir -p "$bulk_vol/nested"
+printf 'granted\n' >"$bulk_vol/nested/deep"
+
+mkdir -p /etc/guarden/services/kidv-staging
+seed /etc/guarden/services/kidv-staging/overrides.toml \
+    "[ownership]" \
+    "volumes = { \"scratch\" = $granted_uid }"
+run weedr service ingest kidv-staging --from poke kidv@0000001
+assert_exit 0
+
+for path in "$bulk_vol" "$bulk_vol/nested" "$bulk_vol/nested/deep"; do
+    owner=$(stat -c %u "$path")
+    [ "$owner" = "$granted_uid" ] \
+        || _fail "$path is owned by host uid $owner after the grant, not the granted uid $granted_uid"
+done
+echo "MEASURE: the granted volume's tree is owned by uid $granted_uid (root and nested entry)"
+
+# **A container cannot act as that uid**, which is the half of ADR-0021's old
+# sentence that does not hold: the volume is `0700` and it is the granted uid's
+# now, so the service's own container — whose uid maps onto the service identity
+# — does not read it.
+run_in "$home" setpriv --reuid=kidv-staging --regid=kidv-staging --clear-groups \
+    env -u OLDPWD HOME="$home" PWD="$home" USER=kidv-staging LOGNAME=kidv-staging \
+    XDG_RUNTIME_DIR="$runtime" \
+    podman exec "$container" sh -c 'cat /scratch/nested/deep'
+echo "MEASURE: the container reading the granted volume: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_stderr_has "Permission denied"
+
+# **The three refusals, each one exit code and one line naming what it refused.**
+
+seed /etc/guarden/services/kidv-staging/overrides.toml \
+    "[ownership]" \
+    "volumes = { \"data\" = $granted_uid }"
+run weedr service ingest kidv-staging --from poke kidv@0000001
+echo "MEASURE: a grant on the state volume: exit=$GUARDEN_EXIT $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_stderr_has "state volume"
+assert_stderr_has "'data'"
+
+seed /etc/guarden/services/kidv-staging/overrides.toml \
+    "[ownership]" \
+    "volumes = { \"absent\" = $granted_uid }"
+run weedr service ingest kidv-staging --from poke kidv@0000001
+echo "MEASURE: a grant on a name the manifest does not declare: exit=$GUARDEN_EXIT $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_stderr_has "does not declare"
+
+seed /etc/guarden/services/kidv-staging/overrides.toml \
+    "[ownership]" \
+    "volumes = { \"scratch\" = 4242424 }"
+run weedr service ingest kidv-staging --from poke kidv@0000001
+echo "MEASURE: a grant naming a uid the host does not have: exit=$GUARDEN_EXIT $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_exit 1
+assert_stderr_has "/etc/passwd"
+
+rm -f /etc/guarden/services/kidv-staging/overrides.toml
 
 # --- claim 3: the tree does not prescribe it any more ------------------------
 #

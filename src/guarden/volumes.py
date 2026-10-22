@@ -24,6 +24,7 @@ workload and volume names may both contain `-`.
 from __future__ import annotations
 
 import os
+import stat
 from dataclasses import dataclass
 
 from guarden import conf, errors, paths, snapper, tool
@@ -232,6 +233,61 @@ def own(target, owner: tuple[int, int]) -> None:
     """
     conf.set_owner(target, owner)
     os.chmod(target, 0o700)
+
+
+def own_tree(target, owner: tuple[int, int], *, base=None) -> list[str]:
+    """A volume's whole tree handed to one owner, and only when its root is not already.
+
+    The grant ADR-0021 decided is applied here: the admin names a uid, and the
+    mutator walks the volume the manifest declared and gives every entry to it.
+    The walk is guarden's own -- a container never chowns its tree to a host uid
+    -- and the entries keep the tree's `0700`, so the granted uid is the one that
+    reads them.
+
+    **The root is the check, and the walk runs only when it disagrees.** A
+    reconcile reads this on every deploy, so a volume whose root already carries
+    the granted pair must cost a `stat` rather than a walk of its data. Only a
+    granted volume reaches this: a volume with no grant is the create path's to
+    own (`volumes.own` and the service tree's walk).
+
+    **A link is refused, not followed.** This walk chowns as root, and `<tree>/bulk`
+    is the SERVICE's own 0700 directory: the service user, or its container under
+    the keep-id pin, can free `<base>/<kind>/<vol>` and leave a symlink there.
+    `Path.is_dir()` follows and `rglob` scandirs a symlinked base (measured: it
+    lists `/bin`, `/boot`, `/etc` for a link to `/`), so following one would hand
+    every entry under the link's target to the granted uid -- measured on
+    `own_tree` before this check existed. `lstat` is what asks the volume itself,
+    and the resolved path is then held inside `base` for the case where a link
+    sits above the volume rather than at it.
+    """
+    held = target.lstat()
+    if stat.S_ISLNK(held.st_mode):
+        raise errors.GuardenError(
+            f"the granted volume {target} is a symlink; a granted tree is chowned as "
+            f"root, and following this one would give everything it points at to "
+            f"uid {owner[0]} -- refusing rather than following it",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if not stat.S_ISDIR(held.st_mode):
+        return []
+    if base is not None:
+        real = target.resolve()
+        root = base.resolve()
+        if real != root and root not in real.parents:
+            raise errors.GuardenError(
+                f"the granted volume {target} resolves to {real}, outside the "
+                f"service's own tree {root}; refusing to chown a tree the grant "
+                f"did not name",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+    if (held.st_uid, held.st_gid) == owner:
+        return []
+    for path in [target, *sorted(target.rglob("*"))]:
+        if path.is_symlink():
+            conf.set_owner(path, owner, follow=False)
+            continue
+        conf.set_owner(path, owner)
+    return [f"handed {target} to {owner[0]}:{owner[1]}"]
 
 
 def retention_from(track, overrides) -> Retention:

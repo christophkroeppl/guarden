@@ -301,12 +301,23 @@ def mount_source_at(base: Path, kind: str, vol: str) -> Path:
     return payload_at(base / kind / vol, kind)
 
 
+def mount_base(name: str, escaped_ref: str | None = None) -> Path:
+    """The tree a declared volume's mount source sits in (ADR-0020).
+
+    **One definition, because two readers of it must not disagree.** `mount_source`
+    builds the path from it, and the `[ownership]` walk uses it as the bound a
+    granted volume has to stay inside: that walk chowns as root, so a link
+    anywhere between the tree and the volume would hand something outside the
+    service's own tree to the granted uid.
+    """
+    return instance_tree(name, escaped_ref) if escaped_ref else service_tree(name)
+
+
 def mount_source(
     name: str, kind: str, vol: str, escaped_ref: str | None = None
 ) -> Path:
     """The host path a declared volume is mounted from (ADR-0020)."""
-    base = instance_tree(name, escaped_ref) if escaped_ref else service_tree(name)
-    return mount_source_at(base, kind, vol)
+    return mount_source_at(mount_base(name, escaped_ref), kind, vol)
 
 
 def snapshot(name: str, vol: str, number: int, escaped_ref: str | None = None) -> Path:

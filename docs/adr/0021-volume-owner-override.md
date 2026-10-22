@@ -3,27 +3,32 @@
 ADR-0019 moved the container's user onto the service identity and settled that guarden
 never chowns a file to an image's uid: a pin decides *where* a uid lands, not *who
 starts*. Ticket 308's second item records the escape hatch that decision left open — a
-volume shared by two image uids, where one image's uid must own some of the tree and
-the other the rest. The deferral was explicit: `overrides.toml`'s contract is a closed
-set of tables, so a new key is a spec amendment, not an invented key.
+volume whose tree has to belong to a host uid that is not the service's own. The deferral
+was explicit: `overrides.toml`'s contract is a closed set of tables, so a new key is a
+spec amendment, not an invented key.
 
-Operator decision locked 2026-10-20 on ticket 308's item 2.
+Operator decision locked 2026-10-20 on ticket 308's item 2, and narrowed 2026-10-22 to
+what the pin can actually deliver: **the grant is host-side ownership only.** The other
+reading — that it lets a container act as another uid — is not expressible with one
+`keep-id` pin, and "What it buys, and what it does not" is where that is said with the
+measurement behind it.
 
 ## Status
 
-accepted (2026-10-20, operator) — DECIDED, not yet implemented. The implementation is
-ticket 308's item 2; this ADR records the shape of the grant and the boundary it draws,
-because a grant is a grant and the boundary is the whole of it.
+accepted (2026-10-20, operator), implemented (2026-10-22) — ticket 308's item 2. The
+implementation, `tests/t277-volume-owner.sh`'s §3.3 section, `docs/spec.md` §3.3 and this
+ADR landed in one change, because a grant the program refuses and a grant it applies are
+two different contracts.
 
 ## The decision
 
-**`overrides.toml` gains a seventh table, `[ownership]`, and it is the only new surface.
+**`overrides.toml` gains an eighth table, `[ownership]`, and it is the only new surface.
 It is a grant, and it is refused in every way the other grants are refused.**
 
 ```toml
 [ownership]
-# The uid that owns a volume's tree, when the image's own uid cannot.
-volumes = { "data" = 999 }
+# The host uid that owns a bulk volume's tree.
+volumes = { "scratch" = 999 }
 ```
 
 The rules, each of which is one of the platform's existing rules applied to a new table:
@@ -35,16 +40,55 @@ The rules, each of which is one of the platform's existing rules applied to a ne
 - **The value is refused unless it is a uid the host already has.** Not any number: a
   uid that is not in `/etc/passwd` is refused, because a number nobody owns is not an
   owner. The service's own uid is the default and needs no entry.
-- **The uid is applied to the volume's tree the way ADR-0019 says: by the walk, once,
-  at a named step — never as a chown the container performs.** A container that chowns
-  its own tree to a host uid is a container escalating; the same walk that skips
-  snapper's subtree (ADR-0020) and the podman store (`_in_podman_store`) is the walk
-  that applies it, and it applies the owner to the *host* side, under the mutator's
-  hand.
-- **It is refused for a `state` volume whose images chown their data.** That is the
-  case ADR-0020 decides, and the two must not disagree: ADR-0020 makes the container
-  not see snapper's subtree, and this table must not then let a container chown its own
-  data to a host uid.
+- **The name is refused unless the manifest declares the volume.** A grant on a name
+  nothing declares is a grant that does nothing, and the operator who wrote it would
+  believe it was in effect — which is the one thing this file must never allow, because
+  the file is how the operator knows every way the host has been widened.
+- **It is refused for a `state` volume.** A `state` volume's tree is snapper's as much as
+  the service's: it carries `.snapshots`, `0750 root:root`, and its image's entrypoint may
+  chown the data directory on start — ADR-0020 names the class, and the two decisions must
+  not disagree. **Whether a given image chowns is not knowable before it runs** (no probe
+  reads an entrypoint's behaviour), so the whole kind is refused rather than a subset
+  guarden cannot detect, and an owner the service user does not hold is exactly the chown
+  that fails.
+- **The owner is applied by guarden's own walk, at the reconcile — never by a chown the
+  container performs.** `volumes.own_tree` walks the volume the grant names, under
+  the mutator's hand, which is root; a container that chowned its own tree to a host uid
+  is a container escalating. The walk runs from `weedr service add`/`ingest` (spec 5.3) on
+  the **converged** path too — the grant has no verb of its own, so writing the file and
+  re-running the reconcile is how an operator applies it. **A grant removed is the create
+  path's walk**: `_make_tree` and the volume's create own the whole tree, and they run on a
+  deploy that is not converged, so the reconcile walks only the volumes a grant names.
+  Walking every volume on every reconcile would be a second statement of the tree's rule
+  in the place `_repair` is deliberately narrow.
+
+## What it buys, and what it does not
+
+**The subtree is owned on the host by the named uid.** A process running as that uid — a
+backup agent run as that user, another service's container whose own service uid is the
+granted one, an operator's own inspection as root — can read it.
+
+**A container cannot act as that uid.** A unit whose image declares a user renders
+`UserNS=keep-id:uid=<image uid>,gid=<gid>` (`render.py:262`, `clone.py:539-548`), which
+maps exactly one image uid onto the service identity; every other host uid is unmapped
+inside the container, and `tests/t277-volume-owner.sh:230-250` measures the consequence as
+`Permission denied`. So the granting service's own container does not read the subtree,
+and **cross-service volume sharing is not something this grant provides** — a second
+service reads the volume only when the admin names that service's own uid, and even then
+the path has to reach it (§3.3 `[mounts] allow`). A sentence promising that a container
+reads a subtree owned by another uid would be promising what the pin cannot deliver.
+
+**The service user loses the volume's tree.** The tree stays `0700` and it is the granted
+uid's, so the service that owns the volume can neither read nor write it. An operator
+granting an owner on a volume the service still needs at run time is choosing a volume the
+service no longer uses; the choice is stated here rather than discovered at the first
+`Permission denied` in a container's log.
+
+**The tree above the volume is not widened.** The service tree and its `bulk/` directory
+are the service's own `0700`, so a process running as the granted uid reaches the volume
+only through a path the host allows it — a bind mount guarden made, an operator's root
+shell. Guarden does not widen the tree above a volume to make the grant useful: that tree
+is the isolation boundary (spec 2.1), and this grant is about one volume inside it.
 
 ## What it is NOT
 
@@ -70,25 +114,12 @@ grant surface outside that file is a grant surface nobody reads. So the new tabl
 *in* the file, and the spec's sentence is amended to name it — the same amendment
 `[expose]` already required, when the exposure cluster added its table.
 
-**The spec's "five tables" is already six.** `[ports]`, `[firewall]`, `[retention]`,
-`[groups]`, `[mounts]`, and `[expose]`. Ticket 308's deferral said "overrides.toml's
-contract is 'five tables and nothing else'" — that count was already stale when it was
-written, and the amendment records the real number rather than the remembered one.
-
-## What it costs, stated
-
-- **An owner uid on a volume is a uid outside the service's own boundary.** The volume
-  is `0700`-owned by the service's user, and a subtree of it owned by another uid is
-  read by that uid. This is a real widening, and it is why the grant is refused for
-  `state` volumes whose images chown, and why the value must be a uid the host knows.
-- **The service user cannot then write that subtree** unless the other uid is the
-  service's own or a group it holds. An operator granting an owner is choosing which
-  half of a shared volume is writable by whom, and the answer is not always symmetric.
-  This is a consequence to state, not a defect.
-- **The walk that applies it is a second walk.** ADR-0019's walk skips snapper's
-  subtree and the podman store; this one adds the ownership step. It is the same walk
-  with one more rule, not a second mechanism, and the tree walk's carve-out list is
-  where the rule goes.
+**`[ownership]` is the EIGHTH table, and the counts around this decision were stale.**
+The file carries `[ports]`, `[retention]`, `[groups]`, `[mounts]`, `[firewall]`,
+`[expose]` and `[basicauth]` (ADR-0024) today, so the new one is the eighth — not the
+seventh this ADR first said, and not the "sixth" ticket 308's status line said. Both were
+written before a later ADR added a table, which is the failure mode: **recount from the
+schema that declares the tables (`overrides.py`'s `KEYS`), never from another document.**
 
 ## The scope of this decision
 
