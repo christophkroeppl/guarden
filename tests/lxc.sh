@@ -385,6 +385,13 @@ _wait_cloud_init() {
     # ones.** A cut's document installs nothing (ticket 200) so its wait is short;
     # a golden's first boot is a real boot, and its budget is the long one.
     local budget=${2:-$APT_LOCK_WAIT}
+    # **`installing` is set only by `cmd_provision`, and it exists because the
+    # guard below cannot be its premise** (ticket 309). Provisioning calls this
+    # wait BEFORE it installs the golden's package list, and `psmisc` — which is
+    # what provides `fuser` — is in that list. So on an image without psmisc the
+    # guard fired, the install that would have provided it never ran, and
+    # provision died naming the very package it was about to install.
+    local installing=${3:-0}
     # **Wait on apt's locks as well as on cloud-init, and this is the whole fix.**
     # `cloud-init status --wait` returns as soon as cloud-init reports done, but
     # cloud-init's own `package_update` can still be holding
@@ -453,6 +460,24 @@ _wait_cloud_init() {
     # path that did not wait must say so with its status, or the caller proceeds
     # into the race believing it is protected.
     if ! $LXC exec -T "$instance" -- sh -c 'command -v fuser' >/dev/null 2>&1; then
+        # **Provisioning is the one caller whose guard is inverted, and it says so
+        # explicitly** (ticket 309). The wait above has already done its job:
+        # cloud-init answered. What is skipped here is the LOCK MEASUREMENT, which
+        # needs `fuser` — and `cmd_provision` installs that from the one list
+        # moments later, retries a held lock five times, and asserts `fuser` after
+        # the install. So this path is not "no wait happened"; it is "the wait that
+        # could happen did, and the one that cannot is the next step's job".
+        #
+        # Measured 2026-10-22: `ubuntu:26.04` ships psmisc, so the failure this
+        # prevents needed a slimmer image to appear — and a full gate cannot see it
+        # in either direction, because a gate cuts from a golden that already has
+        # the package. That is why this is asserted here rather than left to the
+        # gate: the gate is structurally blind to the provisioning path.
+        if [ "$installing" = 1 ]; then
+            printf 'note: %s has no fuser yet and is about to install its package list, so the lock measurement is deferred to the assertion after the install\n' \
+                "$instance" >&2
+            return 0
+        fi
         printf 'error: fuser is not on %s, so the apt lock wait cannot run; ' \
             "$instance" >&2
         printf 'psmisc provides fuser and is in the harness package list in ' >&2
@@ -771,7 +796,10 @@ cmd_provision() {
     # signal.** The exit status is checked because `tests/lxc.sh` runs under
     # `set -uo pipefail` and NOT `set -e`: an unchecked non-zero return is
     # silently ignored and the run continues into whatever the boot was doing.
-    _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" || die "cannot wait for cloud-init on $GOLDEN"
+    # **The third argument is `1`: provisioning installs the package list a few
+    # lines below, so this wait cannot require what that install provides**
+    # (ticket 309). The assertion after the install is where `fuser` is required.
+    _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" 1 || die "cannot wait for cloud-init on $GOLDEN"
 
     if [ "${_needs_build:-0}" = 0 ] && [ "$(_conversion_state "$GOLDEN")" != done ]; then
         printf 'replacing %s: no snapshot and its conversion state is not done\n' "$GOLDEN"
@@ -827,7 +855,7 @@ cmd_provision() {
         printf '  packages: install attempt %d failed (rc %d)\n' \
             "$install_attempt" "$install_rc" >&2
         grep -q 'Could not get lock' "$install_err" 2>/dev/null || break
-        _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" \
+        _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" 1 \
             || die "cannot wait for apt's locks on $GOLDEN"
     done
     [ "$install_rc" = 0 ] \
@@ -836,6 +864,16 @@ cmd_provision() {
     # the conversion needs; without this the build dies three steps later.
     vm_exec_t "$GOLDEN" 'command -v snapper >/dev/null' \
         || die "$GOLDEN has no snapper, and the root conversion cannot configure one"
+    # **The guard the provisioning path deferred is required HERE** (ticket 309).
+    # `_wait_cloud_init` above was called with `installing=1`, which skips the
+    # `fuser` check because this install is what provides it. If the install
+    # silently skipped psmisc, every cut would inherit a machine that cannot
+    # measure apt's locks, and the suite that loses the race is not the suite that
+    # caused it — the same shape as the snapper assertion above, for the same
+    # reason. A cut never reaches this line: its machine comes from the snapshot,
+    # and the snapshot is only taken after this passes.
+    vm_exec_t "$GOLDEN" 'command -v fuser >/dev/null' \
+        || die "$GOLDEN has no fuser after installing its package list; psmisc is in the golden role and the apt-lock wait cannot run without it"
 
     # Preconditions the real-host tests plant for themselves today. They are
     # planted here instead so a green run does not depend on one test having run
