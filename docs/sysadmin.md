@@ -795,7 +795,7 @@ thing the manifest is asked for is the fact guarden cannot read anywhere else: w
 application inside that container serves.
 
 ```yaml
-# in the repository's .guarden/service.yml
+# in the app's .guarden/service.yml
 siblings:
   - container: api
     port: 3000

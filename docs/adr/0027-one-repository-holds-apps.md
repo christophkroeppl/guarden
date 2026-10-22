@@ -1,4 +1,4 @@
-# ADR-0026 — one repository holds apps, and one app is one service
+# ADR-0027 — one repository holds apps, and one app is one service
 
 Status: accepted. Narrows spec 5.1, 5.3, 6.6 and 7.3. Ticket 307's design decision.
 

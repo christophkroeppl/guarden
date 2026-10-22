@@ -44,8 +44,8 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from guarden import apps as apps_mod
 from guarden import (
-    apps as apps_mod,
     compose,
     conf,
     edgeconf,
@@ -1072,7 +1072,7 @@ def edge_publications(
         ]
         if not numbers:
             raise errors.GuardenError(
-                f"{context.service} needs {edge.service!r} on port {edge.port}, which "
+                f"{context.service} needs {edge.declared} on port {edge.port}, which "
                 f"resolves to {concrete!r}, and that provider's registry entry names no "
                 f"allocated publication for the edge; the mutator allocates one when it "
                 f"installs the edge, and the renderer does not guess a loopback port",

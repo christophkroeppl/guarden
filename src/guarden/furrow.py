@@ -23,8 +23,19 @@ import sys
 import time
 from pathlib import Path
 
-from guarden import apps
-from guarden import cli, compose, conf, errors, names, paths, projects, registry, tool, unitsource
+from guarden import (
+    apps,
+    cli,
+    compose,
+    conf,
+    errors,
+    names,
+    paths,
+    projects,
+    registry,
+    tool,
+    unitsource,
+)
 from guarden import config as config_mod
 from guarden import manifest as manifest_mod
 

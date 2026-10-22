@@ -38,6 +38,7 @@ MANIFEST_REL = Path(".guarden") / "service.yml"
 TOP_LEVEL_KEYS = {
     "project",
     "units",
+    "pod",
     "state",
     "bulk",
     "needs",
@@ -71,6 +72,13 @@ BLOCK_KEYS = {
 # that is not a list, and running `scrub:` through it read `scrub is not a list`
 # for a block that is legal and correct. Its own closed key sets are below, and
 # `_scrub` applies them.
+
+# `pod:` is a MAPPING too, and it is out of BLOCK_KEYS for the same reason. Its
+# closed key set lives here rather than beside the block's reader, because a key
+# that is not in the table is refused as a typo for every user: the vocabulary is
+# one place (spec 4, §7.1). The block is read by the pod's own renderer, and this
+# set is what that reader closes over.
+POD_KEYS = {"name"}
 
 # The `scrub:` block's own key sets, closed (ADR-0025).
 #

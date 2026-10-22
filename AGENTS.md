@@ -32,9 +32,10 @@ pyproject.toml  build config, console script entry points, ruff config
 There is no `Makefile`. Tasks run through `justfile`, and `just` with no argument lists the
 recipes.
 
-Project repositories carry `compose.yaml` at the root or quadlet units in `.guarden/quadlet/`
-— exactly one, enforced by pre-commit — plus `.guarden/service.yml`, `.guarden/widgets/`, and
-`.guarden/.env.schema`.
+Project repositories carry `compose.yaml` at an app's root or quadlet units in that app's
+`.guarden/quadlet/` — exactly one, enforced by pre-commit — plus the app's `.guarden/service.yml`,
+`.guarden/widgets/`, and `.guarden/.env.schema`. One app is one service; a repository that ships
+several apps has one of these blocks per app directory (ADR-0026, spec §4).
 
 Parts talk over files and paths. There is no internal HTTP API and no socket between them
 .
@@ -81,7 +82,9 @@ a new ADR that supersedes it. The short version:
   between a push and a running production container is the gate, not the creation.
 - Connectivity is one loopback namespace. A declared edge produces an `AddHost=` entry in the
   consumer's own units, a uid-matched firewall rule and a per-consumer credential. There is no
-  shared podman network, no name map, and no per-group address space.
+  shared podman network **between services**, no name map, and no per-group address space. A
+  service's own containers share one **pod** — one network namespace, declared by the manifest,
+  never by a repository's `Pod=` — and nothing else joins it (ADR-0026, spec §7.1).
 - **A host user's group membership is not a container's.** A rootless container's group numbers are
   translated through `/etc/subgid`, so container group `981` means host group `232053`, and no
   `--group-add <gid>` reaches a host group that sits below the window — the number to name does not
@@ -499,7 +502,9 @@ When implementing a ticket:
 
 ## What not to do
 
-- Do not add a web UI. Do not add a shared podman network.
+- Do not add a web UI. Do not add a shared podman network **between services**. The one network
+  namespace a service's own containers share is its pod (ADR-0026, spec §7.1), and the pod is the
+  renderer's: no repository names one.
 - **Do not add a fake.** Not a stand-in for a system tool, not a shim, not a fixture directory,
   and not a "harmless" call log. `fixtures/` is configuration inputs and manifests; the harness
   is a real machine; a suite that cannot say what it wants from a real tool has a design problem,

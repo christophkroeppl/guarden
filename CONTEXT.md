@@ -9,24 +9,55 @@ not negotiable mid-change. If a change needs a word that is not here, the change
 One deployed thing on the host, named `<workload>-<environment>`, owning exactly one Linux
 user of the same name, one home, one quadlet unit directory, and any state it declares. A
 service is not a container: a service may run three.
-_Avoid_: stack, app, deployment
+_Avoid_: stack, deployment
 
 **container**:
 One container inside a service. `compose.yaml` calls these `services:`; guarden calls them
 containers, and the two words never mean the same thing.
-_Avoid_: service (when you mean one process), unit, pod
+_Avoid_: service (when you mean one process), unit
+
+**app**:
+A directory in a project that holds `.guarden/service.yml`, and the containers that manifest
+declares. Discovery is by the file's location, never by a list at the project root, because a list
+is a second declaration that goes stale and an app it forgets silently never deploys. Its name is
+the directory's last path component, and the app at the tree root carries the empty name. An app is
+not a container: its manifest names a quadlet directory, and that directory may hold two (`pgprov`
+runs a database and a vault). It is not a service either — how many services an app's containers
+become is `grouping`'s answer, not the app's.
+_Avoid_: service (when you mean the directory), container (when you mean the directory), project
+(when you mean one app of a multi-app project), module, sibling (a **sibling app** is another app
+of the same repository, dialled with `needs: app:`, and is not a `siblings:` entry)
+
+**grouping**:
+How a project's apps become services. A declaration, never a heuristic: nothing infers this from
+the directory layout. `one-service` puts every app's containers into one service — one Linux user,
+one home, one pod — which is what a monorepo whose apps are one deployment wants.
+`one-service-per-app` gives each app its own service, and so its own Linux user and its own pod,
+which buys per-app isolation at the price of a user per app.
+_Avoid_: mode, layout, topology, default (when you mean the grouping)
+
+**pod**:
+The one network namespace a service's containers share, named by the manifest's `[pod] name` and
+defaulting to the service's workload, so its members reach one another on `127.0.0.1` and only what
+a route or an edge publishes leaves the pod. It is not a network two services share, and it is not a
+name map. A pod is a per-user podman object, so it never spans two services: two services are two
+Linux users, and no quadlet `Pod=` unit crosses a user manager. Its containers also share ONE user
+namespace, so a `keep-id` pin is a pod-level pin — one image uid and container root reach the
+service user, and every other uid lands on a subuid, which is why a pod whose members disagree on a
+uid is refused rather than rendered.
+_Avoid_: network, namespace (when you mean the pod), group, stack, subnet, cluster
 
 **project**:
 A repository. The thing you promote through tracks. Its name is the manifest's `project` field,
 defaulting to the project the `--from` source belongs to. It is not the same thing as the
 workload and the two may differ.
-_Avoid_: app, repo, service (when you mean the repository)
+_Avoid_: repo, service (when you mean the repository)
 
 **workload**:
 The service name without its environment segment: `other-app-production` is workload `other-app`.
 It is what a track holds one service per, and what an instance cap is counted against. A
-workload and a project may differ.
-_Avoid_: app, service (when you mean the part before the dash), project
+workload and a project may differ; a workload that comes from an app is the project and the app.
+_Avoid_: service (when you mean the part before the dash), project
 
 **track**:
 A named row in the root-owned environment table in `/etc/guarden/guarden.toml`, carrying its own
@@ -62,15 +93,6 @@ port, a sibling or an edge names. Publications are the only ports anything in gu
 they are never a door from outside: a granted public port is translated to one of them. Every
 publication carries a uid-matched accept set and a drop for every other uid.
 _Avoid_: port (when you mean the allocated loopback number), ingress, endpoint
-
-**app**:
-A directory holding `.guarden/service.yml`, discovered by that file's location and never by a list.
-One app is one service: its name is the directory's last path component, and its service is
-`<project>-<app>-<environment>` — or `<project>-<environment>` for the app at the repository root,
-whose name is empty. The repository holds the whole tree; the app root holds that service's
-manifest, schema, unit source and Containerfile.
-_Avoid_: service (one repository may hold several apps), sibling (a **sibling app** is another app
-of the same repository, dialled with `needs: app:`, and is not a `siblings:` entry)
 
 **sibling**:
 A container of the *same* unit source that another container of it may dial, declared under the
@@ -134,9 +156,9 @@ the variable it becomes.
 _Avoid_: key, token, env var (when you mean the secret's value)
 
 **manifest**:
-`.guarden/service.yml` in a project repository. The only thing a project declares about
-itself: units, state, declared edges, requested ports, routes, widgets, the shape of its
-secrets, and the rule for a cloned copy of its data (`scrub:`).
+`.guarden/service.yml` at the root of an app, and an app is a directory in a project's tree. The
+only thing an app declares about itself: units, the pod, state, declared edges, requested ports,
+routes, widgets, the shape of its secrets, and the rule for a cloned copy of its data (`scrub:`).
 _Avoid_:  config, spec
 
 **state volume**:
