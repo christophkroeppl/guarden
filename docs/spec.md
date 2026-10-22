@@ -1210,7 +1210,12 @@ Validation rules:
   hostname must be one of its `[route_hosts]` values and that route must be published `tunnel`, so
   a producer recorded `loopback` — which publishes no name a consumer could dial — is refused by
   name. A provider absent from this host's registry is another machine's, and nothing local is
-  asked of it: exit `0` and an edge, not a guess.
+  asked of it: exit `0` and an edge, not a guess. **And an `auth: secret` tunnel edge plants no
+  credential** (ADR-0027): the token is the vendor's Access service token, so the unit asks podman
+  for `<AS>_SECRET` and the store holds nothing until an operator runs `weedr secret set` — a
+  gated track's gate holds, and an ungated track's start refuses with the key and that command.
+  A minted value here would satisfy the gate and authenticate nowhere, which is a green verdict
+  about a credential that cannot work.
 - **The provider's `provides:` is read from the provider's registry, never from its manifest.** A
   manifest that declared both sides of every edge would be one document the renderer cannot
   reach: the consumer's tree is `0700` to the consumer and `loom` runs as `guarden`, so the
@@ -1641,16 +1646,22 @@ In order:
 9. For a track with `gated = false`, a generated value for every `@sensitive` key the schema
   declares and no value has been planted for — minted once, stable until the service is
   removed, and visible in `weedr service list` as generated. A gated track gets no generated
-  value: there, a missing key is a gate failure, and generating one would hide it.
+  value: there, a missing key is a gate failure, and generating one would hide it. **A key a
+  `via: tunnel` edge asks for is not minted here either** (ADR-0027): its value is the vendor's,
+  and a minted one would be the unusable placeholder the edge itself no longer plants.
 10. For a `database` edge, **one role named after the consumer and one database per name the
   edge declares** — `<consumer>` when the manifest names none, `<consumer>-<name>` per entry in
   `databases:` — a minted password planted as a podman secret in the **consumer's** store, and
   nothing in the provider's. For a `secret` edge, a minted secret planted in both, because the
-  provider has to be able to verify it. **A role and a database that exist are left as they
-  are**: the creation is conditional on the name being absent, and only the password is set
-  again, so a repeat converges. A database of this edge's own name that another role already
-  owns is refused, with both names printed, rather than taken over — a database name is global
-  inside the provider, and changing its owner would take the other consumer's data.
+  provider has to be able to verify it. **A `via: tunnel` edge plants nothing** (ADR-0027): its
+  credential is the vendor's Access token, which guarden cannot mint into a value that
+  authenticates, so the key stays a request nobody here satisfies and `weedr secret set` is the
+  only way a value arrives — the condition §6.6 already answers for on either track. **A role
+  and a database that exist are left as they are**: the creation is conditional on the name
+  being absent, and only the password is set again, so a repeat converges. A database of this
+  edge's own name that another role already owns is refused, with both names printed, rather
+  than taken over — a database name is global inside the provider, and changing its owner would
+  take the other consumer's data.
 
   **The provider is the concrete service the consumer's track resolves the manifest's
   logical name to** (§3.1): the role and the databases are created in *that* provider, and

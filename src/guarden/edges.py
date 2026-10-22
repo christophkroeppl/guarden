@@ -370,7 +370,7 @@ def _serving(provider: registry.Registry, port: int) -> str | None:
 
 
 def _credential(entry: registry.Registry, edge, provider, container, publication) -> list[str]:
-    """One minted value per edge, and `auth: none` plants nothing at all.
+    """One minted value per LOCAL edge; `auth: none` and a tunnel edge plant nothing.
 
     A `secret` edge is planted in both stores because the provider has to be able to
     verify it. The provider's copy is planted only when nothing is there, so a second
@@ -380,12 +380,15 @@ def _credential(entry: registry.Registry, edge, provider, container, publication
     consumer's store alone (spec 5.3 step 10) and the role it creates is the
     consumer's own, so no two consumers of one provider can collide there.
 
-    **A tunnel edge's provider is another host, so `provider` is `None`** and the
-    value is planted on the consumer alone: there is no store here to share it
-    with, and the producer's half of a tunnel edge is the route's Access policy,
-    which is the operator's (`weedr share`), not this plant's.
+    **A tunnel edge is a request and not a plant** (ADR-0027). Its credential is a
+    vendor's Access token: guarden cannot mint one that authenticates, so a value
+    planted here would be a value the gate counts as satisfied and the producer
+    answers `401` to. The key therefore stays a request nothing satisfies — the
+    state §6.6 already has an answer for — and `weedr secret set` is the only way a
+    value arrives. The producer's half of the edge is the route's Access policy,
+    which is the operator's (`weedr share`).
     """
-    if edge.auth == AUTH_NONE:
+    if edge.auth == AUTH_NONE or edge.tunnelled:
         return []
     key = credential_key(edge.auth, edge)
     if credentials.planted(entry.service, key):
@@ -393,13 +396,9 @@ def _credential(entry: registry.Registry, edge, provider, container, publication
     else:
         stored = credentials.generated_value()
         credentials.plant(entry.service, key, stored)
-    if (
-        edge.auth == AUTH_SECRET
-        and provider is not None
-        and not credentials.planted(provider.service, key)
-    ):
+    if edge.auth == AUTH_SECRET and not credentials.planted(provider.service, key):
         credentials.plant(provider.service, key, stored)
-    if edge.auth == AUTH_DATABASE and provider is not None:
+    if edge.auth == AUTH_DATABASE:
         return provision(entry.service, provider, container, stored, edge.databases)
     return []
 

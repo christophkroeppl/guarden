@@ -20,7 +20,8 @@ in JSON rather than `ready`: a verdict nobody took is not a passing one.
 
 The three states are the ones spec 3.4 records, and the two paths into them are the
 two tracks. A gated track mints no value (spec 5.3 step 9) because a generated
-value would hide exactly the condition this exists to catch.
+value would hide exactly the condition this exists to catch — and a `via: tunnel`
+edge plants nothing on either track for the same reason (ADR-0027).
 """
 
 from __future__ import annotations
@@ -106,7 +107,9 @@ def evaluate(service: str, schema: secretschema.Schema, gated: bool, now: str) -
     # gate has to answer for. A key the schema declares and the units do not
     # ask for is still a required key — the schema alone makes it one.
     asked: list[str] = []
+    requested: set[str] = set()
     for key in unit_requests(service):
+        requested.add(key)
         if key not in asked:
             asked.append(key)
     for key in schema.keys:
@@ -118,7 +121,17 @@ def evaluate(service: str, schema: secretschema.Schema, gated: bool, now: str) -
         # A key the units ask for and the schema does not declare is required
         # by the request alone: podman cannot resolve it from nothing, so
         # nothing but a planted value satisfies it.
-        if key is not None and not key.required:
+        #
+        # **And a request outranks an `@required=false`.** The schema can call a
+        # key optional while the renderer still emits `Secret=<KEY>` for it —
+        # `@sensitive` is enough, and `@defaultRequired=infer` with a bare
+        # `// API_SECRET` gives a key that is sensitive and not required. podman
+        # refuses that start with `125 no such secret` whatever the schema says,
+        # so a gate that skipped it would report `ready` for a service that
+        # cannot start. ADR-0027 makes it reachable: a `via: tunnel` edge plants
+        # nothing and step 9 does not mint the key, so nothing satisfies a
+        # request this loop had been passing over.
+        if key is not None and not key.required and name not in requested:
             continue
         stored = credentials.value(service, name)
         if stored is None:
@@ -183,7 +196,8 @@ def schema_for(service: str) -> secretschema.Schema:
     return secretschema.read(paths.service_home(service) / manifest.schema)
 
 
-def mint_generated(entry: registry.Registry, schema: secretschema.Schema, now: str) -> list[str]:
+def mint_generated(entry: registry.Registry, schema: secretschema.Schema, now: str,
+                   external: tuple[str, ...] = ()) -> list[str]:
     """A value for every `@sensitive` key nothing has been planted for.
 
     spec 5.3 step 9, and only on a track with `gated = false`: a gated track gets
@@ -191,10 +205,16 @@ def mint_generated(entry: registry.Registry, schema: secretschema.Schema, now: s
     hide it. Minted once and stable until the service is removed — the registry's
     `[generated]` table is what makes that stable, and it is also the only record
     that the value was minted rather than planted.
+
+    **`external` names the keys whose value is issued somewhere else** — a `via:
+    tunnel` edge's vendor token (ADR-0027). Minting one here would plant exactly
+    the unusable value the edge stopped planting, reached through the schema
+    instead of the edge, so those keys are left unsatisfied for an operator.
     """
     minted: list[str] = []
+    issued = set(external)
     for key in schema.keys:
-        if not key.sensitive or key.name in entry.generated:
+        if not key.sensitive or key.name in entry.generated or key.name in issued:
             continue
         if credentials.planted(entry.service, key.name):
             continue

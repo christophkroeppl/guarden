@@ -1737,8 +1737,10 @@ def _secret_requests(
     `/run/secrets/<KEY>`. A key whose application needs a variable gets
     `type=env`, which is what the schema's `@type env` means. An edge adds its
     own key under the `as` prefix — `<AS>_PASSWORD` for `auth: database`,
-    `<AS>_SECRET` for `auth: secret` — so the credential the mutator planted is
-    a credential the unit actually asks for.
+    `<AS>_SECRET` for `auth: secret` — so the credential the mutator plants is
+    a credential the unit actually asks for. **A `via: tunnel` edge is the one
+    edge whose plant never happens** (ADR-0027): its token is the vendor's, so
+    the request is written and nothing satisfies it until an operator plants it.
 
     **There is no `LoadCredentialEncrypted=`**, and a test asserts the absence.
     These units run in the *service user's* user manager, which cannot read the
