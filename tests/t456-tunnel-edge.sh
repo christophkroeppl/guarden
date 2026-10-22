@@ -63,6 +63,7 @@ assert_file_has "$render/units/web.container" "Secret=API_SECRET,type=mount"
 # publication. A name that reached `AddHost=` would resolve to this host's own
 # loopback alias and dial a service that is not here.
 assert_file_lacks "$render/units/web.container" "AddHost="
+assert_file_exists "$render/system/guarden-order.target"
 assert_file_lacks "$render/system/guarden-order.target" "orders"
 assert_file_lacks "$render/units/web.container" "PublishPort="
 

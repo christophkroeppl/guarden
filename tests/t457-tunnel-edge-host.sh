@@ -152,12 +152,14 @@ assert_file_has "$unit_dir/web.container" "Secret=API_SECRET,type=mount"
 # Nothing resolves a public name through this host's alias, and there is no
 # local unit for the edge to start.
 assert_file_lacks "$unit_dir/web.container" "AddHost="
+assert_file_exists /etc/systemd/system/guarden-order.target
 assert_file_lacks /etc/systemd/system/guarden-order.target "orders"
 
 # --- 3. the firewall is unchanged -------------------------------------------
 #
 # No rule names 443: the consumer reaches the vendor's edge as any client does,
 # and a grant on this host would be a rule nothing sends a packet to.
+assert_file_exists "$services"
 assert_file_lacks "$services" "--dport 443"
 assert_file_lacks "$services" "dport 443 "
 

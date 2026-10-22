@@ -1108,8 +1108,9 @@ def tunnel_hosts(
 
     The hostname was the **manifest's** — the producer is another host's service,
     so nothing here can derive it — and the mutator recorded it when it installed
-    the edge. The record is what both the render and `weedr service list` answer
-    from, for the same reason a publication is: one value, one holder.
+    the edge. The record is the authority (spec 3.4) and the render reads it, for
+    the same reason it reads a publication rather than deriving one: a value with
+    one holder is a value with one answer.
 
     A tunnel edge with no recorded hostname is exit `1` — the host has not been
     asked yet — rather than a name the renderer invented and nobody else holds.
