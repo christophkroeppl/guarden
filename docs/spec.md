@@ -1646,7 +1646,9 @@ In order:
 9. For a track with `gated = false`, a generated value for every `@sensitive` key the schema
   declares and no value has been planted for — minted once, stable until the service is
   removed, and visible in `weedr service list` as generated. A gated track gets no generated
-  value: there, a missing key is a gate failure, and generating one would hide it.
+  value: there, a missing key is a gate failure, and generating one would hide it. **A key a
+  `via: tunnel` edge asks for is not minted here either** (ADR-0027): its value is the vendor's,
+  and a minted one would be the unusable placeholder the edge itself no longer plants.
 10. For a `database` edge, **one role named after the consumer and one database per name the
   edge declares** — `<consumer>` when the manifest names none, `<consumer>-<name>` per entry in
   `databases:` — a minted password planted as a podman secret in the **consumer's** store, and

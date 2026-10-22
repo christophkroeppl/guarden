@@ -527,9 +527,17 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # spec 5.3 step 9: on an ungated track every `@sensitive` key nothing has been
     # planted for gets a value minted once, so a poke is never blocked on a human.
     # A gated track gets none — there a missing key is a gate failure, and
-    # generating one would hide exactly what the gate is for.
+    # generating one would hide exactly what the gate is for. **A key a `via:
+    # tunnel` edge asks for is the vendor's and is not minted either** (ADR-0027):
+    # the edge plants nothing, and a minted value of the same name would be the
+    # placeholder this ticket removed, reached through the schema instead.
     if not resolved.track.gated:
-        gate.mint_generated(record, gate.schema_for(resolved.name), now)
+        external = tuple(
+            edges.credential_key(edge.auth, edge)
+            for edge in manifest.needs
+            if edge.tunnelled and edge.auth != edges.AUTH_NONE
+        )
+        gate.mint_generated(record, gate.schema_for(resolved.name), now, external)
 
     retention = volumes.retention_from(resolved.track, granted)
     for vol in manifest.state:

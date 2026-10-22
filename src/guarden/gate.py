@@ -184,7 +184,8 @@ def schema_for(service: str) -> secretschema.Schema:
     return secretschema.read(paths.service_home(service) / manifest.schema)
 
 
-def mint_generated(entry: registry.Registry, schema: secretschema.Schema, now: str) -> list[str]:
+def mint_generated(entry: registry.Registry, schema: secretschema.Schema, now: str,
+                   external: tuple[str, ...] = ()) -> list[str]:
     """A value for every `@sensitive` key nothing has been planted for.
 
     spec 5.3 step 9, and only on a track with `gated = false`: a gated track gets
@@ -192,10 +193,16 @@ def mint_generated(entry: registry.Registry, schema: secretschema.Schema, now: s
     hide it. Minted once and stable until the service is removed — the registry's
     `[generated]` table is what makes that stable, and it is also the only record
     that the value was minted rather than planted.
+
+    **`external` names the keys whose value is issued somewhere else** — a `via:
+    tunnel` edge's vendor token (ADR-0027). Minting one here would plant exactly
+    the unusable value the edge stopped planting, reached through the schema
+    instead of the edge, so those keys are left unsatisfied for an operator.
     """
     minted: list[str] = []
+    issued = set(external)
     for key in schema.keys:
-        if not key.sensitive or key.name in entry.generated:
+        if not key.sensitive or key.name in entry.generated or key.name in issued:
             continue
         if credentials.planted(entry.service, key.name):
             continue

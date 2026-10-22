@@ -33,8 +33,17 @@ Three options were open (plant nothing; keep the placeholder and mark it as mint
 keep it and document the consequence). **Planting nothing is the decision**, for the
 reason §6.6 already states about a gated track's schema keys: *a generated value would
 hide exactly the condition this exists to catch*. A vendor-issued token is the same
-condition with a vendor in the issuer's place, and the other two options keep the lie
-and describe it:
+condition with a vendor in the issuer's place.
+
+The decision has a second half, and it is the shape a repository actually writes:
+**§5.3 step 9's mint skips a key a tunnel edge asks for.** On an ungated track the mint
+gives every `@sensitive` schema key a value, and a repository may well declare the key
+it reads as `API_SECRET` — the same key the edge's `as:` prefix derives. Without the
+skip, an ungated consumer that declares the key would get a minted value for a request
+only the vendor can satisfy: the same placeholder, reached through the schema instead
+of the edge.
+
+The other two options keep the lie and describe it:
 
 - **A minted marker is the same refusal with a lie kept.** The gate cannot distinguish
   the value by looking at it, so the store would have to carry a new field saying

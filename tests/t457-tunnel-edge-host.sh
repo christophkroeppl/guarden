@@ -200,6 +200,21 @@ assert_stderr_has "weedr secret set $consumer API_SECRET"
 assert_stdout_empty
 assert_file_missing "/etc/guarden/creds/$consumer/API_SECRET.cred"
 
+# **A schema key with the same NAME is not a second credential.** The renderer
+# derives `Secret=API_SECRET` from the edge, and a repository also declaring the
+# key it reads is a natural shape; step 9 mints every `@sensitive` key on an
+# ungated track (spec 5.3), so without ADR-0027's second half the mint would
+# plant the placeholder the edge no longer plants — through the schema rather
+# than the edge. The key is the vendor's, so nothing mints it.
+seed "$tree/.guarden/service.yml" "project: tunneled" "units: .guarden/quadlet/" \
+    "schema: .guarden/.env.schema" "state:" "  - data" "needs:" \
+    "  - service: orders" "    as: api" "    auth: secret" "    via: tunnel" \
+    "    hostname: orders.tunnel.example.net"
+seed "$tree/.guarden/.env.schema" "// @defaultSensitive=true" "// @defaultRequired=true" "" "// API_SECRET"
+run weedr service ingest "$consumer" --from poke tunneled@9f2c1ab
+assert_exit 0
+assert_file_missing "/etc/guarden/creds/$consumer/API_SECRET.cred"
+
 # **The gated track is where the placeholder used to open the door.** The same
 # poke on `production` is a service whose gate must hold: a minted value made
 # this `ready`, the container started, and the producer's route met the vendor's
