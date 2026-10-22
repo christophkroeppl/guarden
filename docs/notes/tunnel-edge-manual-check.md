@@ -10,9 +10,11 @@ answered by two suites:
   unchanged. Staged host, no VM state.
 - `tests/t457-tunnel-edge-host.sh` — the mutator's half and the machine's: the
   registry record, the refusal for a producer recorded `loopback`, `50-services.conf`
-  naming no `443`, and a real container in a pasta namespace, with the firewall
-  loaded: the consumer's own uid resolves a public name through its stub-resolver
-  accept and a uid with no accept is dropped.
+  naming no `443`, the credential that is a request and not a plant (a gated
+  consumer's gate holds until an operator plants the token, an ungated one's start
+  refuses with the key and the command), and a real container in a pasta namespace,
+  with the firewall loaded: the consumer's own uid resolves a public name through
+  its stub-resolver accept and a uid with no accept is dropped.
 
 ## What they cannot answer
 
@@ -115,8 +117,10 @@ needs:
 
 3. `weedr service ingest <consumer>-<track> …`, then
    `weedr secret set <consumer>-<track> API_SECRET` with the vendor's Access service
-   token (guarden minted a placeholder when it planted the edge's credential; the
-   token is the vendor's to issue, and `weedr secret set` replaces the placeholder).
+   token. **Guarden plants nothing for this edge** (ADR-0027): the token is the vendor's
+   to issue and guarden cannot mint one that works, so the key is a request with no
+   value until this command runs. On a gated track the gate holds and names the key;
+   on an ungated track `weedr service start` refuses naming the key and this command.
 4. From inside the consumer's container, the round trip:
 
    ```
