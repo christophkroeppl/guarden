@@ -780,7 +780,14 @@ installed_by = "gate-traefik"  # the module that created this service, or absent
   # `weedr module remove` answerable, and it is the reason modules
   # record provenance at all: without it "a service the module
   # installed is not the module's own" has nothing to consult
-deployed_sha = "9f2c1ab"
+deployed_sha = "9f2c1ab"  # the poke commit the service's own deploy came from — the
+  # staged tree this record describes, as the caller names it. Written by the
+  # ingest that installed it, beside the record's source hash. An instance's
+  # deploy is the instance's and does not write it, and a service no poke has
+  # deployed (`add`, `create`, a module) has none: absent is a state, not a gap.
+  # It is a REPORT and never a decision. The sha is the caller's claim, nothing
+  # checks the tree against it, and no program answers "has this changed" from
+  # it (§6.6, §6.7)
 basicauth = true  # the default edge login (basic auth) was minted for this service at
   # creation, while the gate module's policy was in force. Absent
   # is a service created before the policy — grandfathered, with
@@ -2837,7 +2844,8 @@ The steps, in this order, and the order is the point :
    stops at the gate and exits `0` (§6.6 step 5), while an ungated track's deploy reaches the
    start, and the start is the one that refuses.
 4. Stop the units.
-5. Install the rendered units, record the sha, reload the user manager, and then **start only if
+5. Install the rendered units, record the poke's sha in the service's record (§3.4), reload the
+  user manager, and then **start only if
   step 3 recorded `ready` or `not-required`.** A blocked gate stops the sequence here: the units
   are installed, the user manager is reloaded, the container is not started, and `furrow`
   reports the `[gate] reason` and exits `0`. `furrow` does **not** call `weedr service start` on a

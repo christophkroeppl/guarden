@@ -566,6 +566,9 @@ def create(
     # is the only copy a consumer can read: the provider's own tree is 0700 to
     # the provider and loom runs as guarden.
     record.provides = list(manifest.provides)
+    # An instance's deploy is the instance's; this field is the service's own (spec 3.4).
+    if source.kind == "poke" and source.sha and not resolved.escaped_ref:
+        record.deployed_sha = source.sha
     if source_hash and not resolved.escaped_ref:
         record.source_hash = source_hash
     # spec 3.4: what the manifest asked for, in manifest order. A grant is matched
