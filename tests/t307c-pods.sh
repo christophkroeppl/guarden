@@ -233,11 +233,14 @@ echo "MEASURE: what the host fetched from the pod's publication $web_pub: $(cat 
 #
 # Quadlet translates `Pod=` into a service dependency between the two units, so
 # the ordering is the generator's and not a `[Unit]` block a repository wrote.
-run systemctl --user --machine "$svc@" cat "$svc-web.service"
-assert_exit 0
-echo "MEASURE: the generated dependencies of a pod member: $(tr '\n' '|' <"$GUARDEN_STDOUT" | cut -c1-400)"
-assert_stdout_has "Requires=podprobe-pod.service"
-assert_stdout_has "After=podprobe-pod.service"
+# The generated unit is read from the manager's own generator output, because
+# `systemctl --user --machine <name>@ cat` answers "Cannot remotely cat units".
+generated=/run/user/"$svc_uid"/systemd/generator
+assert_file_exists "$generated/$svc-web.service"
+assert_file_has "$generated/$svc-web.service" "Requires=podprobe-pod.service"
+assert_file_has "$generated/$svc-web.service" "After=podprobe-pod.service"
+assert_file_has "$generated/$svc-worker.service" "Requires=podprobe-pod.service"
+echo "MEASURE: the pod member's generated dependencies: $(grep -E '^(Requires|After)=' "$generated/$svc-web.service" | tr '\n' ' ')"
 
 run weedr service stop "$svc"
 assert_exit 0
