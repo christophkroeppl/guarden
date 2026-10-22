@@ -159,6 +159,8 @@ assert_no_error
 assert_file_exists "$registry/shop-web-production.toml"
 assert_file_exists "$registry/shop-api-production.toml"
 assert_file_exists "$registry/shop-worker-api-production.toml"
+# A blocked gate stops the START, not the install: the commit is recorded anyway.
+assert_file_has "$registry/shop-web-production.toml" 'deployed_sha = "9f2c1ab"'
 
 run hose --project shop poke main 9f2c1ab <"$multi_tar"
 assert_exit 0
