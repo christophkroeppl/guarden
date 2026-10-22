@@ -98,13 +98,14 @@ def main(argv: list[str]) -> int:
     )
     check(
         edge == "staging.web",
-        f"the allocator computes {edge!r} for the staging track, not `staging.web`",
+        f"the allocator computes {edge!r} for the staging track; "
+        f"the expected name is `staging.web`",
     )
     check(
         production == "web",
-        f"the allocator computes {production!r} for the production track, not the bare label",
+        f"the allocator computes {production!r} for the production track; "
+        f"the expected name is the bare label `web`",
     )
-
     # 2. The spec does not offer the shape the allocator never produced.
     check(
         "web.myapp.com" not in four,
@@ -119,11 +120,13 @@ def main(argv: list[str]) -> int:
     #    empty, so its tunnel name carries no prefix.
     check(
         tunnel == "web.tunnel.example.net",
-        f"the allocator computes {tunnel!r} for a tunnel route, not `web.tunnel.example.net`",
+        f"the allocator computes {tunnel!r} for a tunnel route; "
+        f"the expected name is `web.tunnel.example.net`",
     )
     check(
         instance == "preview.web",
-        f"the allocator computes {instance!r} for a preview instance, not `preview.web`",
+        f"the allocator computes {instance!r} for a preview instance; "
+        f"the expected name is `preview.web`",
     )
     for example, where, name in (
         ("staging.web", four, "§4"),
