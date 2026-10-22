@@ -2,8 +2,8 @@
 # `needs:` over the tunnel hostname — the MUTATOR's half and the machine's
 # (ticket 307f T2, spec 4, 7.3, 7.6).
 #
-# A `via: tunnel` edge names a service on ANOTHER host. Three things follow, and
-# this suite is all three:
+# A `via: tunnel` edge names a service on ANOTHER host. Three properties follow,
+# and this suite checks all three:
 #
 #   1. **the host records the name and allocates nothing.** `weedr service
 #      ingest` writes the edge's `via` and `hostname` into the consumer's
@@ -13,9 +13,11 @@
 #      route has to be published `tunnel`; a producer recorded `loopback`
 #      publishes no name a consumer could dial, and the ingest is refused before
 #      it leaves a user, a home and a subvolume behind (spec 4, `edges.check`);
-#   3. **the firewall is untouched.** The consumer is a client of the other
-#      host's ingress, so nothing here accepts its uid on a publication and no
-#      rule in `50-services.conf` names `443`.
+#   3. **the rendered firewall set is untouched.** The consumer is a client of
+#      the other host's ingress, so nothing here accepts its uid on a publication
+#      and no rule in `50-services.conf` names `443`. (The suite loads that set
+#      later, for the lookup below — loading it is what makes the measurement
+#      mean anything, and the set it loads carries no rule for this edge.)
 #
 # **A container in a pasta namespace resolves a public name with the policy in
 # force, and a uid with no accept does not — measured.** pasta forwards a
