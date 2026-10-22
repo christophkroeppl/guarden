@@ -58,12 +58,17 @@ cleanup() {
     # where a service lives, and an entry left in one of them is a service the
     # next suite inherits -- which is the whole defect this teardown exists to
     # end.
-    assert_no_service_left || rc=1
+    assert_no_service_left homepage-production traefik-production postgres-staging \
+        quadlet-app-staging || rc=1
     return "$rc"
 }
 trap cleanup EXIT
 
-cleanup
+# The pre-run call CLEARS and never reports: it removes what a previous run of
+# THIS suite left behind, and a failure there is not this run's failure. The
+# `|| true` is load-bearing -- under `set -e` a bare call would end the suite
+# before its first assertion, for a leftover that is not this suite's.
+cleanup || true
 
 # The host configuration below names `operator` as `host.admin_user`, and the
 # firewall renders the edge's API accept set with that account's uid. On a real

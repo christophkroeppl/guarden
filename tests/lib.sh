@@ -748,10 +748,13 @@ assert_no_snapper_config() {
 #
 # **The moved volume counts too.** `weedr service remove` does not destroy a
 # volume: it RENAMES it to `/var/lib/guarden/removed/<service>/<when>/<volume>`
-# and leaves the configuration in place, for `soil storage` to remove. A
-# teardown that only looked at the live tree would not see that
-# configuration, and the name would survive under a name a later suite
-# reuses — which is the whole defect ticket 354 measured.
+# and leaves the configuration in place, for `soil storage` to remove. The
+# configuration still records the OLD path — `os.rename` moves the directory
+# entry and nothing rewrites the configuration's `SUBVOLUME` (snapper refuses
+# that key outright), so this arm is not what finds the configuration; it is
+# what finds a volume that a `remove` moved out of the tree this walk
+# otherwise sees. A name that survived is the whole defect ticket 354
+# measured.
 snapper_configs_of() {
     local path name subvolume service
     for path in /etc/snapper/configs/*; do
@@ -830,20 +833,68 @@ remove_snapper_configs() {
 # Two states, because one check cannot see the other. The directory walk catches
 # a configuration file that survived; the registry check catches a NAME that
 # survived with no file, which `list-configs` hides and `create-config` refuses.
+#
+# **It RETURNS non-zero when it reports a failure.** A helper that prints an
+# error and returns 0 is a helper whose caller cannot act on it: `purge` calls
+# this with `|| failed=1`, and a `return 0` there makes that line dead code --
+# the promise is printed and nothing fails. Measured: the `_fail` calls are
+# inside an `if` body and inside a `||` list, so neither one is the function's
+# last command, and the function returned 0 with the error on stderr.
 assert_no_snapper_configs() {
-    local names file name orphan=''
+    local names file name orphan='' failed=0
     names=$(snapper_configs_of "$@") \
-        || _fail "snapper could not be asked, so no configuration can be ruled out for: $*"
-    [ -z "$names" ] || _fail "snapper configuration(s) left after the purge: $(printf '%s ' $names)"
+        || { _fail "snapper could not be asked, so no configuration can be ruled out for: $*"; failed=1; }
+    if [ -n "$names" ]; then
+        _fail "snapper configuration(s) left after the purge: $(printf '%s ' $names)"
+        failed=1
+    fi
     if file=$(_snapper_registry); then
         for name in $(
             sed -n 's/^SNAPPER_CONFIGS="\{0,1\}\([^"]*\)"\{0,1\}.*/\1/p' "$file"
         ); do
             [ -e "/etc/snapper/configs/$name" ] || orphan="${orphan:+$orphan }$name"
         done
-        [ -z "$orphan" ] \
-            || _fail "snapper configuration name(s) still registered with no file, so a later create-config will refuse them: $orphan"
+        if [ -n "$orphan" ]; then
+            _fail "snapper configuration name(s) still registered with no file, so a later create-config will refuse them: $orphan"
+            failed=1
+        fi
     fi
+    [ "$failed" = 0 ] || return 1
+    return 0
+}
+
+# _remove_service_tree <path>: a service's tree, gone -- subvolumes and all.
+#
+# **A btrfs subvolume is DELETED, not removed.** `rm -rf` on one leaves the
+# subvolume itself behind and the filesystem's accounting of it wrong, and it
+# fails outright on a subvolume carrying a read-only snapshot -- the
+# `.snapshots` subtree snapper owns, which is inside every `state` volume.
+# Measured: `rm: cannot remove '.../data/.snapshots/1/snapshot/file': Read-only
+# file system`, rc=1, and the tree survives.
+#
+# The product deletes a subvolume with btrfs's own ioctl
+# (`src/guarden/clone.py`, `_remove_clone`), and a teardown that cannot
+# delete a service's volume leaves the whole service behind -- which is the
+# defect this whole change exists to end.
+#
+# **The subvolumes are found by the LAYOUT, not by parsing a listing.** A
+# service's tree holds its volumes at `<tree>/state/<vol>` and
+# `<tree>/bulk/<vol>`, and an instance's at
+# `<tree>/instances/<ref>/{state,bulk}/<vol>` (`src/guarden/paths.py`,
+# `paths.volume`; the tree is built in `src/guarden/service.py`). The
+# `state` and `bulk` directories are themselves plain directories, so the
+# volumes under them are the subvolumes -- and the `.snapshots` subtree
+# inside a `state` volume is snapper's, removed with it.
+_remove_service_tree() {
+    local root=$1 volume
+    [ -e "$root" ] || return 0
+    for volume in "$root"/state/* "$root"/bulk/* \
+        "$root"/instances/*/state/* "$root"/instances/*/bulk/*
+    do
+        [ -e "$volume" ] || continue
+        btrfs subvolume delete "$volume" >/dev/null 2>&1 || :
+    done
+    rm -rf "$root"
 }
 
 # purge <service>...: take a service off the machine, whole.
@@ -885,15 +936,23 @@ purge() {
     remove_snapper_configs "$@" || failed=1
     for service in "$@"; do
         paths=(
-            "/var/lib/guarden/services/$service"
             "/etc/guarden/services/$service"
             "/etc/guarden/creds/$service"
             "/var/lib/guarden/registry/$service.toml"
             "/var/lib/guarden/shared/$service"
-            "/var/lib/guarden/removed/$service"
             "/var/lib/guarden/edge/basicauth/$service.htpasswd"
             "/var/lib/guarden/edge/dynamic/$service.yml"
         )
+        # **A btrfs subvolume is DELETED, not removed.** `rm -rf` on one leaves
+        # the subvolume itself behind and the filesystem's accounting of it
+        # wrong, and it fails outright on a subvolume carrying a read-only
+        # snapshot (the `.snapshots` subtree snapper owns) -- measured: `rm:
+        # cannot remove '.../data/.snapshots/1/snapshot/file': Read-only file
+        # system`. The product deletes a subvolume with btrfs's own ioctl
+        # (`src/guarden/clone.py`, `_remove_clone`), and a teardown that
+        # cannot delete a service's volume leaves the whole service behind.
+        _remove_service_tree "/var/lib/guarden/services/$service" || failed=1
+        _remove_service_tree "/var/lib/guarden/removed/$service" || failed=1
         # A process may still be exiting (`podman` on its way out from a
         # materialise), so the removal is retried before it is called a
         # failure.
@@ -945,38 +1004,40 @@ purge() {
     [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
 }
 
-# assert_no_service_left: the machine carries no service this run created.
+# assert_no_service_left <service>...: the machine carries no service of these
+# names.
 #
-# **This is the whole of what a teardown promises, stated about the machine
-# rather than about a name.** The four directories are where a service lives,
-# and an entry left in one of them is a service the NEXT suite inherits --
-# which is the defect ticket 357 measured: one suite's deploy left a route
-# host claimed, and the suite after it was refused by the allocator for a
-# reason that named neither.
+# **It takes NAMES, and it is per name and not per directory.** A directory-wide
+# check would fail a suite that ran on a machine where ANOTHER suite's service
+# was still there -- which is the very contamination this work ends, and not a
+# fact about this suite. A name that survives is this suite's failure; a name
+# this suite never touched is not. Sixty other suites create services and have
+# no teardown at all, so a machine-wide check would make these three fail
+# before their own first assertion, for a leftover that is not theirs.
 #
 # `root` is snapper's own configuration and belongs to no service, so it
 # stays; every other configuration is a service's.
-#
-# It is a separate helper from `purge` because it is a different claim: a
-# purge removes the names it was given, and this asks about the MACHINE. A
-# suite that has a teardown and no service of its own still wants the second.
 assert_no_service_left() {
-    local failed=0 dir config
-    for dir in /var/lib/guarden/services /var/lib/guarden/registry /etc/guarden/creds; do
-        [ -d "$dir" ] || continue
-        if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-            _fail "$dir still holds $(ls -A "$dir" | tr '\n' ' ')after the suite"
-            failed=1
-        fi
-    done
-    if [ -d /etc/snapper/configs ]; then
-        for config in /etc/snapper/configs/*; do
-            [ -e "$config" ] || continue
-            [ "${config##*/}" = root ] && continue
-            _fail "snapper configuration ${config##*/} survived the suite"
-            failed=1
+    local failed=0 service config
+    for service in "$@"; do
+        for config in "/var/lib/guarden/services/$service" \
+            "/etc/guarden/services/$service" \
+            "/etc/guarden/creds/$service" \
+            "/var/lib/guarden/registry/$service.toml" \
+            "/var/lib/guarden/shared/$service" \
+            "/var/lib/guarden/removed/$service"
+        do
+            if [ -e "$config" ]; then
+                _fail "$config survived the suite"
+                failed=1
+            fi
         done
-    fi
+    done
+    # The snapper configuration of a name this suite created, and no other
+    # name's: `snapper_configs_of` asks which configurations point into this
+    # service's trees, so a configuration left under another service's name is
+    # not this suite's business.
+    assert_no_snapper_configs "$@" || failed=1
     [ "$failed" = 0 ] || return 1
     return 0
 }
