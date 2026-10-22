@@ -1281,8 +1281,8 @@ Validation rules:
 - `widgets` must name a container the unit source defines, and the file must exist.
 - `as` must be unique within the manifest, because it is the prefix of generated variables.
 - A self-edge is refused.
-- Exactly one of `compose.yaml` at the root and `.guarden/quadlet/` must exist. Both present
-  is ambiguous; neither present names both accepted locations.
+- Exactly one of `compose.yaml` at the app's root and that app's `.guarden/quadlet/` must exist.
+  Both present is ambiguous; neither present names both accepted locations.
 - The manifest may not contain a key that **records** a grant, nor one expressing a build
   priority, a snapshot priority, a resource cap or weight, or a data source. Each is refused by
   name. `ports:` is a request and is legitimate; a key that records an open host port is not.
