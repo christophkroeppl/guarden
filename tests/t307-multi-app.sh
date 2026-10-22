@@ -286,9 +286,15 @@ assert_file_has "$registry/shop-api-production.toml" 'state = "blocked"'
 # than a count: `api` sorts before `web`, so an implementation that fell back to
 # the queue's name ordering would deploy the consumer first and refuse it for a
 # provider that does not exist yet.
-web_line=$(grep -n "ensure shop-web-production" "$GUARDEN_STDOUT" | cut -d: -f1)
-api_line=$(grep -n "ensure shop-api-production" "$GUARDEN_STDOUT" | cut -d: -f1)
-worker_line=$(grep -n "ensure shop-worker-api-production" "$GUARDEN_STDOUT" | cut -d: -f1)
+# **The padding is part of the needle.** `_step` writes `f"{name:<7} {detail}"`,
+# so a step name is padded to seven columns and then followed by ONE space —
+# `ensure` is six characters, so the line carries two spaces between the step
+# and the service. A literal `ensure shop-…` matches nothing and would make the
+# `[ -n ]` guard below the only thing between this suite and a vacuous pass.
+web_line=$(grep -nE 'ensure +shop-web-production' "$GUARDEN_STDOUT" | cut -d: -f1 || true)
+api_line=$(grep -nE 'ensure +shop-api-production' "$GUARDEN_STDOUT" | cut -d: -f1 || true)
+worker_line=$(grep -nE 'ensure +shop-worker-api-production' "$GUARDEN_STDOUT" \
+    | cut -d: -f1 || true)
 [ -n "$web_line" ] || _fail "the deploy never ensured shop-web-production"
 [ -n "$api_line" ] || _fail "the deploy never ensured shop-api-production"
 [ -n "$worker_line" ] || _fail "the deploy never ensured shop-worker-api-production"
