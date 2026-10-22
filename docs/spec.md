@@ -302,9 +302,10 @@ program writes into is `0770`; a directory it only reads is `0750`.
 | `/etc/ssh/authorized_keys.d/hose` | `0644` | `root` | |
 | `/etc/containers/`, `/etc/containers/systemd/`, `/etc/containers/systemd/users/` | `0755` | `root:root` | `weedr service add`/`ingest`, creating the uid-scoped search path. **Traversable by every uid, because the generator walks it as the service user** — a `0750` would refuse the service its own units, and the umask's answer is not a mode (the same defect `/var/lib/guarden` had) |
 | `/etc/containers/systemd/users/<uid>/` | `0755` | `root:root` | `weedr service add`/`ingest`. The same traverse grant, one level down: the generator reads it as the service user |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/` | `0755` | `root:root` | the mutator, installing the keep-id drop-in. One directory per unit, and the admin's own file in it is never touched |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | `0644` | `root:root` | the mutator, on the install that renders the pin. **World-readable, and that is the point**: the generator reads this path as the service user, and a root-owned `0600` file there yields NO generated unit at all (measured: `probe-quadlet-dropins.md` row 10). Nothing secret is in it — a `UserNS=` line names a uid and a gid — and root alone writes it |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3). **The renderer READS it** — `render._dropins` merges every `*.conf` in this directory into the unit before generation, which is what makes an operator's `MemoryMax=` survive a regeneration (§6.3, ADR-0024) |
+| `/etc/containers/systemd/users/<uid>/<pod>.pod.d/` | `0755` | `root:root` | the mutator, installing the keep-id drop-in. One directory per pod, and the admin's own file in it is never touched |
+| `/etc/containers/systemd/users/<uid>/<pod>.pod.d/50-guarden-keepid.conf` | `0644` | `root:root` | the mutator, on the install that renders the pin. **World-readable, and that is the point**: the generator reads this path as the service user, and a root-owned `0600` file there yields NO generated unit at all (measured: `probe-quadlet-dropins.md` row 10). Nothing secret is in it — a `UserNS=` line names a uid and a gid — and root alone writes it |
+| `/etc/containers/systemd/users/<uid>/<pod>.pod.d/90-admin.conf` | whatever the admin chose | `root:root` | **nobody but the admin.** guarden never writes it and never deletes it; the alphabetical order is what makes it override the pin (§6.3). **The renderer READS it** — `render._dropins` merges every `*.conf` in this directory into the unit before generation, which is what makes an operator's `MemoryMax=` survive a regeneration (§6.3, ADR-0024) |
+| `/etc/containers/systemd/users/<uid>/<container>.container.d/90-admin.conf` | whatever the admin chose | `root:root` | the admin's per-container file, the same rule one level down: guarden never writes it, the renderer merges it into that container's own unit, and a `UserNS=` line in it names a namespace a container in a pod cannot carry (§7.1) |
 | `/tmp` | `1777` | `root:root` | **not the conversion's**: `systemd-tmpfiles`, through `q /tmp 1777 root root 10d` in the distribution's `/usr/lib/tmpfiles.d/tmp.conf`, applied to the `@tmp` subvolume the conversion mounts at it. `btrfs subvolume create` makes `@tmp` `0755` and nothing guarden does would change that, because the mode is the distribution's row and its owner is tmpfiles — the conversion that created the subvolume is not the thing that owns the mode on it |
 
 `/run/guarden/locks/` is `2770 root:guarden` because `guarden` and root both take these locks
@@ -740,6 +741,8 @@ workload  = "myapp"  # the part of the service name before the environment
 project  = "myapp"  # the manifest's project, or the project its --from source
   # belongs to. Never a path basename: under the new layout the
   # staging directory's basename is a sha
+app  = ""  # the app's root as the source tree spells it — `apps/api` for a named app, and
+  # the empty string for the tree root, which is every single-app service (§5.3)
 environment  = "production"
 uid  = 1004
 created  = "2026-09-29T10:12:00Z"
@@ -868,6 +871,12 @@ or the source service's project for `--from <service>`. The instance cap
 counts per **preview service**, which is per workload and environment — never per project,
 because two repositories may declare the same project name.
 
+`app` is the app's root as the source tree spells it — `apps/api`, and the empty string for the
+tree root — because a service's record has to say which app of a multi-app source it came from
+(§5.3). It is a path and not a name: the app's name is the middle segment of the service name,
+and the two agree by construction because the name is what the app was resolved from. A record
+that predates apps reads back as the empty string, which is exactly the single-app service it is.
+
 The registry is the single record of a service's identity, its edges, its publications, its
 lineage and its ports. It is a **projection**: anything derivable from the manifest and the
 host is recomputed, and only what cannot be — the uid, the sha, the allocated ports, the
@@ -973,13 +982,41 @@ programs are shared and ship with guarden.
 
 ## 4. The project manifest
 
-`.guarden/service.yml` at the repository root.
+`.guarden/service.yml` at the root of an **app**, and an app is a directory. A repository that
+holds one app at its root — the shape every repository had before apps existed — has the file at
+`<repository>/.guarden/service.yml`; a repository that ships several apps puts one such file in
+each app's directory, at any depth (`apps/web/.guarden/service.yml`,
+`services/api/.guarden/service.yml`).
+
+An app is found by that file's location and by nothing else. There is no index and no `apps:`
+list, because a list is a second declaration that goes stale: an app the tree ships and the list
+forgets is an app that silently never deploys. The app's **name** is the last path component of
+the directory holding the manifest, and the app at the repository root has the **empty** name.
+The name is a path component and not a path, so the roots may sit at any depth and `apps/web` is
+the app `web`.
+
+Three rules follow, and each is a fact about the tree rather than a preference:
+
+- **An app's name is the middle segment of its service's name** (§5.3), so it must match
+  `^[a-z0-9][a-z0-9._-]*$`. A directory whose name cannot is refused, exit `2`, naming the
+  directory.
+- **Two apps in one repository may not share a name**, and the refusal names both directories.
+  Two roots called `web` would name one service twice, and the second deploy would land on the
+  first one's service carrying the other tree's manifest.
+- **An app may sit inside another app's tree**, and the two are two services: the outer app's tree
+  contains the inner one's files, which is a fact about the repository its build context has to
+  live with rather than a second declaration.
 
 ```yaml
 project: myapp  # optional; defaults to the project the --from source
   # belongs to, never to a path basename
 
 units: compose.yaml  # or: units: .guarden/quadlet/ — exactly one
+
+pod:  # the one network namespace this app's containers share (§7.1)
+  name: myapp  # OPTIONAL. The pod's name, and the only name a `networks:` entry
+  # in the unit source may carry. Defaults to the workload: `<project>` for the
+  # app at the tree root, `<project>-<app>` for a named one (§5.3).
 
 state:  # snapshotted: a btrfs subvolume with a snapper configuration
   - data
@@ -1060,7 +1097,8 @@ Validation rules:
 - Unknown top-level keys are refused, and so are unknown keys **inside** a known one. Each
   block has a closed key set: a `needs` entry takes `service`, `as`, `port`, `auth` and
   `databases` and nothing else; a `routes`, `ports` or `siblings` entry takes `container` and
-  `port`; a `firewall` entry
+  `port`; a `pod` block takes `name` and nothing else, and `name` is a name and not a path; a
+  `firewall` entry
   takes `name`, `chain` and `rule` and nothing else; a
   `widgets` entry
   takes `container` and `file`; a `scrub:` entry takes `tables` and `keys` and nothing else, a
@@ -1092,7 +1130,7 @@ Validation rules:
     It does **not** fire when guarden reads back a document it already holds — the copy of a
     manifest in an installed service's home, which `weedr service start`, `gate`, `restart`,
     `build` and `secret list` all read, and which the firewall render reads. The reason is
-    §1.2's own dividing line: §4 governs "`.guarden/service.yml` at the repository root", and
+    §1.2's own dividing line: §4 governs "`.guarden/service.yml` at the root of an app", and
     "the installed services" are on the **host** side of input against host. A rule that
     refused to read back the operator's own running service would make it unstartable and
     unmanageable — and the operator's staging postgres, the very service this rule is written
@@ -1329,7 +1367,9 @@ its own store.
 A service name is `<workload>-<environment>`, where the environment is the last
 `-`-separated segment and must name a track in the environment table. The workload may
 contain dashes, dots and digits. The whole name must match `^[a-z0-9][a-z0-9._-]*$`, must not
-exceed 31 characters — the Linux user-name limit — and must not contain `..`.
+exceed 31 characters — the Linux user-name limit — and must not contain `..`. A workload that
+comes from a repository's app is composed from the project and the app's name, and §5.3 is the
+one statement of how.
 
 `other-app-production` parses as workload `other-app` in `production`. There is no `--env`
 flag on `ingest` or `add`: the name carries the environment, so a name and an environment
@@ -1466,6 +1506,31 @@ A service's tree comes from exactly one of three places, and never from a path a
   weedr service create <name> [--env <environments>] [--template <template>]  root only
   └ manually create a new service from a template
 ```
+
+**The name carries the app as well as the project.** An app is a directory holding
+`.guarden/service.yml` (§4), and the service it deploys as is
+`<project>-<app>-<environment>` — or `<project>-<environment>` for the tree-root app, whose name
+is empty. The last `-` segment is the environment (§5.1) and the service name begins with the
+project, so an app's service is the project and the app joined by `-`, exactly as a single-app
+project's service is the project alone: `myapp` at the tree root deploys as `myapp-staging`, and
+`apps/api` of the same repository deploys as `myapp-api-staging` from the same staged tree.
+
+The app is **recovered from the name rather than passed beside it**. The name is the mutator's
+whole interface for a poke — `weedr service ingest <name> --from poke <project>@<sha>` — so a
+second argument naming the app would be a second way to say what the name already says, and the
+two could disagree. On `ingest`, where the project is an argument of the same command, the prefix
+is the project's and the suffix is the environment's, so nothing is guessed: a name that is
+neither `<project>-<environment>` nor `<project>-<app>-<environment>` is exit `2`. `add --from
+<service>` is the other case and needs no such rule — it copies one app's tree out of the source
+service, and the new name is the operator's (§5.1). The registry records the app's **root** as the
+source tree spells it — `apps/api`, and the empty string for the tree root — because a service's
+record has to say which app of a multi-app source it came from (§3.4); the app's *name* is in the
+service name and is not stored twice.
+
+A tree that ships an app the name does not match is refused, and the refusal names the apps the
+tree does ship — "no app called `api`" without that list sends the operator to the wrong
+directory: a poke for `myapp-api-staging` against a tree whose only app is at the root is a name
+and a repository that disagree, and neither of the two is the host's state.
 
 There is **no `--from <path>`**, and that is the whole security argument rather than a
 convention. A path is the one argument in this interface that can
@@ -2161,35 +2226,52 @@ to a podman object rather than a host path.
 
 `loom` **must** refuse rather than guess, with the code §1.2 gives each case.
 
-**The renderer owns the container's network backend.** Every generated unit carries
-`Network=pasta:` followed by the `[network] pasta_options` from `guarden.toml`, verbatim and in
-order, joined with commas — podman's documented separator: podman cuts the value at the first
-colon and splits the remainder on commas — and the renderer
-**replaces** any `Network=`, `PodmanArgs=`-adjacent network option or
+**The renderer owns the network backend, and there is one backend per pod.** The pod's own unit
+carries `Network=pasta:` followed by the `[network] pasta_options` from `guarden.toml`, verbatim
+and in order, joined with commas — podman's documented separator: podman cuts the value at the
+first colon and splits the remainder on commas — and every container unit of the app carries
+`Pod=<pod>.pod` and no `Network=` line at all, because podman refuses the two together and the
+namespace the containers share is the pod's (§7.1). The renderer
+**replaces** any `Network=`, `Pod=`, `PodmanArgs=`-adjacent network option or
 `network_mode` the unit source asked for rather than passing it through — the same treatment
 `PublishPort` gets, and for the same reason: a Compose `network_mode: host` that survived
-rendering would give a repository the host's whole network namespace, and a pasta option list
+rendering would give a repository the host's whole network namespace, a `Pod=` that survived
+would put a container in a namespace the repository chose, and a pasta option list
 that survived would let a repository remove the host mapping the connectivity model rests on.
-A unit source naming a backend other than `pasta` is refused with the key named.
+A unit source naming a backend other than `pasta` is refused with the key named, and so is a
+`.pod` unit file in a repository's `.guarden/quadlet/`: the pod's name and its membership come
+from the manifest and the source's own containers, so a repository that could ship the unit
+could name a namespace and choose who is in it.
 
-**A `networks:` declaration is refused, and this is where it differs from a backend.** The
+**A `networks:` declaration is pod membership, and it is checked rather than refused.** The
 renderer replaces a backend and a published port because it can regenerate each from host state;
-there is nothing to regenerate for a network. A guarden host has no shared podman network (§7.1),
-so a document-level `networks:` table names one that does not exist, and a service's `networks:`
-list is the membership claim that network would carry (§7.3). Both are refused by name with exit
-`2` on the repository's own declaration, before the converter is driven — a service naming a
-network it did not declare would otherwise reach the converter and come back as the converter's
-exit `1` for what is a rejected input (§1.2).
+there is nothing to regenerate for a network, and there is no network to name: the one namespace
+a container can be in is its own app's pod (§7.1). So the document-level `networks:` table is
+accepted when its only key is the pod's name and it states no options, and a service's `networks:`
+list is accepted when it names the pod — one entry, and the map form's value empty. Every other
+name is refused by name with exit `2` on the repository's own declaration, before the converter is
+driven — a service naming a network it did not declare would otherwise reach the converter and
+come back as the converter's exit `1` for what is a rejected input (§1.2) — and so is an entry
+that states options: `driver:`, `ipam:`, `external:`, `internal:`, `attachable:` and `labels:` each
+describe a network, and there is none. The diagnostic names the pod, because a name that cannot be
+granted must not silently do nothing.
 
-**The renderer owns the published-port set completely.** It strips every `PublishPort` line
-found in the unit source, from Compose or from hand-written quadlet, and regenerates the
-whole set from the grants and the allocations. Without this the grant model is advisory,
-because a Compose `ports:` entry becomes a `PublishPort=` line verbatim.
+**The renderer owns the published-port set completely, and the pod publishes it.** It strips every
+`PublishPort` line found in the unit source, from Compose or from hand-written quadlet, and
+regenerates the whole set from the grants and the allocations. Without this the grant model is
+advisory, because a Compose `ports:` entry becomes a `PublishPort=` line verbatim. In a pod the
+set is written into the pod's `[Pod]` table rather than into each member unit — podman publishes a
+pod's ports on the pod and refuses a `PublishPort=` on a container that belongs to one — and
+nothing on the host's side of that line changes: one publication per container, on `127.0.0.1`,
+with the same accept set (§7.4).
 
 The renderer refuses, with the directive named: `PodmanArgs=`, `--privileged`, `cap_add`,
 `cap_drop`, `devices`, `network_mode: host`, `pid: host`, `userns_mode`,
-`network_mode: container:`, and any host-path bind outside the service's own volumes,
-`/etc/guarden`, and the paths the admin listed in `mounts.allow`.
+`network_mode: container:`, `network_mode: service:`, and any host-path bind outside the
+service's own volumes, `/etc/guarden`, and the paths the admin listed in `mounts.allow`.
+`network_mode: service:` joins the list because a shared network namespace is what a pod is and
+the pod is the renderer's: a repository that could name another container's namespace could put
+its own container beside a service it does not own.
 
 **A resource cap or a weight is refused in this vocabulary too, and §4 is the one statement of
 the rule** (ticket 350). A repository that ships units rather than a `compose.yaml` writes
@@ -2250,14 +2332,25 @@ and nothing says so: the record holds no answer, so nothing contradicts the pin.
 operator's `weedr service start` is the supported way to start a service, and it re-renders
 first; the gap is between a rebuild and a start through any other door.
 
+**In a pod the pin is the pod's, and there is one pin per pod.** `UserNS=` describes a namespace,
+a container in a pod cannot state one of its own (§7.1), and so the line is rendered on the pod's
+unit rather than on each container's: ADR-0019's per-unit table collapses to one pair per pod, and
+a member container carries no `UserNS=` line at all. **A service whose containers' images resolve
+to different `(uid, gid)` pairs is refused**, naming both images and both pairs — one pin cannot
+serve two users, the second container's uid would land in the subuid band, and its `0700` volume
+would not be its own. That is the per-image table's old job and it is refused rather than absorbed,
+because neither of the two answers it would otherwise give is true. A service with one container,
+or with several whose images agree, is unaffected. An instance's pod is named for the entry, as
+its units are (§5.2), so its pin is its own.
+
 **The line is a DROP-IN, and the base unit carries no `UserNS=` line at all.** Three files,
 three writers, and no file with two of them:
 
 | file | who writes it | what it carries |
 |---|---|---|
-| the base unit, in the service's own quadlet directory | the renderer, on every install | **no `UserNS=` line at all** — the pin is not in it |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf` | the mutator, and nobody else | the `UserNS=keep-id:uid=…,gid=…` line |
-| `/etc/containers/systemd/users/<uid>/<unit>.container.d/90-admin.conf` | **the admin, and nobody else** | whatever the admin wants; a `UserNS=` line in it **overrides** guarden's pin |
+| the pod's base unit, in the service's own quadlet directory | the renderer, on every install | **no `UserNS=` line at all** — the pin is not in it |
+| `/etc/containers/systemd/users/<uid>/<pod>.pod.d/50-guarden-keepid.conf` | the mutator, and nobody else | the `UserNS=keep-id:uid=…,gid=…` line |
+| `/etc/containers/systemd/users/<uid>/<pod>.pod.d/90-admin.conf` | **the admin, and nobody else** | whatever the admin wants; a `UserNS=` line in it **overrides** guarden's pin |
 
 **There is no fourth file, and no staging copy of the third** (ADR-0024). The admin's
 configuration reaches a unit by exactly one path — this directory — and the renderer reads
@@ -2290,10 +2383,11 @@ the generator, and the generator runs at reload, so a file edited while the unit
 changes nothing until the user manager is reloaded and the unit is restarted.
 
 **The instance's drop-in is named for the entry, not for the unit.** An instance's units are
-given an entry in the service's own quadlet directory named `<unit>-<escaped-ref>` (§5.2), and
-the generator reads that name — so the instance's keep-id drop-in is
-`<unit>-<escaped-ref>.container.d/50-guarden-keepid.conf`, beside the service's own
-`<unit>.container.d/`. **An instance OWNS its drop-in directory; it does not share the
+given an entry in the service's own quadlet directory named `<unit>-<escaped-ref>` (§5.2), and its
+pod an entry named `<pod>-<escaped-ref>.pod`, and the generator reads those names — so the
+instance's keep-id drop-in is
+`<pod>-<escaped-ref>.pod.d/50-guarden-keepid.conf`, beside the service's own
+`<pod>.pod.d/`. **An instance OWNS its drop-in directory; it does not share the
 service's.** Two instances of one service have two pins, neither lands in the other's, and
 an instance that is removed takes its own directory with it — the admin's own file in it is
 left alone, by the same rule the service's removal follows.
@@ -2860,9 +2954,10 @@ running set and always has.
 
 ### 7.1 What pasta actually gives a container, and what the host firewall actually sees
 
-A rootless container runs in its own network namespace, so the host's `127.0.0.1` is not an
-address it can dial and a per-service `127.x` scheme is unreachable from inside it by
-construction. What a container can dial is the **default gateway address**, and guarden pins
+A rootless container runs in a network namespace that is not the host's — its own, or the pod's it
+belongs to (below) — so the host's `127.0.0.1` is not an address it can dial and a per-service
+`127.x` scheme is unreachable from inside it by construction. What a container can dial is the
+**default gateway address**, and guarden pins
 which address that is: the `[network] pasta_options` set fixes the container side at
 `10.0.2.100/24` with the gateway `10.0.2.2`, so the container's default route is `via 10.0.2.2`
 on every host and every network. Pasta maps the gateway onto the host's loopback. From
@@ -2893,6 +2988,37 @@ rule of any kind for this hop. The three consequences that shape the rest of thi
   host and every network. A host whose own routes overlap `10.0.2.0/24` is warned about by
   `soil sysctl --check`, and the remedy is to change the range in the one place it is written —
   the option set.
+
+**The one namespace a service's containers share is its pod, and the pod is declared.** One pod
+per app (§4), named by `[pod] name` or, with no such key, by the service's workload — so `myapp`
+at a tree root gets the pod `myapp` and `apps/api` of the same repository gets `myapp-api`, and
+two apps of one repository cannot collide. The pod's unit is `<pod>.pod` in the service's own
+quadlet directory, every container unit of the app carries `Pod=<pod>.pod`, and the pasta backend
+belongs to the pod (§6.3), so every container of the app sees the same gateway at the same pinned
+address and `AddHost=` keeps resolving where it always did. A pod with one container is a pod,
+because the unit source may grow a second one without the render changing shape.
+
+**What the pod gives the containers of a service, and what it does not.** They share a loopback,
+so one of them can dial another's port directly — and that is the isolation property this design
+trades (ADR-0026): before it, each container had a namespace of its own and reached a sibling only
+by leaving through the gateway, arriving at the host's loopback, and coming back in through the
+sibling's publication. It does **not** give them a name service: a name is still an `AddHost=`
+entry the renderer writes, and the port a repository reads is still the publication (§7.3). And it
+widens nothing between services: a pod carries one app's containers, its unit lives in that
+service's own quadlet directory, and no manifest key, `overrides.toml`, module or poke adds a
+member to it.
+
+**The loopback controls are unchanged, and that is structural rather than a promise.** Pasta still
+makes its sockets as the service user and the gateway still lands on the host's `127.0.0.1`, so
+the uid-matched accept set and the default deny (§7.6) are what they were: the deny names no uid,
+and every accept names a (publication, uid) pair whose uid is the service's own. A pod adds no
+destination, no rule and no uid; it moves the namespace the service's own containers share, which
+sits inside the boundary those rules were written about.
+
+**What is still refused.** `network_mode: host` and `network_mode: container:`; `Pod=` and a
+`.pod` unit file as repository input, because the pod's name and its members are the renderer's
+(§6.3); a `networks:` name that is not this app's pod, and any option on one (§6.3); and a second
+pod, because a container has one namespace and an app has one pod.
 
 **An application inside a container must listen on `0.0.0.0`, not on `127.0.0.1`.** Pasta
 rewrites a loopback destination to the guest's observed address before delivery, and
@@ -2936,10 +3062,11 @@ name the environment (§4), so the resolution is the host's and the host's alone
 table does not map is the name as written, so a manifest that names a full service name keeps
 working and a host with no `[providers]` table behaves exactly as it did before.
 
-**A name inside a unit source is a name — but only a declared one.** Every container of one service
-runs in its own pasta namespace and there is no shared network (§7.1), so the containers of one unit
-source cannot resolve each other by network. What they can do is resolve each other's **names**,
-and the renderer writes those names the same way it writes an edge's:
+**A name inside a unit source is a name — but only a declared one.** The containers of one service
+share their pod's namespace (§7.1), so one of them can dial another's port on the pod's own
+loopback — but a namespace carries addresses and no name service, so a *name* in a repository's
+value reaches nothing on its own. The renderer makes it resolve the same way it makes an edge's
+resolve:
 
 ```
 AddHost=<container>:<ingress.alias>
@@ -2996,10 +3123,14 @@ does not resolve.
 accept set (§7.6) already carries for every publication that service holds, and the name never
 leaves the source: it is not a service name and never appears in another service's units.
 
-**One repository is one service.** The service name is `<project>-<track>`, the manifest has no
-`services:` table, and a poke stages one tree for one service — so the migration "split it into a
-service of its own and name it under `needs:`" is not reachable from one repository. It would need a
-second project, a second poke key and a second repository. ADR-0023 carries the decision.
+**One app is one service.** An app is a directory holding `.guarden/service.yml` (§4), and the
+service it deploys as is `<project>-<app>-<environment>` — `<project>-<environment>` for the app at
+the tree root (§5.3). The manifest has no `services:` table: a repository that ships several apps
+ships several manifests, one per app directory, and a poke stages the whole tree once and ingests
+one app of it by name. So the migration "split it into a service of its own and name it under
+`needs:`" is now reachable from one repository — a directory and a manifest — where ADR-0023
+recorded that it was not; that ADR's decision about the *sibling name* stands, and ADR-0026
+narrows the sentence about the repository it was argued against.
 
 ### 7.4 Publications
 
@@ -3016,6 +3147,11 @@ routed at the same time.
 
 The manifest never names a publication. It names a container and the container's port, and
 guarden picks the loopback port.
+
+**The pod publishes the set, and nothing else about it moves.** A container in a pod cannot carry
+a `PublishPort=` of its own, so the renderer writes the whole set into the pod's `[Pod]` table
+(§6.3) — and on the host's side of that line there is still one publication per container, on
+`127.0.0.1`, allocated and persisted exactly as above, with the same uid-matched accept set (§7.6).
 
 ### 7.5 Public ports are forwarded, never bound
 

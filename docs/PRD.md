@@ -61,8 +61,10 @@ rather than a mechanism, and a distinction enforced by nothing has to be enforce
   long-lived daemon as root, guarden has no daemon of its own, and every service is a distinct
   user. `snapperd` is a root daemon the distribution ships and the snapshot design depends on,
   so the claim is about guarden's own processes.
-- A shared podman network. Rootless podman networks are per-user, and that is the reason the
-  connectivity design is what it is (ADR-0004).
+- A shared podman network between services. Rootless podman networks are per-user, and that is
+  the reason the connectivity design is what it is (ADR-0004). The one network namespace a
+  service's own containers share is its **pod**, and it is not a network another service can join
+  (ADR-0026).
 - Remote backup of snapshots, and off-box copies generally. The one off-box copy guarden assumes
   is the operator's own copy of the production credentials, because the host key is single and
   has no second copy anywhere.
