@@ -296,9 +296,17 @@ def _deploy_tree(source: Source, name: str) -> Path:
 def _app_name(source: Source, resolved, tree: Path) -> str:
     """The app this deploy is of, by name, from the one thing that says it.
 
-    **The service name says it** (spec 5.1: the name carries the environment,
-    and `<project>-<app>-<environment>` carries the app), so a poke resolves the
-    app out of the name it was given rather than taking a second argument. The
+    **A repository that ships one app at its root answers that app whatever the
+    service is called.** That is every repository that is one service: the name
+    is the service's whole identity, nothing about it selects an app, and a
+    deploy has always been allowed to name a service whose project half is not
+    the poke's project — `weedr service add` in its poke spelling. The
+    tree-root app's name is empty and the tree-root app is the only one there
+    is.
+
+    A repository that ships its apps in subdirectories has one service per app,
+    so the **service name** says which (spec 5.1: the name carries the
+    environment, and `<project>-<app>-<environment>` carries the app). The
     project half comes from the poke's own `--from` pair, because that is the
     name `furrow` and `hose` built the service name from.
 
@@ -307,6 +315,9 @@ def _app_name(source: Source, resolved, tree: Path) -> str:
     would be a service whose own later `ingest` resolves an app it does not
     hold.
     """
+    shipped = apps_mod.discover(tree)
+    if len(shipped) == 1 and not shipped[0].name:
+        return apps_mod.ROOT_APP
     if source.kind == "service":
         origin = registry.load(str(source.service))
         if origin is None:

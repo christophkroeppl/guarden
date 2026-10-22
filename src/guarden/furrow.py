@@ -435,25 +435,38 @@ def _enqueue(args) -> list[dict]:
 
     entries: list[dict] = []
     for position, app in enumerate(_wanted(shipped, resolved, project)):
-        name = apps.sibling(project, app.name, resolved.track.name)
-        try:
-            entry_resolved = names.resolve(
-                f"{name}/{resolved.ref}" if resolved.ref else name,
-                list(config.tracks),
-                allow_default=False,
-            )
-        except errors.GuardenError as failure:
-            raise errors.GuardenError(
-                f"{failure.message}; the app {app.name or '<the repository root>'!r} of "
-                f"{project} deploys as {name}, and a service name is at most 31 characters",
-                failure.code,
-            ) from None
+        entry_resolved = _resolved_for(resolved, app, shipped, project, list(config.tracks))
         entries.append(
             _write_request(
                 entry_resolved, project, sha, position, _wants_build(app.root), bool(args.now)
             )
         )
     return entries
+
+
+def _resolved_for(resolved: names.Resolved, app, shipped: list, project: str, tracks: list):
+    """The service name one app of the request deploys as.
+
+    **A repository with one app at its root keeps the name it was asked for**,
+    because that name is the service's whole identity and nothing about it
+    selects an app — every request that was correct before this exists is still
+    the same request, which is the regression this change is judged by. A
+    repository that ships its apps in subdirectories has one service per app, so
+    each app's name is built from the project, the app and the track.
+    """
+    if len(shipped) == 1 and not shipped[0].name:
+        return resolved
+    name = apps.sibling(project, app.name, resolved.track.name)
+    try:
+        return names.resolve(
+            f"{name}/{resolved.ref}" if resolved.ref else name, tracks, allow_default=False
+        )
+    except errors.GuardenError as failure:
+        raise errors.GuardenError(
+            f"{failure.message}; the app {app.name or '<the repository root>'!r} of "
+            f"{project} deploys as {name}, and a service name is at most 31 characters",
+            failure.code,
+        ) from None
 
 
 def _wanted(shipped: list, resolved: names.Resolved, project: str) -> list:
