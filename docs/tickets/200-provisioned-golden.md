@@ -78,10 +78,34 @@ Suites run green against the rebuilt golden, `--no-cache`, one machine each:
 
 ## The full-suite wall clock
 
-| | suites | wall clock |
-|---|---|---|
-| before — `guarden-run-t358gate`, the last gate on the same golden | 134 | 2 h 14 m 35 s |
-| after | 134 | recorded below when the gate lands |
+| gate | suites | wall clock | result |
+|---|---|---|---|
+| before, `guarden-run-t358gate` — the last gate on the old golden | 134 | 2 h 14 m 35 s | 134 green |
+| before, `guarden-run-gate4efa` — the 4efa5ad gate, run while this work was building | 134 | 1 h 48 m 29 s | 133 green, 1 red (t455) |
+| after, `guarden-run-t200gate` — this tree, rebuilt golden | 134 | **1 h 40 m 51 s** | 133 green, 1 red (t170-zram) |
+
+**Where the index refresh went, stated rather than assumed.** The 18.5 s
+`apt-get update` cloud-init ran at boot is gone from the boot, and it is not
+free downstream: spec §6.1 has the packages phase refresh the index before its
+first install, so a suite that converges packages now pays it. Measured on a cut
+of the new image: the first `soil packages --apply` takes **6 s** (the delta
+since the build's index), the second **0 s**. So a cut's saving in a full run is
+the boot wait plus the lock race removed, not an index refresh avoided — which
+is why the gate delta (8–34 min) is smaller than 114 cuts × the boot saving. The
+two before numbers also differ from each other by 26 min, so the deterministic
+evidence is the per-cut measurement above; the gate figure says "not slower, and
+faster on the best comparison".
+
+**The one red, and why it is not this change.** `t170-zram.sh` failed at its
+`soil packages --check`, reporting the conditional `systemd-zram-generator`
+package as absent — which it was, because the suite's *first* `soil
+packages --apply` (line 147) must have failed and `assert_not_rejected` accepts
+exit 1, so a failed apply is invisible there and surfaces 80 lines later as a
+drift line about a package the image does install. On the same image: the suite
+passes alone, passes in a four-suite batch, and the exact first-section apply was
+probed three times on a fresh cut (rc 0, package installed). The suite tolerating
+a failed apply is a pre-existing weakness of that file, not something this ticket
+changed; it is recorded here so the next gate's red is read rather than assumed.
 
 ## The two limits, stated
 
