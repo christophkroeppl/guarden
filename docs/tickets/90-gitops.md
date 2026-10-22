@@ -58,6 +58,16 @@ worth a decision.**
    ticket and the fix is either a carve-out for the registry or a mutator verb
    that answers "is this sha deployed".**
 
+   **Removed instead (`2864251`).** The receiver now asks nothing and never
+   reads the registry: a poke always unpacks its tree, and the one answer to
+   "is this poke a no-op" is `weedr service ingest --check` at spec §6.6 step 0,
+   asked once per app. `deployed_sha` is written by the ingest and read by
+   `weedr service list --json` alone — a record and never a decision, because a
+   sha is the caller's claim and an edited tree under a commit the record
+   already names is still a deploy (ticket 297). The short-circuit's premise was
+   also wrong on a repository that ships several apps: the name it looked up,
+   `<project>-<environment>`, is a record no deploy writes (ADR-0028).
+
 **`weedr service build <name>` is not ticket 90's.** It has no body, no ticket
 claims it, and it is a mutator verb for an unprivileged `furrow` that cannot
 become the service user (ADR-0009). It belongs to whoever owns the deploy
