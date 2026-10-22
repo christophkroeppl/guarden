@@ -1254,7 +1254,12 @@ def _apply_volume_owners(manifest, name: str, granted,
                 errors.HOST_NOT_AS_ASSUMED,
             )
         notes += volumes.own_tree(
-            paths.mount_source(name, declared[volume], volume, escaped_ref), pair
+            paths.mount_source(name, declared[volume], volume, escaped_ref),
+            pair,
+            # The bound the walk must stay inside. A symlink above the volume
+            # would otherwise resolve out of the service's tree, and this walk
+            # chowns as root.
+            base=paths.mount_base(name, escaped_ref),
         )
     return notes
 
