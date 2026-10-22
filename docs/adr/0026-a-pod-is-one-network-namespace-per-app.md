@@ -22,8 +22,11 @@ carries it in two places and §6.3 stated the refusal of `networks:`, and this d
 all three with the bounded form — no network *between services*, one namespace *inside* one.
 Narrows ADR-0023's "one repository is one service", which becomes "one app is one service" **under
 the default `grouping`**: a project that declares `grouping = "one-service"` puts several apps'
-containers into one service — and so one pod — instead, which is in `CONTEXT.md` and lands with the
-manifest key in the same change as this decision's §4 edit. What does not change either way is that
+containers into one service — and so one pod — instead, which is in `CONTEXT.md`. **The manifest key
+landed with this decision's §4 edit, and `one-service` is REFUSED by name**: a service is one user,
+one home and one pod, so collapsing several apps into one service changes what a service is, and a
+key accepted and then rendered as the default would be the silently-doing-nothing shape the closed
+key set exists to prevent (spec §4). What does not change either way is that
 an app is never a container and a pod never spans two services. It leaves ADR-0019's
 user-namespace pin intact on the unit that now carries it, with one addition the measurement forced:
 the pin is the POD's, so its containers share one user namespace.
