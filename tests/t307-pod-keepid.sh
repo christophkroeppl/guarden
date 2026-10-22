@@ -127,24 +127,13 @@ podman_as() {
         XDG_RUNTIME_DIR="$runtime" podman "$@"
 }
 
-# poll_log <container> <literal>: poll the container's own log until it names the
-# literal. A reading taken before the container has written the line is not its
-# final word, and a suite that read once measured the race rather than the
-# container: the refusal below is one line after the uid the same shell printed,
-# and both arrive a moment after the container starts. The log driver is
-# `k8s-file` wherever this is used, because `podman logs` against this host's
-# journald answers empty with exit 0 (measured).
-poll_log() {
-    local name=$1 want=$2
-    for _ in $(seq 1 20); do
-        podman_as logs "$name"
-        if text_has "$(cat "$GUARDEN_STDOUT")" "$want"; then
-            return 0
-        fi
-        sleep 1
-    done
-    return 1
-}
+# **A refusal is read from the container's own stderr, in the foreground, and
+# the reason is measured.** This host's podman logs to `journald`, a rootless
+# user's journal is not there to read, and `--log-driver k8s-file` was measured
+# not to deliver a container's STDERR to `podman logs` at all: a container that
+# printed its uid and then failed a write came back with the uid and nothing
+# else, twice, twenty seconds apart. A container run in the foreground hands its
+# stderr to the suite's, where nothing can be lost.
 
 # The image is pulled as the SERVICE user: a pull as root lands in root's store,
 # which this user cannot use, and root's own pull cannot resolve the registry
@@ -204,29 +193,19 @@ assert_exit 0
 echo "MEASURE: the namespaces a pinned pod shares with its containers: $(cat "$GUARDEN_STDOUT")"
 assert_stdout_has "user"
 
-# Three containers, one pod, three uids, all writing into the service user's
+# Three containers, three uids, one pod, all writing into the service user's
 # 0700 directory. The file each one leaves on the host is the whole question:
 # the pinned uid and root land on the service user, and any other uid maps into
-# the service's subuid band and is refused.
-podman_as run -d --log-driver k8s-file --pod podpin --name pin-app --user 33:33 \
+# the service's subuid band. The two positives stay up so the host can be asked
+# about their files; the third runs in the foreground, where its refusal is read
+# below.
+podman_as run -d --pod podpin --name pin-app --user 33:33 \
     -v "$vol:/data" docker.io/library/alpine:3.20 \
     sh -c 'echo uid=$(id -u); printf "%s\n" pinned-33 > /data/pinned-33.txt; exec sleep 3600'
 assert_exit 0
-podman_as run -d --log-driver k8s-file --pod podpin --name pin-root \
+podman_as run -d --pod podpin --name pin-root \
     -v "$vol:/data" docker.io/library/alpine:3.20 \
     sh -c 'echo uid=$(id -u); printf "%s\n" root > /data/root.txt; exec sleep 3600'
-assert_exit 0
-podman_as run -d --log-driver k8s-file --pod podpin --name pin-other --user 999:999 \
-    -v "$vol:/data" docker.io/library/alpine:3.20 \
-    sh -c 'echo uid=$(id -u); printf "%s\n" other > /data/other.txt; exec sleep 3600'
-assert_exit 0
-
-# The control, at the same time: the same uid-33 container in the pod with NO
-# pin. It is refused, which is what says the POD's pin — not `--user` — is what
-# puts a non-root uid on the service user.
-podman_as run -d --log-driver k8s-file --pod podplain --name plain-33 --user 33:33 \
-    -v "$vol:/data" docker.io/library/alpine:3.20 \
-    sh -c 'echo uid=$(id -u); printf "%s\n" plain > /data/plain-33.txt; exec sleep 3600'
 assert_exit 0
 
 # The writes are given a moment to land before the host is asked about them. The
@@ -253,20 +232,28 @@ done
     || _fail "the root container's file on the host is $(cat "$vol/root.txt"), not what it wrote"
 
 # The third uid, refused — and refused by the directory, which is what makes the
-# two greens above mean something. The container itself stays up (its shell
-# carries on after the failed redirect), so the refusal is read out of its log.
+# two greens above mean something. Foreground, so the refusal is the container's
+# own line and not a reading of a log this host does not keep.
+podman_as run --rm --pod podpin --name pin-other --user 999:999 \
+    -v "$vol:/data" docker.io/library/alpine:3.20 \
+    sh -c 'printf "%s\n" other > /data/other.txt'
+echo "MEASURE: the third uid in the pinned pod: exit $GUARDEN_EXIT, $(tr '\n' '|' <"$GUARDEN_STDERR")"
+[ "$GUARDEN_EXIT" != 0 ] \
+    || _fail "a container running as uid 999 wrote into the service user's 0700 directory in a pod pinned at 33, so the pod's pin constrains nothing"
+assert_stderr_has "Permission denied"
 assert_file_missing "$vol/other.txt"
-poll_log pin-other "Permission denied" \
-    || _fail "the uid-999 container in a pod pinned at 33 left no file and its log names no refusal: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
-echo "MEASURE: the third uid in the pinned pod: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
-assert_stdout_has "Permission denied"
 
-# The same uid, the same command, in the pod with NO pin: refused as well.
+# The same uid, the same command, in the pod with NO pin: refused as well. This
+# is the control that says the POD's pin — not `--user`, and not the directory
+# alone — is what puts a non-root uid onto the service user.
+podman_as run --rm --pod podplain --name plain-33 --user 33:33 \
+    -v "$vol:/data" docker.io/library/alpine:3.20 \
+    sh -c 'printf "%s\n" plain > /data/plain-33.txt'
+echo "MEASURE: uid 33 in a pod with no pin: exit $GUARDEN_EXIT, $(tr '\n' '|' <"$GUARDEN_STDERR")"
+[ "$GUARDEN_EXIT" != 0 ] \
+    || _fail "a container running as uid 33 wrote into the service user's 0700 directory in a pod with no pin, so the pinned pod above proved nothing"
+assert_stderr_has "Permission denied"
 assert_file_missing "$vol/plain-33.txt"
-poll_log plain-33 "Permission denied" \
-    || _fail "uid 33 in the pod with no pin left no file and its log names no refusal: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
-echo "MEASURE: uid 33 in a pod with no pin: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
-assert_stdout_has "Permission denied"
 
 # --- 3 and 4. one pasta pod: the addressing, the host, and a payload --------
 #
