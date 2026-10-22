@@ -273,6 +273,36 @@ for directory in "$web_units" "$api_units"; do
 done
 assert_file_lacks "$api_units/api.container" "Network="
 
+# --- 4a-bis. an instance has a pod of its own too --------------------------
+#
+# A preview is an instance, and its units are the service's with the escaped
+# ref appended (spec §5.2) — so its pod is `<pod>-<escaped-ref>.pod`, its
+# podman pod carries a name no backslash can break, and it is the ONE thing two
+# previews of one service cannot share.
+inst_staged=/var/lib/guarden/staging/instprobe/0000001
+mkdir -p "$inst_staged/.guarden/quadlet"
+seed "$inst_staged/.guarden/service.yml" \
+    "project: instprobe" \
+    "units: .guarden/quadlet/" \
+    "state:" \
+    "  - data"
+seed "$inst_staged/.guarden/quadlet/app.container" \
+    "[Container]" \
+    "Image=docker.io/library/alpine:3.20" \
+    "Volume=data:/data" \
+    "Exec=sleep 3600"
+run weedr service ingest instprobe-preview/feature/x --from poke instprobe@0000001
+assert_exit 0
+inst_units=/var/lib/guarden/services/instprobe-preview/instances/feature\\x2fx/.config/containers/systemd
+assert_file_exists "$inst_units/instprobe.pod"
+assert_file_has "$inst_units/instprobe.pod" "PodName="
+assert_file_has "$inst_units/app.container" "Pod=instprobe-feature\\x2fx.pod"
+run weedr service start instprobe-preview/feature/x
+if [ "$GUARDEN_EXIT" != 0 ]; then
+    journalctl --user -M instprobe-preview@ -xeu "app-feature\\x2fx.service" 2>&1 | tail -20
+    _fail "starting an instance's pod failed: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+fi
+
 # `loom check` renders every shape with no host at all — it is the verb a
 # repository runs in CI, and it writes nothing.
 for source in "$GUARDEN_ROOT/fixtures/projects/solo" \
