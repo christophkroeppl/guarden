@@ -195,6 +195,7 @@ class Outcome:
     resolved: names.Resolved
     converged: bool = False
     uid: int = 0
+    app: str = ""
     fresh_instance: bool = False
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -409,7 +410,9 @@ def _source_label(source: Source) -> tuple[str, list[str]]:
     return (registry.SOURCE_MANUAL, [])
 
 
-def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcome:
+def create(
+    resolved: names.Resolved, source: Source, config, now: str, check: bool = False
+) -> Outcome:
     existing = registry.load(resolved.name)
     tree = _deploy_tree(source, resolved.name)
     app = _deploy_root(source, resolved, tree)
@@ -431,7 +434,7 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     manifest = manifest_mod.accept(_manifest_in(directory), held=held)
     apps_mod.check(manifest, apps_mod.discover(tree), _manifest_in(directory))
     project = manifest.project or _project_from(source)
-    outcome = Outcome(resolved=resolved)
+    outcome = Outcome(resolved=resolved, app=app)
 
     # Before identity, before the volumes, before the home: an edge the provider
     # does not offer, a route host another service already holds, and a tunnel
@@ -458,9 +461,14 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # Before the convergence answer: a converged reconcile applies grants too.
     granted = overrides_mod.load(resolved.name)
     _check_volume_owners(manifest, resolved.name, granted)
-    if existing is not None and _converged(
+    converged = existing is not None and _converged(
         existing, resolved, manifest, project, source_hash, hosts, app
-    ):
+    )
+    if check:
+        outcome.converged = converged
+        outcome.uid = existing.uid if existing is not None else 0
+        return outcome
+    if converged and existing is not None:
         outcome.converged = True
         outcome.uid = existing.uid
         # **A converged create still REPAIRS the tree (ticket 334).** The
@@ -2537,8 +2545,18 @@ def _unit_source(name: str, record, escaped_ref: str | None = None) -> Iterator[
     if escaped_ref:
         homes.insert(0, paths.instance_home(name, escaped_ref))
     for home in homes:
-        if _manifest_in(home).is_file():
-            with _render_source(home) as staged:
+        # **The manifest is at the app's root, not at the home's.** A service
+        # that deploys one app of a multi-app repository has its whole tree in
+        # `home` and its manifest at `home/apps/web/.guarden/service.yml`, so a
+        # lookup that only tried `<home>/.guarden/service.yml` found nothing and
+        # answered "no manifest in <home> and no module source" — on the first
+        # `start` of every such service. `record.app` is where the registry says
+        # the app sits (empty for a single-app repository, which is the tree
+        # root), and `paths.app_root` is the one rule for turning that into a
+        # path.
+        root = paths.app_root(home, record.app)
+        if _manifest_in(root).is_file():
+            with _render_source(root) as staged:
                 yield staged
             return
     if record.installed_by:

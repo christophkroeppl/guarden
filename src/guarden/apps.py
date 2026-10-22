@@ -146,6 +146,15 @@ def shipped(apps: list[App]) -> str:
     return ", ".join(_app_label(app.name) for app in apps)
 
 
+def label(service: str, app: str) -> str:
+    """The name a deploy was given and, when it has one, the app root.
+
+    `shop-api-staging (app apps/api)`; the tree-root app adds nothing, because
+    its service name is the whole of it.
+    """
+    return f"{service} (app {app})" if app else service
+
+
 def named(apps: list[App], name: str) -> App | None:
     for app in apps:
         if app.name == name:

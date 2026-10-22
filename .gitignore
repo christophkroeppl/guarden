@@ -19,7 +19,7 @@ CLAUDE.md
 
 __pycache__/
 *.pyc
-.venv/
+.venv
 *.egg-info/
 .ruff_cache/
 *.tar.gz

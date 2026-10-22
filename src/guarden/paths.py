@@ -190,18 +190,26 @@ def unit_dir(name: str) -> Path:
     return service_home(name) / QUADLET
 
 
-def app_home(name: str, app: str = "") -> Path:
-    """A service's app root: the tree's root, or the app's directory inside it.
+def app_root(home: Path, app: str = "") -> Path:
+    """The app root inside a service's — or an instance's — home.
 
-    A repository that ships several apps deploys one service per app, each with
-    its own manifest and unit source in a subdirectory of the source tree
-    (spec 5.3). The home holds the WHOLE tree, because the home is the build
-    context (§6.6), so the app root is a path inside it and not a copy of it.
-    `app` is the root as the tree spells it (`apps/web`), and the empty string
-    is the tree root, which is the shape every single-app repository has.
+    The home holds the WHOLE tree, because the home is the build context (§6.6),
+    so an app's root is a path inside it and not a copy of it. `app` is the root
+    as the tree spells it (`apps/web`), and the empty string is the tree root,
+    which is the shape every single-app repository has.
+
+    **One definition, because a reader that spelled this itself got it wrong.**
+    `_unit_source` looked for `<home>/.guarden/service.yml` and nothing else, so a
+    multi-app service — manifest at `home/apps/web/.guarden/service.yml` — had no
+    unit source at all, and its first `start` failed in `ensure_owner_line` with
+    "no manifest in <home> and no module source".
     """
-    home = service_home(name)
     return home.joinpath(*app.split("/")) if app else home
+
+
+def app_home(name: str, app: str = "") -> Path:
+    """A service's app root: the tree's root, or the app's directory inside it."""
+    return app_root(service_home(name), app)
 
 
 def manifest_in_home(name: str, app: str = "") -> Path:
