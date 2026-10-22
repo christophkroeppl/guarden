@@ -142,18 +142,17 @@ assert_file_has "$registry/$consumer.toml" 'via = "tunnel"'
 # traffic, and a number would be a port the firewall admits and nothing answers.
 assert_file_lacks "$registry/$consumer.toml" "publications = ["
 
-unit=/var/lib/guarden/services/$consumer/units/guarden.env
-assert_file_has "$unit" "API_HOST=orders.tunnel.example.net"
-assert_file_has "$unit" "API_PORT=443"
+unit_dir=/var/lib/guarden/services/$consumer/.config/containers/systemd
+env_file=$unit_dir/guarden.env
+assert_file_has "$env_file" "API_HOST=orders.tunnel.example.net"
+assert_file_has "$env_file" "API_PORT=443"
 # The credential is a REQUEST; the value is the operator's, because a vendor's
 # Access token is minted by the vendor.
-assert_file_has "/var/lib/guarden/services/$consumer/units/web.container" \
-    "Secret=API_SECRET,type=mount"
+assert_file_has "$unit_dir/web.container" "Secret=API_SECRET,type=mount"
 # Nothing resolves a public name through this host's alias, and there is no
 # local unit for the edge to start.
-assert_file_lacks "/var/lib/guarden/services/$consumer/units/web.container" "AddHost="
-assert_file_lacks "/var/lib/guarden/services/$consumer/system/guarden-order.target" \
-    "orders"
+assert_file_lacks "$unit_dir/web.container" "AddHost="
+assert_file_lacks /etc/systemd/system/guarden-order.target "orders"
 
 # --- 3. the firewall is unchanged -------------------------------------------
 #
