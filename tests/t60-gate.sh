@@ -232,9 +232,28 @@ assert_exit 0
 assert_json secrets.0.example false
 
 # `LOG_LEVEL` is required by `@defaultRequired=infer` and is **not** `@sensitive`,
-# so on a gated track nothing mints it and it is the gate's business. Planted, the
-# gate is ready.
+# so on a gated track nothing mints it and it is the gate's business. Planted, it
+# is satisfied — and the gate is still blocked, because `SESSION_SIGNING_KEY` is
+# outstanding.
+#
+# **`SESSION_SIGNING_KEY` is `@sensitive` and NOT required, and it blocks anyway.**
+# The gate's subject is the set of credential REQUESTS the units make (spec 6.6,
+# CONTEXT "gate"), and `@sensitive` alone is enough for the renderer to emit
+# `Secret=SESSION_SIGNING_KEY,type=env`. A key the unit asks for and nothing
+# satisfies is a container podman refuses with `125 no such secret`, so a gate
+# that called this service ready would be reporting a start that cannot happen.
+# "Optional" in the schema excuses a key nothing requests; it cannot excuse a
+# request.
 run weedr secret set qapp-production LOG_LEVEL <<<"info"
+assert_exit 0
+run weedr service gate qapp-production
+assert_exit 1
+assert_stderr_has "SESSION_SIGNING_KEY"
+assert_file_has "$production" 'state = "blocked"'
+
+# Planted, the same condition is satisfied and the gate answers ready. Nothing is
+# re-pushed and nothing is rebuilt: the verb re-evaluates every time.
+run weedr secret set qapp-production SESSION_SIGNING_KEY <<<"$VALUE"
 assert_exit 0
 run weedr service gate qapp-production
 assert_exit 0
