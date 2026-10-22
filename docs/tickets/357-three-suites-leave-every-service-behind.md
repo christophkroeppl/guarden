@@ -123,3 +123,90 @@ the same fact seen from the allocator's side.
   suite lost coverage to its teardown.
 - `t100-homepage.sh`'s marker removal keeps working: it is the only cleanup the
   file has, and it is not a service.
+
+## What landed, and what each answer costs
+
+One teardown per suite, in an `EXIT` trap, written from that suite's **own
+inventory** — every name it creates, and a module's service counts as a name
+it creates, because a module installs a service and a service is a tree, a
+registry entry, a user and a credential. The trap is the right home for the
+reason the ticket gave: `t60` re-ingests `qapp-staging` and hashes its creds
+at `:262`–`:275`, so a purge placed where the names are created would delete
+the subject of an assertion three lines later.
+
+**The purge mechanism is lifted into `tests/lib.sh` once.** Five suites
+carried a local `purge()` — `t80-edges.sh`, `t315-envfile-ref.sh`,
+`t230-build.sh`, `t317-build-context.sh` and
+`t84-provider-diagnostics-mutator.sh` — and the copies had drifted into three
+variants: a full form (`t80`, `t315`), a middle form (`t230`, `t317`) and a
+bare removal loop (`t84`). The **full** form is adopted, because the
+credential-trigger hold is the fix for the race `t315`'s comment describes.
+Each suite keeps its own `cleanup()` and its own inventory list; only the
+mechanism is shared, and only the mechanism.
+
+Four defects the first version had, found by an adversarial review and
+confirmed by measurement before the fix:
+
+1. **`assert_no_snapper_configs` printed its error and returned 0.** Its two
+   `_fail` calls are inside an `if` body and inside a `||` list, so neither
+   is the function's last command, and `purge`'s `|| failed=1` was dead code.
+   The snapper half of the promise was reported and nothing failed.
+2. **`assert_no_service_left` was a machine-wide check inside a per-name
+   teardown**, called from a bare pre-run `cleanup`. On a shared machine
+   holding a service left by one of the sixty suites that has no teardown at
+   all, the three suites died before their own first assertion, naming a
+   directory listing rather than the culprit. It takes names now, and the
+   pre-run call is `cleanup || true`: it clears and never reports, because a
+   leftover that is not this suite's is not this run's failure.
+3. **A recursive removal cannot remove a btrfs subvolume**, and it fails
+   outright on one carrying a read-only snapshot — the `.snapshots` subtree
+   snapper owns, which is inside every `state` volume. The product deletes a
+   subvolume with btrfs's own ioctl (`clone.py`, `_remove_clone`), and the
+   teardown does the same now, finding the volumes by the layout the tree is
+   built in.
+4. **`t120`'s queue cleanup named two files by sha** and missed the preview
+   instance's request, which is named after the service *and* its escaped ref.
+
+**Measured, on the committed tree, one machine, both orders** (`--shared`,
+`--no-cache`, a worktree holding only these three suites):
+
+```
+forward:   ok t100-homepage.sh   ok t120-deploy.sh   ok t60-gate.sh
+           3 suites: 3 ran, 0 inherited, 0 failures, 1 machines cut
+reverse:   ok t60-gate.sh        ok t120-deploy.sh   ok t100-homepage.sh
+           3 suites: 3 ran, 0 inherited, 0 failures, 1 machines cut
+```
+
+**The assertion is not vacuous.** With the teardown's removal disabled in the
+checkout the harness pushes into the cut, the same three suites **fail**, and
+they name exactly what survived:
+
+```
+error: /var/lib/guarden/services/postgres-staging survived the suite
+error: /etc/guarden/creds/qapp-production survived the suite
+error: /var/lib/guarden/registry/qapp-staging.toml survived the suite
+error: snapper configuration(s) left after the purge: postgres-staging-pgdata
+  qapp-production-data qapp-staging-data
+FAIL t60-gate.sh
+3 suites: 3 ran, 0 inherited, 3 failures, 1 machines cut
+```
+
+## Not in scope, and why
+
+- **The other sixty suites still have no teardown.** `t110-previews.sh`,
+  `t120-queue.sh`, `t30-create.sh`, `t250-verb-split.sh` and the rest ingest
+  services and leave them behind. This ticket is about the three it names,
+  and a machine-wide check would make these three fail for a leftover that is
+  not theirs — so the check is per name.
+- **The `edge` group is left behind.** `weedr module add gate-traefik` creates
+  it and nothing removes it. `t20-install.sh` asserts the group is absent,
+  and that suite is `fresh`, so it never sees another suite's group; under
+  `--shared` it would, and it already fails there for a dozen other reasons.
+- **The staged trees are not removed.** `t60`'s `stage_quadlet` and `t120`'s
+  `stage_qapp` write the same path, `/var/lib/guarden/staging/qapp/9f2c1ab`,
+  and the first one's files survive into the second one's run. The staging
+  area is the system's own directory and the poke's tree, not a service's,
+  and none of the four directories the acceptance names holds it.
+- **The product is not changed.** `weedr service remove` leaves a service's
+  snapper configurations to `soil storage` on purpose, and `t20-storage.sh` is
+  where that converge is exercised.

@@ -38,46 +38,6 @@ dialed_publication() {
          seen && /^publications = /{gsub(/[][]/,"",$3); print $3; exit}' "$1"
 }
 
-purge() {
-    local failed=0 service attempt path_was_active=0
-    local -a paths
-    # **The credential trigger is held while the trees are removed**, for the
-    # reason `t315-envfile-ref.sh` states in full: deleting a creds blob starts
-    # its oneshot, which runs `podman secret create` as every service that still
-    # has one, inside that service's own `home` — the tree this loop is deleting.
-    # The unit is put back only if this purge found it running.
-    if systemctl is-active --quiet guarden-creds.path; then
-        path_was_active=1
-    fi
-    systemctl stop guarden-creds.path guarden-creds-boot.service >/dev/null 2>&1 || :
-    remove_snapper_configs "$@" || failed=1
-    for service in "$@"; do
-        paths=(
-            "/var/lib/guarden/services/$service"
-            "/etc/guarden/services/$service"
-            "$creds/$service"
-            "$registry/$service.toml"
-        )
-        attempt=0
-        until rm -rf "${paths[@]}"; do
-            attempt=$((attempt + 1))
-            if [ "$attempt" -ge 3 ]; then
-                failed=1
-                break
-            fi
-            sleep 1
-        done
-        userdel "$service" >/dev/null 2>&1 || :
-    done
-    if [ "$path_was_active" = 1 ]; then
-        systemctl start guarden-creds.path >/dev/null 2>&1 || :
-    fi
-    # A teardown that cannot remove the tree is a failure, not a line in the
-    # log; `t315-envfile-ref.sh` has the long form of that decision too.
-    assert_no_snapper_configs "$@" || failed=1
-    [ "$failed" = 0 ] || { _fail "purge could not remove every path of: $*"; return 1; }
-}
-
 cleanup() {
     # **Every name this file creates, not most of them.** A teardown that leaves
     # a service behind leaves its EDGES behind too, and an edge is a uid-matched

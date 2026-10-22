@@ -45,6 +45,45 @@ stage_quadlet()
     mkdir -p "$GUARDEN_PREFIX/var/lib/guarden/staging/$project/HEAD"
 }
 
+cleanup() {
+    # **Every name this file creates, not most of them** (ticket 357). The list
+    # is this suite's own inventory, read out of this file:
+    #
+    #   postgres-staging   :86  the provider the consumer's edge resolves against
+    #   qapp-production    :91  the gated track
+    #   qapp-staging       :93  the ungated track
+    #   traefik-production :70  the edge, installed by `weedr module add
+    #                             gate-traefik` -- a module installs a SERVICE
+    #                             and a service is a tree, a registry entry, a
+    #                             user and a credential, so the module's service
+    #                             belongs in the list as much as an ingested one
+    #
+    # A teardown that leaves a service behind leaves its route host claimed:
+    # the allocator reads every registry to decide who holds a host, so a
+    # leftover registry entry refuses the next suite that wants the same host.
+    local rc=0
+    purge postgres-staging qapp-production qapp-staging traefik-production || rc=1
+    # The gate's own service was installed by a module, and the module stays
+    # enabled in `guarden.toml` while the service is gone. That is the state
+    # `weedr module add` converges from, and `t100-homepage.sh` proves the
+    # re-add works (it removes the dashboard's service and adds the module
+    # again). The module's own record is not a service, so it is not purged.
+    #
+    # **The machine is left as this suite found it.** The four directories are
+    # where a service lives, and an entry left in one of them is a service the
+    # next suite inherits -- which is the whole defect this teardown exists to
+    # end.
+    assert_no_service_left postgres-staging qapp-production qapp-staging \
+        traefik-production || rc=1
+    return "$rc"
+}
+trap cleanup EXIT
+
+# The pre-run call CLEARS and never reports: it removes what a previous run of
+# THIS suite left behind, and a failure there is not this run's failure. The
+# `|| true` is load-bearing -- under `set -e` a bare call would end the suite
+# before its first assertion, for a leftover that is not this suite's.
+cleanup || true
 # The machine's own tools. Nothing is faked (ADR-0014), so this line is a
 # statement rather than a mechanism: `useradd`, `loginctl`, `systemd-creds` and
 # `snapper` are the machine's, and `.venv/bin` is kept first because it is the

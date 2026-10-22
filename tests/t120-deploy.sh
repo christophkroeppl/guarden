@@ -26,6 +26,56 @@
 export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export GUARDEN_PREFIX=/
 
+cleanup() {
+    # **Every name this file creates, not most of them** (ticket 357). The list
+    # is this suite's own inventory, read out of this file:
+    #
+    #   postgres-staging   :61   the provider the project's `needs:` resolves
+    #                            against
+    #   qapp-production    :97, :170  the production track
+    #   qapp-staging       :203  the staging track
+    #   qapp-preview       :256  the preview track, with the instance
+    #                            `feature/login`; the deploy at :308 is a
+    #                            refusal and creates nothing
+    #   traefik-production :50   the edge, installed by `weedr module add
+    #                            gate-traefik`
+    #
+    # **The preview's instance is nested under the service's own tree**
+    # (`<tree>/instances/<escaped-ref>`), so purging the service takes the
+    # instance with it and the instance needs no entry of its own.
+    #
+    # A teardown that leaves a service behind leaves its route host claimed:
+    # the allocator reads every registry to decide who holds a host, so a
+    # leftover registry entry refuses the next suite that wants the same host.
+    local rc=0
+    purge postgres-staging qapp-production qapp-staging qapp-preview \
+        traefik-production || rc=1
+    # The requests this suite's failing builds left on the queue are files of
+    # their own, and a request file is named after a service and a sha -- so
+    # one left behind is a request a later suite's `furrow queue list` reads
+    # and counts. The preview's request is named after the service AND its
+    # escaped ref, so the names are matched rather than listed: an inventory
+    # of file names would have to repeat the escaping rule the product owns.
+    rm -f /var/lib/guarden/queue/qapp-production@*.json \
+        /var/lib/guarden/queue/qapp-staging@*.json \
+        /var/lib/guarden/queue/qapp-preview@*.json \
+        /var/lib/guarden/queue/qapp-preview-*.json
+    # **The machine is left as this suite found it.** The four directories are
+    # where a service lives, and an entry left in one of them is a service the
+    # next suite inherits -- which is the whole defect this teardown exists to
+    # end.
+    assert_no_service_left postgres-staging qapp-production qapp-staging \
+        qapp-preview traefik-production || rc=1
+    return "$rc"
+}
+trap cleanup EXIT
+
+# The pre-run call CLEARS and never reports: it removes what a previous run of
+# THIS suite left behind, and a failure there is not this run's failure. The
+# `|| true` is load-bearing -- under `set -e` a bare call would end the suite
+# before its first assertion, for a leftover that is not this suite's.
+cleanup || true
+
 install -d -m 0770 -o root -g guarden /var/lib/guarden/queue
 # `guarden-measured.toml` rather than `guarden.toml`: this project's manifest
 # declares a `needs:`, so its units carry `AddHost=` and the renderer refuses an
