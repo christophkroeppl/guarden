@@ -20,18 +20,38 @@ exposed `tunnel` on that host, and — for `auth: secret` — an Access service 
 The harness has no such account, and a suite that appeared to make the trip would be
 asserting a fake. So it is not asserted anywhere.
 
-## MEASURE: not performed
+## MEASURE: the live round trip — not performed
 
 **Result: not run.** No Cloudflare account, no second guarden host, and no tunnel
 zone are available to the machine these suites run on. Nothing in the two suites
 above claims otherwise, and `t457` prints the lookup of the producer's hostname as
-its own measurement and asserts that the name does **not** resolve there — the
-positive half (`example.com` resolving from inside a pasta container) is the
-mechanism the edge relies on, and the negative half is the harness saying it could
-not have made the trip.
+its own measurement and asserts that the name does **not** resolve there.
 
-The lookup, as `t457` recorded it on 2026-10-22 (a fresh cut of the golden):
+## What `t457` measures instead: the composition, with the policy in force
 
+A container's lookup does not leave the host as the container. pasta forwards it to
+the host's stub resolver **from the uid that started the container**, and §7.6's
+default deny drops every loopback packet from every service uid except the accepts
+above it — so whether a container is a client those accepts admit is a question
+about two mechanisms at once, and it is not obvious from either file.
+
+The suite answers it on the deployed state: `soil firewall --apply` writes and
+starts `guarden-firewall.service`, which loads `50-services.conf`, and the same
+lookup then runs twice.
+
+    row                                          uid                        expected
+    nslookup example.com                         the consumer's own          Name: line, deny counter unchanged
+    nslookup example.com                         ubuntu (1000)               no Name: line, deny counter moves
+
+The second row is what makes the first one evidence. Without it, a suite passes on
+a machine where the deny was never installed — which is exactly the state this
+measurement was corrected for — and the deny's own packet counter is what tells a
+refused lookup from one that simply had none.
+
+The output `t457` recorded on 2026-10-22, a fresh cut of the golden:
+
+    MEASURE: SERVICE_UID_LOOKUP_DENY_COUNTER=0->0
+    MEASURE: NON_SERVICE_UID_LOOKUP_DENY_COUNTER=0->2
     MEASURE: the producer hostname from inside a pasta container:
     Server:		169.254.1.1
     Address:	169.254.1.1:53
@@ -40,10 +60,11 @@ The lookup, as `t457` recorded it on 2026-10-22 (a fresh cut of the golden):
 
     Non-authoritative answer:
 
-`169.254.1.1` is pasta's own forwarder, so the **query reached a resolver** — which
-is the half that had to be measured, because the loopback deny (§7.6) sits between a
-service uid and the host's stub and could have taken it. No `Name:` line follows:
-the name has no record, because no Cloudflare zone publishes it here.
+`169.254.1.1` is pasta's own forwarder on both rows, so both queries left the
+container and reached the host's resolver path — and only the consumer's uid's
+answer came back. The producer's hostname has no `Name:` line because no Cloudflare
+zone publishes it here; that is the harness saying it could not have made the trip,
+not evidence about the vendor.
 
 ## The procedure, for the operator who has the account
 

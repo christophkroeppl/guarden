@@ -17,18 +17,24 @@
 #      host's ingress, so nothing here accepts its uid on a publication and no
 #      rule in `50-services.conf` names `443`.
 #
-# **A container in a pasta namespace resolves the producer's name, measured** —
-# pasta's DNS behaviour is not obvious from the pin, and the loopback deny is
-# between a service uid and the stub resolver (§7.6). What is measured is the
-# mechanism the edge relies on: an unprivileged container resolves a public name
-# through pasta's forwarder, and the producer's own name does NOT resolve here
-# because this machine has no zone and no Cloudflare account. The manual round
-# trip is recorded in `docs/notes/tunnel-edge-manual-check.md`, and this suite
-# does not pretend to have made it.
+# **A container in a pasta namespace resolves a public name with the policy in
+# force, and a uid with no accept does not — measured.** pasta forwards a
+# container's lookup to the host's stub resolver from the uid that started the
+# container, and §7.6's default deny drops every loopback packet from a service
+# uid except the two accepts above it. So the suite loads
+# `guarden-firewall.service` — `soil firewall --apply` writes and starts it, and
+# it loads `50-services.conf` — and runs the same lookup twice: as the consumer's
+# own uid, and as `ubuntu`, which is not a service and has no accept. The deny's
+# packet counter is read across each row, so the second row failing and the first
+# not is what says the policy is loaded rather than that nothing was. The
+# producer's own name does NOT resolve here — no zone, no Cloudflare account —
+# and the live round trip is a MANUAL check in
+# `docs/notes/tunnel-edge-manual-check.md`, which this suite does not pretend to
+# have made.
 #
 # Real host, real uid, real render: `GUARDEN_PREFIX=/`, as `t84` and `t455` do.
-# The container probe needs a package and an image in `ubuntu`'s own store, so
-# the machine is this suite's own.
+# The container probe puts a package and an image into two users' stores — the
+# consumer's and `ubuntu`'s — so the machine is this suite's own.
 #
 # machine: fresh
 
@@ -195,16 +201,21 @@ run weedr service ingest "$consumer" --from poke tunneled@9f2c1ab
 assert_exit 0
 assert_file_has "$registry/$consumer.toml" 'hostname = "staging.orders.example.com"'
 
-# --- the container resolves a public name -----------------------------------
+# --- the container resolves a public name, with the policy in force ----------
 #
 # **Measured, because pasta's DNS behaviour is not obvious.** The pin fixes the
 # gateway and the addressing; name resolution goes through pasta's forwarder to
-# the host's stub resolver, and the loopback deny is owner-matched, so the
-# question is whether a *container* is a client the accept admits (spec 7.6).
-# That is not obvious from either file, so it is measured with the real podman and a
-# real image this machine built. The machine's network is a precondition of the
-# lookup, not a stand-in for the vendor's edge: `example.com` resolves through
-# the golden's own resolver or this suite fails saying so.
+# the host's stub resolver, and the query is forwarded **from the uid that
+# started the container**, so the composed question is whether §7.6's accept set
+# admits that uid. The suite answers it on the deployed state: the policy is
+# loaded from `50-services.conf` first, and the same lookup then runs twice — as
+# the consumer's own uid, whose two stub-resolver accepts sit above the deny, and
+# as `ubuntu`, which is not a service uid and has none.
+#
+# **The second row is the one that proves the policy is loaded.** A suite that
+# asserted only the first would pass on a machine where the deny was never
+# installed — the deployment guarden never has — and the deny's own packet
+# counter is what tells the two apart, so it is read across both rows.
 run grep -c "^ubuntu:" /etc/subuid
 assert_exit 0
 assert_stdout_has "1"
@@ -219,15 +230,75 @@ mkdir -p "$hop/bin"
 cp /bin/busybox "$hop/bin/busybox"
 tar -C "$hop" -cf "$hop_tar" bin
 chmod 644 "$hop_tar"
+
+# The consumer's OWN store: the probe has to run as the uid under test, so the
+# image is imported by that uid rather than by root or by `ubuntu`.
+home=/var/lib/guarden/services/$consumer/home
+svc_uid=$(id -u "$consumer")
+[ -n "$svc_uid" ] || _fail "$consumer has no uid, so it has no accept to measure"
+runtime=/run/user/"$svc_uid"
+for _ in $(seq 1 30); do
+    [ -d "$runtime" ] && break
+    sleep 1
+done
+assert_file_exists "$runtime"
+
+run_in "$home" setpriv --reuid="$consumer" --regid="$consumer" --clear-groups \
+    env -u OLDPWD HOME="$home" PWD="$home" USER="$consumer" LOGNAME="$consumer" \
+    XDG_RUNTIME_DIR="$runtime" podman import \
+    --change 'CMD ["/bin/busybox","true"]' "$hop_tar" localhost/probe-bb:latest
+assert_exit 0
 run runuser -u ubuntu -- env -C /tmp podman import \
     --change 'CMD ["/bin/busybox","true"]' "$hop_tar" localhost/probe-bb:latest
 assert_exit 0
 
+run soil firewall --apply
+assert_not_rejected
+run systemctl start guarden-firewall.service
+assert_exit 0
+wait_settled guarden-firewall.service
+assert_active guarden-firewall.service
+
+# **The uid under test is in the set that was loaded**, one accept per protocol,
+# before the lookup leans on it: a suite that never asked would read the
+# denial's absence as an accept.
+assert_file_has "$services" \
+    "mod owner uid-owner $svc_uid daddr 127.0.0.53 proto udp dport 53 jump ACCEPT;"
+
 pinned=--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2
-run runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error \
+
+# `iptables -nvx -L` prints `pkts bytes target prot …`, so the DROP rule's
+# counter is the first field and its destination is `127.0.0.0/8`. One function,
+# so the readings cannot differ in how they were taken.
+deny_packets() {
+    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
+        | awk '$3 == "DROP" && $NF ~ /^127\.0\.0\.0\/8/ {print $1; exit}'
+}
+
+before=$(deny_packets)
+[ -n "$before" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to measure"
+run_in "$home" setpriv --reuid="$consumer" --regid="$consumer" --clear-groups \
+    env -u OLDPWD HOME="$home" PWD="$home" USER="$consumer" LOGNAME="$consumer" \
+    XDG_RUNTIME_DIR="$runtime" podman run --rm --log-level=error \
     --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup example.com
 assert_exit 0
 assert_stdout_has "Name:"
+after=$(deny_packets)
+printf 'MEASURE: SERVICE_UID_LOOKUP_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
+[ "$after" = "$before" ] \
+    || _fail "the consumer uid's lookup met the loopback deny, so its stub-resolver accept is not above it"
+
+# **The same lookup as a uid with no accept.** uid 1000 is not a service and the
+# deny names no uid, so the forwarded query is dropped: no `Name:` line, and the
+# deny's counter moves.
+before=$(deny_packets)
+run timeout 120 runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error \
+    --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup example.com
+after=$(deny_packets)
+printf 'MEASURE: NON_SERVICE_UID_LOOKUP_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
+[ "$after" != "$before" ] \
+    || _fail "a non-service uid's lookup did not meet the deny, so the deny is not in force and the row above proves nothing"
+assert_stdout_lacks "Name:"
 
 # The producer's own name is in the tunnel's zone, and no Cloudflare account is
 # reachable from a test machine — so the lookup is the evidence that this suite
@@ -238,7 +309,9 @@ assert_stdout_has "Name:"
 # The live round trip is a MANUAL check —
 # `docs/notes/tunnel-edge-manual-check.md` carries the procedure and the result
 # — and nothing here claims to have made it.
-run runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error \
+run_in "$home" setpriv --reuid="$consumer" --regid="$consumer" --clear-groups \
+    env -u OLDPWD HOME="$home" PWD="$home" USER="$consumer" LOGNAME="$consumer" \
+    XDG_RUNTIME_DIR="$runtime" podman run --rm --log-level=error \
     --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup \
     orders.tunnel.example.net
 printf 'MEASURE: the producer hostname from inside a pasta container:\n%s\n' \

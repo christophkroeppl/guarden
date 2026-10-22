@@ -784,7 +784,9 @@ via  = "tunnel"  # absent is `pasta`. A pasta edge also carries
   # edge carries none, because nothing on this host carries that
   # traffic and the consumer is a client of the other host's ingress
 hostname = "orders.tunnel.example.net"  # the name the manifest stated, recorded
-  # so the render and `weedr service list` answer from one place
+  # so the render answers from this record rather than from the manifest:
+  # one value, one holder. `weedr service list`'s `edges` field set (§1.2)
+  # carries the port, `as:` and `auth:` and does not carry this
 
 [provides]
 kinds = [ "db" ]  # what the manifest's provides: listed, and only that. Written by
@@ -1052,7 +1054,7 @@ needs:  # declared edges to other services
   via: tunnel
   hostname: orders.tunnel.example.net  # that host's route hostname, and the
   # only name guarden cannot derive: it is a fact about the other machine.
-  # `port:` is refused here — the ingress answers https on 443
+  # `port:` is `443` when absent, and any other number is refused
 
 provides:  # what this service can offer a consumer, as KINDS
   - db  # consumed as `as: db`, which also gives DB_HOST/DB_PORT
