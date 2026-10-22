@@ -2466,12 +2466,26 @@ def _podman(name: str, record, *argv: str):
 
 
 def _carries_pod_pin(name: str, escaped_ref: str | None, record) -> bool:
-    """Whether the installed pod's own drop-in holds the line the record renders."""
+    """Whether the installed pod's own drop-in holds exactly the line the record
+    renders — or the record renders no line and guarden's drop-in is not there.
+
+    **A service with no `.pod` of its own is answered on the PIN and not on the
+    file.** A template-created service ships the template's own `.container`
+    files and no manifest, so nothing can re-render it: a record that owes no
+    line is a state an install would not change, and asking for a pod file it can
+    never have made every start of one try to re-render and fail on the missing
+    manifest. A record that DOES owe a line and has no pod to carry it is a
+    render that has not happened yet, and the install that follows is what
+    renders it.
+
+    A stale line is as wrong as a missing one (`_installed_pod_pin` returns it,
+    the record's is `None`, and they disagree), so the drop-in is compared rather
+    than merely looked for.
+    """
     directory = units_dir(name, escaped_ref)
     if not directory.is_dir():
         return False
-    pods = sorted(directory.glob("*.pod"))
-    if not pods:
+    if not sorted(directory.glob("*.container")):
         return False
     unit_images = _installed_images(name, escaped_ref)
     want = render.pin_of(
@@ -2480,6 +2494,9 @@ def _carries_pod_pin(name: str, escaped_ref: str | None, record) -> bool:
             for stem, image in sorted(unit_images.items())
         ]
     )
+    pods = sorted(directory.glob("*.pod"))
+    if not pods:
+        return want is None
     return _installed_pod_pin(record, pods[0].stem, escaped_ref) == want
 
 
