@@ -44,7 +44,7 @@ filesystem, the installed services and the remote are the host. So:
 | a container named in `routes:`, `ports:` or `widgets:` that the unit source does not define | `2` — both are input |
 | a volume named in `state:` or `bulk:` that the unit source does not mount, or a name in both | `2` — both are input |
 | a manifest that provides the `db` kind and declares no volume at all, where the manifest is a repository's declaration | `2` — both are input, and the data would be ephemeral (§8.1) |
-| a `needs:` entry whose provider does not exist, or exists and does not offer the `as:` kind | `1` — the answer came from the host, read from the provider's registry |
+| a `needs:` entry whose provider does not exist, or exists and does not offer the `as:` kind, or — a `via: tunnel` entry — names a route that provider does not publish through the tunnel | `1` — the answer came from the host, read from the provider's registry |
 | a requested port already held by another service | `1` |
 | `weedr firewall open` for a rule the manifest did not request, or a `firewall:` entry outside the closed rule shape of §7.7 | `2` |
 | a snapshot that is gone, or absent from one of the volumes a fork needs | `1` |
