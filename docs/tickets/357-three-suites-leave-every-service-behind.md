@@ -20,9 +20,9 @@ did not.
 
 | suite | cleanup it has today | what it ingests |
 |---|---|---|
-| `t60-gate.sh` | none — no `cleanup`, no `EXIT` trap | `postgres-staging:86`, `qapp-production:89`, `qapp-staging:91`, the `gate-traefik` module |
-| `t100-homepage.sh` | `trap 'rm -f "$marker"' EXIT` and nothing else | `postgres-staging:166` |
-| `t120-deploy.sh` | none — no `cleanup`, no `EXIT` trap | `postgres-staging:61` |
+| `t60-gate.sh` | none — no `cleanup`, no `EXIT` trap | `postgres-staging:86`, `qapp-production:91`, `qapp-staging:93`, the `gate-traefik` module |
+| `t100-homepage.sh` | `trap 'rm -f "$marker"' EXIT` and nothing else | `postgres-staging:166`, `quadlet-app-staging:176` |
+| `t120-deploy.sh` | none — no `cleanup`, no `EXIT` trap | `postgres-staging:61`, `qapp-production:97,170`, `qapp-staging:203`, `qapp-preview/feature/login:256`, `qapp-preview:308` |
 
 ## Why it matters
 
@@ -35,6 +35,57 @@ failure names snapper or a passwd entry rather than the leftover.
 Ticket 354 removed the snapper half of this from the four suites that already had
 a teardown. These three have no teardown to add it to, which is why they are here
 and not there.
+
+### Measured, on a clean machine, 2026-10-22
+
+Both orders fail. This is not a leftover from an earlier run: the runner VMs were
+deleted and the runs repeated from a fresh cut.
+
+**Forward** (`t60`, `t100`, `t120` selected; the runner ordered them
+`t100`, `t120`, `t60`):
+
+```
+ok   t100-homepage.sh
+ok   t120-deploy.sh
+FAIL t60-gate.sh
+error: //var/lib/guarden/registry/qapp-production.toml names [gate] and should not
+error: failed at line 375: return 1 (exit 1)
+3 suites: 3 ran, 0 inherited, 1 failures, 1 machines cut
+```
+
+`t120-deploy.sh` runs `furrow deploy qapp-production` (`:97`), which writes a
+`[gate]` table and `state = "blocked"` into
+`/var/lib/guarden/registry/qapp-production.toml`. `t60-gate.sh:103` asserts that
+a service that has never been evaluated has **no** `[gate]` table:
+
+```sh
+# **A service with no `[gate]` table has never been evaluated.** That is `null` in
+# JSON and it is not the same as `ready`: a verdict nobody took is not a passing
+# one. The service was created a moment ago and the gate has not run.
+assert_file_lacks "$production" "[gate]"
+```
+
+The service is the same name in both suites, so the second one inherits the first
+one's verdict. The assertion is right and the leftover is what breaks it.
+
+**Reverse** (same three suites, `--reverse`):
+
+```
+FAIL t120-deploy.sh
+error: expected exit 0, got 1
+  stderr: error: quadlet-app-staging claims the route host 'staging.web', and
+  qapp-staging already holds it; a route host is allocated and the allocator
+  refuses the second claimant
+error: failed at line 177: return 1 (exit 1)
+FAIL t100-homepage.sh
+3 suites: 3 ran, 0 inherited, 2 failures, 1 machines cut
+```
+
+The route host is **allocated globally** and a service left by a previous suite
+holds it, so the second claimant is refused. This is ticket 330's subject — a
+route's recorded name is `<track host_prefix><label>` and the allocator refuses a
+second claimant — reached from the other direction: not a naming question, but a
+stale claimant.
 
 ## What the work is
 
@@ -55,6 +106,13 @@ same suite still reading?** `t60-gate.sh` reads `qapp-staging`'s creds at
 created would delete the subject of an assertion three lines later. The teardown
 belongs in an `EXIT` trap for that reason, and each suite's list has to be derived
 by reading it.
+
+A second question the measurement raises: **`qapp-production` and `qapp-staging`
+are the same names in two different suites.** A teardown that removes the service
+removes it for whoever runs next on the machine, which is the point — but it also
+means the two suites cannot both be "the first to create `qapp-production`" on a
+shared machine unless the first one cleans up. The route-host refusal above is
+the same fact seen from the allocator's side.
 
 ## Acceptance
 
