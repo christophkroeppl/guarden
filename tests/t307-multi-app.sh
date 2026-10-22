@@ -313,3 +313,32 @@ run furrow status --json
 assert_exit 0
 assert_json queued 0
 assert_json in_flight 0
+
+# --- 6. two apps may not name one pod ---------------------------------------
+#
+# A pod is a per-user podman object — one network namespace a SERVICE's
+# containers share (spec §7.1, ADR-0026). Two apps naming one `[pod] name` are
+# asking for a pod holding both apps' containers, and the answer is two services,
+# two Linux users and two pods: the name cannot mean one pod across them. So the
+# repository is REFUSED rather than deployed as two pods wearing one name, which
+# is the "declaration that silently does nothing" shape this repository refuses
+# wherever an input cannot be built.
+#
+# The manifest is edited where a repository would carry the key — appended to the
+# fixture's own file, not replacing it — so what is refused is the declaration and
+# nothing else about the tree.
+shared=$(stage_tree multi shop c0ffee1)
+say "$shared/apps/web/.guarden/service.yml" ""
+say "$shared/apps/web/.guarden/service.yml" "pod:"
+say "$shared/apps/web/.guarden/service.yml" "  name: shop"
+say "$shared/apps/api/.guarden/service.yml" ""
+say "$shared/apps/api/.guarden/service.yml" "pod:"
+say "$shared/apps/api/.guarden/service.yml" "  name: shop"
+run furrow deploy shop-production --from poke shop@c0ffee1
+assert_exit 2
+assert_one_diagnostic "error:"
+echo "MEASURE: the refusal of two apps naming one pod: $(tr '\n' '|' <"$GUARDEN_STDERR")"
+assert_stderr_has "'api'"
+assert_stderr_has "'web'"
+assert_stderr_has "'shop'"
+assert_stderr_has "never spans two services"

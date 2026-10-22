@@ -1188,6 +1188,12 @@ Validation rules:
   rule covered only the top level, so a typo in a nested key was silently dropped and a
   manifest asking for `authentification: true` got a route with no auth on it and no diagnostic
   saying so.
+- **Two apps of one repository may not name the same pod.** A pod is a per-user podman object, so
+  it never spans two services (§7.1): two apps are two services, two Linux users and two pods, and
+  a `[pod] name` two apps share is refused, exit `2`, naming both apps and the name. The default
+  pod name cannot collide — it is the workload — so the rule is about a name written down. It is
+  asked of a request that deploys the whole repository, which is the one place every app's
+  manifest is in hand; a request naming a single app sees one manifest and does not ask it.
 - `grouping` takes `one-service-per-app` or `one-service` and nothing else. `one-service-per-app`
   is the default and the only value implemented — one app, one service, one user, one home, one
   pod — and `one-service` is refused, exit `2`, naming the value, both spellings and the reason:
