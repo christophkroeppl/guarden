@@ -918,8 +918,8 @@ run loom render "$changed" --service kid-staging --out "$changed/out-own"
 assert_exit 0
 [ "$(unit_line "$changed/out-own/units/app.container")" = "none" ] \
     || _fail "the base unit renders $(unit_line "$changed/out-own/units/app.container") and must render no line at all: the pin is a drop-in (ADR-0019)"
-[ "$(unit_line "$changed/out-own/admin/app.pod.d/50-guarden-keepid.conf")" = "UserNS=keep-id:uid=10001,gid=$kid_gid" ] \
-    || _fail "the record's own image renders $(unit_line "$changed/out-own/admin/app.pod.d/50-guarden-keepid.conf") and the pair it holds is keep-id:uid=10001,gid=$kid_gid"
+[ "$(unit_line "$changed/out-own/admin/kid.pod.d/50-guarden-keepid.conf")" = "UserNS=keep-id:uid=10001,gid=$kid_gid" ] \
+    || _fail "the record's own image renders $(unit_line "$changed/out-own/admin/kid.pod.d/50-guarden-keepid.conf") and the pair it holds is keep-id:uid=10001,gid=$kid_gid"
 
 sed -i 's|^Image=localhost/kid-staging:latest$|Image=localhost/kid-other:latest|' \
     "$changed/.guarden/quadlet/app.container"
@@ -927,7 +927,7 @@ run loom render "$changed" --service kid-staging --out "$changed/out-other"
 assert_exit 0
 [ "$(unit_line "$changed/out-other/units/app.container")" = "none" ] \
     || _fail "a unit naming localhost/kid-other:latest renders $(unit_line "$changed/out-other/units/app.container") from a record whose owner_image is localhost/kid-staging:latest, and a unit the record does not answer renders no line (ADR-0019) — the render alone never probes, so a line here is another image's pin installed until the next start repairs it"
-assert_file_missing "$changed/out-other/admin/app.pod.d/50-guarden-keepid.conf"
+assert_file_missing "$changed/out-other/admin/kid.pod.d/50-guarden-keepid.conf"
 
 # --- a rebuild under the same tag is a DIFFERENT image -----------------------
 #
