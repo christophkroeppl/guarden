@@ -142,7 +142,7 @@ assert_file_has "$registry/$consumer.toml" 'via = "tunnel"'
 # traffic, and a number would be a port the firewall admits and nothing answers.
 assert_file_lacks "$registry/$consumer.toml" "publications = ["
 
-unit_dir=/var/lib/guarden/services/$consumer/.config/containers/systemd
+unit_dir=/var/lib/guarden/services/$consumer/home/.config/containers/systemd
 env_file=$unit_dir/guarden.env
 assert_file_has "$env_file" "API_HOST=orders.tunnel.example.net"
 assert_file_has "$env_file" "API_PORT=443"
