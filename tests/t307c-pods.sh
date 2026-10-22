@@ -236,11 +236,11 @@ echo "MEASURE: what the host fetched from the pod's publication $web_pub: $(cat 
 # The generated unit is read from the manager's own generator output, because
 # `systemctl --user --machine <name>@ cat` answers "Cannot remotely cat units".
 generated=/run/user/"$svc_uid"/systemd/generator
-assert_file_exists "$generated/$svc-web.service"
-assert_file_has "$generated/$svc-web.service" "Requires=podprobe-pod.service"
-assert_file_has "$generated/$svc-web.service" "After=podprobe-pod.service"
-assert_file_has "$generated/$svc-worker.service" "Requires=podprobe-pod.service"
-echo "MEASURE: the pod member's generated dependencies: $(grep -E '^(Requires|After)=' "$generated/$svc-web.service" | tr '\n' ' ')"
+assert_file_exists "$generated/web.service"
+assert_file_has "$generated/web.service" "Requires=podprobe-pod.service"
+assert_file_has "$generated/web.service" "After=podprobe-pod.service"
+assert_file_has "$generated/worker.service" "Requires=podprobe-pod.service"
+echo "MEASURE: the pod member's generated dependencies: $(grep -E '^(Requires|After)=' "$generated/web.service" | tr '\n' ' ')"
 
 run weedr service stop "$svc"
 assert_exit 0
