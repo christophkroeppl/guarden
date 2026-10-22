@@ -252,9 +252,17 @@ assert_exit 1
 # root as well as the service.
 assert_stderr_has "the build of shop-api-production failed"
 assert_stdout_has "build   shop-api-production (app apps/api): weedr service build"
-worker_after=$(grep -nE 'ensure +shop-worker-api-production' "$GUARDEN_STDOUT" | cut -d: -f1 || true)
-[ -n "$worker_after" ] \
+# **The third app ran after the second one failed**, and it is an ORDER rather
+# than a count: a drain that stopped at the first failure would report the build
+# line and nothing after it, and a check for the line alone would pass on a
+# poke that deployed two of its three apps.
+failed_at=$(grep -nE '^build +shop-api-production' "$GUARDEN_STDOUT" | cut -d: -f1 || true)
+worker_at=$(grep -nE '^ensure +shop-worker-api-production' "$GUARDEN_STDOUT" | cut -d: -f1 || true)
+[ -n "$failed_at" ] || _fail "the poke never reached shop-api-production's build"
+[ -n "$worker_at" ] \
     || _fail "shop-worker-api-production was never ensured after shop-api-production's build failed"
+[ "$failed_at" -lt "$worker_at" ] \
+    || _fail "shop-worker-api-production was ensured before the build that failed ($worker_at <= $failed_at)"
 # The apps that could deploy did, and the one that could not changed nothing: a
 # failure is one app's and the poke does not take the others with it.
 [ "$(sha256sum "$registry/shop-web-production.toml" | cut -d' ' -f1)" != "$before_web" ] \
