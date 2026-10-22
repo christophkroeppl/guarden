@@ -42,13 +42,36 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from guarden import config as config_mod  # noqa: E402
-from guarden import exposure  # noqa: E402
-from guarden import publications  # noqa: E402
+from guarden import (
+    exposure,  # noqa: E402
+    publications,  # noqa: E402
+)
 from guarden import service as service_mod  # noqa: E402
 
 TUNNEL_DOMAIN = "tunnel.example.net"
 
+NOT_IN_A_NAME = re.compile(r"\b(?:not\s+in|in\s+no)\b", re.IGNORECASE)
+CONTAINED = re.compile(
+    r"\b(?:inside|outside|within|beyond|under)\s+(?:a\s+|the\s+)?`?host\.domain", re.IGNORECASE
+)
+HISTORICAL = re.compile(
+    r"\b(?:earlier|previous|previously|formerly|used\s+to|no\s+longer)\b", re.IGNORECASE
+)
+
 FAILURES: list[str] = []
+
+
+def host_domain_containment_ok(paragraph: str) -> bool:
+    """Whether a paragraph avoids placing a name inside or outside `host.domain`.
+
+    The claim the spec used to make has the shape `<a name> outside host.domain`.
+    Prose about the earlier revision is allowed to describe that shape, but only
+    after the paragraph has said it is describing history.
+    """
+    for match in CONTAINED.finditer(paragraph):
+        if not HISTORICAL.search(paragraph[: match.start()]):
+            return False
+    return True
 
 
 def check(condition: bool, what: str) -> None:
@@ -150,28 +173,58 @@ def main(argv: list[str]) -> int:
         "${domain}" in four,
         "spec §4 does not state that `host.domain` is the `${domain}` substitution",
     )
-    # The old sentence, asserted absent by its CLAIM and not by its wording: a
-    # boundary drawn around `host.domain`. A reworded version of the same false
-    # claim is the same defect, so the rule is about what a sentence SAYS rather
-    # than about the words it uses: every sentence in the spec that mentions
-    # `host.domain` must either state that it is the substitution's source, or
-    # deny that a name is in it. The sentence the spec used to carry — "A
-    # repository therefore cannot claim a name outside `host.domain`" — does
-    # neither, and is refused.
-    negation = re.compile(
-        r"\b(?:not|no|never|nor|neither|cannot|can't|isn't|aren't|without)\b", re.IGNORECASE
+    # The old sentence, asserted absent by the SHAPE of its claim and not by the
+    # words: a name placed inside or outside `host.domain`. The rule has to look
+    # for that shape rather than for a negation next to the word `name` — "A
+    # repository therefore cannot claim a name outside `host.domain`" has both of
+    # those, and the negation is of *claiming*, not of the containment. The
+    # paragraph is the unit rather than the sentence, because markdown emphasis
+    # after a full stop (`validated nothing.** It made`) means a sentence
+    # boundary is not where a naive split finds one, and a bad clause was being
+    # laundered by a good one in the same chunk.
+    #
+    # So it takes both halves: one paragraph that gives `host.domain` its role
+    # and denies that a name contains it, and no paragraph that describes a name
+    # as sitting inside or outside it. The first half is what the spec must say;
+    # the second is what it must not.
+    paragraphs = re.split(r"\n\s*\n", spec)
+    check(
+        any(
+            "host.domain" in paragraph
+            and "substitution" in paragraph
+            and NOT_IN_A_NAME.search(paragraph)
+            for paragraph in paragraphs
+        ),
+        "no paragraph in the spec both states `host.domain`'s role (the `${domain}` "
+        "substitution) and says it is not in a name",
     )
-    for sentence in re.split(r"(?<=[.:])\s+", spec):
-        if "host.domain" not in sentence:
+    for paragraph in paragraphs:
+        match = CONTAINED.search(paragraph)
+        if not match:
             continue
-        states_substitution = "substitution" in sentence
-        denies_membership = bool(negation.search(sentence)) and bool(
-            re.search(r"\bname", sentence, re.IGNORECASE)
-        )
         check(
-            states_substitution or denies_membership,
-            f"the spec makes `host.domain` a boundary a name is inside or outside: {sentence!r}; "
+            host_domain_containment_ok(paragraph),
+            "the spec places a name inside or outside `host.domain`: "
+            f"{match.group(0)!r} in "
+            f"{paragraph[max(0, match.start() - 120) : match.end() + 120]!r}; "
             "`host.domain` is the `${domain}` substitution's source and is in no allocated name",
+        )
+    # The rule itself is asserted, because the rule it replaces was described in
+    # its own comment as refusing the old claim and accepted it. A check that
+    # cannot fail on the sentence it names is the defect it was written to catch.
+    for sample, expected in (
+        (
+            "A repository therefore cannot claim a name outside `host.domain`, and the only "
+            "way to serve another domain is for the operator to set `host.domain`.",
+            False,
+        ),
+        ("The earlier revision made the full name the label inside `host.domain`.", True),
+        ("`host.domain` is in no allocated name.", True),
+    ):
+        check(
+            host_domain_containment_ok(sample) is expected,
+            f"the `host.domain` rule does not judge its own sample {sample!r}: expected "
+            f"{'acceptance' if expected else 'refusal'}",
         )
     for name in (edge, production, tunnel, instance):
         check(
