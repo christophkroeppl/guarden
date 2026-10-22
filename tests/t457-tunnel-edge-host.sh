@@ -267,6 +267,15 @@ assert_file_has "$services" \
 
 pinned=--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2
 
+run runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=error \
+    --network "pasta:$pinned" localhost/probe-bb /bin/busybox cat /etc/resolv.conf
+printf 'PROBE ubuntu resolv.conf:\n%s\n' "$(cat "$GUARDEN_STDOUT")" >&2
+run_in "$home" setpriv --reuid="$consumer" --regid="$consumer" --clear-groups \
+    env -u OLDPWD HOME="$home" PWD="$home" USER="$consumer" LOGNAME="$consumer" \
+    XDG_RUNTIME_DIR="$runtime" podman run --rm --log-level=error \
+    --network "pasta:$pinned" localhost/probe-bb /bin/busybox cat /etc/resolv.conf
+printf 'PROBE consumer resolv.conf:\n%s\n' "$(cat "$GUARDEN_STDOUT")" >&2
+
 # `iptables -nvx -L` prints `pkts bytes target prot …`, so the DROP rule's
 # counter is the first field and its destination is `127.0.0.0/8`. One function,
 # so the readings cannot differ in how they were taken.
@@ -296,6 +305,9 @@ run timeout 120 runuser -u ubuntu -- env -C /tmp podman run --rm --log-level=err
     --network "pasta:$pinned" localhost/probe-bb /bin/busybox nslookup example.com
 after=$(deny_packets)
 printf 'MEASURE: NON_SERVICE_UID_LOOKUP_DENY_COUNTER=%s->%s\n' "$before" "$after" >&2
+printf 'PROBE ubuntu lookup stdout:\n%s\nPROBE ubuntu lookup stderr:\n%s\n' \
+    "$(cat "$GUARDEN_STDOUT")" "$(cat "$GUARDEN_STDERR")" >&2
+printf 'PROBE rules:\n%s\n' "$(iptables-legacy -nvx -L guarden-svc | head -40)" >&2
 [ "$after" != "$before" ] \
     || _fail "a non-service uid's lookup did not meet the deny, so the deny is not in force and the row above proves nothing"
 assert_stdout_lacks "Name:"
