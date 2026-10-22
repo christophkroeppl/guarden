@@ -93,7 +93,7 @@ change to this table and not a compatible addition.
 | `furrow queue list` | `requests` — one object per request with `service`, `ref`, `sha`, `state`, `lane`, `weight`, `queued_at` |
 | `furrow status` | `lanes`, `in_flight`, `deployed`, `queued` |
 
-**`stakes query` reads the pin file and the registry, and nothing else.**
+**`stakes query` reads the pin file and the registry, and nothing else.** An earlier version of
 this table listed `tag`, `description`, `important` and `userdata` for it, which is the same
 contradiction §6.8 states a third time: those fields come from snapper, a service's
 configurations are `0700` to that service, and `stakes` runs as `guarden` and cannot read them.
@@ -217,7 +217,7 @@ to it.
 /etc/snapper/configs/<service>-<vol>  written by soil, converged to a fixed value set
 ```
 
-**An instance's volumes are a sibling of the service's, never a child of them.**
+**An instance's volumes are a sibling of the service's, never a child of them.** An earlier
 version of this layout put them at `services/<name>/state/<vol>/<escaped-ref>/`, and that is
 wrong in a way that fails silently: **btrfs does not recurse into nested subvolumes when it
 snapshots.** A subvolume nested inside another is excluded from its parent's snapshot entirely,
@@ -1187,7 +1187,7 @@ Validation rules:
   `www.elsewhere.com` claims `www.elsewhere.com.myapp.com` — inside the domain, unreachable,
   and visibly wrong to the developer rather than silently successful. **A repository therefore
   cannot claim a name outside `host.domain`, and the only way to serve another domain is for the
-  operator to set `host.domain` or the track's `host_prefix`.** 
+  operator to set `host.domain` or the track's `host_prefix`.** The earlier revision combined
   these two with a `${domain}` substitution and validated nothing, which meant any repository
   could claim any name in the operator's domain and two services claiming one was undefined.
 - `host:` must match `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$` after
@@ -1199,6 +1199,9 @@ Validation rules:
   second `weedr service ingest` whose route host is already taken is exit `1` with the holder
   named, exactly as for a duplicate port (§1.2). The allocation lives in the host's
   `[route_hosts]` table, so it survives regeneration and two instances of one preview service
+  cannot collide. Nothing about this is cooperative: a repository cannot take a name that is
+  already serving, and a service that loses its host on removal has it released, so the name
+  becomes available again.
 - **A `zram:` key is refused specifically, in all three vocabularies a repository speaks.** It
   is host configuration, it is in the root-owned `/etc/guarden/guarden.toml` (§3.1), and the
   answer is never in a repository — the same shape and the same reason as `environment:` and
@@ -1208,9 +1211,6 @@ Validation rules:
   the door open in the vocabulary most developers write. `sysctls:` and `swappiness:` are refused
   with them: `vm.swappiness` is the one real sysctl this design adds to the set `soil sysctl`
   owns, and neither is a grant nor a request, so neither is anything a repository may state.
-  cannot collide. Nothing about this is cooperative: a repository cannot take a name that is
-  already serving, and a service that loses its host on removal has it released, so the name
-  becomes available again.
 - A `ports:` entry names a container the unit source defines, exactly as `routes:` does. The
   container's port is also how its publication is found, so a container named only in `ports:`
   gets a publication like any other (§7.4). This is the case the whole grant model rests on: a
@@ -1780,7 +1780,7 @@ still converge and the run still exits `1`.
   edge if `ingress.alias` is still empty. It is the only phase that writes outside the host's own
   storage.
 
-  **There is no alias probe, and `ingress.alias` is not a measurement.**
+  **There is no alias probe, and `ingress.alias` is not a measurement.** An earlier revision of
   this section ran a throwaway rootless container and recorded four facts from it, and that
   mechanism could never run: `soil install` is root and runs before any service user exists, and
   podman 5.7 refuses `--network pasta:` as root — "pasta networking is only supported for

@@ -297,6 +297,35 @@ assert_file_has() {
     grep -qF -- "$2" "$1" || _fail "$1 does not name $2"
 }
 
+# assert_string_contains <text> <needle> and assert_string_lacks <text> <needle>:
+# the same pair as assert_file_has / assert_file_lacks, for a STRING rather than
+# a file.
+#
+# **A passage of a document is a subject an assertion can have.** A suite that
+# wants to pin what a PARAGRAPH says cannot reach it with the file helpers:
+# `assert_file_has` reads the whole file, so a string in a neighbouring
+# paragraph satisfies it and the paragraph under test is not measured at all.
+# So the text is passed in and searched as text.
+#
+# **And the negative one can fail.** `assert_file_lacks` had a defect here
+# once — it filtered the file through a pipe into `grep -q`, and `grep -q`
+# exits at its first match, so the producer got SIGPIPE and `pipefail` turned
+# that into exit 141: on a file bigger than one pipe buffer the assertion
+# could not fail at all (fixed in `e177cbe`). These two take a string and use
+# a here-string, so there is no pipe and no producer to lose.
+assert_string_contains() {
+    case "$1" in
+        *"$2"*) return 0 ;;
+    esac
+    _fail "the text does not contain $2"
+}
+
+assert_string_lacks() {
+    case "$1" in
+        *"$2"*) _fail "the text contains $2 and should not" ;;
+    esac
+}
+
 # assert_dir_empty <dir>: the directory exists and holds nothing.
 #
 # The pair to `assert_file_exists` for a generator's output: a systemd generator

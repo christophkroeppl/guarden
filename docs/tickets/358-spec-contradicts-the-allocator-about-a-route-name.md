@@ -136,10 +136,12 @@ would have to confront.
 
 ## Acceptance
 
+- [x] The sentence at 1191 is repaired into a whole sentence — and so are the
+      other three of the same class, and the fifth by a different mechanism.
+- [x] A suite pins the class, so the next fragment is caught too.
 - [ ] `docs/spec.md` §4 says, once and unambiguously, what a route's full name is,
-      and it says the same thing the allocator computes.
-- [ ] The sentence at 1191 is either repaired into a whole sentence or removed —
-      it is not left as a fragment.
+      and it says the same thing the allocator computes. **Blocked on the
+      operator's answer below.**
 - [ ] `host.domain`'s role is stated: the `${domain}` substitution, the route
       name, or both — and if it is the route name, the allocator and the three
       pinning suites change with it.
@@ -148,8 +150,84 @@ would have to confront.
 - [ ] `tests/t480-doc-claims.sh` pins whatever §4 now says, so the spec and the
       allocator cannot drift apart again without a suite going red.
 
+## What landed without the decision
+
+The broken sentence is the one part of this ticket that is not the operator's
+to decide, and it is fixed. **It was not one sentence but five**, in two
+mechanisms:
+
+**Four fragments, one mechanism.** `67740995` folded the ADRs into the spec,
+and in four places it replaced a paragraph's opening and left the tail behind:
+
+| line | what was lost |
+|---|---|
+| 96 | `stakes query`'s field set lost "An earlier version of" |
+| 220 | the instance-volumes layout lost "An earlier" |
+| 1190 | the route-host paragraph lost "The earlier revision combined" |
+| 1783 | the alias-probe paragraph lost "An earlier revision of" |
+
+**One split paragraph, a different mechanism.** `caa414d` inserted the `zram:`
+bullet between a paragraph's two halves, so `cannot collide. Nothing about this
+is cooperative` ended a paragraph it no longer belonged to. That is the ticket's
+1191 case with the half in a different place: the sentence at 1191 is orphaned
+by a rewrite, and the sentence at 1211 is orphaned by an insertion.
+
+**The repair restores the words the rewrite dropped** rather than rewriting the
+sentences — a fragment is a fragment because of the half that is missing, and
+the missing half is known.
+
+**The check is structural, so the next one is caught too.** A phrase list would
+name the four fragments someone found and leave the next one uncaught, so
+`tests/docfragments.py` asks whether a sentence begins with a lowercase word
+where the previous line ended a complete sentence. Measured: it finds exactly
+those four fragments in the spec before the repair and none after it, and none
+in `docs/sysadmin.md`, `CONTEXT.md`, `AGENTS.md`, `docs/PRD.md` or
+`SECURITY.md` — so it measures the defect and not the documents' prose style.
+`tests/t480-doc-claims.sh` runs it over every document the repository ships.
+
+**Verified non-vacuously.** With the fragments restored and the assertion kept,
+the suite fails naming all four; with them repaired it passes on a second
+runner.
+
 ## Status: needs-a-decision
 
 - [ ] answer 1 (the spec is stale; rewrite §4, keep the bare form) — **or** —
 - [ ] answer 2 (the code is wrong; the name is in the host's domain, and the
       allocator, the edge rule and the three suites change)
+
+### What each answer costs, measured
+
+**Answer 1 — the code is right, the spec is stale.** §4 is rewritten to the
+bare form, `host.domain`'s role is stated as the `${domain}` substitution only,
+and §3.4's example (`web = "web.myapp.com"`) and §9's (`preview.$DOMAIN/<ref>`)
+are corrected too — they are the same claim in two more places. **Nothing in
+`src/guarden/` changes.** The three pinning suites stay as they are.
+
+**Answer 2 — the spec is right, the code is wrong.** The allocator needs
+`host.domain` in it, and everything that carries a route's name moves with it:
+
+| what | where |
+|---|---|
+| the allocated name | `publications.claim_host`, `service._zone` |
+| the registry table | the `[route_hosts]` record |
+| the slice | `shared-routes.toml.j2`'s `host =` |
+| the edge's rule | `roots._rule`'s `Host(`…`)` |
+| the tunnel | `roots.render_tunnel`'s hostname |
+| `twig`'s links | `twig.projects`'s `hosts` |
+| `weedr share issue` | the hostname it grants |
+| the three pinning suites | `t50-route.sh:62,70,100`, `t50-slice.sh:425` |
+
+**And the name's SHAPE is a second decision inside answer 2**, which the
+ticket does not settle: `staging.` + `web` + `example.com` is
+`web.staging.example.com` (prefix first, the label inside the domain) or
+`staging.web.example.com` (prefix as a subdomain of the domain). The spec's
+own example at 1186 says `web.myapp.com`, which is the FIRST shape, and its
+formula at 1185 says `<track host_prefix><host:>`, which is the SECOND. **The
+spec contradicts itself here, independently of the allocator**, so answer 2
+must also say which shape it means.
+
+**What neither answer changes:** `host.domain` remains the `${domain}`
+substitution's only source (`render._substitute`), and the tunnel's
+`[ingress] tunnel_domain` remains the zone a tunnel route is allocated in
+(ticket 324). Only the EDGE route's name is in question.
+

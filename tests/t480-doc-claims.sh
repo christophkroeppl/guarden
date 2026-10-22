@@ -37,6 +37,8 @@
 # reads: src/guarden/templates/cloud-init/template.yaml
 # reads: src/guarden/templates/cloud-init/provision.sh
 # reads: packages/packages.toml
+# reads: docs/spec.md CONTEXT.md AGENTS.md docs/PRD.md SECURITY.md
+# reads: src/guarden/publications.py src/guarden/service.py tests/t50-route.sh
 
 . "$(dirname "$0")/lib.sh"
 
@@ -47,6 +49,11 @@ INSTALL=$GUARDEN_ROOT/tools/install.sh
 TEMPLATE=$GUARDEN_ROOT/src/guarden/templates/cloud-init/template.yaml
 PROVISION=$GUARDEN_ROOT/src/guarden/templates/cloud-init/provision.sh
 PACKAGES=$GUARDEN_ROOT/packages/packages.toml
+SPEC=$GUARDEN_ROOT/docs/spec.md
+CONTEXT=$GUARDEN_ROOT/CONTEXT.md
+AGENTS=$GUARDEN_ROOT/AGENTS.md
+PRD=$GUARDEN_ROOT/docs/PRD.md
+SECURITY=$GUARDEN_ROOT/SECURITY.md
 
 # The one checkout location, read out of the code rather than written here.
 # `install.sh` and `userdata.py` both carry it, and a runbook that names a
@@ -235,5 +242,47 @@ assert_file_has "$PACKAGES" '"git"'
 run soil packages --list
 assert_exit 0
 assert_stdout_has "git"
+
+# --- 358: no sentence with no subject, and the route's name stated once -----
+#
+# **A paragraph's opening was rewritten and its tail was left behind.** The
+# defect this measures is not a typo and not a stale claim: it is a document
+# edit that replaced a paragraph's first half and left the second half in
+# place, so the paragraph reads
+#
+#     **A claim.**<newline>
+#     these two with a `${domain}` substitution and validated nothing, ...
+#
+# The second line has no subject and no verb, because the words that made it a
+# sentence were in the part that was rewritten. A reader gets a fragment and
+# nothing says so — and `docs/spec.md` is the document the suites check the
+# code against, so a fragment there is a claim about the code that nobody can
+# read.
+#
+# **It happened four times in one commit.** `67740995` folded the ADRs into
+# the spec, and in four places it rewrote a paragraph's opening and left the
+# tail behind: the `stakes query` field set, the instance-volumes layout, the
+# route-host paragraph, and the alias-probe paragraph. All four were repaired,
+# and the repair restored the words the rewrite had dropped rather than
+# rewriting the sentences — a fragment is a fragment because of the half that
+# is missing, and the missing half is known.
+#
+# **The check is structural, and that is the point.** A phrase list would name
+# the four fragments someone has already found and leave the next one
+# uncaught, so `tests/docfragments.py` asks a question about the SHAPE of a
+# document: does a sentence begin with a lowercase word where the previous
+# line ended a complete sentence? That is the shape a rewrite leaves behind,
+# and it is narrow enough to be precise — a fenced code block is not prose, a
+# list item is a new block, and a blank line ends a paragraph.
+#
+# **It is measured, not asserted from a reading.** The helper found exactly
+# those four fragments in the spec before the repair and none after it, and
+# none in `docs/sysadmin.md`, `CONTEXT.md`, `AGENTS.md`, `docs/PRD.md` or
+# `SECURITY.md` — so it is measuring the defect and not the documents' prose
+# style. It runs over every document the repository ships, so a fragment in
+# any of them is caught.
+run python3 "$GUARDEN_ROOT/tests/docfragments.py" \
+    "$SPEC" "$DOC" "$CONTEXT" "$AGENTS" "$PRD" "$SECURITY"
+assert_exit 0
 
 echo "t480-doc-claims: ok"
