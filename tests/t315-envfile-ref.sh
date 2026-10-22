@@ -218,6 +218,10 @@ echo "MEASURE: the backslashes in the volume path: $vol_backslashes"
 # container never came up would be a start that proved nothing, so the
 # container is asked for.
 run weedr service start envconsumer-preview/feature/x
+if [ "$GUARDEN_EXIT" != 0 ]; then
+    journalctl --user -M envconsumer-preview@ -xeu 'web-feature\x2fx.service' 2>&1 | tail -30
+    journalctl --user -M envconsumer-preview@ -xeu 'envconsumer-666561747572655c78326678-pod.service' 2>&1 | tail -30
+fi
 assert_exit 0
 assert_stdout_has "started envconsumer-preview"
 
