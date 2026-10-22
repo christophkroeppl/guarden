@@ -211,12 +211,14 @@ assert_exit 0
 
 apt_waits install -y busybox-static
 assert_executable /bin/busybox
-hop=$GUARDEN_FIXTURES/hop
+hop=/tmp/guarden-t457-hop
+hop_tar=/tmp/guarden-t457-hop.tar
 mkdir -p "$hop/bin"
 cp /bin/busybox "$hop/bin/busybox"
-tar -C "$hop" -cf "$GUARDEN_FIXTURES/hop.tar" bin
+tar -C "$hop" -cf "$hop_tar" bin
+chmod 644 "$hop_tar"
 run runuser -u ubuntu -- env -C /tmp podman import \
-    --change 'CMD ["/bin/busybox","true"]' "$GUARDEN_FIXTURES/hop.tar" localhost/probe-bb:latest
+    --change 'CMD ["/bin/busybox","true"]' "$hop_tar" localhost/probe-bb:latest
 assert_exit 0
 
 pinned=--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2
