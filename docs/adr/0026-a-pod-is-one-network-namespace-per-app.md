@@ -39,7 +39,7 @@ the pod's (§6.3). `AddHost=` stays where it is — on the member container unit
 `/etc/hosts` is the container's file and not the namespace's, so every name §7.3 writes still
 resolves, to the same address, for the same reason.
 
-**`networks:` is pod membership, and the only pod there is is the app's.** A document-level
+**`networks:` is pod membership, and the only pod there is belongs to the app.** A document-level
 `networks:` table is accepted when its only key is the pod's name and it states no options, and a
 service's `networks:` list is accepted when it names the pod. Every other name is refused by name,
 exit `2`, on the repository's own declaration and before the converter is driven. That is the
@@ -63,7 +63,7 @@ against:
   the host; it gives it no name service. Names are still `AddHost=` entries the renderer writes,
   and the port a repository reads is still the publication (§7.3).
 - **It is not where a port is granted.** Publications are allocated per container and persisted in
-  the registry exactly as before (§7.4); the pod publishes them, because podman publishes a pod's
+  the registry exactly as before (§7.4); the pod publishes them, because podman binds a pod's
   ports on the pod, and the host-side set is unchanged — `127.0.0.1:<publication>:<container
   port>`, one per container, with the same accept set.
 
