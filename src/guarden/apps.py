@@ -154,15 +154,27 @@ def resolve(tree: Path, name: str) -> App:
     The tree is **input** (spec 1.2) — a poke's staged tree, a service's copied
     home — so an app that is not there is exit `2`: the repository and the
     service name disagree, and neither is the host's state.
+
+    **A tree with no app anywhere is a tree with no manifest anywhere**, and the
+    absent file is what the operator can act on: a deploy against an empty
+    staging directory is a missing manifest before it is a missing app, and the
+    refusal says so rather than reporting an app name that was never going to
+    resolve. A tree that ships apps and not *this* one is the other case, and
+    there the list of what it does ship is the useful half.
     """
     apps = discover(tree)
     app = named(apps, name)
     if app is not None:
         return app
+    if not apps:
+        raise errors.GuardenError(
+            f"the manifest {_manifest(tree)} does not exist, so the tree {tree} ships "
+            f"no app at any depth",
+            errors.REJECTED_INPUT,
+        )
     raise errors.GuardenError(
-        f"the tree {tree} ships no app called {name!r}"
-        + (f"; the apps it ships are: {shipped(apps)}" if apps else f", and no "
-           f"{MANIFEST_REL} at all")
+        f"the tree {tree} ships no app called {name!r}; the apps it ships are: "
+        f"{shipped(apps)}"
         + ("; a service of a multi-app repository is `<project>-<app>-<environment>`"
            if name else ""),
         errors.REJECTED_INPUT,
