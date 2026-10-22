@@ -22,7 +22,6 @@ AUTH_DATABASE = "database"
 AUTH_SECRET = "secret"
 AUTH_NONE = "none"
 
-VIA_PASTA = manifest_mod.VIA_PASTA
 VIA_TUNNEL = manifest_mod.VIA_TUNNEL
 TUNNEL_PORT = manifest_mod.TUNNEL_PORT
 
