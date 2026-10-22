@@ -457,7 +457,7 @@ enabled = ["gate-traefik", "homepage"]
 
 [[environments]]  # a track
 name = "production"
-host_prefix = ""  # route host is myapp.$DOMAIN
+host_prefix = ""  # the route host is the label alone: `web`
 gated = true  # refuses to start on a missing or placeholder credential
 weight = 1000  # CPUWeight and IOWeight in generated units
 free_limit = 0.10  # snapper FREE_LIMIT: the free-space floor (§8.1), and a TOML
@@ -780,10 +780,14 @@ kinds = [ "db" ]  # what the manifest's provides: listed, and only that. Written
   # whose manifest declares none, which is not the same as empty
 
 [route_hosts]
-web = "web.myapp.com"  # manifest label -> the full name, prefix applied, and the
-  # tunnel's zone after it when the route's destination is `tunnel`
-  # (§3.1 `tunnel_domain`): `web` alone is a name in no zone, which
-  # no DNS can answer. A claim, like a publication: allocated,
+web = "web"  # manifest label -> the allocated name: the track's root-owned
+  # host_prefix in front, and the tunnel's zone after it when the route's
+  # destination is `tunnel` (§3.1 `tunnel_domain`): `web` alone is a
+  # name in no zone, which no DNS can answer. This record's route is
+  # `loopback` on the production track, whose prefix is empty, so the
+  # name is the bare label; a route on the staging track is `staging.web`,
+  # and a tunnel route is `web.tunnel.example.net`. A claim, like a
+  # publication: allocated,
   # refused when taken, released on remove
 
 [route_destinations]
@@ -1002,9 +1006,9 @@ ports:  # public ports requested from outside the host
 routes:  # published to the edge
   - container: web  # a container in THIS service
   port: 3000  # the container's own port; the loopback publication is guarden's
-  host: "web"  # a LABEL, not a domain. The full name is the track's
-  # root-owned host_prefix + this, so a manifest cannot claim a
-  # name outside host.domain
+  host: "web"  # a LABEL, not a domain. The allocated name is the track's
+  # root-owned host_prefix + this, and the tunnel's zone after it when the
+  # route's destination is `tunnel` — `host.domain` is in no name
   auth: true
 
 siblings:  # a container of THIS service another container may dial (§7.3)
@@ -1181,15 +1185,26 @@ Validation rules:
   therefore not used anywhere in a manifest entry; string form carried the protocol, and
   carrying it in two places is two places for it to be wrong.
 - `routes` must name a container the unit source defines, and carry a container port.
-- **A route's `host:` is a label, not a domain, and the host owns the domain.** The full name is
-  `<track host_prefix><host:>`, and `host_prefix` is root-owned. So with `host_prefix = "myapp."`
-  a manifest writing `web` claims `web.myapp.com` and a manifest writing
-  `www.elsewhere.com` claims `www.elsewhere.com.myapp.com` — inside the domain, unreachable,
-  and visibly wrong to the developer rather than silently successful. **A repository therefore
-  cannot claim a name outside `host.domain`, and the only way to serve another domain is for the
-  operator to set `host.domain` or the track's `host_prefix`.** The earlier revision combined
-  these two with a `${domain}` substitution and validated nothing, which meant any repository
-  could claim any name in the operator's domain and two services claiming one was undefined.
+- **A route's `host:` is a label, not a domain, and the allocated name is
+  `<track host_prefix><host:>`, with `host_prefix` root-owned.** The repository states a label and
+  the host says what the name is: with `host_prefix = "staging."` a manifest writing `web` claims
+  `staging.web`, and with the production track's empty prefix it claims `web`.
+- **A route's destination adds the ZONE, and the zone is the tunnel's, not the host's.** A route
+  whose destination is `tunnel` is allocated `<track host_prefix><host:>.<tunnel_domain>` (§3.1),
+  because that is the name the tunnel's provider answers on and a bare label is a name in no zone
+  that no DNS can answer. A route whose destination is `edge` or `loopback` is allocated the bare
+  `<track host_prefix><host:>`, with **no domain at all**: the edge matches the name it was given,
+  and the operator's DNS and certificates are outside guarden's part of the name.
+- **So `host.domain` is NOT in a route's name, and it is not a boundary a repository can cross.**
+  It is the source of the `${domain}` manifest substitution (the substitution rule below) and
+  nothing else. A repository states a label and the host allocates the name, so there is no
+  domain for a repository to reach outside of: `host.domain` is in no allocated name. **The only
+  way to serve another domain is for the operator to set the track's `host_prefix`, or the
+  tunnel's `tunnel_domain`.**
+- **The earlier revision combined the label and the domain and validated nothing.** It made the
+  full name the label inside `host.domain`, and it validated neither the label nor the result — so
+  any repository could claim any name in the operator's domain and two services claiming one was
+  undefined. The name is now the bare form above, and the second claimant is refused.
 - `host:` must match `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$` after
   prefixing, and must be at least one label. An uppercase character, an underscore, a leading or
   trailing dot, a wildcard or a port is exit `2` naming the value. A wildcard was the shape that
@@ -3735,9 +3750,14 @@ registry entry**, so the count can never be observed mid-flight.
 A manual redeploy does not make an instance newer; the ordering is a property of creation and
 cannot be gamed by redeploying.
 
-Route hosts for an instance are a **path prefix** on one host: `preview.$DOMAIN/<ref>`. All
-previews of all projects therefore share one host, which means no wildcard certificate, no
-per-ref DNS and no per-ref public port.
+Route hosts for an instance are a **path prefix** on one host: `preview.<tunnel_domain>/<ref>`
+(§3.1). All previews of all projects therefore share one host, which means no wildcard
+certificate, no per-ref DNS and no per-ref public port.
+
+An instance's OWN recorded name is not that shared host: it is the track's prefix and the
+label alone — `preview.web` — because the tunnel publishes the shared host and the ref is a
+path on it, so qualifying the instance's own name would give every preview a hostname of its
+own and undo the one host this section is about.
 
 ---
 

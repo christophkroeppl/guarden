@@ -4,8 +4,9 @@
 
   `target` is `<name>:<publication>` — the service's own name, with no suffix
   and no alias (spec 7.3) — and `host` is the name the mutator allocated from
-  the manifest's label and the track's root-owned host_prefix. A repository
-  cannot claim a name outside host.domain: it only ever gets a label.
+  the manifest's label and the track's root-owned host_prefix, plus the tunnel's
+  zone when the route's destination is `tunnel`. A repository only ever gets a
+  label, so it cannot name a domain: `host.domain` is in no route's name.
   `destination` is `edge` or `tunnel` — where this route is published.
   `ref` is the instance ref for preview instances, empty for slot tracks.
   `basicauth` is the LOGIN MINTED for this service at creation (spec 3.4), a

@@ -38,10 +38,28 @@ slice's `host`, the edge's `Host(`…`)` rule, `weedr share issue` (which must
 still refuse an edge route), `twig`'s links, and the three suites that pin the
 bare form.
 
-## Status: ready-for-agent
+## Status: the first item is settled by ticket 358
 
-- [ ] `[host] domain` is what the edge's route names are allocated in, or the
-      spec says why it is not.
+- [x] `[host] domain` is what the edge's route names are allocated in, or the
+      spec says why it is not. **It is not: the spec says why.** Ticket 358
+      decided the naming question — answer 1, the code is right and the spec
+      was stale — and §4 now states that a route's allocated name is
+      `<track host_prefix><host:>`, that the ZONE is the tunnel's and comes
+      from the destination, and that `host.domain` is the `${domain}`
+      manifest substitution's source and is in no allocated name. The spec
+      says why it is not, which is what this item asked for.
 - [ ] The edge's `Host(`…`)` rule matches the name a browser sends, asserted
       with a real request and not a hand-written `Host:` header.
 - [ ] Red first, in the t450–t459 range.
+
+**What is left here is the second item and the third**, and they are a
+different piece of work from the naming decision: the edge's rule is written
+from the recorded name and no suite yet asserts it against a request the edge
+itself made, rather than a hand-written `Host:` header. `t50-slice.sh:422`
+curls the edge with `-H 'Host: staging.web'`, which is the hand-written form
+this item names.
+
+**Note for whoever picks this up**: the name is now stated in one place and
+pinned against the allocator by `tests/routename.py` (run by
+`t480-doc-claims.sh`), so a change to `publications.claim_host` that the spec
+does not follow is caught before it reaches the edge.

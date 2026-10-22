@@ -195,9 +195,9 @@ def _rule(route: dict) -> str:
     whole of how two instances of one service are told apart.** A preview
     service's route host is the SERVICE's own — `record.route_hosts` is per
     service, and the spec says so: "Route hosts for an instance are a **path
-    prefix** on one host: `preview.$DOMAIN/<ref>`" (spec 9). So the rule for an
-    instance is `Host(...) && PathPrefix(...)` and the rule for a slot's own
-    route is `Host(...)`, byte for byte what it was before.
+    prefix** on one host: `preview.<tunnel_domain>/<ref>`" (spec 9). So the rule
+    for an instance is `Host(...) && PathPrefix(...)` and the rule for a slot's
+    own route is `Host(...)`, byte for byte what it was before.
 
     The path is the RAW ref, quoted, because the rule is a matcher and the ref
     is a path: `feature/x` is two segments and `/feature/x` is the path that
@@ -341,7 +341,7 @@ def render_tunnel(routes: list[dict], config) -> str:
     service claims is a 404 from the tunnel rather than a default page.
 
     Preview instances on the tunnel are published at preview.<tunnel_domain>/<ref>
-    as a path on one host (same shape as preview.$DOMAIN/<ref>). **A route with a
+    as a path on one host. **A route with a
     `ref` is therefore never a `rows` entry of its own**: an instance's recorded
     name is `preview.web` — the track's prefix and a label, which is the path's
     shape and not a name in the tunnel's zone — so publishing it as a hostname
