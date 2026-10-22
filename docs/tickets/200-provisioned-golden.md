@@ -21,8 +21,11 @@ deliberately and not alongside other work.**
 - [ ] A cut machine reaches a steady state **without running any package transaction**, measured:
       no `apt-get` process during boot, apt's lists lock free, `cloud-init` reaching `done` with
       nothing to install. That measurement is the ticket's evidence, not a passing suite
-- [ ] **`--provision` still works on a machine whose cloud-init does nothing**, because the first
-      install on a bare host is still `soil install`'s job
+- [ ] **`provision` still works on a machine whose cloud-init does nothing**, because the first
+      install on a bare host is still `soil install`'s job — the verb is `just provision`, which
+      calls `tests/lxc.sh provision` (`cmd_provision`, `tests/lxc.sh:754`). **There is no
+      `--provision` flag anywhere in this repository.** This item said there was, and a worker
+      spent its first minutes searching for it (corrected 2026-10-22).
 - [ ] The one suite that asserts the golden's package inventory is **updated to the new fact**,
       not deleted: a golden that ships its substrate is a different machine, and the claim that
       recorded which packages it did *not* have has to be re-derived rather than remembered
