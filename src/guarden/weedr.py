@@ -1146,6 +1146,35 @@ def _record_for(name: str):
     return record
 
 
+def _plant_tail(name: str, keys) -> str:
+    """The sentence that tells an operator what to plant, or nothing to plant.
+
+    One command per key, because `weedr secret set` takes one key and a comma-joined
+    list would be a command that does not parse.
+    """
+    if not keys:
+        return ""
+    commands = " then ".join(f"`weedr secret set {name} {key}`" for key in keys)
+    return f"; {commands} plants it, and this verb re-checks"
+
+
+def _refuse_unplanted(name: str, verdict: gate.Verdict) -> None:
+    """Refuse a start whose units ask for a credential nothing planted, on either track.
+
+    The podman secret does not exist, so the container cannot be created: the host is
+    not in the state the request assumed and the answer is exit `1` (spec 1.2, §6.6).
+    One line, and it names every key and the command that plants each.
+    """
+    if not verdict.unsatisfied:
+        return
+    keys = ", ".join(verdict.unsatisfied)
+    raise errors.GuardenError(
+        f"{name} cannot start: the unit asks for {keys} and no value is planted for it"
+        f"{_plant_tail(name, verdict.unsatisfied)}",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
 def _gate(args) -> int:
     """Evaluate and record, and change nothing else (spec 6.6 step 3).
 
@@ -1172,7 +1201,7 @@ def _gate(args) -> int:
     if verdict.state == gate.BLOCKED:
         raise errors.GuardenError(
             f"{resolved.name} is on the gated track {resolved.track.name!r} and cannot start: "
-            f"{verdict.reason}",
+            f"{verdict.reason}{_plant_tail(resolved.name, verdict.unsatisfied)}",
             errors.HOST_NOT_AS_ASSUMED,
         )
     sys.stdout.write(f"{resolved.name} gate {verdict.state}\n")
@@ -1194,7 +1223,9 @@ def _start(args) -> int:
         sys.stderr.write(f"{warning}\n")
     if verdict.state == gate.BLOCKED:
         raise errors.GuardenError(
-            f"{resolved.name} cannot start: {verdict.reason}", errors.HOST_NOT_AS_ASSUMED
+            f"{resolved.name} cannot start: {verdict.reason}"
+            f"{_plant_tail(resolved.name, verdict.unsatisfied)}",
+            errors.HOST_NOT_AS_ASSUMED,
         )
     # The SLOT first: a name that names no instance on an instance track has
     # no unit to start at all, and a unit that does not exist cannot ask for a
@@ -1214,18 +1245,7 @@ def _start(args) -> int:
     # what to plant. It is the host not being in the state the request assumed
     # — the podman secret does not exist — so it is exit `1` and not `2` (spec
     # 1.2), the same code a blocked gate's start answers with.
-    if verdict.unsatisfied:
-        keys = ", ".join(verdict.unsatisfied)
-        # One command per key, because `weedr secret set` takes ONE key and a
-        # comma-joined list would be a command that does not parse.
-        plants = " then ".join(
-            f"`weedr secret set {resolved.name} {key}`" for key in verdict.unsatisfied
-        )
-        raise errors.GuardenError(
-            f"{resolved.name} cannot start: the unit asks for {keys} and no value is "
-            f"planted for it; {plants} plants it, and the start re-checks",
-            errors.HOST_NOT_AS_ASSUMED,
-        )
+    _refuse_unplanted(resolved.name, verdict)
     # `started <name>` is a claim about the host, so it needs a unit to be true of.
     # A quadlet directory with nothing in it is a service whose units were never
     # installed, and reporting success there is the false report spec 1.2 forbids.
@@ -1315,13 +1335,16 @@ def _restart(args) -> int:
     refusals the halves make are the restart's refusals: a bare `<name>` on an
     instance track names the SLOT, and the slot holds no unit of its own — so
     the refusal that stops the start from fanning out to every instance also
-    stops the restart from stopping every instance, and the stop half runs
-    first so a restart never leaves a service down when it was refused.
+    stops the restart from stopping every instance, and every refusal runs
+    before the stop so a restart never leaves a service down when it was refused.
 
     The gate is re-evaluated on the way in, exactly as `start` does, because a
     restart after planting a credential is the operator's way of saying "now it
     can start" — and a restart that re-evaluated nothing would refuse a
-    service whose credential has since been planted.
+    service whose credential has since been planted. It is asked **before** the
+    stop for the same reason `start` asks: a blocked gate leaves a running
+    container untouched (spec 6.6), and a restart that stopped first and refused
+    after would take the service down on its way to saying no.
 
     The verb was advertised in the table, in `--help` and in the spec, and had
     no handler at all: every invocation fell to `cli.pending` and answered
@@ -1335,7 +1358,6 @@ def _restart(args) -> int:
     # units are down leaves a service stopped when the operator asked for a
     # restart and got a refusal.
     _refuse_slot_start(resolved, record, "restart")
-    service.stop_units(resolved.name, resolved.escaped_ref)
     now = _now()
     verdict = gate.evaluate(
         resolved.name, gate.schema_for(resolved.name, record.app), resolved.track.gated, now
@@ -1345,8 +1367,12 @@ def _restart(args) -> int:
         sys.stderr.write(f"{warning}\n")
     if verdict.state == gate.BLOCKED:
         raise errors.GuardenError(
-            f"{resolved.name} cannot start: {verdict.reason}", errors.HOST_NOT_AS_ASSUMED
+            f"{resolved.name} cannot start: {verdict.reason}"
+            f"{_plant_tail(resolved.name, verdict.unsatisfied)}",
+            errors.HOST_NOT_AS_ASSUMED,
         )
+    _refuse_unplanted(resolved.name, verdict)
+    service.stop_units(resolved.name, resolved.escaped_ref)
     # The same step-10 re-attempt as `_start`, for the same reason: a restart is
     # the other way an operator says "now it can run" (ticket 284).
     for warning in edges.provision_pending(record):

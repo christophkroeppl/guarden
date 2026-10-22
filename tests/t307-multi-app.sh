@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One manifest per app: a repository may ship several, and one app is one
-# service (ticket 307a, ADR-0027, spec 5.1 / 5.3 / 6.6 / 7.3).
+# service (ticket 307a, ADR-0028, spec 5.1 / 5.3 / 6.6 / 7.3).
 #
 # **The three facts this suite pins, in the order it pins them.**
 #

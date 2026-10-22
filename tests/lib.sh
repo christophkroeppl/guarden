@@ -563,12 +563,41 @@ stage_config() {
 # to render: "there is no 'operator' account, and it is the uid the edge's API accept
 # set names". useradd exits 9 when the GROUP exists and -g was not given, so the
 # group is created first — that mistake was in three suites at once.
+# _ensure_account <name> <group> [useradd args]: the account, or a message that
+# says which account and why.
+#
+# **Every account this helper claims to have made is then looked for.** The
+# guard above each `useradd` asks `id`, and `useradd` asks `/etc/passwd` with its
+# own duplicate check; the two can disagree, and this helper used to let them.
+# Measured on a cut runner: `id -u guarden` said "no such user" while `useradd`
+# exited 9 ("already exists"), so a suite died on its FIRST line with a bare
+# exit code and no account, which reads as a suite defect and was not one.
+# `purge` two hundred lines up asserts every promise it makes; this is the same
+# promise and the same assertion.
+#
+# The useradd arguments are the caller's, not this helper's: `guarden` is a
+# system account with no home, `operator` is a login account with one, and a
+# helper that decided either would be wrong about the other.
+_ensure_account() {
+    local name=$1 group=$2
+    shift 2
+    getent group "$group" >/dev/null 2>&1 || groupadd --system "$group"
+    id -u "$name" >/dev/null 2>&1 && return 0
+    # Exit 9 is the NAME being taken while `id` could not resolve it — a
+    # half-created account, or a passwd line glibc skips and useradd's own check
+    # does not. Tolerating it here leaves that state to fail later as a KeyError
+    # in the renderer, so it is named where it happened.
+    if ! useradd "$@" --gid "$group" "$name" 2>/dev/null; then
+        if ! id -u "$name" >/dev/null 2>&1; then
+            _fail "ensure_accounts: cannot create the '$name' account — its name is taken but 'id -u $name' cannot resolve it"
+            return 1
+        fi
+    fi
+}
+
 ensure_accounts() {
-    getent group guarden >/dev/null 2>&1 || groupadd --system guarden
-    id -u guarden >/dev/null 2>&1 || useradd --system --no-create-home \
-        --shell /usr/sbin/nologin --gid guarden guarden
-    getent group operator >/dev/null 2>&1 || groupadd --system operator
-    id -u operator >/dev/null 2>&1 || useradd --create-home --gid operator --shell /bin/bash operator
+    _ensure_account guarden guarden --system --no-create-home --shell /usr/sbin/nologin
+    _ensure_account operator operator --create-home --shell /bin/bash
 }
 
 # stage_poke <project> <sha>: a poke's staged tree, where guarden itself puts it.

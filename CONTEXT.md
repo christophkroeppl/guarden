@@ -138,14 +138,16 @@ authority class as a port grant — root, made by hand, on no sudoers rule.
 _Avoid_: firewall rule (for the decision), port, override, ufw rule
 
 **gate**:
-The credential check on a track with `gated = true`: every key the schema requires must exist in
-the service's own podman secret store with a real value, and one that is still an example does not
-count. It is a **state, not a moment** — recorded in the registry as `ready`, `blocked` or
-`not-required` — because a service may be deployed, installed and waiting for its operator to
-plant credentials, and that is a successful deploy rather than a failed one. `weedr service gate`
-evaluates it; `weedr service start` re-evaluates it every time. A poke therefore never leaves a
-red build waiting on a human. On a track with `gated = false` the same condition is one
-`warning:` line and the start proceeds, which is the only difference between the two tracks.
+The credential check on a track with `gated = true`: every credential the service's units ask for
+must exist in the service's own podman secret store with a real value, and one that is still an
+example does not count. It is a **state, not a moment** — recorded in the registry as `ready`,
+`blocked` or `not-required` — because a service may be deployed, installed and waiting for its
+operator to plant credentials, and that is a successful deploy rather than a failed one. `weedr
+service gate` evaluates it; `weedr service start` re-evaluates it every time. A poke therefore
+never leaves a red build waiting on a human. On a track with `gated = false` the same condition is
+one `warning:` line and the verdict is `not-required`. The tracks differ in the verdict and in
+what a deploy does with it, and in nothing else: a start refuses on either track when a request
+has no value, because podman cannot create the container.
 _Avoid_: disabled service, hold, release
 
 **secret**:

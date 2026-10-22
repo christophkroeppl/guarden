@@ -16,12 +16,15 @@ from __future__ import annotations
 
 from guarden import apps as apps_mod
 from guarden import config as config_mod
-from guarden import credentials, edgeresolve, errors, paths, registry, tool
+from guarden import credentials, edgeresolve, errors, exposure, paths, registry, tool
 from guarden import manifest as manifest_mod
 
 AUTH_DATABASE = "database"
 AUTH_SECRET = "secret"
 AUTH_NONE = "none"
+
+VIA_TUNNEL = manifest_mod.VIA_TUNNEL
+TUNNEL_PORT = manifest_mod.TUNNEL_PORT
 
 ENGINE = "postgres"
 PSQL_USER = "postgres"
@@ -150,6 +153,9 @@ def check(consumer: str, document: manifest_mod.Manifest, environment: str,
     registry, so it is exit `1` (spec 1.2, spec 4).
     """
     for edge in document.needs:
+        if edge.tunnelled:
+            _tunnelled(consumer, edge, environment, config)
+            continue
         _identifiers(consumer, edge)
         _installable(consumer, edge, environment, config, project)
 
@@ -220,6 +226,64 @@ def _offered(consumer: str, edge, provider) -> None:
     )
 
 
+def _tunnelled(consumer: str, edge, environment: str, config: config_mod.Config) -> str:
+    """The producer a `via: tunnel` edge names, or the refusal that says why not.
+
+    **Nothing local is required.** The provider is another host's service: it has
+    no registry entry here, names no container on a port here and holds no
+    publication this host could copy, so none of that is asked. What this host
+    can check it does — a self-edge is the same copy-paste as ever, and a
+    provider of that name **registered here** has to publish the named route
+    through its own tunnel. A producer recorded `loopback` has no name a
+    consumer reaches through the tunnel, and the edge would leave the host and
+    never come back.
+    """
+    name = resolve_name(config, environment, edge)
+    if name == consumer:
+        raise errors.GuardenError(
+            f"{consumer} needs {edge.service!r} as {edge.prefix!r}, which resolves to "
+            f"{name!r} — the service that declared it: a self-edge has no consumer "
+            f"and is nearly always a copy-paste"
+        )
+    provider = registry.load(name)
+    if provider is not None:
+        published_at(provider, edge, config)
+    return name
+
+
+def published_at(provider, edge: manifest_mod.Edge, config: config_mod.Config) -> str:
+    """The route label of `provider` published at the edge's `hostname:`.
+
+    The recorded destinations are the authority (spec 3.4) and the derived
+    default answers a record an older guarden wrote, which carried none. Either
+    way the answer is a destination the tunnel actually carries: a route on the
+    edge or on loopback is refused and named, because that name is not reachable
+    through the tunnel at all.
+    """
+    for label in sorted(provider.route_hosts):
+        if provider.route_hosts[label] != edge.hostname:
+            continue
+        recorded = (provider.route_destinations or {}).get(label)
+        if recorded is None:
+            recorded = exposure.resolve(
+                provider, config.track(provider.environment), config.modules
+            )
+        if recorded == exposure.TUNNEL:
+            return label
+        raise errors.GuardenError(
+            f"{edge.hostname} is the route {label!r} of {provider.service}, and it is "
+            f"published {recorded}: no tunnel carries it, so a `via: tunnel` edge naming "
+            f"it would leave the host and never come back",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    routes = ", ".join(sorted(provider.route_hosts.values())) or "none"
+    raise errors.GuardenError(
+        f"{provider.service} publishes no route at {edge.hostname}, and a `via: {VIA_TUNNEL}` "
+        f"edge dials a route the producer has; its routes are {routes}",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
 def _installable(consumer: str, edge, environment: str, config: config_mod.Config,
                  project: str = "",
                  ) -> tuple[str, registry.Registry, str, int]:
@@ -283,6 +347,18 @@ def install(entry: registry.Registry, document: manifest_mod.Manifest,
     """
     warnings: list[str] = []
     for edge in document.needs:
+        if edge.tunnelled:
+            name = _tunnelled(entry.service, edge, entry.environment, config)
+            warnings += _credential(entry, edge, None, None, None)
+            entry.edges[edge_key(name, TUNNEL_PORT, edge.prefix)] = {
+                "port": TUNNEL_PORT,
+                "as": edge.prefix,
+                "auth": edge.auth,
+                "databases": [],
+                "via": VIA_TUNNEL,
+                "hostname": edge.hostname,
+            }
+            continue
         name, provider, container, publication = _installable(
             entry.service, edge, entry.environment, config, entry.project)
         warnings += _credential(entry, edge, provider, container, publication)
@@ -313,7 +389,7 @@ def _serving(provider: registry.Registry, port: int) -> str | None:
 
 
 def _credential(entry: registry.Registry, edge, provider, container, publication) -> list[str]:
-    """One minted value per edge, and `auth: none` plants nothing at all.
+    """One minted value per LOCAL edge; `auth: none` and a tunnel edge plant nothing.
 
     A `secret` edge is planted in both stores because the provider has to be able to
     verify it. The provider's copy is planted only when nothing is there, so a second
@@ -322,8 +398,16 @@ def _credential(entry: registry.Registry, edge, provider, container, publication
     says how one provider names two of the same edge. A `database` edge plants in the
     consumer's store alone (spec 5.3 step 10) and the role it creates is the
     consumer's own, so no two consumers of one provider can collide there.
+
+    **A tunnel edge is a request and not a plant** (ADR-0027). Its credential is a
+    vendor's Access token: guarden cannot mint one that authenticates, so a value
+    planted here would be a value the gate counts as satisfied and the producer
+    answers `401` to. The key therefore stays a request nothing satisfies — the
+    state §6.6 already has an answer for — and `weedr secret set` is the only way a
+    value arrives. The producer's half of the edge is the route's Access policy,
+    which is the operator's (`weedr share`).
     """
-    if edge.auth == AUTH_NONE:
+    if edge.auth == AUTH_NONE or edge.tunnelled:
         return []
     key = credential_key(edge.auth, edge)
     if credentials.planted(entry.service, key):

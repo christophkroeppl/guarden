@@ -596,9 +596,17 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
     # spec 5.3 step 9: on an ungated track every `@sensitive` key nothing has been
     # planted for gets a value minted once, so a poke is never blocked on a human.
     # A gated track gets none — there a missing key is a gate failure, and
-    # generating one would hide exactly what the gate is for.
+    # generating one would hide exactly what the gate is for. **A key a `via:
+    # tunnel` edge asks for is the vendor's and is not minted either** (ADR-0027):
+    # the edge plants nothing, and a minted value of the same name would be the
+    # placeholder this ticket removed, reached through the schema instead.
     if not resolved.track.gated:
-        gate.mint_generated(record, gate.schema_for(resolved.name, app), now)
+        external = tuple(
+            edges.credential_key(edge.auth, edge)
+            for edge in manifest.needs
+            if edge.tunnelled and edge.auth != edges.AUTH_NONE
+        )
+        gate.mint_generated(record, gate.schema_for(resolved.name, app), now, external)
 
     retention = volumes.retention_from(resolved.track, granted)
     for vol in manifest.state:
@@ -625,8 +633,9 @@ def create(resolved: names.Resolved, source: Source, config, now: str) -> Outcom
 
     # spec 5.3 step 10, after step 9: a `@sensitive` key nothing has planted for is
     # minted first, so an edge adopting `DB_PASSWORD` reuses that value rather than
-    # minting a second one over it. On a gated track step 9 mints nothing and the
-    # edge's own value is what exists.
+    # minting a second one over it. On a gated track step 9 mints nothing and a local
+    # edge's own value is what exists; a `via: tunnel` edge plants nothing at all
+    # (ADR-0027).
     outcome.warnings += edges.install(record, manifest, config)
 
     with conf.lock("registry"):
