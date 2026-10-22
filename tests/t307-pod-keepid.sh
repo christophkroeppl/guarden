@@ -293,8 +293,10 @@ done
 
 # The pod's own addressing, read inside a container of the pod: the option set
 # was applied to the POD, and this is what says so rather than the command line
-# that asked for it.
-podman_as exec net-srv ip addr show dev eth0
+# that asked for it. No interface is named: pasta's device inside the namespace
+# is the runtime's to name (measured: it is not always `eth0`), and the address
+# and the route are the claims.
+podman_as exec net-srv ip addr show
 assert_exit 0
 echo "MEASURE: the pod container's addressing: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
 assert_stdout_has "10.0.2.100/24"
