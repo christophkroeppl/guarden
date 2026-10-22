@@ -314,22 +314,15 @@ SUITE_TIMEOUT=${GUARDEN_LXC_SUITE_TIMEOUT:-480}
 # wins against every holder, so the budget is the guard and the evidence the
 # failure prints is the answer when it does not.
 APT_LOCK_WAIT=${GUARDEN_LXC_APT_LOCK_WAIT:-600}
-# **And the budget has to be long enough for the install that holds the lock.**
-# Measured 2026-10-21: on a FRESH golden, cloud-init's `packages:` install is
-# twenty-four packages -- podman, dracut-core, fail2ban, ferm among them -- and
-# it was still running at 40s of its own clock, well past the point where the
-# harness's own `apt-get install` had already given up. The harness's
-# 600-second budget expired while cloud-init was mid-install, and the
-# harness's install then collided with it: "Could not get lock
-# /var/lib/dpkg/lock-frontend. It is held by process 1916 (apt-get)".
+# **And the budget has to be long enough for the machine's own boot.** Measured
+# 2026-10-21: on a FRESH golden, cloud-init's `packages:` install was twenty-four
+# packages -- podman, dracut-core, fail2ban, ferm among them -- and it was still
+# running at 40s of its own clock, past the point where the harness's own
+# `apt-get install` had already given up and collided with it on `lock-frontend`.
 #
-# **The budget is a guard against a wedge, not a claim about how long apt
-# takes.** 600s was a guess that happened to be short for a fresh machine and
-# ample for a cut one, and the difference between the two is exactly the
-# 24-package install that only a fresh machine does. So the golden's budget is
-# longer than a cut's: a cut re-runs cloud-init over a machine that already
-# has every package, so its install is short, while a golden's first boot
-# does the whole set from an empty image.
+# **Since ticket 200 no document installs anything, on a golden or on a cut**:
+# `cmd_provision` installs the golden's set after this wait, so the long budget
+# guards a boot that does not finish, not an install.
 #
 # The value is overridable, because a bound is a policy and the operator may
 # have a reason for a different one.
@@ -389,22 +382,22 @@ _boot_id() {
 _wait_cloud_init() {
     local instance=$1
     # **The budget is the caller's, because the two callers need different
-    # ones.** A cut re-runs cloud-init over a machine that already has every
-    # package, so its install is short; a golden's first boot installs the
-    # whole set from an empty image, and its 24-package install (podman,
-    # dracut-core, fail2ban, ferm) is what the shorter budget was losing to.
-    # Measured 2026-10-21: the golden's own apt-get was still running at 40s
-    # of its clock while the harness's 600s budget had already expired, and the
-    # harness's install then collided with it on `lock-frontend`.
+    # ones.** A cut's document installs nothing (ticket 200) so its wait is short;
+    # a golden's first boot is a real boot, and its budget is the long one.
     local budget=${2:-$APT_LOCK_WAIT}
     # **Wait on apt's locks as well as on cloud-init, and this is the whole fix.**
     # `cloud-init status --wait` returns as soon as cloud-init reports done, but
     # cloud-init's own `package_update` can still be holding
-    # `/var/lib/apt/lists/lock` at that moment. Measured on a cut machine: the
-    # lists lock is held from 12.5s of uptime to 23.5s, and `_wait_ready` has
-    # already returned by 12s — so a suite that calls `soil packages --apply` in
-    # its first seconds loses the race, and `apt-get` does not wait: it exits 100
-    # with `Could not get lock`.
+    # `/var/lib/apt/lists/lock` at that moment. Measured on a cut machine before
+    # ticket 200 — when a cut still re-ran the build document — the lists lock
+    # was held from 12.5s of uptime to 23.5s, and `_wait_ready` has already
+    # returned by 12s, so a suite that called `soil packages --apply` in its
+    # first seconds lost the race: `apt-get` exits 100 with `Could not get lock`.
+    #
+    # **A cut's document installs nothing now, and the wait stays anyway.** It is
+    # the runner's only answer to "may this machine be handed to a suite", and the
+    # distribution's own `unattended-upgrades` and `apt-daily` are timer-driven on
+    # this image and were measured holding apt's locks.
     #
     # **What was observed is a `FAIL` with no `error:` line under it**, which is
     # how t20-podlet and t90-projects failed in a full gate while passing alone.
@@ -609,60 +602,29 @@ _push() {
     tar -C "$src" --exclude=./.venv -cf - . | vm_exec_t "$instance" \
         "sudo mkdir -p '$dst' && sudo tar -C '$dst' -xf - && sudo chown -R root:root '$dst'"
 }
-# The package list is the harness's, not guarden's: `soil packages` converges
-# packages/packages.toml on a host, and the harness must not test its own list
-# against itself. Everything here stands in for something a fake used to.
-_user_data() {
-    cat <<'CLOUD'
+
+# The document the golden carries, and the only one: a cut re-runs it, because a
+# copy of the golden is a new instance to cloud-init. It installs nothing —
+# `cmd_provision` installs the image's packages from the one list before the
+# snapshot — where the document a cut used to re-run refreshed the package index
+# and named 23 packages: measured 2026-10-22 at 18.5 s of `apt-get update` with
+# apt's locks held from ~20 s of uptime to ~40 s.
+_provisioned_user_data() {
+    cat <<'PROVISIONED'
 #cloud-config
-package_update: true
-packages:
-  - python3
-  - python3-yaml
-  - python3-jinja2
-  - iproute2
-  - iptables
-  - btrfs-progs
-  - snapper
-  - passwd
-  - uidmap
-  - curl
-  - ca-certificates
-  - sudo
-  - util-linux
-  - kmod
-  - procps
-  - git
-  - rsync
-  - dracut-core
-  # **The substrate, and it is deliberate that it is here as well as in
-  # `packages/packages.toml`.** Ticket 200's doctrine is "the packages are
-  # already baked into the golden", and the rebuild of 2026-10-12 showed what
-  # a golden without `ferm`, `fail2ban` and `podman` does to the suites that
-  # use them before their own apply: `t100-homepage`'s firewall unit never
-  # loaded and `t150-auth`'s module add failed the same way. The other two reds
-  # of that rebuild were different classes and were fixed elsewhere --
-  # `t110-previews` needed the `/var/lib/guarden` traverse (`df0b268`) and
-  # `t130-packages` died on a rolled-back golden transaction, not on this
-  # list. The rendered document carries the raw
-  # substrate; `t15-cutlist.sh` holds this list to `soil packages --list`, so a
-  # package added to the one list cannot miss the other.
-  - ferm
-  - fail2ban
-  - podman
-  - python3-pip
-  # **`psmisc` is here because the harness's apt-lock wait needs `fuser`,
-  # which comes from it.** The wait is what closes the race between
-  # cloud-init's own `apt-get` and the `soil packages` a suite runs in its
-  # first seconds, and without `fuser` the wait cannot run at all — the
-  # runner then refuses to cut rather than enter the race believing it was
-  # protected. The golden carries the package today only because
-  # `ubuntu-standard` pulls it in (measured: `apt-cache rdepends --installed
-  # psmisc` lists ubuntu-standard; `procps` only Recommends it), so an image
-  # without that metapackage lost the wait entirely. It is a harness tool
-  # and not a host dependency: no program under `src/guarden` calls fuser.
-  - psmisc
-CLOUD
+#
+# This image is already provisioned.
+#
+# The golden was built by `tests/lxc.sh provision`: its package set was read
+# from `packages/packages.toml` and installed once, the root was converted to
+# btrfs, and the machine was snapshotted. A cut from that snapshot re-runs this
+# document, and it has nothing to install — no index refresh, no package
+# transaction, no apt lock taken during boot.
+#
+# The one package list is `packages/packages.toml`; `tests/t15-golden-list.sh`
+# holds the image to it.
+final_message: "the golden image is already provisioned; cloud-init installed no package for this boot"
+PROVISIONED
 }
 
 _ensure_pool() {
@@ -796,24 +758,19 @@ cmd_provision() {
         $LXC config device override "$GOLDEN" root size=32GiB >/dev/null 2>&1 || true
         # Piped on stdin, as `next` did: no temporary file, no `lxc config edit`.
         # A document whose first line is not `#cloud-config` is ignored in
-        # silence, which is why readiness is proven by asking the machine whether
-        # the packages arrived rather than by waiting a fixed time.
-        _user_data | $LXC config set "$GOLDEN" cloud-init.user-data -
+        # silence, and this one has to be READ: it is the document every cut
+        # re-runs, and the packages it no longer installs are installed below.
+        _provisioned_user_data | $LXC config set "$GOLDEN" cloud-init.user-data -
         _needs_build=1
     fi
 
     [ "$(_state "$GOLDEN")" = RUNNING ] || $LXC start "$GOLDEN" >/dev/null
     _wait_ready_or_cycle "$GOLDEN" || die "$GOLDEN did not become ready"
 
-    # cloud-init installs the package list, and it answers before it has
-    # finished. Asking anything of apt while it runs loses the dpkg lock, which
-    # is how snapper went missing from a golden — the capability gate caught it,
-    # but the honest wait is cloud-init's own.
-    #
-    # **The exit status is checked, and that is the point of the function
-    # returning one.** `tests/lxc.sh` runs under `set -uo pipefail` and NOT
-    # `set -e`, so an unchecked non-zero return here is silently ignored — the
-    # diagnostic prints and the run continues into the race anyway.
+    # **cloud-init answers before it has finished, so the wait is the honest
+    # signal.** The exit status is checked because `tests/lxc.sh` runs under
+    # `set -uo pipefail` and NOT `set -e`: an unchecked non-zero return is
+    # silently ignored and the run continues into whatever the boot was doing.
     _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" || die "cannot wait for cloud-init on $GOLDEN"
 
     if [ "${_needs_build:-0}" = 0 ] && [ "$(_conversion_state "$GOLDEN")" != done ]; then
@@ -840,67 +797,31 @@ cmd_provision() {
         return 0
     fi
 
-    local i
-    for ((i = 0; i < 120; i++)); do
-        vm_exec_t "$GOLDEN" 'python3 -c "import yaml, jinja2"' >/dev/null 2>&1 && break
-        sleep 5
-    done
-    vm_exec_t "$GOLDEN" 'python3 -c "import yaml, jinja2"' \
-        || die "$GOLDEN never finished installing python3-yaml and python3-jinja2"
+    # **The golden's package set is installed here, from the one list, in the
+    # machine.** `tests/packagelist.py` composes it from `packages/packages.toml`,
+    # so the image is declared once. It is installed here rather than by the
+    # document the image boots because a cut re-runs that document: an install
+    # left to it is paid on every cut, with apt's locks held against the suite.
+    _push "$GOLDEN" "$REPO" "$VM_REPO" \
+        || die "cannot place the checkout on $GOLDEN, so its package list cannot be read"
+    local golden_packages
+    # One line, space-separated: the names go into a shell command, where a
+    # newline would end it and make every name after the first a command.
+    golden_packages=$(vm_exec_t "$GOLDEN" "cd $VM_REPO && python3 tests/packagelist.py" \
+        | tr '\n' ' ') \
+        || die "cannot read the golden's package list from packages/packages.toml in $GOLDEN"
+    [ -n "${golden_packages//[[:space:]]/}" ] \
+        || die "tests/packagelist.py named no package for $GOLDEN; the one list is empty"
 
-    # cloud-init installs the list, and it silently skips a package whose
-    # install fails — snapper was missing from one golden this way, and the
-    # capability gate below is what caught it. Re-assert the list rather than
-    # trust that it landed.
-    #
-    # **The apt lock has to be waited for, because on a FRESH boot the
-    # lock is held by cloud-init's own `package_update`.** Measured
-    # 2026-10-21: this install lost the race and printed "Could not get lock
-    # /var/lib/dpkg/lock-frontend. It is held by process 6351 (apt-get)", and
-    # because the whole call was `|| true` the failure was INVISIBLE — the
-    # provision carried on to the conversion, which then failed on a missing
-    # snapper ("snapper is not installed (No such file or directory)"), and the
-    # real cause was two steps earlier.
-    #
-    # The wait is `_wait_cloud_init`'s, which is already the runner's own
-    # answer to "are apt's locks free" — but it is called BEFORE the yaml
-    # loop above, and cloud-init's `package_update` can still be running
-    # after that returns, because `status --wait` can report done while the
-    # per-boot `package_update` still holds the lists lock. So the wait is
-    # repeated HERE, immediately before the install that needs it, and the
-    # install's own failure is no longer swallowed.
-    #
-    # **The install is no longer `|| true`, and that is the point.** A golden
-    # that silently lacks snapper is a golden whose conversion fails an hour
-    # later with a cause three steps removed. Failing here, with apt's own
-    # message, is the cheap and honest failure.
-    _wait_cloud_init "$GOLDEN" "$GOLDEN_APT_LOCK_WAIT" || die "cannot wait for apt's locks on $GOLDEN"
-    # **The install RETRIES, because a lock check and a lock acquisition are
-    # not the same thing.** Measured 2026-10-21: the wait above reported the
-    # locks free, and the install that followed immediately failed with
-    #
-    #     E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 1916 (apt-get)
-    #
-    # -- because cloud-init's own 24-package install was in a phase that takes
-    # the lock in a window AFTER the probe observed it free. The probe asks
-    # "is anyone holding the lock right now"; apt asks "can I take it", and
-    # between the two questions another apt can start.
-    #
-    # **So the install is retried, and only a lock collision is retried.**
-    # `apt-get` exits 100 when it cannot acquire the frontend lock, and its
-    # message says so; a mirror that is unreachable exits 100 as well, so the
-    # MESSAGE is what separates the two -- not the exit code. The install's
-    # stderr is therefore kept, and the retry is decided by what it says.
-    # (An earlier version of this re-ran apt to ask whether the message was
-    # about a lock, which is self-defeating: that second apt competes for the
-    # very lock it is trying to read about.)
-    local install_attempt install_rc install_err="/tmp/guarden-apt-install.$$.err"
-    install_rc=0
+    # **Retry a lock collision and nothing else.** apt exits 100 with `Could not
+    # get lock` for a held lock and with the same code for an unreachable mirror,
+    # so the message decides. Nothing else in this build asks apt for anything.
+    local install_attempt install_rc=0 install_err=/tmp/guarden-golden-install.$$.err
     for ((install_attempt = 1; install_attempt <= 5; install_attempt++)); do
         install_rc=0
-        vm_exec_t "$GOLDEN" 'export DEBIAN_FRONTEND=noninteractive
+        vm_exec_t "$GOLDEN" "export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
-            apt-get install -y -qq --no-install-recommends snapper btrfs-progs iptables iproute2 passwd uidmap curl ca-certificates' \
+            apt-get install -y -qq $golden_packages" \
             2>"$install_err" >/dev/null || install_rc=$?
         [ "$install_rc" = 0 ] && break
         printf '  packages: install attempt %d failed (rc %d)\n' \
@@ -910,12 +831,9 @@ cmd_provision() {
             || die "cannot wait for apt's locks on $GOLDEN"
     done
     [ "$install_rc" = 0 ] \
-        || die "$GOLDEN could not install the golden's own packages; apt's locks are held or the mirror is unreachable"
-    # **And the install is ASSERED, not assumed.** The `|| true` that used to
-    # hide this also hid a partially-installed list, and the capability gate
-    # below is the only other place snapper's absence was caught — after the
-    # conversion had already failed. snapper is the one package the conversion
-    # itself needs, so its absence is fatal here rather than later.
+        || die "$GOLDEN could not install its package list; apt's locks are held or the mirror is unreachable"
+    # apt silently skips a package whose install fails, and snapper is the one
+    # the conversion needs; without this the build dies three steps later.
     vm_exec_t "$GOLDEN" 'command -v snapper >/dev/null' \
         || die "$GOLDEN has no snapper, and the root conversion cannot configure one"
 
@@ -943,6 +861,11 @@ cmd_provision() {
     printf 'converting the golden root to btrfs (this reboots it twice)...\n'
     _convert "$GOLDEN"
     _prove "$GOLDEN"
+
+    # The snapshot must carry the provisioned document; a resume can land on a
+    # machine an older checkout created, whose config installs on every cut.
+    _provisioned_user_data | $LXC config set "$GOLDEN" cloud-init.user-data - \
+        || die "cannot set the provisioned user-data on $GOLDEN"
 
     if _has_snapshot "$GOLDEN"; then
         $LXC delete "$GOLDEN/$SNAPSHOT" >/dev/null 2>&1 || true
@@ -1011,24 +934,13 @@ _reset() {
     fi
     $LXC start "$RUNNER" >/dev/null || return 1
     _wait_ready_or_cycle "$RUNNER" || return 1
-    # **cloud-init, before the suite.** A machine cut from the golden is a new
-    # instance to cloud-init, so it re-runs this harness's own user-data on every
-    # boot: `package_update: true` and nineteen packages, which is an
-    # `apt-get update` followed by an `apt-get install` holding apt's locks.
-    #
-    # Measured on a cut machine: the lists lock is held from 12.5 s of uptime to
-    # 23.5 s, and `_wait_ready` above has already returned by 12 s, so a suite
-    # that calls `soil packages --apply` in its first seconds loses the race and
-    # gets `E: Could not get lock /var/lib/apt/lists/lock. It is held by process
-    # N (apt-get)`. `apt-get` does not wait: two concurrent real `apt-get update`
-    # runs on this machine, one exit 0 and one exit 100 with that diagnostic,
-    # both inside five seconds.
-    #
-    # **This is the harness's claim and not the product's.** The writer is this
-    # file's own user-data, so no change to `soil` can remove the race — which is
-    # exactly why `soil packages` also disables the distribution's own apt timers
-    # and why that change fixes no suite here: no timer in the list is the thing
-    # holding the lock at 12 s.
+    # **cloud-init, before the suite.** A cut re-runs the document the image
+    # carries; since ticket 200 that installs nothing, so the wait is not for
+    # cloud-init's apt. It stays because it is the runner's only answer to "may
+    # this machine be handed to a suite" and because `unattended-upgrades` and
+    # `apt-daily` are timer-driven on this image. Measured on a cut of 2026-10-22
+    # with the old document: `apt-get update` of 18.5 s, apt's locks held from
+    # ~20 s of uptime to ~40 s.
     # **A non-zero return here is the caller's to handle, not this function's to
     # act on.** `_reset`'s callers already branch on it: the per-suite cut prints
     # `error: cannot cut a clean <name>` and CONTINUES to the next suite, and the

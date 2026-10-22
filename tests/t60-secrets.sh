@@ -314,8 +314,9 @@ assert_file_lacks "$unit" "$VALUE"
 # inside that service's own home, and whatever can read that home has it.
 #
 # **The machine has to carry a real `podman` for this half, and the golden
-# bakes it as substrate (`tests/lxc.sh`'s cut list; `t15-cutlist.sh` keeps the
-# two lists agreeing).** This suite still installs it through the phase that
+# installs it at build time from the one package list (`tests/lxc.sh`'s
+# `provision`, via `tests/packagelist.py`; `t15-golden-list.sh` holds the image
+# to the list).** This suite still installs it through the phase that
 # owns it, because the phase is what the block exercises; what it no longer
 # assumes is that some other suite's removal left it absent, which was never
 # true of a fresh cut in the first place. It is the real tool and the real
