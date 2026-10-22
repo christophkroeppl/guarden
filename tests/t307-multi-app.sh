@@ -39,13 +39,14 @@ export GUARDEN_PREFIX=/
 
 cleanup() {
     local rc=0
-    purge solo-staging shop-web-staging shop-api-staging \
-        shop-web-production shop-api-production || rc=1
+    purge solo-staging shop-web-staging shop-api-staging shop-worker-api-staging \
+        shop-web-production shop-api-production shop-worker-api-production || rc=1
     # A request file is named after a service and a sha, so one left behind is a
     # request a later suite's `furrow queue list` counts.
     rm -f /var/lib/guarden/queue/shop-*.json /var/lib/guarden/queue/solo-*.json
     assert_no_service_left solo-staging shop-web-staging shop-api-staging \
-        shop-web-production shop-api-production || rc=1
+        shop-worker-api-staging shop-web-production shop-api-production \
+        shop-worker-api-production || rc=1
     rm -rf /var/lib/guarden/staging/shop /var/lib/guarden/staging/solo
     return "$rc"
 }
@@ -119,6 +120,16 @@ run weedr service ingest shop-api-staging --from poke shop@9f2c1ab
 assert_exit 0
 assert_stderr_empty
 assert_file_has "$registry/shop-api-staging.toml" 'app = "apps/api"'
+
+# **An app name carrying a dash is still an app name**, and the environment is
+# still the LAST segment of the service name: `shop-worker-api-staging` is the
+# app `worker-api` of `shop` on `staging`, and the project half is the poke's
+# own `--from` pair rather than anything counted out of the name.
+run weedr service ingest shop-worker-api-staging --from poke shop@9f2c1ab
+assert_exit 0
+assert_stderr_empty
+assert_file_has "$registry/shop-worker-api-staging.toml" 'app = "apps/worker-api"'
+assert_file_has "$registry/shop-worker-api-staging.toml" 'environment = "staging"'
 
 # Seven characters of app name in the service name, and the environment is
 # still the LAST segment — an app name carrying a dash would be the same rule.
@@ -227,6 +238,21 @@ assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "no app called 'worker'"
 
+# **Two app directories with one last component collide**, and the refusal names
+# both of them rather than picking one: the name is what a service is called, so
+# whichever one won, the other's deploy would land on a service carrying a
+# different tree's manifest.
+stage_tree multi shop c1d2e3f >/dev/null
+mkdir -p /var/lib/guarden/staging/shop/c1d2e3f/services
+cp -a /var/lib/guarden/staging/shop/c1d2e3f/apps/web \
+      /var/lib/guarden/staging/shop/c1d2e3f/services/web
+run weedr service ingest shop-web-staging --from poke shop@c1d2e3f
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "two apps called 'web'"
+assert_stderr_has "apps/web"
+assert_stderr_has "services/web"
+
 # --- 5. one poke is one request per app, providers first --------------------
 
 # The production track is gated in `guarden-measured.toml`. Both apps declare a
@@ -238,6 +264,7 @@ run furrow deploy shop-production --from poke shop@7b3e1d9
 assert_exit 0
 assert_file_exists "$registry/shop-web-production.toml"
 assert_file_exists "$registry/shop-api-production.toml"
+assert_file_exists "$registry/shop-worker-api-production.toml"
 assert_file_has "$registry/shop-api-production.toml" 'app = "apps/api"'
 assert_file_has "$registry/shop-web-production.toml" 'state = "blocked"'
 assert_file_has "$registry/shop-api-production.toml" 'state = "blocked"'
@@ -248,10 +275,14 @@ assert_file_has "$registry/shop-api-production.toml" 'state = "blocked"'
 # provider that does not exist yet.
 web_line=$(grep -n "ensure shop-web-production" "$GUARDEN_STDOUT" | cut -d: -f1)
 api_line=$(grep -n "ensure shop-api-production" "$GUARDEN_STDOUT" | cut -d: -f1)
+worker_line=$(grep -n "ensure shop-worker-api-production" "$GUARDEN_STDOUT" | cut -d: -f1)
 [ -n "$web_line" ] || _fail "the deploy never ensured shop-web-production"
 [ -n "$api_line" ] || _fail "the deploy never ensured shop-api-production"
+[ -n "$worker_line" ] || _fail "the deploy never ensured shop-worker-api-production"
 [ "$web_line" -lt "$api_line" ] \
     || _fail "shop-api-production was ensured before its provider (line $api_line < $web_line)"
+[ "$api_line" -lt "$worker_line" ] \
+    || _fail "shop-worker-api-production was ensured before api ($worker_line < $api_line)"
 
 # The consumer's edge was installed from the provider's allocation on the same
 # track, which is the property the ordering exists for: a staging deploy cannot

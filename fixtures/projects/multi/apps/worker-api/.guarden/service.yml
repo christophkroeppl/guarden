@@ -1,0 +1,17 @@
+# A third app, whose NAME CARRIES A DASH (ticket 307a's first trap), and whose
+# edge names the repository's other app.
+#
+# The environment is still the LAST `-`-separated segment of the service name:
+# `shop-worker-api-staging` is the app `worker-api` of the project `shop` on the
+# track `staging`, and the project half is the deploy's own `--from` pair rather
+# than something counted out of the name.
+project: shop
+units: .guarden/quadlet/
+
+needs:
+  - app: api
+    as: api
+    port: 4000
+    auth: none
+
+schema: .guarden/.env.schema

@@ -1,4 +1,6 @@
-# The consumer app of a two-app repository (ticket 307a).
+# The consumer app of a two-app repository (ticket 307a), and a provider too:
+# `web` dials nothing, `api` dials `web`, and `worker-api` dials `api` — a chain
+# of three apps, so the deploy order is a graph rather than a pair.
 #
 # Its service is `shop-api-<environment>`, and its edge names the OTHER APP of
 # this repository with `app:`. Guarden resolves that to `shop-web-<environment>`
@@ -13,5 +15,15 @@ needs:
     as: web
     port: 3000
     auth: none
+
+provides:
+  - http
+
+# What `worker-api` dials: a container of this app, on the port it serves
+# inside its own unit. It requests public ingress and nothing is ever granted
+# for it — the publication exists because a declared edge dials it (spec 7.3).
+ports:
+  - container: api
+    port: 4000
 
 schema: .guarden/.env.schema
