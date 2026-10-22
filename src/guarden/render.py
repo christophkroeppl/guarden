@@ -1378,7 +1378,9 @@ def build(
             errors.REJECTED_INPUT,
         )
     pod = pod_name(document, context, directory)
-    pod_entry = units.entry_stem(pod, context.instance if context is not None else None)
+    instance = context.instance if context is not None else None
+    pod_entry = units.entry_stem(pod, instance)
+    podman_name = f"{pod}-{instance.encode().hex()}" if instance else pod
     pin = _pod_pin(context, source)
     dropins = _dropins(context, source)
     pod_dropin = _pod_dropin(context, pod_entry)
@@ -1424,7 +1426,7 @@ def build(
 
     plan.add(
         f"units/{pod}.pod",
-        _pod_unit(source, context, pod, ports, pod_dropin, domain),
+        _pod_unit(source, context, pod, podman_name, ports, pod_dropin, domain),
     )
     if pin is not None:
         plan.add(
@@ -1592,6 +1594,7 @@ def _pod_unit(
     source: Source,
     context: Context | None,
     pod: str,
+    podman_name: str,
     ports: dict[str, tuple[int, int]],
     merged: Unit | None,
     domain: str,
@@ -1603,6 +1606,8 @@ def _pod_unit(
     description = (unit.one("Unit", "Description") or "").strip() or f"{service} pod".strip()
     unit_keys.insert(0, f"Description={description}")
     pod_keys: list[str] = []
+    if pod != podman_name:
+        pod_keys.append(f"PodName={podman_name}")
     if context is not None:
         pod_keys.append(f"Network={context.config.network}")
     pod_keys.extend(
