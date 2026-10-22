@@ -9,12 +9,25 @@ not negotiable mid-change. If a change needs a word that is not here, the change
 One deployed thing on the host, named `<workload>-<environment>`, owning exactly one Linux
 user of the same name, one home, one quadlet unit directory, and any state it declares. A
 service is not a container: a service may run three.
-_Avoid_: stack, app, deployment
+_Avoid_: stack, deployment
+
+**app**:
+A directory in a project's tree that holds `.guarden/service.yml`, and the thing one service
+deploys from. An app is found by that file's location; its name is the directory's last path
+component, and the app at the tree root has the empty name. One app is one service: its workload is
+`<project>` at the root and `<project>-<app>` for a named app.
+_Avoid_: service, project, module
+
+**pod**:
+The one network namespace an app's containers share, named by the manifest's `[pod] name` and
+defaulting to the service's workload. A pod holds one app's containers and nothing else: it is not
+a network two services share, and it is not a name map.
+_Avoid_: network, namespace (when you mean the pod), cluster
 
 **container**:
 One container inside a service. `compose.yaml` calls these `services:`; guarden calls them
 containers, and the two words never mean the same thing.
-_Avoid_: service (when you mean one process), unit, pod
+_Avoid_: service (when you mean one process), unit
 
 **app**:
 A directory in a project that holds `.guarden/service.yml`, and the containers that manifest
@@ -49,13 +62,13 @@ _Avoid_: network, group, stack, subnet
 A repository. The thing you promote through tracks. Its name is the manifest's `project` field,
 defaulting to the project the `--from` source belongs to. It is not the same thing as the
 workload and the two may differ.
-_Avoid_: app, repo, service (when you mean the repository)
+_Avoid_: repo, service (when you mean the repository)
 
 **workload**:
 The service name without its environment segment: `other-app-production` is workload `other-app`.
 It is what a track holds one service per, and what an instance cap is counted against. A
-workload and a project may differ.
-_Avoid_: app, service (when you mean the part before the dash), project
+workload and a project may differ; a workload that comes from an app is the project and the app.
+_Avoid_: service (when you mean the part before the dash), project
 
 **track**:
 A named row in the root-owned environment table in `/etc/guarden/guarden.toml`, carrying its own
@@ -154,9 +167,9 @@ the variable it becomes.
 _Avoid_: key, token, env var (when you mean the secret's value)
 
 **manifest**:
-`.guarden/service.yml` in a project repository. The only thing a project declares about
-itself: units, state, declared edges, requested ports, routes, widgets, the shape of its
-secrets, and the rule for a cloned copy of its data (`scrub:`).
+`.guarden/service.yml` at the root of an app, and an app is a directory in a project's tree. The
+only thing an app declares about itself: units, the pod, state, declared edges, requested ports,
+routes, widgets, the shape of its secrets, and the rule for a cloned copy of its data (`scrub:`).
 _Avoid_:  config, spec
 
 **state volume**:
