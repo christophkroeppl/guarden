@@ -38,7 +38,7 @@ off the guarden rule).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from guarden import errors, names, paths
@@ -238,11 +238,6 @@ def clean(relative: str) -> str:
             errors.HOST_NOT_AS_ASSUMED,
         )
     return relative
-
-
-def with_app(source, app: str):
-    """The source with its app root fixed, for the callers that resolve it."""
-    return replace(source, app=app)
 
 
 def check(document: manifest_mod.Manifest, apps: list[App], path: Path) -> None:
