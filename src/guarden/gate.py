@@ -107,7 +107,9 @@ def evaluate(service: str, schema: secretschema.Schema, gated: bool, now: str) -
     # gate has to answer for. A key the schema declares and the units do not
     # ask for is still a required key — the schema alone makes it one.
     asked: list[str] = []
+    requested: set[str] = set()
     for key in unit_requests(service):
+        requested.add(key)
         if key not in asked:
             asked.append(key)
     for key in schema.keys:
@@ -119,7 +121,17 @@ def evaluate(service: str, schema: secretschema.Schema, gated: bool, now: str) -
         # A key the units ask for and the schema does not declare is required
         # by the request alone: podman cannot resolve it from nothing, so
         # nothing but a planted value satisfies it.
-        if key is not None and not key.required:
+        #
+        # **And a request outranks an `@required=false`.** The schema can call a
+        # key optional while the renderer still emits `Secret=<KEY>` for it —
+        # `@sensitive` is enough, and `@defaultRequired=infer` with a bare
+        # `// API_SECRET` gives a key that is sensitive and not required. podman
+        # refuses that start with `125 no such secret` whatever the schema says,
+        # so a gate that skipped it would report `ready` for a service that
+        # cannot start. ADR-0027 makes it reachable: a `via: tunnel` edge plants
+        # nothing and step 9 does not mint the key, so nothing satisfies a
+        # request this loop had been passing over.
+        if key is not None and not key.required and name not in requested:
             continue
         stored = credentials.value(service, name)
         if stored is None:
