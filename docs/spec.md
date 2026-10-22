@@ -1367,9 +1367,9 @@ its own store.
 A service name is `<workload>-<environment>`, where the environment is the last
 `-`-separated segment and must name a track in the environment table. The workload may
 contain dashes, dots and digits. The whole name must match `^[a-z0-9][a-z0-9._-]*$`, must not
-exceed 31 characters — the Linux user-name limit — and must not contain `..`. A workload that
-comes from a repository's app is composed from the project and the app's name, and §5.3 is the
-one statement of how.
+exceed 31 characters — the Linux user-name limit — and must not contain `..`. A workload
+that comes from a repository's app is composed from the project and the app's name, and
+§5.3 is the one statement of how.
 
 `other-app-production` parses as workload `other-app` in `production`. There is no `--env`
 flag on `ingest` or `add`: the name carries the environment, so a name and an environment
@@ -1520,12 +1520,12 @@ whole interface for a poke — `weedr service ingest <name> --from poke <project
 second argument naming the app would be a second way to say what the name already says, and the
 two could disagree. On `ingest`, where the project is an argument of the same command, the prefix
 is the project's and the suffix is the environment's, so nothing is guessed: a name that is
-neither `<project>-<environment>` nor `<project>-<app>-<environment>` is exit `2`. `add --from
-<service>` is the other case and needs no such rule — it copies one app's tree out of the source
-service, and the new name is the operator's (§5.1). The registry records the app's **root** as the
-source tree spells it — `apps/api`, and the empty string for the tree root — because a service's
-record has to say which app of a multi-app source it came from (§3.4); the app's *name* is in the
-service name and is not stored twice.
+neither `<project>-<environment>` nor `<project>-<app>-<environment>` is exit `2`. The
+`--from <service>` form of `add` is the other case and needs no such rule — it copies one app's
+tree out of the source service, and the new name is the operator's (§5.1). The registry records
+the app's **root** as the source tree spells it — `apps/api`, and the empty string for the tree
+root — because a service's record has to say which app of a multi-app source it came from
+(§3.4); the app's *name* is in the service name and is not stored twice.
 
 A tree that ships an app the name does not match is refused, and the refusal names the apps the
 tree does ship — "no app called `api`" without that list sends the operator to the wrong
@@ -2260,10 +2260,10 @@ granted must not silently do nothing.
 `PublishPort` line found in the unit source, from Compose or from hand-written quadlet, and
 regenerates the whole set from the grants and the allocations. Without this the grant model is
 advisory, because a Compose `ports:` entry becomes a `PublishPort=` line verbatim. In a pod the
-set is written into the pod's `[Pod]` table rather than into each member unit — podman publishes a
-pod's ports on the pod and refuses a `PublishPort=` on a container that belongs to one — and
-nothing on the host's side of that line changes: one publication per container, on `127.0.0.1`,
-with the same accept set (§7.4).
+set is written into the pod's `[Pod]` table rather than into each member unit — podman binds a
+pod's ports on the pod, so a member container carries none of its own — and nothing on the host's
+side of that line changes: one publication per container, on `127.0.0.1`, with the same accept set
+(§7.4).
 
 The renderer refuses, with the directive named: `PodmanArgs=`, `--privileged`, `cap_add`,
 `cap_drop`, `devices`, `network_mode: host`, `pid: host`, `userns_mode`,
@@ -2957,8 +2957,8 @@ running set and always has.
 A rootless container runs in a network namespace that is not the host's — its own, or the pod's it
 belongs to (below) — so the host's `127.0.0.1` is not an address it can dial and a per-service
 `127.x` scheme is unreachable from inside it by construction. What a container can dial is the
-**default gateway address**, and guarden pins
-which address that is: the `[network] pasta_options` set fixes the container side at
+**default gateway address**, and guarden pins which address that is: the `[network] pasta_options`
+set fixes the container side at
 `10.0.2.100/24` with the gateway `10.0.2.2`, so the container's default route is `via 10.0.2.2`
 on every host and every network. Pasta maps the gateway onto the host's loopback. From
 `pasta(1)`:
