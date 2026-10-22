@@ -30,6 +30,21 @@ positive half (`example.com` resolving from inside a pasta container) is the
 mechanism the edge relies on, and the negative half is the harness saying it could
 not have made the trip.
 
+The lookup, as `t457` recorded it on 2026-10-22 (a fresh cut of the golden):
+
+    MEASURE: the producer hostname from inside a pasta container:
+    Server:		169.254.1.1
+    Address:	169.254.1.1:53
+
+    Non-authoritative answer:
+
+    Non-authoritative answer:
+
+`169.254.1.1` is pasta's own forwarder, so the **query reached a resolver** — which
+is the half that had to be measured, because the loopback deny (§7.6) sits between a
+service uid and the host's stub and could have taken it. No `Name:` line follows:
+the name has no record, because no Cloudflare zone publishes it here.
+
 ## The procedure, for the operator who has the account
 
 On the **producing** host:

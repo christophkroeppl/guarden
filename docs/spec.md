@@ -3204,6 +3204,11 @@ a `PublishPort=` of its own, so the renderer writes the whole set into the pod's
 (§6.3) — and on the host's side of that line there is still one publication per container, on
 `127.0.0.1`, allocated and persisted exactly as above, with the same uid-matched accept set (§7.6).
 
+**A `via: tunnel` `needs:` entry allocates nothing.** Its provider is another host's container,
+reached at that host's published route hostname on `443` (§7.3), so there is no loopback
+publication on this side of the edge to allocate, nothing to forward and nothing for §7.6 to
+accept: the consumer's traffic leaves the host as any client's does.
+
 ### 7.5 Public ports are forwarded, never bound
 
 A public port is a port the outside world uses. It becomes reachable only through a grant, and
