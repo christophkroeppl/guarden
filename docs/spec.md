@@ -1716,6 +1716,14 @@ still converge and the run still exits `1`.
   machine whose job is to test it. The phase installs one the moment the knob is there, which is
   the same path a real host takes.
 
+  **A `golden` role is not a host's, and no phase converges it.** It is what the LXD golden every
+  suite is cut from needs on top of the substrate, and `tests/lxc.sh provision` installs it once,
+  at build time, from this same file — so the image the suites ride is declared here rather than
+  in a second list inside the runner. The document the image carries installs nothing: a copy of
+  the golden is a new instance to cloud-init, and an install left to that document would be paid
+  on every cut, holding apt's locks against the suite it was cut for. `tests/t15-golden-list.sh`
+  holds the image to the role.
+
   **The timers are disabled for the same reason `storage` disables the packaged
   snapper cleanup timer, and it is the same overlap by another name**: a packaging
   timer running on its own schedule is another writer of the state this phase converges.

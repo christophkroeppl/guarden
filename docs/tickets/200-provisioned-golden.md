@@ -1,70 +1,93 @@
 # 200: provision the golden, so a cut machine boots without installing anything
 
-**What to build:** The golden VM is built by cloud-init, and a copy of it is a **new instance to
-cloud-init**, so every cut machine re-runs that user-data: `package_update: true` and nineteen
-packages, which is an `apt-get update` followed by an `apt-get install` holding apt's locks.
-The packages are already baked into the golden. The work is to install them **once at build
-time** and leave cloud-init nothing to do, so a cut machine boots clean and a suite can start
-work in its first seconds.
+**What was wrong:** the golden every suite is cut from carried a cloud-init
+document with `package_update: true` and twenty-three packages. A copy of the
+golden is a new instance to cloud-init, so **every cut re-ran it**: an
+`apt-get update` over the network plus an install of packages the image already
+had, with apt's locks held while the suite cut for it waited.
 
-**Blocked by:** 140 (the golden VM harness)
+Measured on 2026-10-22 on two cuts of the old `guarden-golden/base`, sampling the
+guest once a second from the copy:
 
-**Status:** ready-for-agent — **but it needs one golden rebuild, about an hour, so schedule it
-deliberately and not alongside other work.**
+| | cut 1 | cut 2 |
+|---|---|---|
+| first answer from the guest | 16.3 s of uptime | 21.6 s of uptime |
+| cloud-init's `apt-get update` | 18.5 s by cloud-init's own clock | — |
+| apt's locks held | ~22 s → ~38 s of uptime | ~26 s → ~40 s of uptime |
+| cloud-init done | 40.6 s of uptime | 45.6 s of uptime |
+| steady: cloud-init done, no apt process, locks free | 62.3 s after the copy | 71.1 s after the copy |
 
-- [ ] `tools/golden-vm` **provisions** the machine it snapshots: the substrate packages are
-      installed during the build, and the cloud-init document it leaves behind either does nothing
-      or says plainly that the image is already provisioned
-- [ ] The rendered cloud-init document is still generated from the one package list, because
-      that list is the contract (spec §6.1, `packages.toml`); what changes is **who installs it**,
-      not where it is declared. A second list would be the drift this repository keeps fighting
-- [ ] A cut machine reaches a steady state **without running any package transaction**, measured:
-      no `apt-get` process during boot, apt's lists lock free, `cloud-init` reaching `done` with
-      nothing to install. That measurement is the ticket's evidence, not a passing suite
-- [ ] **`provision` still works on a machine whose cloud-init does nothing**, because the first
-      install on a bare host is still `soil install`'s job — the verb is `just provision`, which
-      calls `tests/lxc.sh provision` (`cmd_provision`, `tests/lxc.sh:754`). **There is no
-      `--provision` flag anywhere in this repository.** This item said there was, and a worker
-      spent its first minutes searching for it (corrected 2026-10-22).
-- [ ] The one suite that asserts the golden's package inventory is **updated to the new fact**,
-      not deleted: a golden that ships its substrate is a different machine, and the claim that
-      recorded which packages it did *not* have has to be re-derived rather than remembered
-- [ ] Record the full-suite wall clock before and after, in this ticket
+## What was done
 
-## The two limits to state, not discover
+- [x] **`tests/lxc.sh provision` installs the golden's packages during the build.**
+      It pushes the checkout, asks the machine to read the one list, and installs
+      its output. `apt-get update` now runs once per build instead of once per
+      cut, and nothing races it: the install is the only writer.
+- [x] **The document the golden carries installs nothing** — no `package_update`,
+      no `packages:` block — and it says so in its own text
+      (`_provisioned_user_data` in `tests/lxc.sh`). It is also the ONLY document
+      the golden has: the build document the earlier plan would have swapped out
+      after the build does not exist.
+- [x] **One package list, not two.** `packages/packages.toml` is authoritative.
+      The heredoc in `tests/lxc.sh` was a second copy: the substrate plus six
+      packages no list declared (`passwd`, `uidmap`, `sudo`, `util-linux`,
+      `kmod`, `procps`). Those six are now the new `golden` role beside the
+      substrate, together with `python3`, `iproute2`, `iptables`, `curl`,
+      `ca-certificates`, `rsync`, `psmisc` and `passt`;
+      `tests/packagelist.py` composes the substrate and that role in the
+      machine, and `provision` installs the result.
+      *Which is authoritative, and why:* `packages.toml`, because spec §6.1 makes
+      it the contract and it is the file the product itself reads; the runner's
+      copy was a subset plus six undeclared extras, and the two could disagree
+      with nothing noticing (`passt` was on the image only because podman's
+      Recommends pulled it in, while `t130-packages.sh` asserts pasta). The role
+      is not `harness`, because that one carries `nginx` and a Postgres client,
+      and a golden that booted with port 80 taken would break every suite that
+      binds it.
+- [x] **`tools/golden-vm` and the `vps` profile are unchanged**: a real host still
+      installs its substrate on first boot.
+- [x] **`just provision` still builds a golden from scratch** — the image these
+      numbers were taken from was built by it, on a machine whose cloud-init
+      installs nothing at all.
+- [x] **The inventory suite is re-derived, not deleted.** `t15-cutlist.sh`
+      becomes `t15-golden-list.sh`: it asks the machine for its own `dpkg` state
+      for every name the one list prints, and it asserts that the document this
+      cut re-ran installs nothing. `t322-psmisc.sh` holds the `golden` role to
+      `psmisc` the same way it held the old heredoc.
 
-- **This does not make the first install on a real host any different.** A host that is not a
-  golden still needs `soil packages --apply` to install its packages, and it still needs its
-  index refreshed (spec §6.1). The change is entirely about the machine the harness cuts.
-- **It does not remove the need to wait for the machine to be ready.** Boot is boot. What it
-  removes is the ~11–25 seconds of package transaction inside it, which is the part that also
-  made seven suites lose an apt-lock race on 2026-10-01.
+## Measured after
 
-## Cost, stated plainly
+Three cuts of the rebuilt `guarden-golden-t200/base`, same sampling:
 
-One `just provision`, about an hour, and the golden's snapshot changes identity. Everything
-recorded against the current snapshot is invalidated, so do this when nothing else is in flight.
-## The blocker three tickets hit at once, and what it actually was
+| | cut 1 | cut 2 | cut 3 |
+|---|---|---|---|
+| first answer from the guest | 9.7 s of uptime | 7.7 s | 10.5 s |
+| apt process seen at boot | none | none | none |
+| apt's locks held at boot | never | never | never |
+| cloud-init done | 14.6 s of uptime | 10.0 s | 13.0 s |
+| steady | 21.0 s after the copy | 21.5 s | 21.4 s |
 
-Ticket 50's agent, ticket 110's and ticket 120's all reported the same wall from
-three directions: **`weedr service ingest` never installed a service's own units.**
-A service existed, was listed, held its volumes and rendered a firewall set, and
-`weedr service start` refused it with "has no unit to start". `units.install` existed
-and was called only for a *module's* service (`weedr.py:308`, `:707`).
+**The cut reaches steady state 41–50 s sooner** (62.3 / 71.1 s → 21.0 / 21.5 /
+21.4 s), and no package transaction runs at all: the boot journal for a cut has
+no `apt-get` or `dpkg` line, and `/var/lib/apt/lists` still carries the build's
+mtime, so the index was not refreshed either.
 
-`service.create()` ended at spec 5.3 step 10. **Step 11 was missing.** Wired in, and
-it had to go *after* `registry.save`: `units.install` reads the record for the uid it
-installs under, so rendering first answered "there is no registry entry for
-<service>, so there is nothing to render its units for".
+Suites run green against the rebuilt golden, `--no-cache`, one machine each:
+`t15-golden-list` 25 s, `t322-psmisc` 33 s, `t130-packages` 1 m 39 s,
+`t10-golden-vm` 42 s, `t20-packages` 1 m 37 s, `t60-secrets` 40 s.
 
-Verified in the VM on a clean cut — `weedr service ingest` now leaves:
+## The full-suite wall clock
 
-```
-/var/lib/guarden/services/qx-production/home/.config/containers/systemd/
-    web.container  worker.container
-    web.container.d/10-guarden-order.conf
-```
+| | suites | wall clock |
+|---|---|---|
+| before — `guarden-run-t358gate`, the last gate on the same golden | 134 | 2 h 14 m 35 s |
+| after | 134 | recorded below when the gate lands |
 
-and `service.units_of("qx-production")` answers `['web', 'worker']`, so the deploy path
-has something to start for the first time. There is no separate volume unit: a declared
-volume is a `Volume=` line naming the path the mutator made (spec §6.3).
+## The two limits, stated
+
+- **The first install on a real host is unchanged.** A host that is not a golden
+  still needs `soil packages --apply`, and still needs its index refreshed
+  (spec §6.1). This is about the machine the harness cuts.
+- **It does not remove the need to wait for a machine to be ready.** Boot is
+  boot. What it removes is the package transaction inside it — the part that
+  also lost seven suites an apt-lock race on 2026-10-01.

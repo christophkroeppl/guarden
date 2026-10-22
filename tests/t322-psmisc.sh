@@ -122,25 +122,24 @@ assert_exit 0
 assert_file_has "$vps" "#cloud-config"
 assert_file_lacks "$vps" "- psmisc"
 
-# --- and the cut list bakes it ---------------------------------------------
+# --- and the golden's build list bakes it ----------------------------------
 
-# The cut's cloud-init document is the HARNESS's own list (the heredoc in
-# tests/lxc.sh), not guarden's: the harness must not test its own list against
-# itself. The substrate rides in it because a suite that uses a substrate
-# package before its own apply is riding the golden (ticket 200), and
-# `t15-cutlist.sh` is the keeper of that.
+# The LXD golden's document installs nothing (ticket 200): its packages are
+# installed at build time from the one list, and `tests/packagelist.py` is the
+# reader that composes the substrate and the `golden` role. So psmisc's home on
+# the image is that role, and the reader is what puts it there.
 #
 # **The wait needs fuser BEFORE any suite runs**, and the wait is the runner's
-# own, before the checkout is even pushed into the cut -- so a package the
-# packages phase would install later is not enough. The cut has to carry it
+# own, before the checkout is even pushed into the cut — so a package the
+# packages phase would install later is not enough. The golden has to carry it
 # from the boot, or the runner refuses the machine and every suite that needed
 # the wait is skipped for a reason that names a package nobody installed.
-[ "$(grep -c "<<'CLOUD'" "$RUNNER")" = 1 ] \
-    || _fail "tests/lxc.sh no longer carries exactly one cloud-init heredoc"
-sed -n "/<<'CLOUD'/,/^CLOUD\$/p" "$RUNNER" \
-    | sed -n 's/^  - //p' | sort >"$GUARDEN_FIXTURES/cutlist-packages"
-grep -qx 'psmisc' "$GUARDEN_FIXTURES/cutlist-packages" \
-    || _fail "the cut list does not bake psmisc, so a cut has no fuser and the apt-lock wait cannot run"
+[ -f "$GUARDEN_ROOT/tests/packagelist.py" ] \
+    || _fail "tests/packagelist.py is gone, so nothing composes the golden's package set from the one list"
+run python3 "$GUARDEN_ROOT/tests/packagelist.py"
+assert_exit 0
+assert_stdout_has "psmisc"
+assert_file_has "$RUNNER" "tests/packagelist.py"
 
 # --- and the guard points at the place that fixes it -----------------------
 

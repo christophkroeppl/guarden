@@ -37,6 +37,12 @@
 # `tools/render-user-data` renders the substrate and the harness roles only,
 # because a machine being provisioned is not yet a configured host.
 #
+# `golden` is a fourth role: what the **LXD golden** needs on top of the
+# substrate. It is not the `harness` role, because that one carries an HTTP
+# server and a Postgres client and a golden that booted with `nginx` enabled
+# would hold port 80 against every suite. `tests/packagelist.py` composes it with
+# `packages`, and `tests/lxc.sh provision` installs the result at build time.
+#
 # ## Per family
 #
 # The names are the part that is not portable: `python3-yaml` on Debian,
@@ -280,4 +286,33 @@ harness = [
     # `fuser` (from psmisc) proves the package-manager locks are free before
     # the harness calls `soil packages` — the same harness tool as on debian.
     "psmisc",
+]
+
+# The LXD golden's own extras, on top of the substrate above, installed once at
+# build time. Debian only: the harness's image is Ubuntu, and naming these on a
+# family nobody has built a golden on would be inventing packages. The role is
+# complete for its machine, so where it overlaps `harness` the overlap is
+# visible rather than inherited.
+#
+# `passwd`/`uidmap`: rootless podman's user database and newuidmap. `sudo`: what
+# the harness pushes a checkout with. `util-linux`/`kmod`/`procps`: the tools the
+# phases read the machine with. `psmisc`: `fuser`, for the runner's apt-lock wait.
+# `iptables`/`iproute2`: refused by `_prove` if absent. `passt`: named rather
+# than left to podman's Recommends, because `t130-packages.sh` asserts pasta.
+[golden.debian]
+golden = [
+    "python3",
+    "iproute2",
+    "iptables",
+    "passwd",
+    "uidmap",
+    "curl",
+    "ca-certificates",
+    "sudo",
+    "util-linux",
+    "kmod",
+    "procps",
+    "rsync",
+    "psmisc",
+    "passt",
 ]
