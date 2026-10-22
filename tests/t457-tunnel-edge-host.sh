@@ -2,8 +2,8 @@
 # `needs:` over the tunnel hostname — the MUTATOR's half and the machine's
 # (ticket 307f T2, spec 4, 7.3, 7.6).
 #
-# A `via: tunnel` edge names a service on ANOTHER host. Three properties follow,
-# and this suite checks all three:
+# A `via: tunnel` edge names a service on ANOTHER host. Four properties follow,
+# and this suite checks all four:
 #
 #   1. **the host records the name and allocates nothing.** `weedr service
 #      ingest` writes the edge's `via` and `hostname` into the consumer's
@@ -18,6 +18,11 @@
 #      and no rule in `50-services.conf` names `443`. (The suite loads that set
 #      later, for the lookup below — loading it is what makes the measurement
 #      mean anything, and the set it loads carries no rule for this edge.)
+#   4. **the credential is a request and not a plant** (ADR-0027). The vendor
+#      issues the token, so guarden mints nothing: a gated consumer's gate holds
+#      and names the key, an ungated one's start refuses with the key and the
+#      command that plants it, and the operator's `weedr secret set` is what
+#      opens the door.
 #
 # **A container in a pasta namespace resolves a public name with the policy in
 # force, and a uid with no accept does not — measured.** pasta forwards a
@@ -49,9 +54,10 @@ registry=/var/lib/guarden/registry
 services=/etc/guarden/firewall/50-services.conf
 producer=orders-staging
 consumer=tunneled-staging
+gated=tunneled-production
 
 cleanup() {
-    purge "$consumer" "$producer"
+    purge "$consumer" "$gated" "$producer"
 }
 trap cleanup EXIT
 
@@ -169,6 +175,62 @@ assert_file_has "$unit_dir/web.container" "Secret=API_SECRET,type=mount"
 assert_file_lacks "$unit_dir/web.container" "AddHost="
 assert_file_exists /etc/systemd/system/guarden-order.target
 assert_file_lacks /etc/systemd/system/guarden-order.target "orders"
+
+# --- 4. the credential is a request, and guarden plants nothing --------------
+#
+# **ADR-0027.** The token on this edge is a Cloudflare Access service token, so
+# the vendor issues it: guarden cannot mint one that authenticates, and a minted
+# value would be one the gate counts as present and the producer answers `401`
+# to. The absence is the assertion.
+assert_file_missing "/etc/guarden/creds/$consumer/API_SECRET.cred"
+
+# **The ungated track's gate still says `not-required`** — that is the state
+# spec 6.6 defines for an ungated track — and its warning names the key. The
+# START is what refuses, in words the operator can act on, instead of handing
+# the container to podman for a raw `125 no such secret` (tickets 305 and 313).
+run weedr service gate "$consumer"
+assert_exit 0
+assert_stdout_has "$consumer gate not-required"
+assert_stderr_has "API_SECRET"
+
+run weedr service start "$consumer"
+assert_exit 1
+assert_stderr_has "API_SECRET"
+assert_stderr_has "weedr secret set $consumer API_SECRET"
+assert_stdout_empty
+assert_file_missing "/etc/guarden/creds/$consumer/API_SECRET.cred"
+
+# **The gated track is where the placeholder used to open the door.** The same
+# poke on `production` is a service whose gate must hold: a minted value made
+# this `ready`, the container started, and the producer's route met the vendor's
+# `401`. Nothing is planted for it either.
+run weedr service ingest "$gated" --from poke tunneled@9f2c1ab
+assert_exit 0
+assert_file_missing "/etc/guarden/creds/$gated/API_SECRET.cred"
+
+run weedr service gate "$gated"
+assert_exit 1
+assert_stderr_has "API_SECRET"
+assert_stderr_has "weedr secret set $gated API_SECRET"
+assert_file_has "$registry/$gated.toml" 'state = "blocked"'
+assert_file_has "$registry/$gated.toml" "missing required key: API_SECRET"
+
+run weedr service start "$gated"
+assert_exit 1
+assert_stderr_has "API_SECRET"
+assert_stderr_has "weedr secret set $gated API_SECRET"
+assert_stdout_empty
+
+# **The operator plants the vendor's token and the same verb opens.** That plant
+# is the only path a value takes: `weedr secret set`, then `ready` — presence,
+# and now the operator's presence rather than guarden's fabrication.
+run weedr secret set "$gated" API_SECRET <<<"the-vendors-access-service-token"
+assert_exit 0
+assert_file_exists "/etc/guarden/creds/$gated/API_SECRET.cred"
+run weedr service gate "$gated"
+assert_exit 0
+assert_stdout_has "$gated gate ready"
+assert_file_lacks "$registry/$gated.toml" "reason ="
 
 # --- 3. the firewall is unchanged -------------------------------------------
 #
