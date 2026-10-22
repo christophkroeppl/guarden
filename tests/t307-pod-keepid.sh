@@ -127,6 +127,25 @@ podman_as() {
         XDG_RUNTIME_DIR="$runtime" podman "$@"
 }
 
+# poll_log <container> <literal>: poll the container's own log until it names the
+# literal. A reading taken before the container has written the line is not its
+# final word, and a suite that read once measured the race rather than the
+# container: the refusal below is one line after the uid the same shell printed,
+# and both arrive a moment after the container starts. The log driver is
+# `k8s-file` wherever this is used, because `podman logs` against this host's
+# journald answers empty with exit 0 (measured).
+poll_log() {
+    local name=$1 want=$2
+    for _ in $(seq 1 20); do
+        podman_as logs "$name"
+        if text_has "$(cat "$GUARDEN_STDOUT")" "$want"; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 # The image is pulled as the SERVICE user: a pull as root lands in root's store,
 # which this user cannot use, and root's own pull cannot resolve the registry
 # through the stub resolver (t325 records the same two reasons).
@@ -237,15 +256,15 @@ done
 # two greens above mean something. The container itself stays up (its shell
 # carries on after the failed redirect), so the refusal is read out of its log.
 assert_file_missing "$vol/other.txt"
-podman_as logs pin-other
-assert_exit 0
+poll_log pin-other "Permission denied" \
+    || _fail "the uid-999 container in a pod pinned at 33 left no file and its log names no refusal: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
 echo "MEASURE: the third uid in the pinned pod: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
 assert_stdout_has "Permission denied"
 
 # The same uid, the same command, in the pod with NO pin: refused as well.
 assert_file_missing "$vol/plain-33.txt"
-podman_as logs plain-33
-assert_exit 0
+poll_log plain-33 "Permission denied" \
+    || _fail "uid 33 in the pod with no pin left no file and its log names no refusal: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
 echo "MEASURE: uid 33 in a pod with no pin: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
 assert_stdout_has "Permission denied"
 
@@ -270,6 +289,21 @@ podman_as run -d --log-driver k8s-file --pod podnet --name net-srv \
     sh -c 'while true; do printf "HTTP/1.1 200 OK\r\nContent-Length: 17\r\nConnection: close\r\n\r\npod-roundtrip-307" | nc -l -p 8080 >> /tmp/request.txt; done'
 assert_exit 0
 
+# The container has to be up before it can be asked anything, and a container is
+# up a moment after `run -d` returns. The poll asks the question the reads below
+# need answered — can a process be started in it — rather than sleeping.
+nsrv_up=0
+for _ in $(seq 1 20); do
+    podman_as exec net-srv true
+    if [ "$GUARDEN_EXIT" = 0 ]; then
+        nsrv_up=1
+        break
+    fi
+    sleep 1
+done
+[ "$nsrv_up" = 1 ] \
+    || _fail "the pod's server container never became exec-able, so nothing below it could be measured"
+
 # The pod's own addressing, read inside a container of the pod: the option set
 # was applied to the POD, and this is what says so rather than the command line
 # that asked for it.
@@ -283,19 +317,40 @@ echo "MEASURE: the pod container's route: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
 assert_stdout_has "default via 10.0.2.2"
 
 # The round-trip: a third container in the same pod, in the foreground, whose
-# own stdout is the payload's evidence.
-podman_as run --rm --pod podnet --name net-cli \
-    docker.io/library/alpine:3.20 \
-    wget -qO- http://127.0.0.1:8080/proof.txt
-assert_exit 0
+# own stdout is the payload's evidence. The server's `nc` starts a moment after
+# its container does, so the first attempt can be refused; the poll asks for the
+# PAYLOAD rather than for a connect, and a run where no attempt ever carried it
+# is a failure with the last attempt's stderr in the message.
+trip=0
+for _ in $(seq 1 20); do
+    podman_as run --rm --pod podnet --name net-cli \
+        docker.io/library/alpine:3.20 \
+        wget -qO- http://127.0.0.1:8080/proof.txt
+    if [ "$GUARDEN_EXIT" = 0 ] && [ "$(cat "$GUARDEN_STDOUT")" = "pod-roundtrip-307" ]; then
+        trip=1
+        break
+    fi
+    sleep 1
+done
+[ "$trip" = 1 ] \
+    || _fail "no payload crossed between two containers of the pod: the last attempt exited $GUARDEN_EXIT with $(tr '\n' '|' <"$GUARDEN_STDERR") and got $(cat "$GUARDEN_STDOUT")"
 echo "MEASURE: what the second container fetched over 127.0.0.1 from the first: $(cat "$GUARDEN_STDOUT")"
 [ "$(cat "$GUARDEN_STDOUT")" = "pod-roundtrip-307" ] \
     || _fail "the payload fetched between two containers of one pod is $(cat "$GUARDEN_STDOUT"), not the token the first container served"
 
 # And the request half, read out of the server's own filesystem: a response
 # without a request that arrived would be a response from something else.
-podman_as exec net-srv cat /tmp/request.txt
-assert_exit 0
+req=0
+for _ in $(seq 1 20); do
+    podman_as exec net-srv cat /tmp/request.txt
+    if [ "$GUARDEN_EXIT" = 0 ] && text_has "$(cat "$GUARDEN_STDOUT")" "GET /proof.txt"; then
+        req=1
+        break
+    fi
+    sleep 1
+done
+[ "$req" = 1 ] \
+    || _fail "the server holds no request naming GET /proof.txt: $(tr '\n' '|' <"$GUARDEN_STDERR")"
 echo "MEASURE: the request the server received: $(tr '\n' '|' <"$GUARDEN_STDOUT")"
 assert_stdout_has "GET /proof.txt"
 
