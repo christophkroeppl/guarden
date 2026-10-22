@@ -95,6 +95,37 @@ assert_exit 2
 assert_stderr_has "weight"
 assert_stderr_has "guarden.toml"
 
+# `grouping` is a declaration with two spellings, and the one that is not built is
+# refused by name rather than accepted and rendered as the default: a key that reads
+# back what the repository wrote and deploys something else is the silent shape the
+# closed key set exists to prevent.
+seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml" \
+  "grouping: one-service"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "grouping"
+assert_stderr_has "one-service"
+assert_stderr_has "one-service-per-app"
+assert_stderr_has "not implemented"
+
+# The value that IS built is accepted, and it is the default, so a repository that
+# writes it down gets what it asked for.
+seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml" \
+  "grouping: one-service-per-app"
+run loom check "$project"
+assert_exit 0
+assert_stderr_empty
+
+# A value that is neither is refused with the value and the two spellings named.
+seed "$project/.guarden/service.yml" "project: myapp" "units: compose.yaml" \
+  "grouping: two-services"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "two-services"
+assert_stderr_has "one-service-per-app"
+
 # The closed key set covers the keys *inside* a block. A typo there used to be
 # silently dropped, and a manifest asking for `authentification: true` got a
 # route with no auth on it and no diagnostic saying so.

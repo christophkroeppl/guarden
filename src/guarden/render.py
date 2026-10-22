@@ -286,7 +286,8 @@ def pin_of(answers: list[tuple[str, str, tuple[int, int] | None]]) -> str | None
             f"the pod's containers run as different users: {described}. A pod shares one user "
             f"namespace, so its keep-id pin puts exactly one image uid on the service user and "
             f"every other uid lands in the subuid band; apps that need different uids are "
-            f"separate services, which is what `grouping` is for",
+            f"separate services, so declare one app per service "
+            f"(`grouping: {manifest_mod.GROUPING_ONE_SERVICE_PER_APP}`)",
             errors.REJECTED_INPUT,
         )
     if not pins:

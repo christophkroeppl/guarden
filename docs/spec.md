@@ -1054,6 +1054,13 @@ project: myapp  # optional; defaults to the project the --from source
 
 units: compose.yaml  # or: units: .guarden/quadlet/ — exactly one
 
+grouping: one-service-per-app  # how this app's containers become services (CONTEXT.md)
+  # `one-service-per-app` is the default and the only value implemented: the app is
+  # one service, one user, one home and one pod. `one-service` — several apps'
+  # containers in one service — is in the vocabulary and REFUSED until a ticket
+  # implements it: accepted and then rendered as the default, it would be a key that
+  # silently does nothing, which is what the closed key set exists to prevent.
+
 pod:  # the one network namespace this app's containers share (§7.1)
   name: myapp  # OPTIONAL. The pod's name, and the only name a `networks:` entry
   # in the unit source may carry. Defaults to the workload: `<project>` for the
@@ -1181,6 +1188,10 @@ Validation rules:
   rule covered only the top level, so a typo in a nested key was silently dropped and a
   manifest asking for `authentification: true` got a route with no auth on it and no diagnostic
   saying so.
+- `grouping` takes `one-service-per-app` or `one-service` and nothing else. `one-service-per-app`
+  is the default and the only value implemented — one app, one service, one user, one home, one
+  pod — and `one-service` is refused, exit `2`, naming the value, both spellings and the reason:
+  accepting a key and then rendering the default would be a key that silently does nothing.
 - An `environment` key is refused **specifically**, with a message saying the host decides the
   environment and where the decision is recorded.
 - A `basicauth` key is refused **specifically**, with a message saying the host decides it and
