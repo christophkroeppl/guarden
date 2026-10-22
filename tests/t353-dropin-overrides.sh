@@ -8,7 +8,7 @@
 #     `UserNS=` line at all** — the pin is not in it, so a regeneration of the
 #     unit cannot disturb the pin and the unit cannot carry the line twice.
 #   * `50-guarden-keepid.conf`, in the ROOT-OWNED drop-in directory
-#     `/etc/containers/systemd/users/<uid>/<unit>.container.d/`, carries the
+#     `/etc/containers/systemd/users/<uid>/<pod>.pod.d/`, carries the
 #     `UserNS=keep-id:uid=…,gid=…` line. **Guarden writes this file and
 #     nothing else in that directory.**
 #   * `90-admin.conf`, in the same directory, is the HUMAN's own file. Guarden

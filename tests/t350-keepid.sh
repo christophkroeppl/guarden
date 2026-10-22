@@ -114,7 +114,7 @@ svc_uid=$(id -u kid-staging)
 # uid-scoped search path, and the BASE unit carries no `UserNS=` line at all.
 # Every assertion below about "the line" is about the drop-in, and the base
 # unit's own absence of the line is asserted where the line is.
-dropin_dir=/etc/containers/systemd/users/"$svc_uid"/app.container.d
+dropin_dir=/etc/containers/systemd/users/"$svc_uid"/kid.pod.d
 pin=$dropin_dir/50-guarden-keepid.conf
 assert_passwd kid-staging
 assert_linger kid-staging
