@@ -37,9 +37,6 @@ set -euo pipefail
 REPO_URL="${GUARDEN_REPO_URL:-https://github.com/christophkroeppl/guarden.git}"
 REPO_BRANCH="${GUARDEN_REPO_BRANCH:-develop}"
 REPO_DIR="${GUARDEN_REPO_DIR:-/usr/local/src/guarden}"
-# install runs before packages on a fresh host: soil packages installs the
-# pinned podlet, whose record is seeded by soil install. On a host where
-# install already ran (cloud-init, previous run), the order is irrelevant.
 PHASE_ORDER=("install" "packages" "storage" "sysctl" "firewall" "units")
 
 CHECK_MODE=0
@@ -88,8 +85,7 @@ fi
 
 # Concurrent-run guard: two simultaneous invocations (cloud-init retrying
 # while an operator runs it manually) must not interleave repo clone/update
-# and soil applies. Taken after the root check and argument parsing so
-# that --help and the usage error work without root.
+# and soil applies.
 exec 9>/run/guarden-install.lock
 flock 9
 

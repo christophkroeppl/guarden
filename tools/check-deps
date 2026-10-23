@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""Check the runtime dependencies, and that nothing reaches past them.
-
-The runtime dependencies are the distribution's
-`python3-yaml` and `python3-jinja2`, installed by `soil packages`, and they are
-the only non-standard-library imports a guarden program may make. There is no
-`pip install` at deploy time and no wheel is checked in, so a program that
-imported a third thing would be a program the host cannot install — the
-dependency rule is what makes the host installable on a distribution nobody has
-tried yet.
-
-Exit 0 when every import is the standard library, `guarden` itself, or one of
-those two. Exit 1 otherwise, with one `error:` line per problem.
-
-`--imports-only` skips the importability half, so the rule can be checked on a
-host that has not run `soil packages` yet. Paths name files or directories;
-with none given, the package, this tool and the tests are checked.
-"""
-
 from __future__ import annotations
 
 import ast
@@ -39,12 +21,6 @@ def allowed_roots() -> frozenset[str]:
 
 
 def imported_roots(path: Path) -> set[str]:
-    """The top-level package names one file imports, by parsing it.
-
-    Parsing rather than importing, because a file with a syntax error is a
-    finding and a program that runs on import is a program this tool must not
-    run.
-    """
     tree = ast.parse(path.read_text(), filename=str(path))
     roots: set[str] = set()
     for node in ast.walk(tree):
@@ -57,11 +33,6 @@ def imported_roots(path: Path) -> set[str]:
 
 
 def python_files(root: Path) -> list[Path]:
-    """A directory's python files, or the one file that was named.
-
-    A file named explicitly is scanned whatever it is called, so this tool can
-    check itself: it has no `.py` suffix, like every script in `tools/`.
-    """
     if root.is_file():
         return [root]
     return sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)

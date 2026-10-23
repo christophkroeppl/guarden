@@ -27,10 +27,7 @@ forwarded = [ "80/tcp", "443/tcp", "443/udp" ]
 tunnel_domain = ""
 
 [network]
-backend = "pasta"                # the only value v1 supports
-# The pinned addressing (spec 3.1), and the complete set: `-a` is the container's
-# address, `-n` its width, and `-g` the gateway `ingress.alias` is derived from.
-# A set missing any piece of it, or carrying `--no-map-gw`, is refused.
+backend = "pasta"
 pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]
 
 [build]

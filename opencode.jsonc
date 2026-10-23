@@ -1,10 +1,11 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "varlock-docs-mcp": {
-      "type": "remote",
-      "url": "https://docs.mcp.varlock.dev/mcp",
-      "enabled": true
+    "servers": {
+      "varlock-docs-mcp": {
+        "type": "remote",
+        "url": "https://docs.mcp.varlock.dev/mcp",
+      }
     }
   }
 }

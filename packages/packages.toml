@@ -1,139 +1,8 @@
-# The one package list.
-#
-# spec 6.1 and AGENTS.md: the runtime dependencies are the distribution's
-# `python3-yaml` and `python3-jinja2`. There is no `pip install` at deploy time
-# and no wheel is checked in, so a program that reached for a third thing would
-# be a program the host cannot install -- which is what keeps the layout
-# portable to a distribution nobody has tried yet.
-#
-# It is this file rather than a tuple in `hostprep.py` because there are two
-# consumers that must not disagree: `soil packages` converges `packages`, and
-# `tools/render-user-data` renders `packages` + `harness` into the cloud-init
-# document the golden VM boots. A package added to one and forgotten in the other
-# is a host that installs three things and converges on a fourth, and both
-# machines report success. One file is the only way that cannot happen.
-#
-# ## Two roles, one file
-#
-# `packages` is what a **guarden host** needs, and it is exactly the list spec
-# 6.1 names. `soil packages` converges it and reads nothing else.
-#
-# `harness` is what a **throwaway machine** needs on top, and no real host wants:
-# an HTTP server and a Postgres client to exercise the edge against, the network
-# tools the golden-VM checks read the rule set with. It is here rather than in
-# the user-data document because a package list inside the document is a second
-# copy of this one, and the two would drift with nothing noticing. Keeping the
-# role separate is what stops the harness's tools from becoming every host's
-# dependency, which is the failure the other direction would cause.
-#
-# `conditional` is a third role: a distribution package some hosts need and most
-# must not carry. The one row today is `zram` -- the `systemd-zram-generator`
-# the compressed swap device is built on -- and it is conditional because "absent
-# means absent" is part of what the zram knob promises: a host whose guarden.toml
-# has no `[zram]` installs no generator, writes no configuration and creates no
-# device, and a package in the substrate list would make that claim false on
-# every host the list was copied onto. `soil packages` converges a conditional
-# role only when the operator's configuration asks for it, and
-# `tools/render-user-data` renders the substrate and the harness roles only,
-# because a machine being provisioned is not yet a configured host.
-#
-# `golden` is a fourth role: what the **LXD golden** needs on top of the
-# substrate. It is not the `harness` role, because that one carries an HTTP
-# server and a Postgres client and a golden that booted with `nginx` enabled
-# would hold port 80 against every suite. `tests/packagelist.py` composes it with
-# `packages`, and `tests/lxc.sh provision` installs the result at build time.
-#
-# ## Per family
-#
-# The names are the part that is not portable: `python3-yaml` on Debian,
-# `python3-pyyaml` on Fedora, `python-yaml` on Arch. The layout, the six phases
-# and the FHS are the same everywhere; this table is where the difference lives,
-# and a family with no row is a family this design has not been run on. `soil
-# packages` says so rather than running apt-get on a Fedora box.
-#
-# ## The keys
-#
-#   install   the argv that installs a package, minus the package name
-#   query     the argv that answers whether one package is installed
-#   installed the output `query` prints when it is; empty means "exit 0 is yes"
-#   update    the argv that refreshes the package index
-#   variant   the iptables variant this family converges, and the argv that
-#             selects it and the one that reports it. Absent means the family
-#             has no answer yet, and a family with no row selects nothing
-#
-# `query`/`installed` are separate keys rather than one command because
-# answering that question is distribution-specific in a way installing a package
-# is not, and a probe that asks the wrong question reports a package that is
-# absent as present. An empty `installed` is the honest encoding for a query
-# whose exit code is the whole answer.
-
-# The iptables variant this family converges, and the argv that selects it and
-# the one that reports it. **Three keys rather than a name, because naming a
-# variant in the list would be guarden guessing at a host it has not booted.**
-#
-# `ferm` 2.7 resolves its xtables binary in `find_tool`: for a name matching
-# `^(.*tables)(.*)$` it looks for `$1-legacy$2` FIRST across `/usr/sbin`,
-# `/sbin`, `$PATH`, and only falls back to the unsuffixed name. Measured on the
-# golden, `/usr/sbin/ferm` therefore loads guarden's policy through
-# `/usr/sbin/iptables-legacy-restore` no matter what `update-alternatives` says
-# -- and with the `-legacy` names moved off the host it fell back to
-# `/usr/sbin/iptables-restore`, which is nft. So the table guarden's rules land
-# in is ferm's choice, made at the moment it runs, and it is not the alternatives
-# system's.
-#
-# `nft` is the variant this design converges: it is the one `/usr/sbin/iptables`
-# names by default on every family the list carries, so the rules and every tool
-# an operator reaches for read the same tables. **The alternative is not a
-# free choice on a Debian host, and the row says so rather than implying it
-# could be:** `update-alternatives --set` refuses a path `iptables-legacy` is not
-# registered for, and moving the binary off the host to get around that makes
-# `guarden-firewall.service` write one table at start and another at reload,
-# which is the fail-open this key exists to remove. A family with no `variant`
-# row selects nothing and is reported rather than silently left alone.
-
-# The `variant` table is a subtable of the family, so it goes after the family's
-# own keys: TOML has no way to add a table to a table already closed by its
-# values without a new header.
 [families.debian]
 install = ["apt-get", "install", "-y"]
 query = ["dpkg-query", "-W", "-f=${db:Status-Status}"]
 installed = "installed"
 update = ["apt-get", "update"]
-# `ufw` was removed from guarden. guarden's host firewall is **ferm**. `ufw` was
-# the unit guarden disabled and the one the dead-man timer re-enabled to hand an
-# operator their shell back. Both reasons die with the uninstall: the first because
-# there is no distribution firewall to displace, the second because the dead-man
-# timer now opens the firewall directly by flushing guarden's own chains — it
-# cannot restore the previous ruleset, and that is accepted, not an oversight.
-# The Fedora and Arch families never listed `ufw`, so `DISTRIBUTION_FIREWALL_UNITS`
-# (which named the Debian unit) was meaningless on those families anyway.
-#
-# **`variant` is the only iptables answer a family states, and only Debian
-# states one.** It is a subtable rather than a bare key so the name and the two
-# argvs travel together: a list that carried the variant's name beside some
-# other family's mechanism would let a name be stated with no way to select it.
-# Fedora and Arch ship `iptables-legacy` under the unsuffixed name with no
-# alternatives mechanism to select against, which is a different host shape from
-# Debian's and not something this list can paper over: a family with no
-# `variant` is REPORTED by the firewall phase and converges nothing, which is an
-# honest answer until somebody runs this design on it.
-#
-# **`legacy`, not `nft`, and that is the measurement correcting the obvious
-# answer.** nft is what `/usr/sbin/iptables` names by default, so it is the
-# variant a reader reaches for -- but ferm does not use the alternatives system at
-# all, it resolves the binary itself and prefers the `-legacy` names, so on a host
-# where both binaries are installed **ferm writes legacy whatever alternatives
-# says**. Converging `nft` would therefore leave the host reading a table guarden
-# had stopped writing, which is the fail-open rather than the fix for it. What
-# guarden converges is the table ferm actually writes, and the phase then checks
-# the rules are readable through the host's own binary rather than trusting the
-# selection to have been enough.
-#
-# The trade is stated rather than hidden: the rules live in a table the default
-# `iptables` does not read, and the price is paid by `update-alternatives`
-# pointing operators' own `iptables` at the same table. A host that ships only one
-# variant needs no selection at all, and a host where ferm ever stops preferring
-# legacy is caught by the readability check rather than by this row going stale.
 packages = [
     "btrfs-progs",
     "snapper",
@@ -143,22 +12,7 @@ packages = [
     "python3-yaml",
     "python3-jinja2",
     "python3-pip",
-    # `git` is here because the cloud-init document clones the repository with
-    # it: `guarden-provision.sh` runs `git clone`, and the document's
-    # `packages:` block is the only thing that installs anything before that
-    # clone. Ubuntu 26.04 ships git, so the dependency was invisible here; on
-    # an image that does not, the whole cloud-init path stopped at the clone
-    # with no diagnostic from guarden at all -- the document's own error, on a
-    # machine that was doing exactly what it was told. A distribution package
-    # is the fix and not a guard in the script: the package list is where a
-    # host's dependencies are stated, and a script that refused to run
-    # because the host lacked a tool would be a second list of the same thing.
     "git",
-    # The conversion machinery's initramfs hook runs under dracut; `soil
-    # storage` refuses explicitly on a host without it (other initramfs
-    # generators convert offline from a rescue environment instead), and
-    # without it here a real host learns both facts at apply time. `dracut-core`
-    # is Debian's name for the same tool the other two families call `dracut`.
     "dracut-core",
 ]
 
@@ -199,17 +53,6 @@ packages = [
     "dracut",
 ]
 
-# The throwaway machine's extras. Deliberately a separate role: `soil packages`
-# never reads this table, so a golden-VM check can grow a dependency without
-# putting it on a production host.
-#
-# Nothing zram-related belongs here. The generator is `conditional` because a
-# machine being provisioned is not yet a configured host, and baking it into this
-# list would put it on every golden-VM image and make "absent means absent: no
-# package" untestable on the very machine that has to test it. What the harness
-# needs to *read* a device — `zramctl` and `swapon` — is `util-linux`, which the
-# runner's own user-data already installs.
-
 [conditional.debian]
 zram = ["systemd-zram-generator"]
 
@@ -239,11 +82,6 @@ harness = [
     "nginx",
     "postgresql-client",
     "libpq-dev",
-    # `fuser` (from psmisc) is how the harness proves the apt locks are free
-    # before it calls `soil packages` — without it the wait cannot run at all,
-    # and the harness refuses to cut a box rather than lose the race silently
-    # (tests/lxc.sh's guard names this package). It is a harness tool, not a
-    # host dependency: the golden VM needs it, a real host does not.
     "psmisc",
 ]
 
@@ -263,8 +101,6 @@ harness = [
     "nginx",
     "postgresql",
     "libpq-devel",
-    # `fuser` (from psmisc) proves the apt/dnf locks are free before the
-    # harness calls `soil packages` — the same harness tool as on debian.
     "psmisc",
 ]
 
@@ -283,8 +119,6 @@ harness = [
     "nginx",
     "postgresql",
     "libpq",
-    # `fuser` (from psmisc) proves the package-manager locks are free before
-    # the harness calls `soil packages` — the same harness tool as on debian.
     "psmisc",
 ]
 
@@ -293,12 +127,6 @@ harness = [
 # family nobody has built a golden on would be inventing packages. The role is
 # complete for its machine, so where it overlaps `harness` the overlap is
 # visible rather than inherited.
-#
-# `passwd`/`uidmap`: rootless podman's user database and newuidmap. `sudo`: what
-# the harness pushes a checkout with. `util-linux`/`kmod`/`procps`: the tools the
-# phases read the machine with. `psmisc`: `fuser`, for the runner's apt-lock wait.
-# `iptables`/`iproute2`: refused by `_prove` if absent. `passt`: named rather
-# than left to podman's Recommends, because `t130-packages.sh` asserts pasta.
 [golden.debian]
 golden = [
     "python3",
