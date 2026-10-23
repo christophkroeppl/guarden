@@ -256,15 +256,17 @@ assert_file_has "$conf" \
     | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $vault_pub jump ACCEPT;\$" || true)" = 2 ] \
     || _fail "the vault publication's accept set gained a consumer that declared no such edge"
 
-# The rendered consumer. `AddHost=` into **every** unit, the two generated variables
-# per edge, and a `Secret=` request naming the credential that was planted. The name
-# is the provider's own service name: no suffix, no alias, no name map.
+# The rendered consumer. `AddHost=` on the POD (podman refuses the flag on a
+# container joining a pod), the two generated variables per edge, and a
+# `Secret=` request naming the credential that was planted. The name is the
+# provider's own service name: no suffix, no alias, no name map.
 home=/var/lib/guarden/services/needful-staging/home
 render=$GUARDEN_FIXTURES/render
 run loom render "$home" --service needful-staging --out "$render"
 assert_exit 0
+assert_file_has "$render/units/needful.pod" "AddHost=pgprov-staging:10.0.2.2"
 for unit in web worker; do
-    assert_file_has "$render/units/$unit.container" "AddHost=pgprov-staging:10.0.2.2"
+    assert_file_lacks "$render/units/$unit.container" "AddHost="
 done
 assert_file_has "$render/units/guarden.env" "DB_HOST=pgprov-staging"
 assert_file_has "$render/units/guarden.env" "DB_PORT=$db_pub"
@@ -478,7 +480,7 @@ needful_render=$GUARDEN_FIXTURES/needful-providers-render
 run loom render "$needful_home" --service needful-staging --out "$needful_render"
 assert_exit 0
 assert_file_has "$needful_render/units/guarden.env" "DB_HOST=postgres-staging"
-assert_file_has "$needful_render/units/web.container" "AddHost=postgres-staging:10.0.2.2"
+assert_file_has "$needful_render/units/needful.pod" "AddHost=postgres-staging:10.0.2.2"
 assert_file_has "$needful_render/system/guarden-order.target" "Wants=postgres-staging.target"
 
 # The same logical name in production resolves to the concrete production name.
@@ -492,7 +494,7 @@ prod_render=$GUARDEN_FIXTURES/needful-providers-prod-render
 run loom render "$prod_home" --service needful-production --out "$prod_render"
 assert_exit 0
 assert_file_has "$prod_render/units/guarden.env" "DB_HOST=postgres-production"
-assert_file_has "$prod_render/units/web.container" "AddHost=postgres-production:10.0.2.2"
+assert_file_has "$prod_render/units/needful.pod" "AddHost=postgres-production:10.0.2.2"
 assert_file_has "$prod_render/system/guarden-order.target" "Wants=postgres-production.target"
 
 # An unmapped name passes through unchanged — a manifest naming a full

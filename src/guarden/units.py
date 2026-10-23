@@ -360,9 +360,10 @@ def repair_unit_dirs(
         for path in _chain_up(root, home):
             if _inside(path, home) and _converge(path, owner, home):
                 changed.append(path)
-        for path in sorted(root.glob("*.container.d")):
-            if path.is_dir() and _inside(path, home) and _converge(path, owner, home):
-                changed.append(path)
+        for pattern in ("*.container.d", "*.pod.d"):
+            for path in sorted(root.glob(pattern)):
+                if path.is_dir() and _inside(path, home) and _converge(path, owner, home):
+                    changed.append(path)
     return changed
 
 
@@ -428,7 +429,7 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
     return written
 
 
-QUADLET_KINDS = (".container.d", ".container")
+QUADLET_KINDS = (".container.d", ".container", ".pod.d", ".pod")
 
 
 def _install_admin_dropins(
@@ -465,43 +466,56 @@ def _install_admin_dropins(
     if record is None or not record.uid:
         return
     rendered = {
-        path.name[: -len(".container")]
-        for path in sorted(_files(out / "units"))
+        path.name[: -len(".container")] for path in sorted(_files(out / "units"))
         if path.name.endswith(".container")
     }
-    # The units this render gave a pin to — the ones with a drop-in of their
-    # own in the render's `admin/` directory. The difference from `rendered`
-    # is the set of units whose file must go: the ones the record does not
-    # answer any more.
+    rendered_pods = {
+        path.name[: -len(".pod")] for path in sorted(_files(out / "units"))
+        if path.name.endswith(".pod")
+    }
     pinned = {
         path.relative_to(admin).parts[0][: -len(".container.d")]
         for path in sorted(_files(admin))
         if path.relative_to(admin).parts[0].endswith(".container.d")
+    }
+    pinned_pods = {
+        path.relative_to(admin).parts[0][: -len(".pod.d")]
+        for path in sorted(_files(admin))
+        if path.relative_to(admin).parts[0].endswith(".pod.d")
     }
     for parent in paths.admin_parents():
         parent.mkdir(parents=True, exist_ok=True)
         os.chmod(parent, ADMIN_DIR_MODE)
     for path in sorted(_files(admin)):
         relative = path.relative_to(admin)
-        # `relative` is `<unit>.container.d/<file>` — the unit's own name and
-        # the drop-in's file name, which is exactly the shape of the target.
         stem = relative.parts[0]
-        if not stem.endswith(".container.d"):
+        if stem.endswith(".container.d"):
+            unit = stem[: -len(".container.d")]
+            if escaped_ref:
+                unit = entry_stem(unit, escaped_ref)
+            directory = paths.admin_dropin_dir(record.uid, unit)
+        elif stem.endswith(".pod.d"):
+            unit = stem[: -len(".pod.d")]
+            if escaped_ref:
+                unit = entry_stem(unit, escaped_ref)
+            directory = paths.admin_pod_dropin_dir(record.uid, unit)
+        else:
             continue
-        unit = stem[: -len(".container.d")]
-        if escaped_ref:
-            unit = entry_stem(unit, escaped_ref)
-        directory = paths.admin_dropin_dir(record.uid, unit)
         directory.mkdir(parents=True, exist_ok=True)
         os.chmod(directory, ADMIN_DIR_MODE)
         target = directory / path.name
         conf.write_file(target, path.read_text(encoding="utf-8"), ADMIN_DROPIN_MODE)
         written.append(str(target))
-    _drop_stale_admin_dropins(record.uid, rendered, escaped_ref, pinned)
+    _drop_stale_admin_dropins(record.uid, rendered, escaped_ref, pinned, ".container")
+    _drop_stale_admin_dropins(record.uid, rendered_pods, escaped_ref, pinned_pods, ".pod")
 
 
 def _drop_stale_admin_dropins(
-    uid: int, rendered: set[str], escaped_ref: str | None, pinned: set[str]
+    uid: int,
+    rendered: set[str],
+    escaped_ref: str | None,
+    pinned: set[str],
+    kind: str = ".container",
 ) -> None:
     """Guarden's own file, gone for a unit the render gives no pin to.
 
@@ -527,7 +541,12 @@ def _drop_stale_admin_dropins(
         return
     for stem in sorted(rendered - pinned):
         unit = entry_stem(stem, escaped_ref)
-        stale = paths.admin_dropin_dir(uid, unit) / paths.KEEPID_DROPIN
+        directory = (
+            paths.admin_pod_dropin_dir(uid, unit)
+            if kind == ".pod"
+            else paths.admin_dropin_dir(uid, unit)
+        )
+        stale = directory / paths.KEEPID_DROPIN
         if stale.is_file():
             stale.unlink()
 
@@ -662,9 +681,13 @@ def _drop_instance_admin_dropins(service: str, escaped_ref: str) -> None:
     if not root.is_dir():
         return
     for path in sorted(root.iterdir()):
-        if not path.is_dir() or not path.name.endswith(".container.d"):
+        if not path.is_dir() or not path.name.endswith((".container.d", ".pod.d")):
             continue
-        unit = path.name[: -len(".container.d")]
+        unit = path.name
+        for kind in (".container.d", ".pod.d"):
+            if unit.endswith(kind):
+                unit = unit[: -len(kind)]
+                break
         if not _is_instance_entry(unit, escaped_ref):
             continue
         for dropin in sorted(path.iterdir()):

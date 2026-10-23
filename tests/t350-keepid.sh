@@ -114,7 +114,7 @@ svc_uid=$(id -u kid-staging)
 # uid-scoped search path, and the BASE unit carries no `UserNS=` line at all.
 # Every assertion below about "the line" is about the drop-in, and the base
 # unit's own absence of the line is asserted where the line is.
-dropin_dir=/etc/containers/systemd/users/"$svc_uid"/app.container.d
+dropin_dir=/etc/containers/systemd/users/"$svc_uid"/kid.pod.d
 pin=$dropin_dir/50-guarden-keepid.conf
 assert_passwd kid-staging
 assert_linger kid-staging
@@ -606,26 +606,22 @@ owner=$(stat -c %u "$written")
 [ "$owner" = "$svc_uid" ] \
     || _fail "after the restart the file is owned by host uid $owner, not the service uid $svc_uid"
 
-# --- two units, two images, two pins (ADR-0019's line is per unit) -----------
+# --- two units, two images, ONE pin — the pod's ------------------------------
 #
 # The claim above is one image for one service. This is the shape it has to
-# survive: a service whose units name TWO images, each declaring its own
-# non-root user. ADR-0019 is explicit that "each unit maps its own user onto
-# the same service identity" — so the probe asks each distinct unit image, the
-# registry records a pair per unit, and the renderer writes each unit's own
-# line. One pair for the whole service would put the first image's user on every
-# other unit, and init is the image's own `USER` — a pin decides WHERE that uid
-# lands, not who starts (measured in t352) — so the units it did not probe
-# would keep the subuid-aliased writes ticket 277 opened ADR-0019 to stop,
-# while the pin mapped a uid their containers never run as. Silently: nothing
-# about the run says the pin named the wrong image. Each container's own uid is
-# asserted below, next to the uid_map row that says it landed on the service.
+# survive: a service whose units name TWO images. **A pod shares ONE user
+# namespace, so it carries exactly one `keep-id` pair** (ADR-0026, spec §6.3):
+# both images declare the same non-root user here, the probe asks each distinct
+# image, and the renderer writes the ONE line the pod's own drop-in carries.
+# The pair below is asserted next to the uid_map row that says it landed on the
+# service user, for both containers — a pin decides WHERE a uid lands, and the
+# two containers share the mapping because they share the namespace.
 #
-# The two images are built as the service user from two Containerfiles in the
+# The images are built as the service user from two Containerfiles in the
 # service's own tree: `weedr service build` tags every container from the one
-# `Containerfile` the tree carries (spec 6.6), so a second image with a second
-# uid is built the same way the first one is — `podman build` as the service,
-# into the service's own store, which is the store the probe reads.
+# `Containerfile` the tree carries (spec 6.6), so a second image is built the
+# same way the first one is — `podman build` as the service, into the service's
+# own store, which is the store the probe reads.
 
 pair=/var/lib/guarden/staging/kidpair/0000001
 mkdir -p "$pair/.guarden/quadlet" "$pair/.guarden/images"
@@ -651,7 +647,7 @@ seed "$pair/.guarden/images/web.Containerfile" \
     "CMD [\"sleep\", \"3600\"]"
 seed "$pair/.guarden/images/worker.Containerfile" \
     "FROM docker.io/library/alpine:3.20" \
-    "RUN adduser -D -u 20021 kidworker" \
+    "RUN adduser -D -u 10011 kidworker" \
     "USER kidworker" \
     "CMD [\"sleep\", \"3600\"]"
 
@@ -684,10 +680,11 @@ image_gid() {
 }
 
 web_gid=$(image_gid kidpair-staging localhost/kidpair-staging:latest 10011)
-worker_gid=$(image_gid kidpair-staging localhost/kidpair-worker:latest 20021)
+worker_gid=$(image_gid kidpair-staging localhost/kidpair-worker:latest 10011)
 [ -n "$web_gid" ] || _fail "the web image resolves uid 10011 to no gid in its own passwd"
-[ -n "$worker_gid" ] || _fail "the worker image resolves uid 20021 to no gid in its own passwd"
-[ "$web_gid" != "$worker_gid" ] || _fail "both images resolve to gid $web_gid, so this fixture cannot tell two pins apart"
+[ -n "$worker_gid" ] || _fail "the worker image resolves uid 10011 to no gid in its own passwd"
+[ "$web_gid" = "$worker_gid" ] \
+    || _fail "the two images resolve uid 10011 to two gids ($web_gid and $worker_gid), so one pod's pin cannot serve both"
 
 # unit_line <path>: the file's own rendered line, or `none`. A red that prints
 # what the file actually carries is evidence; a grep that only says the
@@ -716,26 +713,19 @@ done
 unit_web=$home_pair/.config/containers/systemd/web.container
 unit_worker=$home_pair/.config/containers/systemd/worker.container
 record_pair=$registry/kidpair-staging.toml
-# ADR-0019's drop-in model: the two pins are two drop-ins, one per unit, in
-# the uid-scoped search path — and the base units carry no `UserNS=` line at
-# all.
+# ADR-0019's drop-in model with ADR-0026's correction: the pin is the POD's,
+# so there is ONE file — `<pod>.pod.d/50-guarden-keepid.conf` in the
+# uid-scoped search path — and the base units carry no `UserNS=` line at all.
 pair_uid=$(id -u kidpair-staging)
-pin_web=/etc/containers/systemd/users/"$pair_uid"/web.container.d/50-guarden-keepid.conf
-pin_worker=/etc/containers/systemd/users/"$pair_uid"/worker.container.d/50-guarden-keepid.conf
+pin_pod=/etc/containers/systemd/users/"$pair_uid"/kidpair.pod.d/50-guarden-keepid.conf
 
-# Two images, two lines: the claim this fixture exists for. Each unit's OWN
-# drop-in carries the pair of the image IT names, and neither carries the
-# other's.
+# One pod, one line: the claim this fixture exists for. Two images, one pair,
+# and the pod's own drop-in is the only file that carries it.
 assert_file_lacks "$unit_web" "UserNS="
 assert_file_lacks "$unit_worker" "UserNS="
-line_web=$(unit_line "$pin_web")
-line_worker=$(unit_line "$pin_worker")
-[ "$line_web" = "UserNS=keep-id:uid=10011,gid=$web_gid" ] \
-    || _fail "the web unit of a two-image service carries $line_web, and its own image's user is keep-id:uid=10011,gid=$web_gid"
-[ "$line_worker" = "UserNS=keep-id:uid=20021,gid=$worker_gid" ] \
-    || _fail "the worker unit of a two-image service carries $line_worker, and its own image's user is keep-id:uid=20021,gid=$worker_gid — a pin read from another image maps a uid that container never runs as, and that container's own uid would land in the subuid band"
-[ "$line_web" != "$line_worker" ] \
-    || _fail "both units render $line_web, which cannot be two images' users"
+line_pod=$(unit_line "$pin_pod")
+[ "$line_pod" = "UserNS=keep-id:uid=10011,gid=$web_gid" ] \
+    || _fail "the pod of a two-image service carries $line_pod, and both images' user is keep-id:uid=10011,gid=$web_gid"
 
 # The record carries both answers, per unit, and the service-level anchor is
 # the first unit's pair (the single-image fields this file asserted above).
@@ -755,8 +745,8 @@ assert_file_has "$record_pair" "owner_gid = $web_gid"
     || _fail "the record's web entry names the image $(owner_field "$record_pair" web image)"
 [ "$(owner_field "$record_pair" web uid)" = "10011" ] \
     || _fail "the record's web entry holds uid $(owner_field "$record_pair" web uid)"
-[ "$(owner_field "$record_pair" worker uid)" = "20021" ] \
-    || _fail "the record's worker entry holds uid $(owner_field "$record_pair" worker uid), and its image declares 20021"
+[ "$(owner_field "$record_pair" worker uid)" = "10011" ] \
+    || _fail "the record's worker entry holds uid $(owner_field "$record_pair" worker uid), and its image declares 10011"
 [ "$(owner_field "$record_pair" worker gid)" = "$worker_gid" ] \
     || _fail "the record's worker entry holds gid $(owner_field "$record_pair" worker gid)"
 
@@ -881,26 +871,26 @@ pair_init() {
 
 pair_init kidpair-staging-web
 [ "$init_uid" = "10011" ] \
-    || _fail "the web container inits as uid $init_uid under $line_web, and its own image's user is 10011 — init is the image's own USER, which is this unit's pinned pair"
+    || _fail "the web container inits as uid $init_uid under $line_pod, and its image's user is 10011"
 [ "$init_gid" = "$web_gid" ] \
-    || _fail "the web container inits as gid $init_gid under $line_web, and its own image resolves gid $web_gid"
+    || _fail "the web container inits as gid $init_gid under $line_pod, and its image resolves gid $web_gid"
 [ "$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-web" 10011)" = "10011 0 1" ] \
     || _fail "the web uid_map row for 10011 is [$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-web" 10011)], expected [10011 0 1]"
 
 pair_init kidpair-staging-worker
-[ "$init_uid" = "20021" ] \
-    || _fail "the worker container inits as uid $init_uid under $line_worker, and its own image's user is 20021 — two images, two own users: init follows each image's USER and not one pinned pair"
+[ "$init_uid" = "10011" ] \
+    || _fail "the worker container inits as uid $init_uid under $line_pod, and its image's user is 10011"
 [ "$init_gid" = "$worker_gid" ] \
-    || _fail "the worker container inits as gid $init_gid under $line_worker, and its own image resolves gid $worker_gid"
-[ "$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-worker" 20021)" = "20021 0 1" ] \
-    || _fail "the worker uid_map row for 20021 is [$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-worker" 20021)], expected [20021 0 1]"
+    || _fail "the worker container inits as gid $init_gid under $line_pod, and its image resolves gid $worker_gid"
+[ "$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-worker" 10011)" = "10011 0 1" ] \
+    || _fail "the worker uid_map row for 10011 is [$(map_row "$GUARDEN_FIXTURES/uid-map-kidpair-staging-worker" 10011)], expected [10011 0 1]"
 
-# A second start leaves both lines alone: the record, not a probe, is what the
-# renderer answers to once both pairs are in it.
-before_pair=$(sha256sum "$unit_web" "$unit_worker" "$pin_web" "$pin_worker" | sha256sum | cut -d' ' -f1)
+# A second start leaves the units and the one pin alone: the record, not a
+# probe, is what the renderer answers to once the pair is in it.
+before_pair=$(sha256sum "$unit_web" "$unit_worker" "$pin_pod" | sha256sum | cut -d' ' -f1)
 run weedr service start kidpair-staging
 assert_exit 0
-after_pair=$(sha256sum "$unit_web" "$unit_worker" "$pin_web" "$pin_worker" | sha256sum | cut -d' ' -f1)
+after_pair=$(sha256sum "$unit_web" "$unit_worker" "$pin_pod" | sha256sum | cut -d' ' -f1)
 [ "$before_pair" = "$after_pair" ] \
     || _fail "a second start rendered a different pair of units or drop-ins ($before_pair -> $after_pair)"
 
@@ -928,8 +918,8 @@ run loom render "$changed" --service kid-staging --out "$changed/out-own"
 assert_exit 0
 [ "$(unit_line "$changed/out-own/units/app.container")" = "none" ] \
     || _fail "the base unit renders $(unit_line "$changed/out-own/units/app.container") and must render no line at all: the pin is a drop-in (ADR-0019)"
-[ "$(unit_line "$changed/out-own/admin/app.container.d/50-guarden-keepid.conf")" = "UserNS=keep-id:uid=10001,gid=$kid_gid" ] \
-    || _fail "the record's own image renders $(unit_line "$changed/out-own/admin/app.container.d/50-guarden-keepid.conf") and the pair it holds is keep-id:uid=10001,gid=$kid_gid"
+[ "$(unit_line "$changed/out-own/admin/kid.pod.d/50-guarden-keepid.conf")" = "UserNS=keep-id:uid=10001,gid=$kid_gid" ] \
+    || _fail "the record's own image renders $(unit_line "$changed/out-own/admin/kid.pod.d/50-guarden-keepid.conf") and the pair it holds is keep-id:uid=10001,gid=$kid_gid"
 
 sed -i 's|^Image=localhost/kid-staging:latest$|Image=localhost/kid-other:latest|' \
     "$changed/.guarden/quadlet/app.container"
@@ -937,7 +927,7 @@ run loom render "$changed" --service kid-staging --out "$changed/out-other"
 assert_exit 0
 [ "$(unit_line "$changed/out-other/units/app.container")" = "none" ] \
     || _fail "a unit naming localhost/kid-other:latest renders $(unit_line "$changed/out-other/units/app.container") from a record whose owner_image is localhost/kid-staging:latest, and a unit the record does not answer renders no line (ADR-0019) — the render alone never probes, so a line here is another image's pin installed until the next start repairs it"
-assert_file_missing "$changed/out-other/admin/app.container.d/50-guarden-keepid.conf"
+assert_file_missing "$changed/out-other/admin/kid.pod.d/50-guarden-keepid.conf"
 
 # --- a rebuild under the same tag is a DIFFERENT image -----------------------
 #

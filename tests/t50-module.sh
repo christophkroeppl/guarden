@@ -139,25 +139,29 @@ assert_exit 0
 assert_stdout_has "api $api_publication"
 assert_stdout_has "never forwarded"
 
-# The rendered edge unit: every `PublishPort` is a loopback publication in the
-# range, and there is no capability, no privileged port and no non-loopback
-# address anywhere in it.
+# The rendered edge unit and the pod it belongs to: every `PublishPort` is a
+# loopback publication in the range on the POD (podman binds a pod's ports on
+# the pod), and there is no capability, no privileged port and no non-loopback
+# address anywhere in either file.
 unit=/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.container
+pod=/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.pod
 assert_file_exists "$unit"
+assert_file_exists "$pod"
 assert_file_has "$unit" "Rendered by loom"
-assert_file_has "$unit" "Network=pasta:"
-assert_file_has "$unit" "PublishPort=127.0.0.1:$web_publication:80"
-assert_file_has "$unit" "PublishPort=127.0.0.1:$tls_publication:443"
+assert_file_has "$unit" "Pod=traefik.pod"
+assert_file_has "$pod" "Network=pasta:"
+assert_file_has "$pod" "PublishPort=127.0.0.1:$web_publication:80"
+assert_file_has "$pod" "PublishPort=127.0.0.1:$tls_publication:443"
 # The API publication is bound too. `api = true` allocates it and the firewall
 # admits it for `host.admin_user`, so leaving it unbound would be a port the
 # host accepts on and the edge answers nothing on. The container port comes from
 # the entrypoint the edge's own source serves the API on.
-assert_file_has "$unit" "PublishPort=127.0.0.1:$api_publication:8080"
+assert_file_has "$pod" "PublishPort=127.0.0.1:$api_publication:8080"
 assert_file_lacks "$unit" "AmbientCapabilities"
 assert_file_lacks "$unit" "CapAdd"
 assert_file_lacks "$unit" "Privileged"
-assert_file_lacks "$unit" "0.0.0.0:$web_publication"
-assert_file_lacks "$unit" "$web_publication:$web_publication"
+assert_file_lacks "$pod" "0.0.0.0:$web_publication"
+assert_file_lacks "$pod" "$web_publication:$web_publication"
 # The edge reads the shared directory read-only, which is the only direction it
 # has any business writing it in.
 assert_file_has "$unit" "Volume=/var/lib/guarden/edge/dynamic:/etc/guarden/edge:ro"

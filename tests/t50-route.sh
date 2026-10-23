@@ -40,6 +40,7 @@ assert_exit 0
 
 edge_uid=$(getent passwd traefik-production | cut -d: -f3)
 edge_unit=/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.container
+edge_pod=/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.pod
 
 # A poke's staged tree, where guarden itself puts it, and a service with one
 # route. `staging` because its `host_prefix` is `staging.`, which is where the
@@ -74,7 +75,7 @@ assert_file_lacks "$slice" "10.0.2.2"
 # The edge resolves that name through an `AddHost=` entry in **its own** units.
 # Without it the edge cannot resolve its own configuration and every route 502s,
 # which is why this is in the edge's units and not in the routed service's.
-assert_file_has "$edge_unit" "AddHost=routed-staging:10.0.2.2"
+assert_file_has "$edge_pod" "AddHost=routed-staging:10.0.2.2"
 
 # The edge is allowed to dial the publication, by uid, and nobody else is: the
 # owner, the edge, and the declared consumers — and this service declared none.

@@ -136,9 +136,14 @@ def discover(tree: Path) -> list[App]:
     return found
 
 
+def _app_or_root(name: str) -> str:
+    """An app as a diagnostic names it: its name, or the tree root for the empty one."""
+    return repr(name) if name else "<the repository root>"
+
+
 def shipped(apps: list[App]) -> str:
     """The apps of a tree as one line names them, for a refusal to carry."""
-    return ", ".join(repr(app.name) if app.name else "<the repository root>" for app in apps)
+    return ", ".join(_app_or_root(app.name) for app in apps)
 
 
 def label(service: str, app: str) -> str:
@@ -293,11 +298,32 @@ def order(apps: list[App]) -> list[App]:
 
     A cycle is exit `2`: two apps that each need the other cannot be created in
     any order, and it is a fact about the repository.
+
+    **Two apps naming one `[pod] name` is exit `2` as well**, and it is a refusal
+    rather than a pod holding both: a pod is a per-user podman object, so two apps
+    are two services, two Linux users and two pods, and the name cannot mean one
+    pod across them (spec §7.1, ADR-0026). Deploying it would leave two apps wearing
+    one pod name and sharing no namespace — a declaration that silently does
+    nothing, which is the shape this repository refuses wherever an input cannot be
+    built. This is the one place the whole repository is in hand; a request naming
+    a single app sees one manifest and cannot ask the question.
     """
     dependencies: dict[str, set[str]] = {app.name: set() for app in apps}
+    pods: dict[str, str] = {}
     for app in apps:
         document = manifest_mod.read(_manifest(app.root))
         check(document, apps, _manifest(app.root))
+        if document.pod_name:
+            owner = pods.get(document.pod_name)
+            if owner is not None:
+                raise errors.GuardenError(
+                    f"the apps {_app_or_root(owner)} and {_app_or_root(app.name)} both name the "
+                    f"pod {document.pod_name!r}, and a pod never spans two services: two apps "
+                    f"are two services, two Linux users and two podman pods, so one name "
+                    f"cannot be one pod here. Give each app its own `[pod] name`",
+                    errors.REJECTED_INPUT,
+                )
+            pods[document.pod_name] = app.name
         dependencies[app.name] |= {edge.app for edge in document.needs if edge.app}
     by_name = {app.name: app for app in apps}
     ordered: list[App] = []

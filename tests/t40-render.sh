@@ -58,12 +58,16 @@ run loom render "$project" --service app-production --out "$render"
 assert_exit 0
 assert_stderr_empty
 unit=$render/units/web.container
+pod=$render/units/app.pod
 
 # The renderer owns the network backend, and writes it from the [network] table
 # and nowhere else — so a `pasta_options` entry in containers.conf cannot reach
-# a guarden container. The pinned set is what the table states, and the whole set
-# is what the unit carries.
-assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2"
+# a guarden pod. The pinned set is what the table states, and the whole set is
+# what the POD unit carries; the container carries `Pod=` and no `Network=` at
+# all (podman refuses the two together, spec §7.1).
+assert_file_has "$pod" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-g,10.0.2.2"
+assert_file_lacks "$unit" "Network="
+assert_file_has "$unit" "Pod=app.pod"
 assert_file_has "$unit" "Image=docker.io/library/nginx:1.27"
 assert_file_has "$unit" "Environment=APP_MODE=production"
 
@@ -76,7 +80,7 @@ sed -i 's/^pasta_options = .*/pasta_options = [ "--map-gw", "--ipv4-only", "-a",
     "$GUARDEN_PREFIX/etc/guarden/guarden.toml"
 run loom render "$project" --service app-production --out "$render"
 assert_exit 0
-assert_file_has "$unit" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.101,-n,24,-g,10.0.2.2"
+assert_file_has "$pod" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.101,-n,24,-g,10.0.2.2"
 stage_config guarden-measured.toml
 run loom render "$project" --service app-production --out "$render"
 assert_exit 0
@@ -253,6 +257,7 @@ unset GUARDEN_TEMPLATES
 # `roots` and `twig`: the whole set is under those three directories and the
 # whole set is listed.
 assert_stdout_has "units/web.container"
+assert_stdout_has "units/app.pod"
 assert_stdout_has "units/web.container.d/10-guarden-order.conf"
 assert_stdout_has "units/guarden.env"
 assert_stdout_has "system/guarden-order.target"

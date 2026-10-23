@@ -118,7 +118,7 @@ record=$registry/kidv-staging.toml
 svc_uid=$(id -u kidv-staging)
 state_vol=/var/lib/guarden/services/kidv-staging/state/data
 bulk_vol=/var/lib/guarden/services/kidv-staging/bulk/scratch
-dropin_dir=/etc/containers/systemd/users/"$svc_uid"/app.container.d
+dropin_dir=/etc/containers/systemd/users/"$svc_uid"/kidv.pod.d
 pin=$dropin_dir/50-guarden-keepid.conf
 
 # The image's own uid, read from the image's own passwd, the way the probe

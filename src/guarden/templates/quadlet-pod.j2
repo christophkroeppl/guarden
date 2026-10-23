@@ -1,0 +1,29 @@
+{#
+  One quadlet pod unit, rendered by loom.
+
+  The pod is the one network namespace a service's containers share (ADR-0026,
+  spec §7.1). It carries the host's own pasta backend and the whole published
+  port set, and each member container carries `Pod=` and neither of those.
+#}
+# Rendered by loom from {{ origin }} for {{ service }}.
+# Do not edit: the next render overwrites this file, and the mutator installs it
+# into the service user's own quadlet directory.
+#
+# the pod of {{ service }}.
+
+[Unit]
+{% for line in unit_keys %}
+{{ line }}
+{% endfor %}
+
+[Pod]
+{% for line in pod_keys %}
+{{ line }}
+{% endfor %}
+{% if service_keys %}
+
+[Service]
+{% for line in service_keys %}
+{{ line }}
+{% endfor %}
+{% endif %}

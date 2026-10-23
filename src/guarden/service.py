@@ -1780,6 +1780,14 @@ def units_of(name: str, escaped_ref: str | None = None) -> list[str]:
     return sorted(path.stem for path in directory.glob("*.container"))
 
 
+def pods_of(name: str, escaped_ref: str | None = None) -> list[str]:
+    """The pod units this service's own directory declares."""
+    directory = units_dir(name, escaped_ref)
+    if not directory.is_dir():
+        return []
+    return sorted(path.stem for path in directory.glob("*.pod"))
+
+
 def refuse_legacy_volumes(name: str, escaped_ref: str | None = None) -> None:
     """Refuse a `state` volume whose data is at the root, at the START and not
     only at the ingest (ADR-0020).
@@ -1814,18 +1822,19 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
     probes each DISTINCT image the installed units name, as the service user,
     writes the answers into the registry — `owner_uid`/`owner_gid` for a
     service whose units name one image, those plus a per-unit `owner_units` map
-    when they name several — and re-renders so every unit's OWN drop-in
-    carries the `UserNS=keep-id:uid=...,gid=...` of ITS OWN image before the
-    container it is about to start. The line is rendered, never hand-written,
-    so the refusal of a repository's own `Userns=` is untouched (spec 6.3),
-    and a unit whose image cannot be read or resolved raises the probe's one
-    line rather than being skipped.
+    when they name several — and re-renders so the POD's drop-in carries the
+    `UserNS=keep-id:uid=...,gid=...` of the one pair its containers agree on
+    before the containers are started. A service whose images disagree is
+    refused, because a pod shares one user namespace. The line is rendered,
+    never hand-written, so the refusal of a repository's own `Userns=` is
+    untouched (spec 6.3), and a unit whose image cannot be read or resolved
+    raises the probe's one line rather than being skipped.
 
-    **The line is a DROP-IN, and not a line in the base unit**
-    (`50-guarden-keepid.conf` in the uid-scoped search path). The base unit
-    carries no `UserNS=` line at all, which is what makes the pin survive a
-    regeneration of the unit and lets an admin's own `90-admin.conf` override
-    it by name order alone.
+    **The line is a DROP-IN on the pod, and not a line in either base unit**
+    (`<pod>.pod.d/50-guarden-keepid.conf` in the uid-scoped search path). The
+    pod's base unit carries no `UserNS=` line at all, which is what makes the
+    pin survive a regeneration of the unit and lets an admin's own
+    `90-admin.conf` override it by name order alone.
 
     A later start finds every unit answered and does not probe again, and
     re-renders only when the drop-in guarden owns does not hold exactly the
@@ -1855,21 +1864,17 @@ def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
             registry.save(current, (0, users.group_id(GUARDEN_GROUP)))
         record = current
     unit_images = _installed_images(name, escaped_ref)
-    for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
-        unit = unitsource.parse(path)
-        # A pin and a source's own `User=` cannot both decide the container's
-        # user — the line maps the probed pair onto the service identity while
-        # `User=` names the uid the container runs as, and a uid that is not
-        # the pair is one the pin maps nowhere — so the refusal happens here
-        # as well as in the render: this is the path that answers the start,
-        # and it answers with the input code rather than through the
-        # renderer's exit plumbing. It is asked per unit, because
-        # the line is per unit: a service whose other unit is pinned does not
-        # take this unit's `User=` away.
-        pinned = render.owner_line(record, unit.stem(), unit_images[unit.stem()])
-        if pinned is not None:
-            render.refuse_pinned_user(unit, pinned, f"{name}: the unit {path.name}")
-    if not _carries_owner_line(name, escaped_ref, record):
+    pin = render.pin_of(
+        [
+            (stem, image, record.answer_for(stem, image))
+            for stem, image in sorted(unit_images.items())
+        ]
+    )
+    if pin is not None:
+        for path in sorted(units_dir(name, escaped_ref).glob("*.container")):
+            unit = unitsource.parse(path)
+            render.refuse_pinned_user(unit, pin, f"{name}: the unit {path.name}")
+    if not _carries_pod_pin(name, escaped_ref, record):
         with _unit_source(name, record, escaped_ref) as source:
             units.install(source, name, escaped_ref)
 
@@ -1954,6 +1959,9 @@ def _record_owners(current, name: str, escaped_ref: str | None,
                 )
             uid, gid = held
         pairs[stem] = (image, uid, gid)
+    render.pin_of(
+        [(stem, image, (uid, gid)) for stem, (image, uid, gid) in pairs.items()]
+    )
     if pairs and len({image for image, _, _ in pairs.values()}) > 1:
         image, uid, gid = pairs[sorted(pairs)[0]]
         current.owner_uid, current.owner_gid = uid, gid
@@ -2465,67 +2473,54 @@ def _podman(name: str, record, *argv: str):
         raise errors.GuardenError(f"{name}: {exc.message}", exc.code) from None
 
 
-def _carries_owner_line(name: str, escaped_ref: str | None, record) -> bool:
-    """Whether every installed unit already holds exactly the line the record
-    renders FOR THAT UNIT — or holds none at all when the record renders it
-    none. Anything else is a render that has not happened yet.
+def _carries_pod_pin(name: str, escaped_ref: str | None, record) -> bool:
+    """Whether the installed pod's own drop-in holds exactly the line the record
+    renders — or the record renders no line and guarden's drop-in is not there.
 
-    **The answer is read from the DROP-IN, and not from the base unit**
-    (ADR-0019). The pin lives in
-    `/etc/containers/systemd/users/<uid>/<unit>.container.d/50-guarden-keepid.conf`
-    and the base unit carries no `UserNS=` line at all, so a base unit that
-    holds no line is the CORRECT state and not a missing one. Reading the
-    base unit would reinstall the units on every single start — churn, and a
-    reinstall that would overwrite nothing but would also mean guarden and an
-    admin whose `90-admin.conf` says something different fight over the file
-    for ever.
+    **A service with no `.pod` of its own is answered on the PIN and not on the
+    file.** A template-created service ships the template's own `.container`
+    files and no manifest, so nothing can re-render it: a record that owes no
+    line is a state an install would not change, and asking for a pod file it can
+    never have made every start of one try to re-render and fail on the missing
+    manifest. A record that DOES owe a line and has no pod to carry it is a
+    render that has not happened yet, and the install that follows is what
+    renders it.
 
-    What this therefore answers is one question per unit: **does the file
-    guarden owns in that unit's drop-in directory carry exactly the line the
-    record renders for that unit?** A unit the record answers with no line
-    must have NO drop-in of guarden's own — a stale pin left behind by a
-    record that changed is as wrong as a missing one, and the mapping it
-    carries would be in force.
-
-    The admin's own `90-admin.conf` is **not read and not compared**: it is
-    the human's file, guarden never writes it, and the two of them coexist
-    by name order alone. A different `UserNS=` in it is the admin's decision
-    and it wins — that is the model, not a drift.
+    A stale line is as wrong as a missing one (`_installed_pod_pin` returns it,
+    the record's is `None`, and they disagree), so the drop-in is compared rather
+    than merely looked for.
     """
-    files = sorted(units_dir(name, escaped_ref).glob("*.container"))
-    if not files:
+    directory = units_dir(name, escaped_ref)
+    if not directory.is_dir():
+        return False
+    if not sorted(directory.glob("*.container")):
         return False
     unit_images = _installed_images(name, escaped_ref)
-    for path in files:
-        unit = unitsource.parse(path)
-        want = render.owner_line(record, unit.stem(), unit_images[unit.stem()])
-        found = _installed_owner_line(record, unit.stem(), escaped_ref)
-        if found != want:
-            return False
-    return True
+    want = render.pin_of(
+        [
+            (stem, image, record.answer_for(stem, image))
+            for stem, image in sorted(unit_images.items())
+        ]
+    )
+    pods = sorted(directory.glob("*.pod"))
+    if not pods:
+        return want is None
+    return _installed_pod_pin(record, pods[0].stem, escaped_ref) == want
 
 
-def _installed_owner_line(record, stem: str, escaped_ref: str | None) -> str | None:
-    """The line guarden's own drop-in carries for this unit, or `None`.
-
-    The file is named for the unit **the generator reads** — the entry stem,
-    so an instance's `<unit>-<escaped-ref>` and not the `<unit>` its own
-    directory holds — and its content is the one line guarden wrote. A file
-    that is not there, or that carries no `UserNS=` line, is `None`; a file
-    that carries one is that line.
-    """
+def _installed_pod_pin(record, pod: str, escaped_ref: str | None) -> str | None:
+    """The `[Pod] UserNS=` line guarden's own drop-in carries, or `None`."""
     if not record.uid:
         return None
-    unit = units.entry_stem(stem, escaped_ref)
-    directory = paths.admin_dropin_dir(record.uid, unit)
-    dropin = directory / paths.KEEPID_DROPIN
+    entry = units.entry_stem(pod, escaped_ref)
+    dropin = paths.admin_pod_dropin_dir(record.uid, entry) / paths.KEEPID_DROPIN
     if not dropin.is_file():
         return None
     try:
         parsed = unitsource.parse(dropin)
     except errors.GuardenError:
         return None
-    return parsed.one("Container", "UserNS")
+    return parsed.one("Pod", "UserNS")
 
 
 @contextmanager
@@ -2583,6 +2578,8 @@ def stop_units(name: str, escaped_ref: str | None = None) -> None:
     # `units.entry_stem`, the rule's one home, and nowhere else.
     for unit in units_of(name, escaped_ref):
         _unit(name, "stop", units.entry_stem(unit, escaped_ref))
+    for pod in pods_of(name, escaped_ref):
+        _unit(name, "stop", f"{units.entry_stem(pod, escaped_ref)}-pod")
 
 
 def start_units(name: str, escaped_ref: str | None = None) -> None:

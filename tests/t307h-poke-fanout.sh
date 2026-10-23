@@ -151,11 +151,13 @@ web_units=$homes/shop-web-production/home/.config/containers/systemd
 api_units=$homes/shop-api-production/home/.config/containers/systemd
 worker_units=$homes/shop-worker-api-production/home/.config/containers/systemd
 
-assert_file_has "$web_units/web.container" "AddHost=cache:10.0.2.2"
+assert_file_has "$web_units/shop-web.pod" "AddHost=cache:10.0.2.2"
+assert_file_lacks "$web_units/web.container" "AddHost="
 assert_file_has "$web_units/guarden.env" "CACHE_HOST=cache"
-assert_file_has "$api_units/api.container" "AddHost=shop-web-production:10.0.2.2"
+assert_file_has "$api_units/shop-api.pod" "AddHost=shop-web-production:10.0.2.2"
+assert_file_lacks "$api_units/api.container" "AddHost="
 assert_file_has "$api_units/guarden.env" "WEB_HOST=shop-web-production"
-assert_file_has "$worker_units/worker.container" "AddHost=shop-api-production:10.0.2.2"
+assert_file_has "$worker_units/shop-worker-api.pod" "AddHost=shop-api-production:10.0.2.2"
 
 # The negative half: the provider's `siblings:` entry is not a name the consumer
 # holds, and the consumer's edge is not in the provider's units.

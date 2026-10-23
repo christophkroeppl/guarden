@@ -158,6 +158,11 @@ def admin_dropin_dir(uid: int, unit: str) -> Path:
     return ADMIN_UNITS / str(uid) / f"{unit}.container.d"
 
 
+def admin_pod_dropin_dir(uid: int, pod: str) -> Path:
+    """The pod unit's drop-in directory; `pod` is the entry stem, as above."""
+    return ADMIN_UNITS / str(uid) / f"{pod}.pod.d"
+
+
 def creds(service: str) -> Path:
     """One service's blobs, root-owned and unreadable by any service user."""
     return CREDS / service

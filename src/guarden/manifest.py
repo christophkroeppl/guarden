@@ -38,6 +38,7 @@ MANIFEST_REL = Path(".guarden") / "service.yml"
 TOP_LEVEL_KEYS = {
     "project",
     "units",
+    "grouping",
     "pod",
     "state",
     "bulk",
@@ -79,6 +80,18 @@ BLOCK_KEYS = {
 # one place (spec 4, §7.1). The block is read by the pod's own renderer, and this
 # set is what that reader closes over.
 POD_KEYS = {"name"}
+
+# `grouping:` decides how an app's containers become services (CONTEXT.md), and
+# it is a declaration the manifest makes rather than something the renderer
+# infers from the layout. One app is one service, one Linux user and one pod —
+# the whole of what a service is today (§5.3, ADR-0026) — so `one-service`, which
+# would put several apps' containers into one service, is **refused by name**
+# rather than accepted and rendered as its default. Accepting it would be the
+# silently-dropping shape the closed key set exists to prevent: a repository
+# would read back a key it wrote and get a different deployment.
+GROUPING_ONE_SERVICE_PER_APP = "one-service-per-app"
+GROUPING_VALUES = (GROUPING_ONE_SERVICE_PER_APP, "one-service")
+GROUPING_DEFAULT = GROUPING_ONE_SERVICE_PER_APP
 
 # The `scrub:` block's own key sets, closed (ADR-0025).
 #
@@ -373,6 +386,8 @@ class Manifest:
     source: Path
     project: str | None
     units: str | None
+    grouping: str = GROUPING_DEFAULT
+    pod_name: str | None = None
     state: list[str] = field(default_factory=list)
     bulk: list[str] = field(default_factory=list)
     provides: list[str] = field(default_factory=list)
@@ -481,6 +496,8 @@ def read(path: Path) -> Manifest:
         source=path,
         project=_project(document.get("project"), path),
         units=_units(document.get("units"), path),
+        grouping=_grouping(document.get("grouping"), path),
+        pod_name=_pod(document.get("pod"), path),
         state=state,
         bulk=bulk,
         provides=provides,
@@ -737,6 +754,57 @@ def _units(value: Any, path: Path) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise errors.GuardenError(f"the manifest {path}: units is not a path")
     return value
+
+
+def _grouping(value: Any, path: Path) -> str:
+    """How this app's containers become services, refused by name where it is not built.
+
+    The contract states both values and CONTEXT.md defines them; a service is one
+    user, one home and one pod, so `one-service` — several apps' containers in one
+    service — is a change to what a service is and not a rendering choice. It is
+    refused with the value, the two spellings and the reason, rather than accepted
+    and rendered as `one-service-per-app`: the second is a key that reads back what
+    the repository wrote and deploys something else.
+    """
+    if value is None:
+        return GROUPING_DEFAULT
+    if not isinstance(value, str) or value not in GROUPING_VALUES:
+        raise errors.GuardenError(
+            f"the manifest {path}: grouping {value!r} is not one of "
+            f"{', '.join(GROUPING_VALUES)}"
+        )
+    if value != GROUPING_DEFAULT:
+        raise errors.GuardenError(
+            f"the manifest {path}: grouping {value!r} is not implemented: an app is one "
+            f"service, one user and one pod, and several apps in one service is a change to "
+            f"what a service is rather than a rendering choice. Accepting the key while "
+            f"deploying {GROUPING_DEFAULT} would be a key that silently does nothing; "
+            f"declare one app per service and the pod is that app's"
+        )
+    return value
+
+
+def _pod(value: Any, path: Path) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise errors.GuardenError(
+            f"the manifest {path}: pod is not a mapping; it takes `name:` and nothing else"
+        )
+    extra = sorted(set(value) - POD_KEYS)
+    if extra:
+        raise errors.GuardenError(
+            f"the manifest {path}: the pod block has an unknown key {extra[0]!r}; "
+            f"the keys are: {', '.join(sorted(POD_KEYS))}"
+        )
+    name = value.get("name")
+    if name is None:
+        return None
+    if not isinstance(name, str) or not names.NAME_RE.match(name):
+        raise errors.GuardenError(
+            f"the manifest {path}: pod name {name!r} must match {names.NAME_RE.pattern}"
+        )
+    return name
 
 
 def _schema(value: Any, path: Path) -> str | None:

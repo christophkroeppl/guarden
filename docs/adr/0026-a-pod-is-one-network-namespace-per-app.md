@@ -22,8 +22,11 @@ carries it in two places and §6.3 stated the refusal of `networks:`, and this d
 all three with the bounded form — no network *between services*, one namespace *inside* one.
 Narrows ADR-0023's "one repository is one service", which becomes "one app is one service" **under
 the default `grouping`**: a project that declares `grouping = "one-service"` puts several apps'
-containers into one service — and so one pod — instead, which is in `CONTEXT.md` and lands with the
-manifest key in the same change as this decision's §4 edit. What does not change either way is that
+containers into one service — and so one pod — instead, which is in `CONTEXT.md`. **The manifest key
+landed with this decision's §4 edit, and `one-service` is REFUSED by name**: a service is one user,
+one home and one pod, so collapsing several apps into one service changes what a service is, and a
+key accepted and then rendered as the default would be the silently-doing-nothing shape the closed
+key set exists to prevent (spec §4). What does not change either way is that
 an app is never a container and a pod never spans two services. It leaves ADR-0019's
 user-namespace pin intact on the unit that now carries it, with one addition the measurement forced:
 the pin is the POD's, so its containers share one user namespace.
@@ -40,8 +43,12 @@ The pod is a unit of its own in the service's own quadlet directory — `<pod>.p
 container unit of the app carries `Pod=<pod>.pod`. The **pasta backend moves to the pod**: the pod
 unit carries the pinned `[network] pasta_options` on `Network=pasta:`, and a member container
 carries no `Network=` line at all, because podman refuses the two together and the namespace is
-the pod's (§6.3). `AddHost=` stays where it is — on the member container units — because
-`/etc/hosts` is the container's file and not the namespace's, so every name §7.3 writes still
+the pod's (§6.3). **`AddHost=` is the pod's too, and that is a measured correction to this
+decision**: `/etc/hosts` is the container's file and not the namespace's, so this ADR put the
+line on the member — and podman 5.7.0 refuses it there (`Error: invalid config provided: extra
+host entries must be specified on the pod: network cannot be configured when it is shared with a
+pod`, exit `125`). The renderer writes the union of its containers' names into the pod's `[Pod]`
+table, which podman applies to every member's `/etc/hosts`, so every name §7.3 writes still
 resolves, to the same address, for the same reason.
 
 **`networks:` is pod membership, and the only pod there is belongs to the app.** A document-level
@@ -65,8 +72,9 @@ against:
   host from either is the pinned gateway `10.0.2.2`, mapped by pasta to the host's `127.0.0.1`,
   where the uid-matched accept set and the default deny (§7.6) are exactly what they were.
 - **It is not a name map.** A shared namespace gives a container a loopback it does not share with
-  the host; it gives it no name service. Names are still `AddHost=` entries the renderer writes,
-  and the port a repository reads is still the publication (§7.3).
+  the host; it gives it no name service. Names are still `AddHost=` entries the renderer writes —
+  in the POD's own table, because podman refuses the flag on a member — and the port a repository
+  reads is still the publication (§7.3).
 - **It is not where a port is granted.** Publications are allocated per container and persisted in
   the registry exactly as before (§7.4); the pod publishes them, because podman binds a pod's
   ports on the pod, and the host-side set is unchanged — `127.0.0.1:<publication>:<container

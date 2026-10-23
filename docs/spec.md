@@ -163,13 +163,16 @@ to it.
 /etc/containers/systemd/users/<uid>/  podman's uid-scoped rootless quadlet path: the admin
   injection point for a service's own units and drop-ins, and the ONLY path
   to them (ADR-0024). There is no staging copy of them anywhere.
-  <unit>.container.d/  one directory per unit, holding the drop-ins
-  that are merged into that unit's base file. **The mutator writes
+  <pod>.pod.d/  one directory per pod unit, holding the drop-ins
+  that are merged into that pod's base file. **The mutator writes
   exactly one file in it** — `50-guarden-keepid.conf`, the keep-id
-  pin (§6.3) — and **the admin's own `90-admin.conf` beside it is
-  never written and never deleted by guarden**. The directory is
-  searched AFTER the home's own directory, so a drop-in survives a
-  regeneration of the unit (§6.3).
+  pin the pod's containers share (§6.3, §7.1) — and **the admin's own
+  `90-admin.conf` beside it is never written and never deleted by
+  guarden**. The directory is searched AFTER the home's own directory,
+  so a drop-in survives a regeneration of the unit (§6.3).
+  <unit>.container.d/  the container's own drop-in directory, which
+  guarden creates for its start-order drop-in and never writes a pin
+  into: a container in a pod cannot carry a `UserNS=` of its own.
 /etc/ssh/authorized_keys.d/hose  the poke keys, one forced command per project
 /etc/systemd/system/  soil's units and the units of the unprivileged programs
 /usr/lib/systemd/user/  not used; it is not uid-scoped and is not a search path
@@ -240,7 +243,7 @@ in the home's quadlet directory and are rewritten on regeneration.
 (ADR-0024). The admin path above is the whole of it: the admin writes the file where the
 generator reads it, the renderer reads it back and merges it into the rendered unit, and the
 mutator writes exactly one file beside it — `50-guarden-keepid.conf`, the keep-id pin
-(§6.3). **A path a document names is a path a program implements**, so this paragraph is the
+(§6.3) — in the POD's drop-in directory, `<pod>.pod.d/`, because the pin is the pod's. **A path a document names is a path a program implements**, so this paragraph is the
 answer to the question §2.1's mode table asks: the promised
 `/etc/guarden/services/<name>/units.d/` is not in the table because no program ever read or
 wrote it, and adding the copy would give the admin's own configuration two ways to reach a
@@ -1051,6 +1054,13 @@ project: myapp  # optional; defaults to the project the --from source
 
 units: compose.yaml  # or: units: .guarden/quadlet/ — exactly one
 
+grouping: one-service-per-app  # how this app's containers become services (CONTEXT.md)
+  # `one-service-per-app` is the default and the only value implemented: the app is
+  # one service, one user, one home and one pod. `one-service` — several apps'
+  # containers in one service — is in the vocabulary and REFUSED until a ticket
+  # implements it: accepted and then rendered as the default, it would be a key that
+  # silently does nothing, which is what the closed key set exists to prevent.
+
 pod:  # the one network namespace this app's containers share (§7.1)
   name: myapp  # OPTIONAL. The pod's name, and the only name a `networks:` entry
   # in the unit source may carry. Defaults to the workload: `<project>` for the
@@ -1178,6 +1188,16 @@ Validation rules:
   rule covered only the top level, so a typo in a nested key was silently dropped and a
   manifest asking for `authentification: true` got a route with no auth on it and no diagnostic
   saying so.
+- **Two apps of one repository may not name the same pod.** A pod is a per-user podman object, so
+  it never spans two services (§7.1): two apps are two services, two Linux users and two pods, and
+  a `[pod] name` two apps share is refused, exit `2`, naming both apps and the name. The default
+  pod name cannot collide — it is the workload — so the rule is about a name written down. It is
+  asked of a request that deploys the whole repository, which is the one place every app's
+  manifest is in hand; a request naming a single app sees one manifest and does not ask it.
+- `grouping` takes `one-service-per-app` or `one-service` and nothing else. `one-service-per-app`
+  is the default and the only value implemented — one app, one service, one user, one home, one
+  pod — and `one-service` is refused, exit `2`, naming the value, both spellings and the reason:
+  accepting a key and then rendering the default would be a key that silently does nothing.
 - An `environment` key is refused **specifically**, with a message saying the host decides the
   environment and where the decision is recorded.
 - A `basicauth` key is refused **specifically**, with a message saying the host decides it and
@@ -3159,11 +3179,19 @@ rule of any kind for this hop. The three consequences that shape the rest of thi
 **The one namespace a service's containers share is its pod, and the pod is declared.** One pod
 per app (§4), named by `[pod] name` or, with no such key, by the service's workload — so `myapp`
 at a tree root gets the pod `myapp` and `apps/api` of the same repository gets `myapp-api`, and
-two apps of one repository cannot collide. The pod's unit is `<pod>.pod` in the service's own
+Two apps of one repository cannot collide. The pod's unit is `<pod>.pod` in the service's own
 quadlet directory, every container unit of the app carries `Pod=<pod>.pod`, and the pasta backend
 belongs to the pod (§6.3), so every container of the app sees the same gateway at the same pinned
-address and `AddHost=` keeps resolving where it always did. A pod with one container is a pod,
+address and the name map resolves where it always did. A pod with one container is a pod,
 because the unit source may grow a second one without the render changing shape.
+
+**`AddHost=` is the pod's, and the measurement is why.** It was a container line — `/etc/hosts` is
+the container's file and not the namespace's — and podman 5.7.0 refuses it on any container that
+joins a pod: `Error: invalid config provided: extra host entries must be specified on the pod:
+network cannot be configured when it is shared with a pod`, exit `125`. So the renderer writes the
+union of its containers' names into the pod's `[Pod]` table, which podman applies to every member's
+`/etc/hosts` — the same name, the same address, one table (measured in `t307c-pods`). A member
+container carries no `AddHost=` line, and a repository's own is still replaced (§6.3).
 
 **What the pod gives the containers of a service, and what it does not.** They share a loopback,
 so one of them can dial another's port directly — and that is the isolation property this design
@@ -3207,8 +3235,8 @@ services **must not** be given the same publication, and the allocator refuses t
 
 ### 7.3 Names
 
-There is no name map and no `/etc/hosts`. For each edge, the renderer writes into every unit of
-the consumer:
+There is no name map and no `/etc/hosts`. For each edge, the renderer writes into the consumer's
+pod — its `[Pod]` table, which every member inherits (see above):
 
 ```
 AddHost=<provider-service>:<ingress.alias>
@@ -3230,7 +3258,7 @@ table does not map is the name as written, so a manifest that names a full servi
 working and a host with no `[providers]` table behaves exactly as it did before.
 
 **A sibling app is the same mechanism with a name the repository decides.** `needs: app: api`
-renders `AddHost=<project>-api-<environment>:<ingress.alias>` into every unit of the consumer, and
+renders `AddHost=<project>-api-<environment>:<ingress.alias>` into the consumer's pod, and
 its `<AS>_HOST` and `<AS>_PORT` carry that same name and the **publication** the mutator allocated
 for the container of the sibling that serves `port:` — the same two keys and the same `AddHost=`
 shape a `siblings:` entry gets, written by the same code, so a sibling inside a unit source and a
