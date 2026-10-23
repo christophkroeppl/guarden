@@ -21,9 +21,9 @@ RemainAfterExit=yes
 # so only root can create a file here, but the check is defence in depth: the
 # validator and the shell that feeds ferm must agree, or a file the validator
 # warned about still reaches the firewall.
-ExecStart=/bin/sh -c 'find /etc/guarden/firewall/ -maxdepth 1 -name "*.conf" -user 0 | sort | xargs cat 2>/dev/null > /etc/guarden/firewall/.combined.conf; exec /usr/sbin/ferm /etc/guarden/firewall/.combined.conf'
-ExecReload=/bin/sh -c 'find /etc/guarden/firewall/ -maxdepth 1 -name "*.conf" -user 0 | sort | xargs cat 2>/dev/null > /etc/guarden/firewall/.combined.conf; exec /usr/sbin/ferm /etc/guarden/firewall/.combined.conf'
-ExecStop=/bin/sh -c 'find /etc/guarden/firewall/ -maxdepth 1 -name "*.conf" -user 0 | sort | xargs cat 2>/dev/null > /etc/guarden/firewall/.combined.conf; exec /usr/sbin/ferm -F /etc/guarden/firewall/.combined.conf'
+ExecStart=/bin/sh -c 'find /etc/guarden/firewall/ -name "*.conf" -user 0 | sort | xargs cat 2>/dev/null > /etc/guarden/firewall/.combined.conf; exec /usr/sbin/ferm /etc/guarden/firewall/.combined.conf'
+ExecReload=/bin/sh -c 'find /etc/guarden/firewall/ -name "*.conf" -user 0 | sort | xargs cat 2>/dev/null > /etc/guarden/firewall/.combined.conf; exec /usr/sbin/ferm /etc/guarden/firewall/.combined.conf'
+ExecStop=/bin/sh -c 'find /etc/guarden/firewall/ -name "*.conf" -user 0 | sort | xargs cat 2>/dev/null > /etc/guarden/firewall/.combined.conf; exec /usr/sbin/ferm -F /etc/guarden/firewall/.combined.conf'
 
 [Install]
 WantedBy=multi-user.target

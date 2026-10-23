@@ -777,6 +777,61 @@ def refuse_existing(candidates: list[str]) -> None:
     )
 
 
+def _template_nonroot_uid(template_dir: Path) -> tuple[int, int] | None:
+    """Whether the template ships an image that runs as a non-root user.
+
+    Inspects each ``.container`` file's ``Image=`` as root, pulling once if the
+    image is not present locally. Returns the first non-root ``(uid, gid)``
+    found, or ``None`` when every image is root-like, not declared, or could
+    not be inspected.
+    """
+    for path in sorted(template_dir.rglob("*.container")):
+        unit = unitsource.parse(path)
+        image = unit.one("Container", "Image")
+        if not image or not image.strip():
+            continue
+        reference = image.strip()
+        result = tool.call(["podman", "image", "inspect", reference])
+        if not result.ok:
+            result = tool.call(["podman", "pull", reference])
+            if not result.ok:
+                continue
+            result = tool.call(["podman", "image", "inspect", reference])
+            if not result.ok:
+                continue
+        try:
+            document = json.loads(result.stdout)
+        except ValueError:
+            continue
+        items = document if isinstance(document, list) else [document]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            config = item.get("Config") or {}
+            if not isinstance(config, dict):
+                continue
+            user = config.get("User")
+            if isinstance(user, int):
+                if user == 0:
+                    continue
+                return (user, 0)
+            if not isinstance(user, str):
+                user = ""
+            user = user.strip()
+            if not user or _is_root_declaration(user):
+                continue
+            uid_text, _, gid_text = user.partition(":")
+            if not _is_number(uid_text):
+                continue
+            uid = int(uid_text)
+            if uid == 0:
+                continue
+            if _is_number(gid_text):
+                return (uid, int(gid_text))
+            return (uid, 0)
+    return None
+
+
 def create_service(
     resolved: names.Resolved,
     config,
@@ -802,6 +857,18 @@ def create_service(
     """
     refuse_existing([resolved.name])
     template_dir = require_template(template_name)
+
+    nonroot = _template_nonroot_uid(template_dir)
+    if nonroot is not None:
+        uid, gid = nonroot
+        raise errors.GuardenError(
+            f"template {template_name!r} runs as uid {uid} (gid {gid}), but a "
+            f"template-created service cannot carry a keep-id pin because it ships "
+            f"no manifest and its units cannot be re-rendered with the probed line; "
+            f"use a root-running template or create the service from a manifest "
+            f"via `weedr service add`",
+            errors.REJECTED_INPUT,
+        )
 
     # A service created from a template has no manifest yet — it gets one when
     # a poke or `add` brings one in. Create the tree and the identity now, and

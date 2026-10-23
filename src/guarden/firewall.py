@@ -1,8 +1,13 @@
-"""`/etc/guarden/firewall/50-services.conf`: the mutator's half, and its only writer.
+"""`/etc/guarden/firewall/50-services.conf` and `services/<name>.conf`: the
+mutator's half, and its only writer.
 
-Two things live in this file and they are both spec 7.6/7.5: the nat rules that
-forward a granted public port onto a service's loopback publication, and the
-whole uid-matched `filter OUTPUT` set — every accept, then one drop.
+`50-services.conf` carries the nat rules that forward a granted public port
+onto a service's loopback publication, the `guarden-in` INPUT accepts, the
+root and resolver accepts in `guarden-svc`, one `jump guarden-svc-<name>;`
+per registered service, granted rules, and the default deny.
+
+Each `services/<name>.conf` carries that service's own per-(publication, uid)
+accept rules in its dedicated `guarden-svc-<name>` chain.
 """
 
 from __future__ import annotations
@@ -10,6 +15,7 @@ from __future__ import annotations
 import difflib
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from guarden import (
     conf,
@@ -30,7 +36,9 @@ from guarden import overrides as overrides_mod
 from guarden.hosttool import warn
 
 SERVICES_CONF = paths.FIREWALL / "50-services.conf"
+SERVICES_DIR = paths.FIREWALL_SERVICES
 SERVICES_MODE = 0o640
+SERVICE_MODE = 0o640
 UNIT = "guarden-firewall.service"
 UNIT_PATH = ("etc", "systemd", "system", UNIT)
 INPUT_CHAIN = "guarden-in"
@@ -281,45 +289,22 @@ def tunnel_publications(record) -> set[str]:
     }
 
 
-def accept_lines(config) -> list[str]:
-    """One line per `(publication, allowed uid)`, services in name order.
+def _service_accept_map(
+    config,
+) -> dict[str, dict[int, dict[int, str]]]:
+    """One accept per (service, publication, uid), grouped by service and port,
+    with a human-readable reason for each uid's presence.
 
-    A publication's accept set is: the service itself, the uid of every consumer
-    that declared an edge to it **on that publication**, the edge's uid for every
-    route publication recorded `edge` (ticket 293 — the edge is granted what it
-    serves), the tunnel's uid for every route publication the tunnel carries, and
-    `host.admin_user` alone on the API. The API replaces
-    the whole set, because it is a control surface and the edge's own uid is not
-    an answer to "who may see it".
-
-    **A consumer's uid is granted per publication, not per provider.** An edge
-    names a port, and a provider may hold several publications; granting the
-    consumer on all of them would hand it the ports it never asked for. The
-    number comes from the consumer's own registry edge — the same number
-    `render.edge_publications` writes into `<AS>_PORT` — so the rule and the
-    variable can never be built from two different answers.
-
-    **An INSTANCE's publication is granted like the service's own, and this is
-    the whole of what makes a preview reachable.** An instance gets its own
-    publication (`instance.publication`), its unit publishes it
-    (`PublishPort=127.0.0.1:<instance pub>:<port>`) and the route target is
-    `<service>:<instance pub>` — so the edge dials the instance's port, not the
-    service's. A set that named only the service's own publication left the
-    instance's port with no accept at all, and the default deny
-    (`daddr 127.0.0.0/8 jump DROP`, no owner match) dropped the edge's own
-    packet: the preview was running and unreachable (spec 7.4, spec 7.6).
-
-    The instance's uid IS the service's uid — an instance is a directory inside
-    one service and shares its one user — so the accept set is the same set,
-    applied to the instance's own port. The edge and the tunnel are granted on
-    it exactly when they are granted on the service's publication for the same
-    container, because the route is the same route: an instance renders the
-    service's manifest, so `routed`/`tunnel` is the container's name in both.
+    Returns ``{service: {port: {uid: reason}}}``.  The reason is one of
+    ``own``, ``admin``, ``consumer:<name>``, ``edge:<name>`` or
+    ``tunnel:<name>``.
     """
     edge = edge_uids()
     tunnel = tunnel_uids()
-    everything = [record for record in (registry.load(n) for n in registry.names())
-                  if record is not None]
+    everything = [
+        record for record in (registry.load(n) for n in registry.names())
+        if record is not None
+    ]
     # Ticket 293: only the routes recorded `edge` — only what the edge
     # actually serves — take an edge accept on their publication.
     routed = {
@@ -329,48 +314,91 @@ def accept_lines(config) -> list[str]:
     consumers = consumer_uids(everything)
     admin: int | None = None
 
-    lines: list[str] = []
+    # uid -> service name, used to build human-readable reason strings.
+    uid_to_name: dict[int, str] = {}
     for record in everything:
-        allowed: dict[int, set[str]] = {}
+        if record.uid:
+            uid_to_name[record.uid] = record.service
+
+    result: dict[str, dict[int, dict[int, str]]] = {}
+    for record in everything:
+        allowed: dict[int, dict[int, str]] = {}
         claimants = consumers.get(record.service, {})
         edge_names = routed.get(record.service, set())
         tunnel_names = tunnelled.get(record.service, set())
-        # The service's own publications and every instance's own publications,
-        # in one iteration: the two are granted by the same rule and the rule
-        # is keyed by the container's name, which an instance shares with the
-        # service (an instance renders the same manifest).
+
+        def _add(port: int, uid: int, reason: str) -> None:
+            allowed.setdefault(port, {})[uid] = reason
+
         for name, port in sorted(record.publication.items()):
             if name == publications.API:
                 if admin is None:
                     admin = admin_uid(config)
-                uids = {admin}
+                _add(port, admin, "admin")
             else:
-                uids = {record.uid} | claimants.get(port, set())
+                _add(port, record.uid, "own")
+                for c_uid in sorted(claimants.get(port, set())):
+                    c_name = uid_to_name.get(c_uid, str(c_uid))
+                    _add(port, c_uid, f"consumer:{c_name}")
                 if record.uid in edge or name in edge_names:
-                    uids |= edge
+                    for e_uid in sorted(edge):
+                        e_name = uid_to_name.get(e_uid, str(e_uid))
+                        _add(port, e_uid, f"edge:{e_name}")
                 if name in tunnel_names:
-                    uids |= tunnel
-            for uid in sorted(uids):
-                allowed.setdefault(port, set()).add(uid)
+                    for t_uid in sorted(tunnel):
+                        t_name = uid_to_name.get(t_uid, str(t_uid))
+                        _add(port, t_uid, f"tunnel:{t_name}")
         for instance in record.instances.values():
             for name, port in sorted(instance.publication.items()):
                 if name == publications.API:
                     # An instance never holds the API: the API belongs to the
                     # edge's own service, and the edge is not a preview.
                     continue
-                uids = {record.uid}
+                _add(port, record.uid, "own")
                 if record.uid in edge or name in edge_names:
-                    uids |= edge
+                    for e_uid in sorted(edge):
+                        e_name = uid_to_name.get(e_uid, str(e_uid))
+                        _add(port, e_uid, f"edge:{e_name}")
                 if name in tunnel_names:
-                    uids |= tunnel
-                for uid in sorted(uids):
-                    allowed.setdefault(port, set()).add(uid)
-        for port in sorted(allowed):
-            for match in sorted(allowed[port]):
-                lines.append(
-                    f"    mod owner uid-owner {match} daddr {LOOPBACK} "
-                    f"proto tcp dport {port} jump ACCEPT;"
-                )
+                    for t_uid in sorted(tunnel):
+                        t_name = uid_to_name.get(t_uid, str(t_uid))
+                        _add(port, t_uid, f"tunnel:{t_name}")
+        result[record.service] = allowed
+    return result
+
+
+def _accept_lines_from_map(
+    accept_map: dict[str, dict[int, dict[int, str]]],
+) -> list[str]:
+    """Re-create the flat accept lines from the structured map.
+
+    Used only to keep the main ``50-services.conf`` free of per-(publication,
+    uid) accepts after the refactor; the per-service files render through
+    :func:`_service_file_lines` instead.
+    """
+    return []
+
+
+def service_chain_name(name: str) -> str:
+    """The per-service chain name used in ferm and iptables."""
+    return f"{OUTPUT_CHAIN}-{name}"
+
+
+def _service_file_lines(
+    service: str,
+    port_accepts: dict[int, dict[int, str]],
+) -> list[str]:
+    """The ferm lines for one service's dedicated chain."""
+    lines = [f"table filter", f"chain {service_chain_name(service)} {{"]
+    for port in sorted(port_accepts):
+        for uid in sorted(port_accepts[port]):
+            reason = port_accepts[port][uid]
+            comment = f"  # {reason}" if reason else ""
+            lines.append(
+                f"    mod owner uid-owner {uid} daddr {LOOPBACK} "
+                f"proto tcp dport {port} jump ACCEPT;{comment}"
+            )
+    lines.append("}")
     return lines
 
 
@@ -394,11 +422,13 @@ def consumer_uids(everything) -> dict[str, dict[int, set[int]]]:
     return found
 
 
-def render(config, grants: list[Grant]) -> str:
-    # A forwarded port is a PREROUTING DNAT and nothing else. There is no POSTROUTING
-    # masquerade here and there must never be one: after the translation the destination
-    # is local, so the packet goes to INPUT and never reaches POSTROUTING, and a rule
-    # matching `-d 127.0.0.1 --dport <pub>` matches no packet in either direction.
+def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
+    """Render the firewall configuration.
+
+    Returns ``(main_body, service_bodies)`` where ``main_body`` is the content
+    of ``50-services.conf`` and ``service_bodies`` maps each registered service
+    name to the content of its ``services/<name>.conf`` file.
+    """
     interface = config.interface or hosttool.default_route_device()
     lines = [
         "# Written by weedr, and by nothing else. soil firewall owns",
@@ -473,7 +503,6 @@ def render(config, grants: list[Grant]) -> str:
         # path — it can only let the far side of one answer.
         "    mod conntrack ctstate (ESTABLISHED RELATED) jump ACCEPT;",
         f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp jump ACCEPT;",
-        *accept_lines(config),
         # The stub resolver, with the per-publication accepts and above the granted
         # rules — guarden's own accepts first, then what an admin granted, then the
         # single default deny last. `service_uids()` is the registry's uids and
@@ -483,6 +512,15 @@ def render(config, grants: list[Grant]) -> str:
         # `rules.resolver_lines`, beside the service uids and not as one of them
         # (ADR-0023), so the resolver's uid set is the service uids and root.
         *rules.resolver_lines(service_uids()),
+        # Per-service jumps: every registered service gets its own chain in
+        # services/<name>.conf, and this chain jumps to it.  An accept then
+        # cannot land below the deny — that stops being a line-ordering
+        # convention in one renderer and becomes a property of the chain graph.
+        *(
+            f"    jump {service_chain_name(name)};"
+            for name in sorted(registry.names())
+            if registry.load(name) is not None
+        ),
         # A granted rule renders ABOVE the deny and never after it: position is
         # guarden's, and a grant that landed below a default deny would be
         # unreachable while still appearing in the file.
@@ -490,7 +528,15 @@ def render(config, grants: list[Grant]) -> str:
         f"    daddr {LOOPBACK_NETWORK} jump DROP;",
         "}",
     ]
-    return "\n".join(lines) + "\n"
+    main_body = "\n".join(lines) + "\n"
+
+    accept_map = _service_accept_map(config)
+    service_bodies: dict[str, str] = {}
+    for name in sorted(accept_map):
+        service_lines = _service_file_lines(name, accept_map[name])
+        service_bodies[name] = "\n".join(service_lines) + "\n"
+
+    return main_body, service_bodies
 
 
 def granted_rule_lines() -> list[str]:
@@ -509,8 +555,8 @@ def granted_rule_lines() -> list[str]:
 
 
 def installed() -> str:
-    """Read all .conf files in the firewall directory, in lexical order.
-    
+    """Read all root-owned .conf files in the firewall directory, in lexical order.
+
     Only root-owned files are loaded; non-root files are skipped with a warning.
     """
     firewall_dir = paths.FIREWALL
@@ -519,7 +565,6 @@ def installed() -> str:
     out = []
     for conf_file in sorted(firewall_dir.glob("*.conf")):
         try:
-            # Check ownership - skip files not owned by root
             stat = conf_file.stat()
             if stat.st_uid != 0:
                 warn(f"skipping non-root-owned firewall file: {conf_file.name} (uid={stat.st_uid})")
@@ -530,6 +575,13 @@ def installed() -> str:
                 f"{conf_file} could not be read: {exc.strerror}", errors.HOST_NOT_AS_ASSUMED
             ) from exc
     return "\n".join(out)
+
+
+def _read_file(path: Path) -> str:
+    """Read a single config file, returning empty string if absent."""
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8")
 
 
 def unit_installed() -> bool:
@@ -568,19 +620,42 @@ def load_set() -> None:
 
 def install(config) -> str:
     with conf.lock("firewall"):
-        body = render(config, collect())
-        before = installed()
+        main_body, service_bodies = render(config, collect())
+
+        # Remove service files for services that no longer exist in the registry.
+        current_services = set(registry.names())
+        for path in SERVICES_DIR.glob("*.conf"):
+            if path.stem not in current_services:
+                path.unlink()
+
+        # Write the main file if it changed.
+        before_main = _read_file(SERVICES_CONF)
+        main_changed = main_body != before_main
+        if main_changed:
+            conf.write_file(SERVICES_CONF, main_body, SERVICES_MODE)
+
+        # Write each per-service file if it changed.
+        service_changed = False
+        for name, body in service_bodies.items():
+            path = SERVICES_DIR / f"{name}.conf"
+            before = _read_file(path)
+            if body != before:
+                conf.write_file(path, body, SERVICE_MODE)
+                service_changed = True
+
+        if main_changed or service_changed:
+            load_set()
+
+        # Return a unified diff for the main file only; per-service files are
+        # written without a separate diff to keep the report readable.
         diff = "".join(
             difflib.unified_diff(
-                before.splitlines(keepends=True),
-                body.splitlines(keepends=True),
+                before_main.splitlines(keepends=True),
+                main_body.splitlines(keepends=True),
                 fromfile=f"{SERVICES_CONF} (installed)",
                 tofile=f"{SERVICES_CONF} (rendered)",
             )
         )
-        if body != before:
-            conf.write_file(SERVICES_CONF, body, SERVICES_MODE)
-            load_set()
     return diff
 
 
