@@ -1,21 +1,8 @@
 .kilo
 CLAUDE.md
 
-# A project's varlock schema is tracked; a project's values are not.
-# The schema declares names, types and example values, and never a value, so it is
-# safe in git and required to be there. Everything else under `.env` is not.
-# The negation is UNANCHORED on purpose: `.guarden/.env.schema` contains a slash and
-# would match only at the root, silently dropping the schema in every fixture
-# repository under fixtures/projects/.
-.env
-.env.*
-!**/.guarden/.env.schema
-# The root contract is anchored, unlike the rule above it: `/.env.schema` names
-# the one at the top and leaves every nested schema to `!**/.guarden/.env.schema`.
-# Unanchored it would also re-admit the fixture repositories', quietly making
-# the rule above it dead — and a second rule that never fires is a rule nobody
-# can tell is broken.
-!/.env.schema
+.env*
+!.env.schema
 
 __pycache__/
 *.pyc
@@ -26,12 +13,6 @@ __pycache__/
 *.dump
 evidence/
 .lxc-state/
+-ruff_cache
 
-# A rendered cloud-init document is a build output, not a source. What a change
-# is made to is the template under `src/guarden/templates/cloud-init/` and
-# `packages/packages.toml`; `soil packages --render-user-data` produces the
-# document from them. A committed render is a second copy of the package list
-# that goes stale the moment the list changes, so no render is tracked and this
-# pattern is the shape a render lands in — `user-data.yaml`, `user-data.vps.yaml`,
-# `guarden-user-data.yaml`, and whatever a caller names with `--output`.
 *user-data*.yaml

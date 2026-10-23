@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the runtime dependencies, and that nothing reaches past them.
 
-spec 6.1 and AGENTS.md: the runtime dependencies are the distribution's
+The runtime dependencies are the distribution's
 `python3-yaml` and `python3-jinja2`, installed by `soil packages`, and they are
 the only non-standard-library imports a guarden program may make. There is no
 `pip install` at deploy time and no wheel is checked in, so a program that
