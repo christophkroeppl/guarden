@@ -1475,59 +1475,30 @@ def _build(args) -> int:
     source = render.resolve_unit_source(app_dir, manifest)
 
     built: list[str] = []
-    for container in source.containers():
-        # A container builds when its own tree carries a Containerfile. The
-        # reference it is tagged with is the one the unit source declares (spec
-        # 6.6 step 2), so a declared `Image=` is the TAG and not a claim that
-        # this is a pull: the renderer writes the same value into `Image=`, and
-        # the two halves agree because both read it from the source.
-        #
-        # A tree with no Containerfile is a pull whatever the unit declares,
-        # and skipping it is right — but skipping a tree that HAS one because
-        # its unit also declares an image would make the whole verb useless for
-        # the one shape guarden allows: a unit that declares Image= AND carries
-        # a Containerfile.
-        context_file = next(
-            (
-                app_dir / name
-                for name in ("Containerfile", "Dockerfile")
-                if (app_dir / name).is_file()
-            ),
-            None,
-        )
-        if context_file is None:
-            continue
-
-        # Get the reference the build should tag — the one the unit source
-        # declares, or the local one for a pure build with no image:.
-        image_ref = images_mod.declared_or_built(app_dir, resolved.name, container)
-
-        # **Guarden's exclusion goes into the context's own ignore file before
-        # the build reads it.** The podman store — which holds the per-user
-        # secret database in cleartext — is in the home by now, and a context
-        # carrying it leaks the credential material into an image layer. The
-        # source's own patterns are kept and guarden's come after them, so the
-        # source still owns what the build does not see (spec 6.6).
-        service.write_build_exclusions(home, (record.uid, record.uid))
-
-        podman = tool.runuser_as(
-            resolved.name,
-            "podman",
-            "build",
-            "--tag",
-            image_ref,
-            "-f",
-            str(context_file),
-            ".",
-        )
-        result = tool.call(podman, cwd=home)
-        if not result.ok:
-            detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
+    # A `one-service` service holds every app in one home, so the root manifest
+    # may be a combined one that names no containers of its own. Build each
+    # app's own directory instead.
+    if manifest.grouping == manifest_mod.GROUPING_ONE_SERVICE and not source.containers():
+        shipped = apps_mod.discover(home)
+        for app in shipped:
+            app_dir = home / app.root.relative_to(home) if app.root != home else home
+            app_manifest = manifest_mod.read(app_dir / manifest_mod.MANIFEST_REL)
+            app_source = render.resolve_unit_source(app_dir, app_manifest)
+            for container in app_source.containers():
+                built.extend(_build_container(home, app_dir, resolved.name, container))
+        if not built:
             raise errors.GuardenError(
-                f"build {resolved.name}: podman build exited {result.returncode}: {detail}",
+                f"{resolved.name} has no unit source with a build instruction, "
+                "so there is nothing to build",
                 errors.HOST_NOT_AS_ASSUMED,
             )
-        built.append(image_ref)
+        _invalidate_owner(resolved.name, built)
+        for ref in built:
+            sys.stdout.write(f"{ref}\n")
+        return 0
+
+    for container in source.containers():
+        built.extend(_build_container(home, app_dir, resolved.name, container))
 
     if not built:
         raise errors.GuardenError(
@@ -1548,6 +1519,40 @@ def _build(args) -> int:
     for ref in built:
         sys.stdout.write(f"{ref}\n")
     return 0
+
+
+def _build_container(home: Path, app_dir: Path, service: str, container: str) -> list[str]:
+    """Build one container's image, returning the tagged references."""
+    context_file = next(
+        (
+            app_dir / name
+            for name in ("Containerfile", "Dockerfile")
+            if (app_dir / name).is_file()
+        ),
+        None,
+    )
+    if context_file is None:
+        return []
+    image_ref = images_mod.declared_or_built(app_dir, service, container)
+    service.write_build_exclusions(home, (0, 0))
+    podman = tool.runuser_as(
+        service,
+        "podman",
+        "build",
+        "--tag",
+        image_ref,
+        "-f",
+        str(context_file),
+        ".",
+    )
+    result = tool.call(podman, cwd=home)
+    if not result.ok:
+        detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
+        raise errors.GuardenError(
+            f"build {service}: podman build exited {result.returncode}: {detail}",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return [image_ref]
 
 
 def _invalidate_owner(name: str, references: list[str]) -> None:

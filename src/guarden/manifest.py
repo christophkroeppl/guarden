@@ -83,14 +83,14 @@ POD_KEYS = {"name"}
 
 # `grouping:` decides how an app's containers become services (CONTEXT.md), and
 # it is a declaration the manifest makes rather than something the renderer
-# infers from the layout. One app is one service, one Linux user and one pod —
-# the whole of what a service is today (§5.3, ADR-0026) — so `one-service`, which
-# would put several apps' containers into one service, is **refused by name**
-# rather than accepted and rendered as its default. Accepting it would be the
-# silently-dropping shape the closed key set exists to prevent: a repository
-# would read back a key it wrote and get a different deployment.
+# infers from the layout. `one-service-per-app` is the default: one app is one
+# service, one Linux user and one pod. `one-service` puts several apps'
+# containers into one service and one pod, and it is accepted here — the
+# cross-app checks (every app agrees, one pod name for a one-service repo) live
+# in `apps.order`, the one place that holds every manifest at once.
 GROUPING_ONE_SERVICE_PER_APP = "one-service-per-app"
-GROUPING_VALUES = (GROUPING_ONE_SERVICE_PER_APP, "one-service")
+GROUPING_ONE_SERVICE = "one-service"
+GROUPING_VALUES = (GROUPING_ONE_SERVICE_PER_APP, GROUPING_ONE_SERVICE)
 GROUPING_DEFAULT = GROUPING_ONE_SERVICE_PER_APP
 
 # The `scrub:` block's own key sets, closed (ADR-0025).
@@ -757,14 +757,13 @@ def _units(value: Any, path: Path) -> str | None:
 
 
 def _grouping(value: Any, path: Path) -> str:
-    """How this app's containers become services, refused by name where it is not built.
+    """How this app's containers become services.
 
-    The contract states both values and CONTEXT.md defines them; a service is one
-    user, one home and one pod, so `one-service` — several apps' containers in one
-    service — is a change to what a service is and not a rendering choice. It is
-    refused with the value, the two spellings and the reason, rather than accepted
-    and rendered as `one-service-per-app`: the second is a key that reads back what
-    the repository wrote and deploys something else.
+    `one-service-per-app` is the default: each app deploys as its own service,
+    user, home and pod. `one-service` puts every app of the repository into one
+    service and one pod, and it is accepted here — the cross-app check (same
+    grouping for every app, one pod name for a one-service repo) lives in
+    `apps.order`, which is the one place that holds every manifest at once.
     """
     if value is None:
         return GROUPING_DEFAULT
@@ -772,14 +771,6 @@ def _grouping(value: Any, path: Path) -> str:
         raise errors.GuardenError(
             f"the manifest {path}: grouping {value!r} is not one of "
             f"{', '.join(GROUPING_VALUES)}"
-        )
-    if value != GROUPING_DEFAULT:
-        raise errors.GuardenError(
-            f"the manifest {path}: grouping {value!r} is not implemented: an app is one "
-            f"service, one user and one pod, and several apps in one service is a change to "
-            f"what a service is rather than a rendering choice. Accepting the key while "
-            f"deploying {GROUPING_DEFAULT} would be a key that silently does nothing; "
-            f"declare one app per service and the pod is that app's"
         )
     return value
 
@@ -1301,3 +1292,84 @@ def _port(value: Any, where: str, path: Path) -> int:
             f"{PORT_MIN}-{PORT_MAX}"
         )
     return value
+
+
+def combine(documents: list[Manifest], root: Path) -> Manifest:
+    """Merge several app manifests into one, for a `one-service` render.
+
+    Every list-typed block is concatenated in manifest order. `project` and
+    `units` come from the first manifest (they are the same for every app),
+    `grouping` is set to `one-service`, and `pod_name` must already have been
+    checked for agreement by the caller.
+    """
+    if not documents:
+        raise errors.GuardenError("combine needs at least one manifest")
+    first = documents[0]
+    schema_keys: list[manifest_mod.Key] = []
+    schema_path = None
+    for doc in documents:
+        if doc.schema:
+            schema_path = doc.schema
+    return Manifest(
+        source=root / MANIFEST_REL,
+        project=first.project,
+        units=first.units,
+        grouping=GROUPING_ONE_SERVICE,
+        pod_name=first.pod_name,
+        state=sorted({v for doc in documents for v in doc.state}),
+        bulk=sorted({v for doc in documents for v in doc.bulk}),
+        provides=sorted({v for doc in documents for v in doc.provides}),
+        needs=[edge for doc in documents for edge in doc.needs],
+        ports=[entry for doc in documents for entry in doc.ports],
+        routes=[entry for doc in documents for entry in doc.routes],
+        siblings=[entry for doc in documents for entry in doc.siblings],
+        widgets=[entry for doc in documents for entry in doc.widgets],
+        firewall=[entry for doc in documents for entry in doc.firewall],
+        schema=schema_path,
+        scrub=Scrub(),
+    )
+
+
+def _dump(document: Manifest) -> str:
+    """Serialize a Manifest back to YAML text."""
+    yaml = _yaml()
+    out: dict[str, Any] = {}
+    if document.project:
+        out["project"] = document.project
+    if document.units:
+        out["units"] = document.units
+    out["grouping"] = document.grouping
+    if document.pod_name:
+        out["pod"] = {"name": document.pod_name}
+    if document.state:
+        out["state"] = document.state
+    if document.bulk:
+        out["bulk"] = document.bulk
+    if document.provides:
+        out["provides"] = document.provides
+    if document.needs:
+        out["needs"] = [
+            {
+                **({"service": edge.service} if edge.service else {"app": edge.app}),
+                "as": edge.prefix,
+                "port": edge.port,
+                "auth": edge.auth,
+                **({"databases": list(edge.databases)} if edge.databases else {}),
+                **({"via": edge.via} if edge.via != VIA_PASTA else {}),
+                **({"hostname": edge.hostname} if edge.hostname else {}),
+            }
+            for edge in document.needs
+        ]
+    if document.ports:
+        out["ports"] = [{"container": entry.container, "port": entry.port} for entry in document.ports]
+    if document.routes:
+        out["routes"] = [{"container": entry.container, "port": entry.port, "host": entry.host, "auth": entry.auth} for entry in document.routes]
+    if document.siblings:
+        out["siblings"] = [{"container": entry.container, "port": entry.port} for entry in document.siblings]
+    if document.widgets:
+        out["widgets"] = [{"container": entry.container, "file": entry.file} for entry in document.widgets]
+    if document.firewall:
+        out["firewall"] = [{"name": entry.name, "chain": entry.chain, "rule": entry.rule} for entry in document.firewall]
+    if document.schema:
+        out["schema"] = document.schema
+    return yaml.safe_dump(out, default_flow_style=False, sort_keys=False)
