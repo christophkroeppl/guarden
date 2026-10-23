@@ -100,6 +100,7 @@ SERVICE = (
     ("immutable", "set chattr +i on a snapshot and record it, in one act"),
     ("mutable", "clear chattr +i on a snapshot and its record, in one act"),
     ("build", "podman build, as the service user"),
+    ("commit", "record the deployed sha after a successful build (option B)"),
 )
 
 PROGRAM_GROUP = "guarden"
@@ -347,6 +348,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     build = top["service"]["verbs"]["build"]
     cli.add_name(build, "the service whose own tree the build runs on")
+
+    commit = top["service"]["verbs"]["commit"]
+    cli.add_name(commit, "the service whose deployed sha is recorded")
+    commit.add_argument("sha", metavar="SHA", help="the commit that was deployed")
 
     secret_set = top["secret"]["verbs"]["set"]
     secret_set.add_argument("name", metavar="NAME", help="the service that owns the value")
@@ -1582,6 +1587,28 @@ def _invalidate_owner(name: str, references: list[str]) -> None:
             registry.save(record, (0, users.group_id(service.GUARDEN_GROUP)))
 
 
+def _commit(args) -> int:
+    """Option B: record the deployed sha after the build and gate have succeeded.
+
+    A failed build never reaches this verb, so the record never claims a sha
+    that did not run. A ref is a named snapshot, not a commit, and it carries
+    no sha the record can name.
+    """
+    config = config_mod.load()
+    resolved = names.resolve(args.name, list(config.tracks), allow_default=False)
+    record = registry.load(resolved.name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{resolved.name} has no registry entry, so there is nothing to commit",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if args.sha and not resolved.escaped_ref:
+        record.deployed_sha = args.sha
+        with conf.lock("registry"):
+            registry.save(record, (0, users.group_id(service.GUARDEN_GROUP)))
+    return 0
+
+
 def _secret_set(args) -> int:
     key = credentials.validate_key(args.key)
     names.validate(args.name)
@@ -2580,6 +2607,7 @@ HANDLERS = {
     "weedr service stop": _stop,
     "weedr service restart": _restart,
     "weedr service build": _build,
+    "weedr service commit": _commit,
     "weedr service list": _list,
     "weedr service snapshot": _snapshot,
     "weedr service fork": _fork,

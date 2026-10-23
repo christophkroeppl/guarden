@@ -486,6 +486,10 @@ def create(
         outcome.notes += _apply_volume_owners(
             manifest, resolved.name, granted, resolved.escaped_ref
         )
+        # Option B: the record must persist so the gate can read it, but
+        # `deployed_sha` is written by furrow after the build succeeds.
+        with conf.lock("registry"):
+            registry.save(existing, (0, users.group_id(GUARDEN_GROUP)))
         return outcome
 
     fresh = bool(resolved.escaped_ref) and (

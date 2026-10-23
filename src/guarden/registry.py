@@ -648,7 +648,6 @@ def load(service: str) -> Registry | None:
 def save(registry: Registry, owner: tuple[int, int]) -> None:
     conf.write_toml(path_for(registry.service), registry.to_document(), REGISTRY_MODE, owner)
 
-
 def delete(service: str) -> bool:
     target = path_for(service)
     if not target.exists():
