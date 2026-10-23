@@ -486,6 +486,18 @@ def create(
         outcome.notes += _apply_volume_owners(
             manifest, resolved.name, granted, resolved.escaped_ref
         )
+        # **A converged deploy still records the poke's sha (spec 3.4).** The
+        # convergence answer is about the tree and the record, not about which
+        # commit the operator pointed at: a nudge — `git commit --allow-empty`,
+        # the way AGENTS.md documents forcing a deploy — has an identical tree by
+        # construction, so this is the only path such a poke ever reaches. Without
+        # this the deploy reported `unchanged <service> at <new sha>` while the
+        # record still named the previous commit, and `weedr service list --json`
+        # reported a sha nobody had deployed.
+        if source.kind == "poke" and source.sha and not resolved.escaped_ref:
+            existing.deployed_sha = source.sha
+            with conf.lock("registry"):
+                registry.save(existing, (0, users.group_id(GUARDEN_GROUP)))
         return outcome
 
     fresh = bool(resolved.escaped_ref) and (

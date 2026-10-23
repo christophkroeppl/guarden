@@ -149,7 +149,24 @@ assert_stdout_lacks "unchanged poked-staging at 0000001"
 assert_file_has "$homes/poked-staging/home/.guarden/quadlet/app.container" "Exec=sleep 1800"
 assert_file_has "$registry/poked-staging.toml" 'deployed_sha = "0000001"'
 
-# --- 4. a three-app repository is asked once per app -------------------------
+# --- 4. a converged poke still records the sha it reports (spec 3.4) ---------
+#
+# `git commit --allow-empty` is the nudges AGENTS.md documents: the tree is
+# byte-identical by construction, so the poke takes the converged path and
+# installs nothing. It must still record the commit it reports — otherwise
+# `weedr service list --json` answers with a sha nobody deployed, which is the
+# exact class of bug this suite exists for, one path over.
+nudge_tar=$(tar_tree "$own")
+run hose --project poked poke develop 0000002 <"$nudge_tar"
+assert_exit 0
+assert_no_error
+assert_stdout_has "unchanged poked-staging at 0000002"
+assert_file_has "$registry/poked-staging.toml" 'deployed_sha = "0000002"'
+run weedr service list --json
+assert_exit 0
+assert_json services.0.deployed_sha '"0000002"'
+
+# --- 5. a three-app repository is asked once per app -------------------------
 
 project_for shop '"main" = ["production"]'
 multi_tar=$(tar_tree "$fixtures/multi")
