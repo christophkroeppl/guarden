@@ -156,4 +156,43 @@ run iptables-legacy -S guarden-svc
 assert_exit 0
 assert_stdout_lacks "--uid-owner $uid "
 
+# --- a template whose image runs as non-root is refused at create --------------
+# A template ships no manifest, so a non-root image cannot get the keep-id pin
+# its start would need. The create verb must refuse before the tree is written.
+
+build_dir=$(mktemp -d)
+cat > "$build_dir/Containerfile" <<'EOF'
+FROM docker.io/library/alpine:3.20
+RUN adduser -D -u 10001 testuser
+USER 10001
+CMD ["sleep", "3600"]
+EOF
+
+# The base may already be in the store from another suite; pull it if not.
+if ! podman image inspect docker.io/library/alpine:3.20 >/dev/null 2>&1; then
+    run podman pull docker.io/library/alpine:3.20
+    assert_exit 0
+fi
+
+run podman build -t localhost/nonroot-template:latest "$build_dir"
+assert_exit 0
+
+install -d -m 0755 /usr/lib/guarden/templates/services/nonroot-template
+cat > /usr/lib/guarden/templates/services/nonroot-template/nonroot-template.container <<'EOF'
+[Unit]
+Description=a non-root template
+
+[Container]
+Image=localhost/nonroot-template:latest
+EOF
+
+run weedr service create nonroot-svc --env staging --template nonroot-template
+assert_exit 2
+assert_stderr_has "template 'nonroot-template'"
+assert_stderr_has "uid 10001"
+assert_stderr_has "keep-id pin"
+assert_stderr_has "weedr service add"
+
+rm -rf /usr/lib/guarden/templates/services/nonroot-template
+rm -rf "$build_dir"
 rm -rf /usr/lib/guarden/templates/services/vaultwarden
