@@ -448,6 +448,7 @@ class Source:
     units: dict[str, Unit]
     mounts: dict[str, list[Mount]]
     warnings: list[str] = field(default_factory=list)
+    container_names: dict[str, str] = field(default_factory=dict)
 
     def containers(self) -> list[str]:
         return sorted(self.units)
@@ -550,7 +551,8 @@ def resolve_unit_source(directory: Path, document: manifest_mod.Manifest) -> Sou
         )
     _check_declared(document, compose.COMPOSE_REL if has_compose else QUADLET_DIR)
     if has_compose:
-        return _compose_source(compose_file, _known_siblings(document))
+        pod = document.pod_name or document.project or directory.name
+        return _compose_source(compose_file, _known_siblings(document), pod)
     return _quadlet_source(quadlet_dir, _known_siblings(document))
 
 
@@ -585,17 +587,17 @@ def _check_declared(document: manifest_mod.Manifest, present: Path) -> None:
         )
 
 
-def _compose_source(path: Path, known: set[str] | None = None) -> Source:
+def _compose_source(path: Path, known: set[str] | None = None, pod_name: str = "") -> Source:
     document = compose.document(path)
     # The document-level tables are checked before the services are, because a
     # `networks:` table is a claim about the whole document and not about one
     # container (spec 6.3, ticket 272).
-    compose.refuse_document(document, path)
+    compose.refuse_document(document, path, pod_name)
     declared = compose.services(document, path)
     warnings: list[str] = []
     mounts: dict[str, list[Mount]] = {}
     for container, body in sorted(declared.items()):
-        compose.refuse(body, container, path)
+        compose.refuse(body, container, path, pod_name)
         wanted = body.get("network_mode")
         if wanted is not None:
             warnings.append(
@@ -630,7 +632,19 @@ def _compose_source(path: Path, known: set[str] | None = None) -> Source:
             )
     for container in units:
         units[container].path = path / f"{container}.container"
-    return Source(kind="compose", origin=path, units=units, mounts=mounts, warnings=warnings)
+    container_names = {
+        name: body.get("container_name", name)
+        for name, body in declared.items()
+        if isinstance(body, dict) and "container_name" in body
+    }
+    return Source(
+        kind="compose",
+        origin=path,
+        units=units,
+        mounts=mounts,
+        warnings=warnings,
+        container_names=container_names,
+    )
 
 
 def _quadlet_source(directory: Path, known: set[str] | None = None) -> Source:
@@ -1367,7 +1381,7 @@ def build(
         edge_ports = edge_publications(document, context)
         tunnelled = tunnel_hosts(document, context)
         routed = routed_names(context.service)
-        sibling_ports = sibling_publications(document, context)
+        sibling_ports = sibling_publications(document, context, source)
 
     schema = secretschema.read(directory / document.schema if document.schema else ABSENT)
     plan.warnings.extend(_image_warnings(source, context))
@@ -1381,9 +1395,9 @@ def build(
     hosts: list[str] = []
     if context is not None:
         hosts = [concrete for _, concrete, _ in sorted(edge_ports)]
-        for name in [name for name, _, _ in sibling_ports] + list(routed):
-            if name not in hosts:
-                hosts.append(name)
+        for host in [host for _, host, _ in sibling_ports] + list(routed):
+            if host not in hosts:
+                hosts.append(host)
     pod = pod_name(document, context, directory)
     instance = context.instance if context is not None else None
     pod_entry = units.entry_stem(pod, instance)
@@ -1927,14 +1941,17 @@ def _environment_file(
 
 
 def sibling_publications(
-    document: manifest_mod.Manifest, context: Context
+    document: manifest_mod.Manifest, context: Context, source: Source
 ) -> list[tuple[str, str, int]]:
     """`<NAME>_HOST` and `<NAME>_PORT` for every sibling, from the service's own
     registry.
 
-    Each row is `(container, host, publication)`: the container's own name — the
-    name the consumer resolves — and the **publication** guarden allocated for
-    that container (spec 7.4).
+    Each row is `(container, host, publication)`: the manifest container name —
+    the key the sibling entry wrote — and the **publication** guarden allocated
+    for that container (spec 7.4). The hostname is the container's own
+    `ContainerName=` from the unit source, which is the name the container is
+    actually reach by inside the pod; a container's own name is not added,
+    because it resolves to itself.
 
     **The port is the publication and not the container's own port.** The host
     binds each container's publication and forwards the container's port to it,
@@ -1961,7 +1978,9 @@ def sibling_publications(
                 f"installs the service",
                 errors.HOST_NOT_AS_ASSUMED,
             )
-        out.append((sibling.container, sibling.container, publication))
+        container_name = source.container_names.get(sibling.container)
+        host = container_name if container_name else sibling.container
+        out.append((sibling.container, host, publication))
     return out
 
 
