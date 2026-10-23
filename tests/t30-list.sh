@@ -99,7 +99,7 @@ assert_json services.1.project '"myapp"'
 assert_json services.1.environment '"production"'
 assert_json services.1.uid "$production_uid"
 assert_json services.1.source '"gitops"'
-assert_json services.1.deployed_sha null
+assert_json services.1.deployed_sha '"9f2c1ab"'
 assert_json services.1.publication.containers "[]"
 assert_json services.1.publication.api null
 assert_json services.1.edges "[]"

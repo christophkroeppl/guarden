@@ -486,8 +486,14 @@ def create(
         outcome.notes += _apply_volume_owners(
             manifest, resolved.name, granted, resolved.escaped_ref
         )
-        # Option B: the record must persist so the gate can read it, but
-        # `deployed_sha` is written by furrow after the build succeeds.
+        # The record must persist so the gate can read it. A converged poke
+        # still records the sha the operator pointed at (t362): the convergence
+        # answer is about the tree, not about which commit, so a nudge reaches
+        # only this path. Option B's `weedr service commit` updates the sha
+        # again after a successful build, so a failed build never claims a
+        # commit that did not run.
+        if source.kind == "poke" and source.sha and not resolved.escaped_ref:
+            existing.deployed_sha = source.sha
         with conf.lock("registry"):
             registry.save(existing, (0, users.group_id(GUARDEN_GROUP)))
         return outcome
@@ -570,6 +576,9 @@ def create(
     # is the only copy a consumer can read: the provider's own tree is 0700 to
     # the provider and loom runs as guarden.
     record.provides = list(manifest.provides)
+    # `deployed_sha` is set by `weedr service commit` after a successful build
+    # (option B). A fresh create does not set it here: a failed build must not
+    # leave the record claiming a sha that did not run.
     if source_hash and not resolved.escaped_ref:
         record.source_hash = source_hash
     # spec 3.4: what the manifest asked for, in manifest order. A grant is matched

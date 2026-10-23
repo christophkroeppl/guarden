@@ -37,7 +37,7 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from guarden import cli, errors, names, paths, projects, registry, tool
+from guarden import cli, errors, names, paths, projects, tool
 from guarden import config as config_mod
 
 FURROW = paths.BIN / "furrow"
@@ -330,10 +330,6 @@ def _poke(project: projects.Project, args) -> int:
     target = _target(project, args.ref, args.environment)
     target_dir = projects.staging(project.name) / args.sha
 
-    if _already_deployed(target, args.sha):
-        sys.stdout.write(f"{target.service} is already at {args.sha}; no deploy was queued\n")
-        return 0
-
     files = unpack(sys.stdin.buffer, target_dir)
     sys.stdout.write(f"unpacked {files} files into {target_dir}\n")
     # `finally`, not a following line: a refusal raised out of _deploy — a
@@ -373,29 +369,6 @@ def _deploy(target: Target, args, project: projects.Project) -> int:
 
 def _pair(project: projects.Project, args) -> str:
     return f"{project.name}@{args.sha}"
-
-
-def _already_deployed(target: Target, sha: str) -> bool:
-    """Whether the registry already records this sha for this service, and what
-    to do when this program may not read it.
-
-    `hose` is not in the `guarden` group, so on a conforming host the registry
-    is unreadable here and the answer is "not known" — which is not the same as
-    "not deployed". A poke of the deployed sha then makes its `furrow deploy`
-    call, and `weedr service ingest` is idempotent: it converges, says `converged`
-    and changes nothing, so the deploy exits 0 and no service is touched. The
-    short-circuit is a saving, never a correctness requirement, and it is where
-    the record is readable.
-    """
-    try:
-        record = registry.load(target.service)
-    except OSError:
-        return False
-    if record is None:
-        return False
-    if target.ref is not None and names.systemd_escape(target.ref) not in record.instances:
-        return False
-    return record.deployed_sha == sha
 
 
 def _drop(project: projects.Project, ref: str) -> int:

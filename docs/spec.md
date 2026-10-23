@@ -780,7 +780,14 @@ installed_by = "gate-traefik"  # the module that created this service, or absent
   # `weedr module remove` answerable, and it is the reason modules
   # record provenance at all: without it "a service the module
   # installed is not the module's own" has nothing to consult
-deployed_sha = "9f2c1ab"
+deployed_sha = "9f2c1ab"  # the poke commit the service's own deploy came from — the
+  # staged tree this record describes, as the caller names it. Written by the
+  # ingest that installed it, beside the record's source hash. An instance's
+  # deploy is the instance's and does not write it, and a service no poke has
+  # deployed (`add`, `create`, a module) has none: absent is a state, not a gap.
+  # It is a REPORT and never a decision. The sha is the caller's claim, nothing
+  # checks the tree against it, and no program answers "has this changed" from
+  # it (§6.6, §6.7)
 basicauth = true  # the default edge login (basic auth) was minted for this service at
   # creation, while the gate module's policy was in force. Absent
   # is a service created before the policy — grandfathered, with
@@ -2727,6 +2734,14 @@ The steps, in this order, and the order is the point :
   because step 4 is the destructive one and the answer has to arrive before it. The answer is the
   whole tree's until ticket 307e narrows it to the app's own subtree, so an edit anywhere in a
   multi-app repository redeploys every app of it today.
+
+  **This is the only answer to "is this poke a no-op", and `hose` asks nothing** (§6.7). One
+  asker is what keeps the sha from being read as a change: `deployed_sha` is the caller's claim
+  (§3.4), and a poke that stages an edited tree under a commit the record already names is a
+  deploy and not a no-op. It is also the only place the question can be asked on a repository
+  that ships several apps: the records are per app (`<project>-<app>-<environment>`, §5.3), and
+  the `<project>-<environment>` a receiver derives from its own arguments is a name no record
+  carries.
 1. Render with `loom`.
 2. Build, if the unit source has a build instruction: `weedr service build <name>`, which runs
   `podman build` **as the service user** on the service's own tree, tagged with the image
@@ -2837,7 +2852,8 @@ The steps, in this order, and the order is the point :
    stops at the gate and exits `0` (§6.6 step 5), while an ungated track's deploy reaches the
    start, and the start is the one that refuses.
 4. Stop the units.
-5. Install the rendered units, record the sha, reload the user manager, and then **start only if
+5. Install the rendered units, record the poke's sha in the service's record (§3.4), reload the
+  user manager, and then **start only if
   step 3 recorded `ready` or `not-required`.** A blocked gate stops the sequence here: the units
   are installed, the user manager is reloaded, the container is not started, and `furrow`
   reports the `[gate] reason` and exits `0`. `furrow` does **not** call `weedr service start` on a
@@ -3014,6 +3030,12 @@ unpacks the archive into `/var/lib/guarden/staging/<project>/<sha>/` and calls `
 --from` that directory; `furrow` creates the service. Requested public ports stay pending and
 are reported as a `warning:` line naming them and the exact command to run, which reaches the
 workflow log.
+
+**It unpacks unconditionally and asks no convergence question of its own.** There is nothing to
+ask before the unpack — a poke is a tree and the tree is what the question is about — and one
+asker is what keeps a sha from being read as a change (§6.6 step 0). `hose` reads the allowlist
+and the track table and never the registry, so a poke of a deployed sha is a `furrow deploy` that
+answers `unchanged` rather than a receiver that answers "already at" and skips the archive.
 
 **The per-project directory is created when the key is installed, not when the poke arrives.**
 `hose` is unprivileged and `staging/` is `0755 root:root`, so it cannot create a subdirectory
