@@ -553,7 +553,8 @@ def _weedr(verb: str, target: str, doing: str, *extra: str) -> int:
     one verb whose non-zero answer is an answer: it is `1` on a blocked gate and
     the deploy branches on the verdict it recorded instead (spec 6.6).
     """
-    result = tool.call(_root("service", verb, target, *extra))
+    argv = _root("service", verb, target, *extra)
+    result = tool.call(argv)
     detail = errors.oneline(result.stderr.strip() or result.stdout.strip())
     if result.returncode not in (0, 1) or (verb != "gate" and not result.ok):
         raise errors.GuardenError(
@@ -860,12 +861,28 @@ def _install(entry: dict, resolved: names.Resolved, target: str, app: str) -> No
     the record in one call. Calling it a second time for the install is what the
     order has: the units on disk come from the mutator's own render of the
     service's home, not from the unprivileged render this program held.
+
+    **Option B:** `deployed_sha` is committed by `weedr service commit`, a
+    separate subprocess call that runs after the build and the gate have both
+    succeeded. A failed build never reaches this call, so the record never
+    claims a sha that did not run. The commit runs in its own process so it
+    takes the `registry` lock without holding `deploy-<service>`, avoiding the
+    rank-order check that the in-process save tripped.
     """
     _step("install", f"{apps.label(target, app)}: weedr service ingest --from poke")
     _weedr(
         "ingest", target, f"the rendered units of {target} did not install",
         *_ingest_argv(entry),
     )
+    # Option B: record the sha the build actually deployed. A ref is a named
+    # snapshot, not a commit, so it gets no sha.
+    if entry.get("sha") and not resolved.escaped_ref:
+        _step("commit", f"{apps.label(target, app)}: {entry['sha']}")
+        _weedr(
+            "commit", target,
+            f"the deployed_sha of {target} was not recorded",
+            entry["sha"],
+        )
 
 
 def _drain(mine: str) -> int:
