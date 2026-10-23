@@ -136,37 +136,42 @@ REFUSED_COMPOSE_CAPS: dict[str, str] = {
     "cpu_shares": WEIGHT_OWNER,
 }
 
-# **A `networks:` claim resolves to nothing on a guarden host** (spec 6.3 and
-# 7.1, ticket 272). Every container of a service runs in its own pasta
-# namespace, there is no shared podman network, and the renderer writes
-# `Network=pasta:` over whatever the source asked for. A compose file that
-# declares one is not a faithful description of what runs, so the declaration is
-# refused rather than silently corrected.
+# **A `networks:` claim resolves to the app's own pod** (spec 6.3, 7.1, ticket
+# 272, ADR-0026). Every container of a service runs in the same pasta namespace,
+# and the only namespace a name here can resolve to is the app's pod. A compose
+# file that declares a network name that is not the pod's is therefore refused
+# by name, with the pod named in the diagnostic.
+#
+# The document-level `networks:` table is accepted when its only key is the
+# pod's name and it states no options. A service's `networks:` list is accepted
+# when it names the pod; the implicit default network (no `networks:` key)
+# resolves to the same pod. Every other name is refused by name.
 #
 # **This is a refusal of a false claim rather than of a value the host owns**,
 # which is what separates it from a cap: there is no operator's drop-in to grant
 # a network in, because the network does not exist.
 #
-# The table is refused at the DOCUMENT level and the `networks:` list on a
-# SERVICE, because the two halves are halves of one claim — the table names a
-# network and the service says "this container is on it". Measured: on its own a
-# service list makes the converter exit `1`, spec 1.2's "the host is not in the
-# state the request assumed" over what is a rejected input; with the table
-# present the converter writes a `.network` unit that the conversion drops in
-# silence while the render replaces `Network=`.
-#
-# **`volumes:` is not here**, and neither is `secrets:`: the document-level
+# `volumes:` is not here, and neither is `secrets:`: the document-level
 # `volumes:` table is ordinary Compose and is how a named volume is declared,
 # and a top-level `secrets:` with `external: true` is how a podman secret is
 # named. Refusing either would refuse every project.
-NETWORK_CLAIM = (
-    "there is no shared podman network on a guarden host: every container of a "
-    "service runs in its own pasta namespace and the renderer writes "
-    "Network=pasta: over whatever the source asked for, so a network named here "
-    "does not exist and cannot be granted"
+NETWORK_NOT_POD = (
+    "there is no shared podman network on a guarden host: the only namespace a "
+    "name here can resolve to is the app's own pod {pod!r}"
 )
 
-REFUSED_COMPOSE_TABLES: dict[str, str] = {"networks": NETWORK_CLAIM}
+NETWORK_SEVERAL = (
+    "a pod is one network namespace, so a service may be on only one network: "
+    "the networks here are {names!r} and the app's pod is {pod!r}"
+)
+
+NETWORK_OPTIONS = (
+    "a `networks:` entry carries options ({keys!r}), and each describes a network "
+    "that does not exist on a guarden host: the only namespace a name here can "
+    "resolve to is the app's own pod {pod!r}"
+)
+
+REFUSED_COMPOSE_TABLES: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -253,20 +258,43 @@ def services(doc: dict[str, Any], path: Path) -> dict[str, dict]:
     return out
 
 
-def refuse_document(doc: dict[str, Any], path: Path) -> None:
+def refuse_document(doc: dict[str, Any], path: Path, pod_name: str) -> None:
     """The document-level tables this host has no such thing for (spec 7.1).
 
     Checked on the repository's own declaration and before the converter is
     driven, so the diagnostic is guarden's and the exit is `2` (spec 1.2).
+
+    A document-level `networks:` table is accepted when its only key is the
+    pod's name and it states no options (ADR-0026). Every other name is refused
+    by name, with the pod named in the diagnostic.
     """
-    for key, why in REFUSED_COMPOSE_TABLES.items():
-        if key in doc:
+    networks = doc.get("networks")
+    if networks is None:
+        return
+    if not isinstance(networks, dict):
+        raise errors.GuardenError(
+            f"the unit source {path}: the top-level `networks:` is not a mapping, "
+            f"and the only namespace a name here can resolve to is the app's pod "
+            f"{pod_name!r}"
+        )
+    for name, config in networks.items():
+        if name != pod_name:
             raise errors.GuardenError(
-                f"the unit source {path} declares {key}: {_shown(doc[key])}, and {why}"
+                f"the unit source {path}: the top-level `networks:` names {name!r}, "
+                f"and the only network a name here can resolve to is the app's pod "
+                f"{pod_name!r}"
+            )
+        if config:
+            keys = ", ".join(sorted(config))
+            raise errors.GuardenError(
+                f"the unit source {path}: the top-level `networks:` entry for "
+                f"{name!r} carries options {keys!r}, and each describes a network "
+                f"that does not exist on a guarden host: the only namespace a name "
+                f"here can resolve to is the app's pod {pod_name!r}"
             )
 
 
-def refuse(body: dict[str, Any], container: str, path: Path) -> None:
+def refuse(body: dict[str, Any], container: str, path: Path, pod_name: str) -> None:
     """The refusal list, checked on the repository's own declaration.
 
     One diagnostic, one line, naming the container and the key: the two facts
@@ -292,7 +320,7 @@ def refuse(body: dict[str, Any], container: str, path: Path) -> None:
                 f"{_shown(body[key])}, and {why}"
             )
     _refuse_caps(body, container, path)
-    _refuse_networks(body, container, path)
+    _check_networks(body, container, path, pod_name)
     _refuse_templated_ports(body, container, path)
 
 
@@ -328,19 +356,74 @@ def _refuse_caps(body: dict[str, Any], container: str, path: Path) -> None:
         )
 
 
-def _refuse_networks(body: dict[str, Any], container: str, path: Path) -> None:
-    """A `networks:` list on a Compose service, refused by name (spec 6.3).
+def _check_networks(
+    body: dict[str, Any], container: str, path: Path, pod_name: str
+) -> None:
+    """A `networks:` list on a Compose service, checked against the pod name.
 
-    The consumer half of the claim the document-level table makes: "this
-    container is on that network", and there is no such network here. Refused
-    on the repository's own declaration, so the exit is `2` rather than the
-    converter's `1` for what is rejected input (spec 1.2).
+    The consumer half of the membership claim: a service may be on only the
+    app's own pod, and the implicit default network (no `networks:` key) is
+    that pod. Every other name is refused by name, with the pod named in the
+    diagnostic (ADR-0026). Refused on the repository's own declaration, so the
+    exit is `2` rather than the converter's `1` for what is rejected input
+    (spec 1.2).
     """
-    if "networks" in body:
-        raise errors.GuardenError(
-            f"the unit source {path}: the service {container!r} asks for networks: "
-            f"{_shown(body['networks'])}, and {NETWORK_CLAIM}"
-        )
+    networks = body.get("networks")
+    if networks is None:
+        return
+    if isinstance(networks, list):
+        if not networks:
+            return
+        if len(networks) > 1:
+            names = ", ".join(repr(name) for name in networks)
+            raise errors.GuardenError(
+                f"the unit source {path}: the service {container!r} is on "
+                f"{len(networks)} networks ({names}), and a pod is one namespace: "
+                f"the app's pod is {pod_name!r}"
+            )
+        name = networks[0]
+        if not isinstance(name, str):
+            raise errors.GuardenError(
+                f"the unit source {path}: the service {container!r} has a `networks:` "
+                f"entry that is not a string"
+            )
+        if name != pod_name:
+            raise errors.GuardenError(
+                f"the unit source {path}: the service {container!r} asks for the "
+                f"network {name!r}, and the only network a name here can resolve to "
+                f"is the app's pod {pod_name!r}"
+            )
+        return
+    if isinstance(networks, dict):
+        if not networks:
+            return
+        if len(networks) > 1:
+            names = ", ".join(repr(name) for name in networks)
+            raise errors.GuardenError(
+                f"the unit source {path}: the service {container!r} is on "
+                f"{len(networks)} networks ({names}), and a pod is one namespace: "
+                f"the app's pod is {pod_name!r}"
+            )
+        name, config = next(iter(networks.items()))
+        if name != pod_name:
+            raise errors.GuardenError(
+                f"the unit source {path}: the service {container!r} asks for the "
+                f"network {name!r}, and the only network a name here can resolve to "
+                f"is the app's pod {pod_name!r}"
+            )
+        if config:
+            keys = ", ".join(sorted(config))
+            raise errors.GuardenError(
+                f"the unit source {path}: the service {container!r} asks for the "
+                f"network {name!r} with options {keys!r}, and each describes a "
+                f"network that does not exist on a guarden host: the only namespace "
+                f"a name here can resolve to is the app's pod {pod_name!r}"
+            )
+        return
+    raise errors.GuardenError(
+        f"the unit source {path}: the service {container!r} has a `networks:` that "
+        f"is not a list or a mapping"
+    )
 
 
 def _refuse_templated_ports(body: dict[str, Any], container: str, path: Path) -> None:

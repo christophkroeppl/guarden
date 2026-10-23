@@ -151,10 +151,16 @@ assert_stderr_has "memory"
 assert_stderr_lacks "podlet"
 
 # --- the Compose vocabulary: a network ---------------------------------------
-#
-# The document-level table. This is the shape the real repository declared, and
-# it is refused because the network it names does not exist on a guarden host
-# and cannot be granted there.
+
+# A `networks:` name resolves to the app's own pod (ADR-0026). The document-level
+# table is accepted when its only key is the pod's name and it states no options;
+# every other name is refused by name, with the pod named in the diagnostic.
+# The service-level list is accepted when it names the pod; the implicit default
+# network (no `networks:` key) is that pod. A service on several networks is
+# refused, because a pod is one namespace.
+
+# The document-level table naming the WRONG network is refused by name, with the
+# pod named in the diagnostic.
 seed "$project/compose.yaml" "services:" "  web:" \
     "    image: docker.io/library/nginx:1.27" "networks:" "  klimafit:" \
     "    driver: bridge"
@@ -162,33 +168,75 @@ run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
 assert_stderr_has "networks"
-assert_stderr_has "pasta"
+assert_stderr_has "myapp"
 # There is no operator grant that answers this, so the diagnostic says the
 # network does not exist rather than pointing at a drop-in.
 assert_stderr_lacks "drop-in"
 assert_stderr_lacks "podlet"
 
-# The service-level list is the consumer half of the same false declaration: it
-# says "this container is on that network", and there is no such network. This
-# is the shape that today reaches the converter and comes back as its exit 1.
+# The document-level table naming the pod, with no options, is ACCEPTED.
+seed "$project/compose.yaml" "services:" "  web:" \
+    "    image: docker.io/library/nginx:1.27" "networks:" "  myapp: {}"
+run loom check "$project"
+assert_exit 0
+assert_stderr_empty
+
+# The service-level list naming the WRONG network is refused by name, with the
+# pod named in the diagnostic.
 seed "$project/compose.yaml" "services:" "  web:" \
     "    image: docker.io/library/nginx:1.27" "    networks:" "      - klimafit"
 run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
+assert_stderr_has "network"
+assert_stderr_has "'web'"
+assert_stderr_has "myapp"
+assert_stderr_lacks "podlet"
+
+# The service-level list naming the pod is ACCEPTED.
+seed "$project/compose.yaml" "services:" "  web:" \
+    "    image: docker.io/library/nginx:1.27" "    networks:" "      - myapp" \
+    "networks:" "  myapp: {}"
+run loom check "$project"
+assert_exit 0
+assert_stderr_empty
+
+# A service on SEVERAL networks is refused: a pod is one namespace.
+seed "$project/compose.yaml" "services:" "  web:" \
+    "    image: docker.io/library/nginx:1.27" "    networks:" "      - myapp" \
+    "      - klimafit" \
+    "networks:" "  myapp: {}"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
 assert_stderr_has "networks"
 assert_stderr_has "'web'"
+assert_stderr_has "myapp"
 assert_stderr_lacks "podlet"
 
 # The map form of the same key carries `aliases:` and `ipv4_address:` — a name
-# map and a static address, and this design has neither (spec 7.3).
+# map and a static address, and this design has neither (spec 7.3). The wrong
+# name is refused by name with the pod named.
 seed "$project/compose.yaml" "services:" "  web:" \
     "    image: docker.io/library/nginx:1.27" "    networks:" \
     "      klimafit:" "        aliases: [ api ]" "        ipv4_address: 10.0.2.50"
 run loom check "$project"
 assert_exit 2
 assert_one_diagnostic "error:"
-assert_stderr_has "networks"
+assert_stderr_has "network"
+assert_stderr_has "myapp"
+assert_stderr_lacks "podlet"
+
+# The map form naming the pod but carrying options is refused.
+seed "$project/compose.yaml" "services:" "  web:" \
+    "    image: docker.io/library/nginx:1.27" "    networks:" \
+    "      myapp:" "        aliases: [ api ]"
+run loom check "$project"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "network"
+assert_stderr_has "myapp"
+assert_stderr_lacks "podlet"
 
 # --- what is NOT refused -----------------------------------------------------
 #
