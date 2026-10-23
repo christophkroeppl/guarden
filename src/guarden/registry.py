@@ -382,6 +382,7 @@ class Registry:
     # reads back as (spec 5.3). It is a PATH and not the app's name, because it
     # is what locates the manifest and the unit source in the home.
     app: str = ""
+    grouping: str = manifest_mod.GROUPING_DEFAULT
     deployed_sha: str | None = None
     source_hash: str | None = None
     publication: dict[str, int] = field(default_factory=dict)

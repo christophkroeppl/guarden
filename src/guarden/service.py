@@ -315,9 +315,14 @@ def _app_name(source: Source, resolved, tree: Path) -> str:
     app root, and the new name must carry the same app: a name that did not
     would be a service whose own later `ingest` resolves an app it does not
     hold.
+
+    **A `one-service` repository ships every app in one service**, so the
+    service name carries no app segment and the app is the tree root.
     """
     shipped = apps_mod.discover(tree)
     if len(shipped) == 1 and not shipped[0].name:
+        return apps_mod.ROOT_APP
+    if len(shipped) > 1 and shipped[0].grouping == manifest_mod.GROUPING_ONE_SERVICE:
         return apps_mod.ROOT_APP
     if source.kind == "service":
         origin = registry.load(str(source.service))
@@ -431,8 +436,15 @@ def create(
     # and a tree an operator wrote are declarations by where they live, and
     # the path says so.
     held = source.kind == "service"
-    manifest = manifest_mod.accept(_manifest_in(directory), held=held)
-    apps_mod.check(manifest, apps_mod.discover(tree), _manifest_in(directory))
+    shipped = apps_mod.discover(tree)
+    apps_mod.order(shipped)
+    one_service = len(shipped) > 1 and shipped[0].grouping == manifest_mod.GROUPING_ONE_SERVICE
+    if one_service:
+        documents = [manifest_mod.read(_manifest_in(app.root)) for app in shipped]
+        manifest = manifest_mod.combine(documents, tree)
+    else:
+        manifest = manifest_mod.accept(_manifest_in(directory), held=held)
+    apps_mod.check(manifest, shipped, _manifest_in(directory) if not one_service else manifest.source)
     project = manifest.project or _project_from(source)
     outcome = Outcome(resolved=resolved, app=app)
 
@@ -691,6 +703,8 @@ def create(
         # the instance's own (spec 5.2) — `units_of(<name>, <ref>)` then finds
         # nothing and `weedr service start <name>/<ref>` answers 1 (ticket 295).
         with _render_source(directory) as staged:
+            if one_service:
+                _flatten_one_service(staged, tree, shipped)
             outcome.notes += units.install(staged, resolved.name, resolved.escaped_ref)
     return outcome
 
@@ -1664,6 +1678,52 @@ def _reap_staging(parent: Path) -> None:
             shutil.rmtree(entry, ignore_errors=True)
         else:
             entry.unlink(missing_ok=True)
+
+
+def _flatten_one_service(staged: Path, tree: Path, shipped: list[apps_mod.App]) -> None:
+    """Flatten all apps' containers into the root quadlet dir and write the combined manifest.
+
+    A `one-service` tree ships each app's containers in its own `.guarden/quadlet/`
+    and its own manifest in its own `.guarden/service.yml`. The renderer reads
+    one manifest and one quadlet directory, so this function copies every
+    `.container` and `.pod` file from every app into the root's `.guarden/quadlet/`
+    and writes a combined manifest at the root's `.guarden/service.yml`.
+    """
+    quadlet = staged / ".guarden" / "quadlet"
+    quadlet.mkdir(parents=True, exist_ok=True)
+    seen: dict[str, Path] = {}
+    for app in shipped:
+        app_quadlet = tree / app.root.relative_to(tree) / ".guarden" / "quadlet"
+        if not app_quadlet.is_dir():
+            continue
+        for src in sorted(app_quadlet.glob("*.container")):
+            dst = quadlet / src.name
+            if dst.name in seen and seen[dst.name] != src:
+                raise errors.GuardenError(
+                    f"the apps {apps_mod._app_or_root(app.name)} and "
+                    f"{apps_mod._app_or_root(seen[dst.name].parent.parent.name)} "
+                    f"both ship a container called {src.name!r}, and a container name "
+                    f"must be unique within a service",
+                    errors.REJECTED_INPUT,
+                )
+            seen[dst.name] = app.root
+            shutil.copy2(src, dst, follow_symlinks=False)
+        for src in sorted(app_quadlet.glob("*.pod")):
+            dst = quadlet / src.name
+            if dst.name in seen and seen[dst.name] != src:
+                raise errors.GuardenError(
+                    f"the apps {apps_mod._app_or_root(app.name)} and "
+                    f"{apps_mod._app_or_root(seen[dst.name].parent.parent.name)} "
+                    f"both ship a pod unit called {src.name!r}",
+                    errors.REJECTED_INPUT,
+                )
+            seen[dst.name] = app.root
+            shutil.copy2(src, dst, follow_symlinks=False)
+    documents = [manifest_mod.read(_manifest_in(app.root)) for app in shipped]
+    combined = manifest_mod.combine(documents, staged)
+    manifest_path = staged / manifest_mod.MANIFEST_REL
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(manifest_mod._dump(combined), encoding="utf-8")
 
 
 @contextmanager

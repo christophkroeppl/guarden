@@ -444,6 +444,19 @@ def _enqueue(args) -> list[dict]:
             errors.HOST_NOT_AS_ASSUMED,
         )
 
+    grouping = shipped[0].grouping if shipped else manifest_mod.GROUPING_DEFAULT
+    one_service = len(shipped) > 1 and grouping == manifest_mod.GROUPING_ONE_SERVICE
+
+    if one_service:
+        # One request for the whole project; build if any app needs one.
+        build = any(_wants_build(app.root) for app in shipped)
+        entries = [
+            _write_request(
+                resolved, project, sha, 0, build, bool(args.now)
+            )
+        ]
+        return entries
+
     entries: list[dict] = []
     for position, app in enumerate(_wanted(shipped, resolved, project)):
         entry_resolved = _resolved_for(resolved, app, shipped, project, list(config.tracks))
