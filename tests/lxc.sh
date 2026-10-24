@@ -178,6 +178,7 @@ _ledger_lost() {
 # must not keep its 8 GiB machine because the thing that names failures is
 # missing.
 [ -r "$REPO/tests/failure_messages.sh" ] && . "$REPO/tests/failure_messages.sh"
+[ -r "$REPO/tests/run_plan.sh" ] && . "$REPO/tests/run_plan.sh"
 
 # `lxc list -c s` prints the whole table, not the state, so the comparison
 # against RUNNING never matched and every provision tried to start a machine
@@ -1053,6 +1054,15 @@ cmd_run() {
     command -v _failure_message >/dev/null 2>&1 \
         || die "$REPO/tests/failure_messages.sh is unreadable; a run cannot name a failure without it"
 
+    # **The same stop for the plan's file, and for the same reason.** `die` is
+    # still here, but `_plan` is not: without the file a run could not select a
+    # suite or say which machine one is on, and the loop below would fall
+    # through to a machine cut with no plan at all. This is before the flags so
+    # that a checkout missing either file answers about the file rather than
+    # about whatever the flags said.
+    command -v _plan >/dev/null 2>&1 \
+        || die "$REPO/tests/run_plan.sh is unreadable; a run cannot decide a plan without it"
+
     # Four flags and none of them about the suites: what a run shares is decided
     # by each suite, and the flags decide what happens to a suite that says
     # nothing.
@@ -1071,75 +1081,56 @@ cmd_run() {
         die "--fresh and --shared are opposites; pass one"
     fi
 
+    # **The same stop for the plan's file, and for the same reason.** `die` is
+    # still here, but `_plan` is not: without the file a run could not select a
+    # suite or say which machine one is on, and the loop below would fall
+    # through to a machine cut with no plan at all. This is before the flags so
+    # that a checkout missing either file answers about the file rather than
+    # about whatever the flags said.
+    command -v _plan >/dev/null 2>&1 \
+        || die "$REPO/tests/run_plan.sh is unreadable; a run cannot decide a plan without it"
+
+    # Four flags and none of them about the suites: what a run shares is decided
+    # by each suite, and the flags decide what happens to a suite that says
+    # nothing.
+    local fresh=0 shared=0 reverse=0 no_cache=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --fresh) fresh=1 ;;
+            --shared) shared=1 ;;
+            --reverse) reverse=1 ;;
+            --no-cache) no_cache=1 ;;
+            *) die "unknown option for run: $1" ;;
+        esac
+        shift
+    done
+    if [ "$fresh" = 1 ] && [ "$shared" = 1 ]; then
+        die "--fresh and --shared are opposites; pass one"
+    fi
+
+    # **The plan, decided before anything is cut** — `tests/run_plan.sh`, where
+    # a suite can drive it: which suites the pattern selects, the machine group
+    # each one is on, and the run's mode. It used to sit *after* provisioning,
+    # so a suite carrying a bad `# machine:` declaration was refused only after
+    # a machine had been cut for it; the declaration is input and the cut is
+    # the host, so the refusal comes first. What each answer means — the
+    # pattern, the groups, the reversal, and why the cache must not be able to
+    # move any of them — is stated where the function is.
+    local files=() groups=() frishes=() mode overridden
+    local file name i group want_fresh
+    _plan "$REPO/tests" "$pat" "$fresh" "$shared" "$reverse"
+    files=("${PLAN_FILES[@]}")
+    groups=("${PLAN_GROUPS[@]}")
+    frishes=("${PLAN_FRESH[@]}")
+    mode=$PLAN_MODE
+    overridden=$PLAN_OVERRIDDEN
+
     cmd_provision || exit 1
 
     # A run that is interrupted must not leave a running VM behind holding 8 GiB
     # of the host's memory until someone notices. The golden survives; the
     # runner does not.
     trap '_teardown_runner' EXIT INT TERM
-
-    # The selected suites, in the order they will run, and for each one **the
-    # machine it will be on** — both decided here, before anything runs.
-    #
-    # `--reverse` reverses the selection rather than the machine: sharing is a
-    # claim about one suite not contaminating the next, and only running the
-    # shared ones in both orders asks the question. The machine travels with the
-    # suite through the reversal, because it is a property of the suite's place
-    # in the sharing order.
-    #
-    # Both are decided here rather than in the loop because **the cache must not
-    # change them.** A group derived from the run's own progress would make a
-    # shared suite's key a function of whether its neighbours hit or missed: a
-    # first run where three shared suites all ran numbers them 1, and a second
-    # run where the first is inherited numbers the other two 2 — so the two runs
-    # disagree about the machine they were on and the cache inherits nothing.
-    # Counted from the selection, the number is the same in every run and
-    # describes what was cut rather than what was observed.
-    #
-    # `runner` is one machine and no history, so every suite wanting its own
-    # shares that name: a green observed on one of them is a claim about the
-    # machine it ran on and nothing else.
-    local files=() groups=() frishes=() reversed=() rev_groups=() rev_frishes=()
-    local file name i group=0 slot=0 want_fresh machine
-    local overridden=0
-    for file in "$REPO"/tests/t[0-9]*.sh; do
-        [ -f "$file" ] || continue
-        name=${file##*/}
-        if [ -n "$pat" ] && [[ "$name" != *"$pat"* ]]; then
-            continue
-        fi
-        if [ "$shared" = 1 ]; then
-            want_fresh=0
-            machine=0
-        elif [ "$fresh" = 1 ]; then
-            want_fresh=1
-            machine="fresh-$slot"
-            _shares_machine "$file" && overridden=$((overridden + 1))
-        else
-            want_fresh=1
-            _shares_machine "$file" && want_fresh=0
-            if [ "$want_fresh" = 1 ]; then
-                machine="fresh-$slot"
-            else
-                machine="shared-$group"
-                group=$((group + 1))
-            fi
-        fi
-        files+=("$file")
-        groups+=("$machine")
-        slot=$((slot + 1))
-        frishes+=("$want_fresh")
-    done
-    if [ "$reverse" = 1 ]; then
-        for ((i = ${#files[@]} - 1; i >= 0; i--)); do
-            reversed+=("${files[$i]}")
-            rev_groups+=("${groups[$i]}")
-            rev_frishes+=("${frishes[$i]}")
-        done
-        files=("${reversed[@]}")
-        groups=("${rev_groups[@]}")
-        frishes=("${rev_frishes[@]}")
-    fi
 
     local total=0 failures=0 cuts=0
 
@@ -1186,16 +1177,6 @@ cmd_run() {
     # observed in a reversed run would answer for the forward run's machine —
     # the one contamination claim this repository cares most about not making,
     # because `--reverse` exists to ask exactly that question.
-    local mode
-    case "$fresh:$shared:$reverse" in
-        1:0:0) mode=fresh ;;
-        1:0:1) mode=fresh-reversed ;;
-        0:1:0) mode=shared ;;
-        0:1:1) mode=shared-reversed ;;
-        0:0:0) mode=declared ;;
-        0:0:1) mode=declared-reversed ;;
-    esac
-
     # One machine for the shared suites, cut once before the first of them and
     # kept for the rest. A suite that needs one of its own closes the group: the
     # next shared suite gets a clean machine rather than the one the fresh suite
