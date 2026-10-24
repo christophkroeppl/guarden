@@ -21,7 +21,7 @@ assert_verbs furrow deploy preview queue status
 assert_verbs hose poke drop check
 assert_verbs stakes pin unpin list query
 
-assert_subcommands weedr service ingest add create remove purge gate start stop restart list status snapshot fork rollback build immutable mutable
+assert_subcommands weedr service add build commit create fork gate immutable ingest list mutable purge remove restart rollback snapshot start status stop
 assert_subcommands weedr secret set list materialise
 assert_subcommands weedr port list open close
 assert_subcommands weedr pin sync

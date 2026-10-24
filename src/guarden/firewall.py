@@ -13,6 +13,7 @@ accept rules in its dedicated `guarden-svc-<name>` chain.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -380,8 +381,17 @@ def _accept_lines_from_map(
 
 
 def service_chain_name(name: str) -> str:
-    """The per-service chain name used in ferm and iptables."""
-    return f"{OUTPUT_CHAIN}-{name}"
+    """The per-service chain name used in ferm and iptables.
+
+    iptables limits a chain name to 29 characters, so a service whose name
+    would push `guarden-svc-<name>` past that is given a short, deterministic
+    alias instead. The alias is stable for a given name, so render and reload
+    agree.
+    """
+    full = f"{OUTPUT_CHAIN}-{name}"
+    if len(full) <= 28:
+        return full
+    return f"gsvc-{hashlib.sha256(name.encode()).hexdigest()[:23]}"
 
 
 def _service_file_lines(

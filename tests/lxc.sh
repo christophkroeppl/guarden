@@ -626,7 +626,7 @@ _reboot() {
 _push() {
     local instance=$1 src=$2 dst=$3
     tar -C "$src" --exclude=./.venv -cf - . | vm_exec_t "$instance" \
-        "sudo mkdir -p '$dst' && sudo tar -C '$dst' -xf - && sudo chown -R root:root '$dst'"
+        "sudo mkdir -p '$dst' && sudo tar -C '$dst' -xf - && sudo find '$dst' -exec chown root:root {} +"
 }
 
 # The document the golden carries, and the only one: a cut re-runs it, because a
