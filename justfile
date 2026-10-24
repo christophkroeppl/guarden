@@ -120,3 +120,17 @@ unit:
 # throw the machine away and run the golden VM (minutes, manual)
 golden-vm:
     tools/golden-vm
+
+# build a source tarball (*.tar.gz) of guarden
+package-tarball:
+    packaging/build-tarball.sh
+
+# build a Debian package (.deb) of guarden
+package-deb:
+    packaging/build-deb.sh
+
+# build both packages
+package: package-tarball package-deb
+
+# build packages for CI
+ci-package: package-tarball package-deb
