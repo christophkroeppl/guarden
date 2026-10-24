@@ -32,6 +32,7 @@ export GUARDEN_PREFIX=/
 registry=/var/lib/guarden/registry
 creds=/etc/guarden/creds
 conf=/etc/guarden/firewall/50-services.conf
+svc_conf=/etc/guarden/firewall/services/pgprov-staging.conf
 
 dialed_publication() {
     awk -v want="$2" '$0 == "port = " want {seen=1}
@@ -178,13 +179,13 @@ assert_exit 0
 
 # The firewall. The consumer's uid reaches the publications it declared, and the
 # provider reaches its own so it can answer on its own listener.
-assert_file_has "$conf" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $provider_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"
-assert_file_has "$conf" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $provider_uid daddr 127.0.0.1 proto tcp dport $vault_pub jump ACCEPT;"
-assert_file_has "$conf" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $needful_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"
-assert_file_has "$conf" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $needful_uid daddr 127.0.0.1 proto tcp dport $vault_pub jump ACCEPT;"
 
 # The loopback is closed by default: one deny, last, carrying no owner match, over
@@ -243,9 +244,9 @@ assert_exit 0
 # vault edge, so its uid is **not** on the vault publication. A uid granted per
 # provider rather than per publication would reach a port it never asked for, and
 # this is the only assertion that tells the two designs apart.
-assert_file_has "$conf" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $needy_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"
-[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$svc_conf" \
     | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;\$" || true)" = 3 ] \
     || _fail "the db publication's accept set is not the provider and its two consumers"
 # Anchored on the whole match: a bare dport would match another publication.
@@ -401,7 +402,7 @@ assert_mode "$creds/multidb-staging/DB_PASSWORD.cred" 600
 # The consumer is granted on the publication once, not once per database: the
 # databases live in the provider's container, so the reach rule is unchanged.
 multidb_uid=$(getent passwd multidb-staging | cut -d: -f3)
-assert_file_has "$conf" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $multidb_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"
 
 
@@ -450,7 +451,7 @@ assert_file_has "$GUARDEN_FIXTURES/twin-render/units/web.container" "Secret=DB_P
 assert_file_has "$GUARDEN_FIXTURES/twin-render/units/web.container" "Secret=SECRET_SECRET,type=mount"
 # The twin's uid appears on the db publication (provider + needful + needy + twin = 4)
 twin_uid=$(getent passwd twin-staging | cut -d: -f3)
-assert_file_has "$conf" \
+assert_file_has "/etc/guarden/firewall/services/pgdual-staging.conf" \
     "mod owner uid-owner $twin_uid daddr 127.0.0.1 proto tcp dport $pgdual_pub jump ACCEPT;"
 
                                                                              

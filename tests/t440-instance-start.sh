@@ -209,11 +209,13 @@ instance_pub=$(cat "$GUARDEN_STDOUT")
 [ -n "$instance_pub" ] \
     || _fail "the instance feature\\x2fx holds no publication in the registry"
 services=/etc/guarden/firewall/50-services.conf
+svc_conf=/etc/guarden/firewall/services/routed-preview.conf
 assert_file_exists "$services"
+assert_file_exists "$svc_conf"
 # The service's own uid, and the edge's uid: the edge is what dials it, and it
 # dials it as the edge's own uid. Both accepts are owner-matched and both sit
 # above the single loopback deny.
-assert_file_has "$services" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $(id -u routed-preview) daddr 127.0.0.1 proto tcp dport $instance_pub jump ACCEPT;"
 # The edge's uid is the one that makes the preview reachable at all, so it is
 # asserted by name rather than by count: the edge's own publication set is
@@ -222,11 +224,11 @@ assert_file_has "$services" \
 edge_uid=$(getent passwd traefik-production | cut -d: -f3)
 [ -n "$edge_uid" ] \
     || _fail "the edge service traefik-production has no uid, so its accept cannot be named"
-assert_file_has "$services" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $instance_pub jump ACCEPT;"
 # Above the deny: an accept under the single drop matches no packet while
 # still appearing in the file, so the position is part of the claim.
-accept_line=$(grep -nFm1 "dport $instance_pub jump ACCEPT;" "$services" | cut -d: -f1)
+accept_line=$(grep -nFm1 "dport $instance_pub jump ACCEPT;" "$svc_conf" | cut -d: -f1)
 deny_line=$(grep -nF "daddr 127.0.0.0/8 jump DROP;" "$services" | tail -n 1 | cut -d: -f1)
 if [ -z "$accept_line" ] || [ -z "$deny_line" ] || [ "$accept_line" -ge "$deny_line" ]; then
     _fail "the instance's accept for dport $instance_pub (line ${accept_line:-absent}) is not above the loopback deny (line ${deny_line:-absent})"

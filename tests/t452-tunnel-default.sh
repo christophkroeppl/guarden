@@ -39,6 +39,8 @@ destination_of() {
 }
 
 services=$GUARDEN_PREFIX/etc/guarden/firewall/50-services.conf
+svc_conf=$GUARDEN_PREFIX/etc/guarden/firewall/services/routed-staging.conf
+prod_svc_conf=$GUARDEN_PREFIX/etc/guarden/firewall/services/routed-production.conf
 
 # 1. With no cloudflared module a new service is loopback-only: its slice says
 # so, the edge does not render it, and the edge's uid holds no accept on its
@@ -55,10 +57,10 @@ routed_uid=$(getent passwd routed-staging | cut -d: -f3)
 edge_uid=$(getent passwd traefik-production | cut -d: -f3)
 [ "$(destination_of "$slice")" = "loopback" ] \
     || _fail "without the cloudflared module a new service rendered destination $(destination_of "$slice"), not loopback"
-assert_file_has "$services" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $routed_uid daddr 127.0.0.1 proto tcp dport $publication jump ACCEPT;"
 [ "$(grep -cE "uid-owner $edge_uid daddr 127\.0\.0\.1 proto tcp dport $publication jump ACCEPT;" \
-    "$services" || true)" = 0 ] \
+    "$svc_conf" || true)" = 0 ] \
     || _fail "the edge holds an accept on a loopback-only service's publication"
 
 # 2. A track that says `tunnel` with no tunnel to carry it is fail-closed
@@ -114,7 +116,7 @@ assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
 run grep -qxF '  - hostname: "web.tunnel.example.net"' \
     "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
 assert_exit 0
-assert_file_has "$services" \
+assert_file_has "$prod_svc_conf" \
     "mod owner uid-owner $tunnel_uid daddr 127.0.0.1 proto tcp dport $prodpub jump ACCEPT;"
 
 # 5. Grandfathering: the service created before the tunnel existed keeps its
@@ -166,7 +168,7 @@ run weedr expose set routed-production loopback
 assert_exit 0
 # The tunnel's accept went with the act...
 [ "$(grep -cE "uid-owner $tunnel_uid daddr 127\.0\.0\.1 proto tcp dport $prodpub jump ACCEPT;" \
-    "$services" || true)" = 0 ] \
+    "$prod_svc_conf" || true)" = 0 ] \
     || _fail "the tunnel still holds an accept on a demoted service's publication"
 # ...and the slice still says tunnel, which is what the act promises.
 [ "$(destination_of "$prodslice")" = "tunnel" ] \

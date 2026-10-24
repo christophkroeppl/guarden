@@ -109,6 +109,7 @@ own_tree=/var/lib/guarden/services/$SVC
 own_volume=$own_tree/state/data
 other_volume=/var/lib/guarden/services/$OTHER/state/data
 conf=/etc/guarden/firewall/50-services.conf
+svc_conf=/etc/guarden/firewall/services/$SVC.conf
 registry=/var/lib/guarden/registry
 
 as_service() {
@@ -149,6 +150,10 @@ restore_state() {
     fi
     if [ -f "$GUARDEN_FIXTURES/50-services.conf.bak" ]; then
         cp "$GUARDEN_FIXTURES/50-services.conf.bak" "$conf" 2>/dev/null || true
+        systemctl restart guarden-firewall.service >/dev/null 2>&1 || true
+    fi
+    if [ -f "$GUARDEN_FIXTURES/svc.conf.bak" ]; then
+        cp "$GUARDEN_FIXTURES/svc.conf.bak" "$svc_conf" 2>/dev/null || true
         systemctl restart guarden-firewall.service >/dev/null 2>&1 || true
     fi
 }
@@ -430,6 +435,7 @@ echo "MEASURE: the mode is restored"
 # what the kernel did.
 echo "=== the firewall's owner-matched accepts"
 assert_file_exists "$conf"
+assert_file_exists "$svc_conf"
 # The accept for this service's own publication, read out of the rendered set.
 #
 # **The lookup finds the accept BY ITS PORT, not by its owner.** The owner
@@ -452,11 +458,17 @@ PY
     || _fail "$SVC holds no publication of its own, so the owner-match claim cannot be asked of it"
 echo "MEASURE: $SVC's own publication is $own_pub"
 # And the accept that carries it must name THIS service's uid and no other's.
-assert_file_has "$conf" "uid-owner $svc_uid daddr 127.0.0.1 proto tcp dport $own_pub jump ACCEPT;"
-[ "$(grep -c "dport $own_pub jump ACCEPT;" "$conf")" = 1 ] \
+assert_file_has "$svc_conf" "uid-owner $svc_uid daddr 127.0.0.1 proto tcp dport $own_pub jump ACCEPT;"
+[ "$(grep -c "dport $own_pub jump ACCEPT;" "$svc_conf")" = 1 ] \
     || _fail "the rendered set carries more than one accept for dport $own_pub"
 
-# The policy is in force before anything is measured.
+# Root's blanket accept is scoped: it lives exactly once in the main file
+# (50-services.conf) and no per-service file may name uid 0.
+[ "$(grep -c "uid-owner 0 daddr 127.0.0.1 proto tcp jump ACCEPT;" "$conf")" = 1 ] \
+    || _fail "root's blanket TCP accept is not present exactly once in $conf"
+if grep -q "uid-owner 0" "$svc_conf"; then
+    _fail "per-service file $svc_conf names uid 0, which must not be widened"
+fi
 run soil firewall --apply
 assert_not_rejected
 run systemctl start guarden-firewall.service
@@ -531,16 +543,16 @@ echo "MEASURE: the deny's counter around the OTHER service's publication $other_
 # The minimal removal: the accept line for this service's own publication is
 # deleted from the INSTALLED set, the firewall is reloaded, and the same
 # datagram that was ACCEPTED is now DROPPED — the deny's own counter moves.
-cp "$conf" "$GUARDEN_FIXTURES/50-services.conf.bak"
-sed -i "/dport $own_pub/d" "$conf"
+cp "$svc_conf" "$GUARDEN_FIXTURES/svc.conf.bak"
+sed -i "/dport $own_pub/d" "$svc_conf"
 run systemctl restart guarden-firewall.service
 assert_exit 0
-run iptables-legacy -S guarden-svc
+run iptables-legacy -S "guarden-svc-$SVC"
 assert_exit 0
 # `text_has` on the captured output, not `printf … | grep -q`: the pipe reports
 # the producer's SIGPIPE instead of the match under `pipefail`, and this RED
 # demonstration would then pass without having gone red.
-if text_has "$(<"$GUARDEN_STDOUT")" "dport $own_pub"; then
+if text_has "$(cat "$GUARDEN_STDOUT")" "dport $own_pub"; then
     _fail "the RED demonstration did not go red: the accept for dport $own_pub is still in the running ruleset"
 fi
 before=$(deny_packets)
@@ -549,7 +561,7 @@ after=$(deny_packets)
 echo "MEASURE: RED — with the accept deleted, the same datagram's counter went $before -> $after"
 [ "$after" != "$before" ] \
     || _fail "the RED demonstration did not go red: with the accept deleted the datagram was still accepted"
-cp "$GUARDEN_FIXTURES/50-services.conf.bak" "$conf"
+cp "$GUARDEN_FIXTURES/svc.conf.bak" "$svc_conf"
 run systemctl restart guarden-firewall.service
 assert_exit 0
 before=$(deny_packets)

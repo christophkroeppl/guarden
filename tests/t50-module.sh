@@ -207,6 +207,7 @@ assert_file_lacks "$nat" "jump DNAT"
 
 # The intra-host rule set: accepts above one drop, and the drop carries no uid.
 services=/etc/guarden/firewall/50-services.conf
+svc_conf=/etc/guarden/firewall/services/traefik-production.conf
 # spec 7.6's loopback deny is `daddr 127.0.0.0/8 jump DROP;` and carries NO
 # interface match: `ip route get 127.0.0.1` answers `local 127.0.0.1 dev lo`, so
 # the destination already scopes the interface. `-o lo` was removed from the
@@ -217,14 +218,14 @@ if grep -E 'jump DROP' "$services" | grep -q 'lo'; then
 fi
 assert_file_exists "$services"
 assert_file_has "$services" "chain guarden-svc"
-assert_file_has "$services" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $web_publication jump ACCEPT;"
-assert_file_has "$services" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $tls_publication jump ACCEPT;"
 assert_file_lacks "$services" "10.0.2.2"
 # The API's accept set is `host.admin_user` and nobody else.
 admin_uid=$(getent passwd operator | cut -d: -f3)
-assert_file_has "$services" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $admin_uid daddr 127.0.0.1 proto tcp dport $api_publication jump ACCEPT;"
 # The drop is the last rule and names no uid: a default deny that enumerates who
 # it applies to leaves every other uid with the box's own default policy.

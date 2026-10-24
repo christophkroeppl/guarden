@@ -239,6 +239,8 @@ otherslice=$(slice_of routed2-production)
 edge_uid=$(getent passwd traefik-production | cut -d: -f3)
 [ -n "$edge_uid" ] || _fail "the edge service has no uid on this host"
 services=$GUARDEN_PREFIX/etc/guarden/firewall/50-services.conf
+prod_svc_conf=$GUARDEN_PREFIX/etc/guarden/firewall/services/routed-production.conf
+other_svc_conf=$GUARDEN_PREFIX/etc/guarden/firewall/services/routed2-production.conf
 prodpub=$(sed -n 's/^web = \([0-9]*\)$/\1/p' "$prodreg")
 otherpub=$(sed -n 's/^web = \([0-9]*\)$/\1/p' "$otherreg")
 [ -n "$prodpub" ] || _fail "no publication was allocated for the routed service"
@@ -250,7 +252,7 @@ assert_exit 0
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed2-production.yml"
 [ "$(grep -cE "uid-owner $edge_uid daddr 127\.0\.0\.1 proto tcp dport $prodpub jump ACCEPT;" \
-    "$services" || true)" = 0 ] \
+    "$prod_svc_conf" || true)" = 0 ] \
     || _fail "the edge holds an accept on a private service's publication"
 
 # **The promotion: the edge router appears and the edge uid accept appears.**
@@ -275,7 +277,7 @@ assert_file_has "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.
 # The accept is on the PUBLICATION, not on the public port: the edge dials the
 # loopback publication the service's unit publishes, and a rule naming any
 # other number matches no packet.
-assert_file_has "$services" \
+assert_file_has "$prod_svc_conf" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $prodpub jump ACCEPT;"
 
 # **The record is ONE service's.** The other service on the same gated track
@@ -285,7 +287,7 @@ assert_file_has "$services" \
 # to prevent.
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed2-production.yml"
 [ "$(grep -cE "uid-owner $edge_uid daddr 127\.0\.0\.1 proto tcp dport $otherpub jump ACCEPT;" \
-    "$services" || true)" = 0 ] \
+    "$other_svc_conf" || true)" = 0 ] \
     || _fail "the edge holds an accept on an unpromoted service's publication"
 
 # `unset` reverses it: the router goes and the accept goes with it, and the
@@ -303,7 +305,7 @@ run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
 [ "$(grep -cE "uid-owner $edge_uid daddr 127\.0\.0\.1 proto tcp dport $prodpub jump ACCEPT;" \
-    "$services" || true)" = 0 ] \
+    "$prod_svc_conf" || true)" = 0 ] \
     || _fail "the edge still holds an accept on an unset service's publication"
 
 # The track goes back to the fixture's own posture, so the rest of the suite

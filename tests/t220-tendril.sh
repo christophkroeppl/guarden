@@ -194,6 +194,7 @@ assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging
 # thing that reaches the publications is an explicit accept ABOVE the deny rather
 # than a gap in it.
 services=$GUARDEN_PREFIX/etc/guarden/firewall/50-services.conf
+svc_conf=$GUARDEN_PREFIX/etc/guarden/firewall/services/routed-staging.conf
 assert_file_exists "$services"
 assert_file_has "$services" "127.0.0.0/8"
 
@@ -208,12 +209,12 @@ routed_publication=$(sed -n 's/^publication = //p' \
 [ -n "$routed_publication" ] || _fail "routed-staging holds no publication"
 
 grant="uid-owner $tunnel_uid daddr 127.0.0.1 proto tcp dport $routed_publication"
-grep -vE '^[[:space:]]*#' "$services" | grep -qF "$grant" \
+grep -vE '^[[:space:]]*#' "$svc_conf" | grep -qF "$grant" \
     || _fail "the tunnel's uid is not granted the publication it fronts: $grant"
 
 # And the accept is above the deny, because a grant that lands below a default
 # deny is unreachable while still appearing in the file.
-grant_line=$(grep -nF "$grant" "$services" | head -n 1 | cut -d: -f1)
+grant_line=$(grep -nF "$grant" "$svc_conf" | head -n 1 | cut -d: -f1)
 deny_line=$(grep -nF 'daddr 127.0.0.0/8 jump DROP' "$services" | head -n 1 | cut -d: -f1)
 [ -n "$grant_line" ] && [ -n "$deny_line" ] && [ "$grant_line" -lt "$deny_line" ] \
     || _fail "the tunnel's accept is not above the deny (grant line $grant_line, deny line $deny_line)"

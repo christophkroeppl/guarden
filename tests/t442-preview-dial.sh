@@ -211,10 +211,11 @@ edge_uid=$(getent passwd traefik-production | cut -d: -f3)
 [ -n "$edge_uid" ] \
     || _fail "the edge service traefik-production has no uid, so its accept cannot be named"
 services=/etc/guarden/firewall/50-services.conf
+svc_conf=/etc/guarden/firewall/services/routed-preview.conf
 assert_file_exists "$services"
-assert_file_has "$services" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $pub_a jump ACCEPT;"
-assert_file_has "$services" \
+assert_file_has "$svc_conf" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $pub_b jump ACCEPT;"
 
 run iptables-legacy -S guarden-svc
@@ -226,7 +227,7 @@ assert_stdout_has "dport $pub_b"
 # And above the single deny: an accept under the drop matches no packet while
 # still appearing in the file.
 drop_line=$(grep -nF "daddr 127.0.0.0/8 jump DROP;" "$services" | tail -n 1 | cut -d: -f1)
-accept_line=$(grep -nFm1 "dport $pub_a jump ACCEPT;" "$services" | cut -d: -f1)
+accept_line=$(grep -nFm1 "dport $pub_a jump ACCEPT;" "$svc_conf" | cut -d: -f1)
 if [ -z "$drop_line" ] || [ -z "$accept_line" ] || [ "$accept_line" -ge "$drop_line" ]; then
     _fail "the instance's accept (line ${accept_line:-absent}) is not above the loopback deny (line ${drop_line:-absent})"
 fi
