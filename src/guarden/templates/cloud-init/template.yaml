@@ -76,34 +76,29 @@ package_upgrade: false
 # conversion reboots twice, and a cloud-init runcmd that tried to span a reboot
 # would be a document that silently stopped half way.
 #
-# Re-running is safe and is the expected recovery. `install.sh` asks each phase
-# whether it has converged and applies only the ones that have not, so a second
-# run after a reboot — or after this document — converges the remainder rather
-# than starting again.
+# **The branch is set here, once.** The renderer knows the branch of the
+# checkout it renders from — that is what `--branch` says — and it is written
+# into both the clone step and the installer's call, so the two cannot disagree
+# about which tree the host installs from. The installer records it in the
+# service's environment, so the run after the first reboot uses the same branch
+# without the document naming it again.
 #
-# **THIS DOCUMENT ENDS RED ON THE FIRST BOOT, AND THAT IS CORRECT.** The btrfs
-# conversion is a staged offline operation that crosses two reboots, and
-# `install.sh` exits **75** at each of them — *a reboot is required, then
-# re-run me*. cloud-init reads any non-zero exit as a failed module, so a
-# correct run ends with `cloud-init status: error`. The operator's recovery is
-# the same command again, by hand, after each reboot:
+# **The install is ONE CLICK from here.** The installer hands the work to a
+# temporary systemd service that carries the run across the conversion's two
+# reboots, and the machine reboots itself. Nothing is asked of the operator
+# after this document has run.
 #
-#   cloud-init status                      # status: error  <- expected, boot 1
-#   reboot
-#   curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
-#   reboot
-#   curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
-#   soil --check                           # silent, exit 0  <- converged
+# **A boot's `cloud-init status` is not the host's convergence.** cloud-init's
+# runcmd runs once per instance, so the document is read on the first boot and
+# never again; the status it writes says whether *the document* ran, not
+# whether the host converged. The service carries the rest, and the host's own
+# answer is `soil --check`.
 #
-# **The re-run is the operator's to make, and `cloud-init status` will not
-# report it as missing.** This document's `runcmd` is `once-per-instance`, and
-# cloud-init writes that marker BEFORE the module runs — so the failed boot
-# still counts as the instance's one, the next boot reports the step as
-# "previously ran" and does not run it again, and `cloud-init status` reads
-# `done` while the host is still unconverged. A green cloud-init status is not
-# a converged host; `soil --check` is the answer to that question.
-# `install.sh` is what resumes, and it resumes because every phase checks
-# before it applies.
+# **The manual fallback is `--inline`.** `install.sh --inline` runs the phases
+# in this process and stops with exit 75 when a phase asks for a reboot; the
+# operator then reboots and re-runs the same command. This is the path for a
+# host where systemd cannot run a service, and every phase is check-then-apply
+# so a re-run converges only what is left.
 #
 # Nothing here is fetched from PyPI. Every package comes from the distribution's
 # own repository; the one artefact from outside is the pinned `podlet` release,
@@ -171,6 +166,9 @@ write_files:
 
 runcmd:
   - /usr/local/bin/guarden-provision.sh
+  # The installer hands the work to a temporary systemd service and returns;
+  # the service carries the run across the conversion's reboots and the
+  # machine reboots itself. The branch is named here, once.
   - bash "{{ repo_dir }}/tools/install.sh" --branch "{{ repo_branch }}"
 {% endif %}
 
