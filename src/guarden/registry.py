@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from guarden import conf, errors, paths
+from guarden import manifest as manifest_mod
 
 REGISTRY_MODE = 0o640
 SOURCE_MANUAL = "manual"

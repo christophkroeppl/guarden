@@ -269,10 +269,7 @@ port. A service that did not declare an edge cannot connect to a declared one, a
 cannot reach a port nobody published at all, including `sshd`. The rule renders the accept set
 first and the single deny last, and the order is the whole of it.
 
-**Binds are not policed.** Nothing prevents a service from binding a loopback port it was never
-granted a publication for, and two compromised services can talk over any port they both choose.
-"Two services must not hold the same publication" is enforced by the allocator and is
-cooperative, not structural.
+**Binds are policed on the reply path.** A socket answering on a publication port must be owned by that publication's service uid. A hostile service that squats on another service's publication answers from that port with its own uid; its reply carries the publication as its source port and is dropped and logged by the bind-policing rules in `50-services.conf`. A service can still bind a loopback port it was never granted, but traffic to a squatted publication does not complete. "Two services must not hold the same publication" is enforced by the allocator and is cooperative, not structural."
 
 The owner match is deliberately **not** used in `INPUT`. A forwarded packet has no socket, so
 an owner match there is unreliable and would drop the edge's traffic.
@@ -345,9 +342,7 @@ change (ADR-0015). Making that daemon a service is still the right
 answer for a host loopback port that is not a publication — a granted rule is the door for the
 cases where it is not possible, and it is opened by root on purpose.
 
-What this does **not** do is stop a service *binding* a port of its own choosing. Two
-compromised services can still talk over a port neither declared. What is enforced is that a
-service which did not declare an edge cannot connect to one.
+Bind policing is enforced on the reply path: a socket answering on a publication port must be owned by that publication's service uid, and a squatter's reply is dropped and logged. A service can still bind a loopback port it was never granted, but traffic to a squatted publication does not complete. What the deny still does not do is grant: a granted rule is the door for the cases where a daemon cannot be made a service."
 
 ### 2.7 Ingress without a capability
 

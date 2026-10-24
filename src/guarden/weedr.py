@@ -133,6 +133,8 @@ FIREWALL = (
     ("list", "every requested rule, deduplicated by content, with its services"),
     ("open", "install a requested rule the manifest asked for"),
     ("close", "revoke a granted rule"),
+    ("show", "one service's dial-set and door-set"),
+    ("check", "report squatted publications on the loopback"),
 )
 
 PIN = (("sync", "recompute the snapper marks from the pin files and the registries"),)
@@ -457,6 +459,10 @@ def build_parser() -> argparse.ArgumentParser:
         verb_parser = top["firewall"]["verbs"][verb]
         verb_parser.add_argument("name", metavar="NAME", help="the service")
         verb_parser.add_argument("rule", metavar="RULE", help="the name it asked for")
+
+    show_parser = top["firewall"]["verbs"]["show"]
+    show_parser.add_argument("name", metavar="NAME", help="the service")
+    # `check` takes no arguments
 
     expose_set = top["expose"]["verbs"]["set"]
     _add_service_name(expose_set, "the service whose exposure is recorded")
@@ -2362,6 +2368,14 @@ def _firewall_list(args) -> int:
     return firewallrules.list_rules(args.json)
 
 
+def _firewall_show(args) -> int:
+    return firewallrules.show(args.name)
+
+
+def _firewall_check(args) -> int:
+    return firewallrules.check()
+
+
 def _exposure_record(config, name: str):
     """The service's record and its track, or the refusal that names one."""
     record = registry.load(name)
@@ -2596,6 +2610,8 @@ HANDLERS = {
     "weedr firewall open": _firewall_open,
     "weedr firewall close": _firewall_close,
     "weedr firewall list": _firewall_list,
+    "weedr firewall show": _firewall_show,
+    "weedr firewall check": _firewall_check,
     "weedr expose set": _expose_set,
     "weedr expose unset": _expose_unset,
     "weedr expose list": _expose_list,

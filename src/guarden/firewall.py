@@ -492,15 +492,25 @@ def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
         "}",
         "",
         f"chain {OUTPUT_CHAIN} {{",
+        # Bind policing (gap G3): a socket bound to one of this host's
+        # publication ports must be owned by that publication's service uid.
+        # A hostile service that squats on another service's publication
+        # answers from that port with its own uid; its reply carries the
+        # publication as its source port and is dropped here, before the
+        # ESTABLISHED accept can let it through, and the attempt is logged.
+        # The owner match is negated, so a socket owned by the
+        # publication's own uid is untouched and legitimate binds keep
+        # working.
+        *bind_policing_lines(),
         # The reply half of a connection that was just permitted. A reply's
         # destination is an ephemeral port on loopback, so it lands inside the
         # deny's `127.0.0.0/8` range and is dropped without this: the request
-        # passes, the SYN-ACK does not, and the client sees a timeout rather than
-        # an answer. INPUT has carried this rule since the first commit.
+        # passes, the SYN-ACK does not, and the client sees a timeout rather
+        # than an answer. INPUT has carried this rule since the first commit.
         #
         # It widens nothing. ESTABLISHED is conntrack's word for "this packet
-        # belongs to a connection that already exists", so the rule cannot open a
-        # path — it can only let the far side of one answer.
+        # belongs to a connection that already exists", so the rule cannot
+        # open a path — it can only let the far side of one answer.
         "    mod conntrack ctstate (ESTABLISHED RELATED) jump ACCEPT;",
         f"    mod owner uid-owner 0 daddr {LOOPBACK} proto tcp jump ACCEPT;",
         # The stub resolver, with the per-publication accepts and above the granted
@@ -538,6 +548,39 @@ def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
 
     return main_body, service_bodies
 
+
+def bind_policing_lines() -> list[str]:
+    """Ferm lines that police binds on this host's publication ports (gap G3).
+
+    A socket answering on a publication port must be owned by that
+    publication's service uid.  A squatter's reply carries the publication
+    as its source port and a uid that is not the owner's, so it is logged
+    and dropped here.  Rules are emitted once per publication port.
+    """
+    out: list[str] = []
+    seen: set[int] = set()
+    for name in sorted(registry.names()):
+        record = registry.load(name)
+        if record is None:
+            continue
+        ports: set[int] = set(record.publication.values())
+        for instance in record.instances.values():
+            ports.update(instance.publication.values())
+        for port in sorted(ports):
+            if port in seen:
+                continue
+            seen.add(port)
+            uid = record.uid
+            out.append(
+                f"    mod owner ! uid-owner {uid} proto tcp sport {port} "
+                f"daddr {LOOPBACK_NETWORK} LOG log-prefix \"guarden-squat: \" "
+                f"log-level warning;"
+            )
+            out.append(
+                f"    mod owner ! uid-owner {uid} proto tcp sport {port} "
+                f"daddr {LOOPBACK_NETWORK} DROP;"
+            )
+    return out
 
 def granted_rule_lines() -> list[str]:
     """One ferm line per GRANTED requested rule, deduplicated by content.
@@ -622,6 +665,9 @@ def install(config) -> str:
     with conf.lock("firewall"):
         main_body, service_bodies = render(config, collect())
 
+        # Ensure the services directory exists.
+        SERVICES_DIR.mkdir(parents=True, exist_ok=True)
+
         # Remove service files for services that no longer exist in the registry.
         current_services = set(registry.names())
         for path in SERVICES_DIR.glob("*.conf"):
@@ -632,7 +678,7 @@ def install(config) -> str:
         before_main = _read_file(SERVICES_CONF)
         main_changed = main_body != before_main
         if main_changed:
-            conf.write_file(SERVICES_CONF, main_body, SERVICES_MODE)
+            conf.write_file(SERVICES_CONF, main_body, SERVICES_MODE, owner=owner())
 
         # Write each per-service file if it changed.
         service_changed = False
@@ -640,7 +686,7 @@ def install(config) -> str:
             path = SERVICES_DIR / f"{name}.conf"
             before = _read_file(path)
             if body != before:
-                conf.write_file(path, body, SERVICE_MODE)
+                conf.write_file(path, body, SERVICE_MODE, owner=owner())
                 service_changed = True
 
         if main_changed or service_changed:
