@@ -92,7 +92,7 @@ green cloud-init status is not a converged host; `soil --check` is the answer to
 
 **From the scripts** — for a host without cloud-init, which is most of them. The one-shot
 installer above, or the same phases run by hand — with `install` first, because it is what seeds
-the file `packages` resolves its fetch against and puts the programs on `PATH`: (feat(install): the one-click install — a temporary service carries the run across the reboots)
+the file `packages` resolves its fetch against and puts the programs on `PATH`:
 
 ```sh
 # 1. Install. `storage` reboots the machine twice to convert the root filesystem to btrfs.

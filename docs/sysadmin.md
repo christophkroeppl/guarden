@@ -36,7 +36,6 @@ login session. `runuser -l <service> -c 'systemctl --user status web'` works too
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/main/tools/install.sh | sudo bash
-``` (feat(install): the one-click install — a temporary service carries the run across the reboots)
 ```
 
 It clones the repository to `/usr/local/src/guarden`, converges every phase, and **reboots the
