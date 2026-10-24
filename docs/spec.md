@@ -1144,6 +1144,10 @@ scrub:  # the operator's policy for a CLONED copy of this database (ADR-0025).
     - table: ir_config_parameter
       column: key
       prefix: "mail."
+
+config_files:  # repository templates rendered into the service home (§6.3)
+  - source: templates/odoo.conf.j2  # a path inside the repository
+    target: /etc/odoo/odoo.conf  # an absolute path inside the container
 ```
 
 `service:` names a guarden service; `container:` names a container inside this service; `app:`
@@ -1185,7 +1189,8 @@ Validation rules:
   and not a path; a `firewall` entry
   takes `name`, `chain` and `rule` and nothing else; a
   `widgets` entry
-  takes `container` and `file`; a `scrub:` entry takes `tables` and `keys` and nothing else, a
+  takes `container` and `file`; a `config_files` entry takes `source` and `target` and nothing
+  else; a `scrub:` entry takes `tables` and `keys` and nothing else, a
   `tables` entry takes `name` and nothing else, and a `keys` entry takes `table`, `column` and
   **exactly one** of `prefix` and `equals` — a rule that named neither would match every row of
   the table, which is what a `tables` entry is for; a `provides` entry is a **single string naming a kind** — `db`,
@@ -1216,6 +1221,12 @@ Validation rules:
   **resulting service name** must not exceed 31 characters, and that is what is checked.
 - `state` and `bulk` entries must match `^[a-z0-9][a-z0-9._-]*$`, must name a volume the unit
   source mounts, and a name may not appear in both.
+- `config_files` is a list of entries, each a mapping with the closed key set `source` and
+  `target` and nothing else. `source` is a path inside the repository: not absolute, and with no
+  empty, `.` or `..` component. `target` is an absolute path inside the container matching
+  `^/[^/]+(/[^/]+)*$`. Two entries may not name the same `target`, because the rendered file
+  would be written twice. The check is on the manifest's own shape; whether `source` exists in
+  the tree is the renderer's question (§6.3).
 - **A manifest that provides the `db` kind must declare a volume.** It is refused, exit `2`,
   when it declares neither `state:` nor `bulk:`. The rule and its limits, stated once, because
   the failure it prevents is silent and the data is gone with nothing saying so:
@@ -1774,7 +1785,7 @@ In order:
   idempotent; a provider that is still down is the same warning and does not refuse the start.
   The one refusal remains the engine's own: a `psql` that answers wrongly, or a server older
   than 10, fails the command it ran under.
-11. Units, rendered by `loom` and installed by the mutator.
+11. Units and config files, rendered by `loom` and installed by the mutator.
 12. **A fork, when the track forks — as an internal step of this command, from the track's
   `fork_from` field and nothing else.** §8.3 has the rules; the two that matter here are that
   **`production` has `fork_from = ""` and therefore starts empty, and a production service
@@ -2361,6 +2372,10 @@ loom render <source-dir> --service <name> --out <unit-dir> [--instance <escaped-
 loom check <source-dir>
 ```
 
+`loom check` renders leniently: it has no registry and therefore no edge variables, so an
+undefined name is treated as empty. It proves the template parses and the file exists. `loom
+render` renders strictly: it is the verb that proves the template renders against the host.
+
 Unprivileged and pure: the same manifest, the same registry, the same overrides and the same
 configuration always produce the same bytes. It reads the manifest, the registry, the
 referenced overrides and the environment table, and writes quadlet units — each with the
@@ -2380,6 +2395,13 @@ suffix and matches what remains to a declared volume, while a `Mount=` source en
 to a podman object rather than a host path.
 
 `loom` **must** refuse rather than guess, with the code §1.2 gives each case.
+
+**`loom check` has no service, so it allows the service tree as a whole; `loom render`
+narrows to one service's own.** A bind mount into another service's home is refused by
+`render`, which knows the service name, while `check` — which renders for the whole tree —
+allows the service tree itself, because that tree is a constant of the host layout rather
+than a host answer. The bind mount this feature exists to make checkable lives under the
+service's own home, so allowing the tree is what lets `check` prove the template parses.
 
 **The renderer owns the network backend, and there is one backend per pod.** The pod's own unit
 carries `Network=pasta:` followed by the `[network] pasta_options` from `guarden.toml`, verbatim
@@ -2427,6 +2449,15 @@ service's own volumes, `/etc/guarden`, and the paths the admin listed in `mounts
 `network_mode: service:` joins the list because a shared network namespace is what a pod is and
 the pod is the renderer's: a repository that could name another container's namespace could put
 its own container beside a service it does not own.
+
+The service tree is the one place `check` and `render` disagree, because `check` has no
+service context and `render` does:
+
+- `check` allows the service tree as a whole (no service context available)
+- `render` narrows to one service's own home
+- A config_files entry's bind mount lives under the service's own home — the mount that feature exists to make checkable
+- `check` allows what the host layout fixes (`/var/lib/guarden/services/`)
+- `render`, which knows the name, refuses a mount into another service's home
 
 **A resource cap or a weight is refused in this vocabulary too, and §4 is the one statement of
 the rule** (ticket 350). A repository that ships units rather than a `compose.yaml` writes
