@@ -445,6 +445,7 @@ def create(
     else:
         manifest = manifest_mod.accept(_manifest_in(directory), held=held)
     apps_mod.check(manifest, shipped, _manifest_in(directory) if not one_service else manifest.source)
+    _check_config_sources(directory, manifest)
     project = manifest.project or _project_from(source)
     outcome = Outcome(resolved=resolved, app=app)
 
@@ -469,7 +470,7 @@ def create(
     # under its ref — the registry is one file per service, and one shared
     # field was a value an instance's ingest wrote over the service's own
     # (review finding 1).
-    source_hash = _source_hash(tree) if source.kind in ("poke", "service", "tree") else ""
+    source_hash = _source_hash(tree, tuple(manifest.config_files)) if source.kind in ("poke", "service", "tree") else ""
     # Before the convergence answer: a converged reconcile applies grants too.
     granted = overrides_mod.load(resolved.name)
     _check_volume_owners(manifest, resolved.name, granted)
@@ -545,7 +546,7 @@ def create(
     root_owner = (0, users.group_id(GUARDEN_GROUP))
 
     _make_tree(resolved.name, owner, resolved.escaped_ref)
-    _copy_source(tree, resolved.name, owner)
+    _copy_source(tree, resolved.name, owner, manifest.config_files)
 
     # **The read, the seed and the write are one act under the `overrides`
     # lock.** Every other writer of this file takes it — `weedr port open`,
@@ -1292,6 +1293,23 @@ def _repair(record, resolved) -> list[str]:
     return [f"repaired {path} to the service's own" for path in repaired]
 
 
+def _check_config_sources(directory: Path, manifest: manifest_mod.Manifest) -> None:
+    """A declared config template that is not in the tree is refused before identity.
+
+    The same reason `edges.check` and `check_hosts` run where they do: a refusal
+    after the user and the home exist leaves a system account behind on the way
+    out. The renderer refuses the same file by name when it renders; this is the
+    earlier and cheaper answer for a file that is not there at all, and it is the
+    one that keeps a bad manifest from creating a service.
+    """
+    for entry in manifest.config_files:
+        if not (directory / entry.source).is_file():
+            raise errors.GuardenError(
+                f"the manifest {manifest.source} declares the config file {entry.source!r}, "
+                f"and it does not exist in {directory}"
+            )
+
+
 def _make_tree(name: str, owner: tuple[int, int], escaped_ref: str | None = None) -> None:
     """The whole tree, `0700` to the service user, with no carve-out for the home.
 
@@ -1442,7 +1460,7 @@ def _apply_volume_owners(manifest, name: str, granted,
 
 
 
-def _source_hash(directory: Path) -> str:
+def _source_hash(directory: Path, config_files=()) -> str:
     """The content hash of everything that determines the render, for the
     convergence check.
 
@@ -1480,7 +1498,7 @@ def _source_hash(directory: Path) -> str:
     return h.hexdigest()
 
 
-def _copy_source(directory: Path, name: str, owner: tuple[int, int]) -> None:
+def _copy_source(directory: Path, name: str, owner: tuple[int, int], config_files=()) -> None:
     """The repository's whole staged tree into a home.
 
     A repository ships either `compose.yaml` at its root or `.guarden/quadlet/`

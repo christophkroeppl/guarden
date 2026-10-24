@@ -1037,6 +1037,8 @@ def check_mount_paths(mounts: list[Mount], source: Source, context: Context | No
         roots = [ALLOWED_ROOT, *allowed]
         if context is not None:
             roots.append(str(context.volume_root()))
+        elif _under(mount.source, str(paths.SERVICES)):
+            continue
         if any(_under(mount.source, root) for root in roots if root):
             continue
         raise errors.GuardenError(
@@ -1471,6 +1473,10 @@ def build(
     plan.add("shared/widgets.toml", _widget_slice(document, source, context))
     for widget in document.widgets:
         plan.add(f"shared/widgets/{Path(widget.file).name}", _widget_file(directory, widget.file))
+    for relative, text in _config_files(
+        directory, document, _edge_rows(document, edge_ports), context
+    ):
+        plan.add(relative, text)
     return plan
 
 
@@ -1982,6 +1988,131 @@ def sibling_publications(
         host = container_name if container_name else sibling.container
         out.append((sibling.container, host, publication))
     return out
+
+
+# --- inserted from feat/config-files: config file rendering helpers ----------
+
+def _edge_rows(
+    document: manifest_mod.Manifest, edge_ports: list[tuple[str, str, int]]
+) -> list[tuple[str, str, int, str | None]]:
+    """`<AS>_HOST` / `<AS>_PORT` / `<AS>_USER` rows, shared by the environment file
+    and the config files.
+
+    One place rather than two, because a config file rendered with a second
+    derivation of the same names would be a second place for them to be wrong.
+    """
+    rows = []
+    for edge in document.needs:
+        for logical, concrete, publication in edge_ports:
+            if logical != edge.service:
+                continue
+            if edge.databases:
+                for db_name in edge.databases:
+                    user = f"{concrete}-{db_name}"
+                    name = f"{edge.variable}_{db_name.upper()}"
+                    rows.append((name, concrete, publication, user))
+            else:
+                rows.append((edge.variable, concrete, publication, None))
+    return rows
+
+
+def _config_variables(rows: list[tuple[str, str, int, str | None]]) -> dict[str, object]:
+    """The edge rows as a flat namespace a config template can name.
+
+    `{{ DB_HOST }}`, `{{ DB_PORT }}` and, for a multi-database edge,
+    `{{ DB_ODOO_HOST }}` — the same names the environment file carries, so a
+    config file and a unit never disagree about what an edge is called. They are
+    passed as the template's own context rather than under a `vars` key, because
+    a config file is written the way the application reads it.
+    """
+    out: dict[str, object] = {}
+    for variable, host, port, user in rows:
+        out[f"{variable}_HOST"] = host
+        out[f"{variable}_PORT"] = port
+        if user:
+            out[f"{variable}_USER"] = user
+    return out
+
+
+def _config_files(
+    directory: Path,
+    document: manifest_mod.Manifest,
+    rows: list[tuple[str, str, int, str | None]],
+    context: Context | None,
+) -> list[tuple[str, str]]:
+    """Each `config_files:` entry, rendered and keyed by where it lands in the home.
+
+    The key is `config/<target>` rather than the source's own path: the home is a
+    mirror of the container's filesystem at the paths the service needs
+    configured, so the unit source's bind mount is `<home>/<target>:<target>` and
+    reads the same on every track (spec 4).
+    """
+    return [
+        (
+            f"config/{entry.home_relative}",
+            _render_config_file(directory, document, entry, rows, context),
+        )
+        for entry in document.config_files
+    ]
+
+
+def _render_config_file(
+    directory: Path,
+    document: manifest_mod.Manifest,
+    entry: manifest_mod.ConfigFile,
+    rows: list[tuple[str, str, int, str | None]],
+    context: Context | None,
+) -> str:
+    """One config file, rendered with jinja2 out of the repository's own template.
+
+    The loader is rooted at the repository root, so `{% include %}` inside a
+    template resolves against the repository and not against guarden's own
+    `templates/`. `check` has no registry and therefore no edge variables, so its
+    environment is lenient: it proves the template *parses* and the file exists,
+    and `render` is the verb that proves it renders against the host.
+    """
+    try:
+        import jinja2
+    except ImportError:
+        raise errors.GuardenError(
+            "python3-jinja2 is not importable; it is the distribution's package, "
+            "installed by `soil packages`",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    environment = jinja2.Environment(
+        loader=jinja2.FileSystemLoader(str(directory)),
+        undefined=jinja2.StrictUndefined if context is not None else jinja2.Undefined,
+        keep_trailing_newline=True,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        autoescape=False,
+    )
+    try:
+        template = environment.get_template(entry.source)
+    except jinja2.TemplateNotFound:
+        raise errors.GuardenError(
+            f"the manifest {document.source} declares the config file {entry.source!r}, "
+            f"and it does not exist in {directory}"
+        ) from None
+    except jinja2.TemplateError as exc:
+        # A syntax error is raised here rather than at render time: `get_template`
+        # parses the template, and a file that is not a template is refused with
+        # its own name rather than reaching the home as a file that is not one.
+        raise errors.GuardenError(
+            f"the config file {entry.source!r} declared by the manifest {document.source} "
+            f"is not a template: {errors.oneline(str(exc))}"
+        ) from exc
+    try:
+        fields = _config_variables(rows)
+        fields["rows"] = rows
+        fields["service"] = context.service if context else ""
+        fields["domain"] = context.config.domain if context else ""
+        return template.render(**fields)
+    except jinja2.TemplateError as exc:
+        raise errors.GuardenError(
+            f"the config file {entry.source!r} declared by the manifest {document.source} "
+            f"did not render: {errors.oneline(str(exc))}"
+        ) from exc
 
 
 def _order_target(document: manifest_mod.Manifest, context: Context | None) -> str:

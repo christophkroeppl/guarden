@@ -51,6 +51,7 @@ TOP_LEVEL_KEYS = {
     "firewall",
     "schema",
     "scrub",
+    "config_files",
 }
 
 # Each block's own key set, closed. spec 4 is emphatic that the rule covers the
@@ -66,6 +67,7 @@ BLOCK_KEYS = {
     "siblings": {"container", "port"},
     "widgets": {"container", "file"},
     "firewall": {"name", "chain", "rule"},
+    "config_files": {"source", "target"},
 }
 
 # `scrub:` is a MAPPING of two lists, and it is not in BLOCK_KEYS because that
@@ -159,6 +161,11 @@ DB_NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 # closed rather than a list of prohibitions because a wildcard was the shape that
 # would have been dangerous.
 HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")
+# A `config_files:` target: an absolute path inside the container, and the path
+# the rendered file is written under in the service home. The closed form is
+# what keeps a target from naming a path the home cannot hold — a `//`, a `.`
+# component or a trailing slash would be a path the mirror does not have.
+CONFIG_TARGET_RE = re.compile(r"^/[^/]+(/[^/]+)*$")
 # What a provider may `provide:`. The first two are the CREDENTIAL kinds: a
 # consumer edges to them with `auth: database` or `auth: secret` and receives a
 # minted value, and the provider can verify it. The rest are REACHABILITY kinds:
@@ -332,6 +339,28 @@ def _check_widget_file(value: str, path: Path, container: str) -> None:
 
 
 @dataclass(frozen=True)
+class ConfigFile:
+    """One `config_files:` entry: a repository template and where it lands.
+
+    `source` is a path in the repository; `target` is an absolute path inside
+    the container. The rendered bytes are written under the service home at the
+    target's own path, so the home is a mirror of the container's filesystem at
+    the paths the service needs configured and the unit source's bind mount is
+    `<home>/<target>:<target>` — the same path on every track, because the
+    target comes from the manifest and the home from the service's own name.
+    """
+
+    source: str
+    target: str
+
+    @property
+    def home_relative(self) -> str:
+        """Where the rendered file lands in the service home, `target` without its
+        leading separator."""
+        return self.target.lstrip("/")
+
+
+@dataclass(frozen=True)
 class RuleRequest:
     """One `firewall:` entry: the name a grant names, the chain, the rule text.
 
@@ -399,6 +428,7 @@ class Manifest:
     firewall: list[RuleRequest] = field(default_factory=list)
     schema: str | None = None
     scrub: Scrub = field(default_factory=Scrub)
+    config_files: list[ConfigFile] = field(default_factory=list)
 
     def volume_kind(self, name: str) -> str:
         return "state" if name in self.state else "bulk"
@@ -509,6 +539,7 @@ def read(path: Path) -> Manifest:
         firewall=_firewall(document.get("firewall", []), path),
         schema=_schema(document.get("schema"), path),
         scrub=_scrub(document.get("scrub"), path),
+        config_files=_config_files(document.get("config_files", []), path),
     )
 
 
@@ -1113,6 +1144,52 @@ def _widgets(value: Any, path: Path) -> list[Widget]:
             )
         _check_widget_file(file, path, container)
         out.append(Widget(container=container, file=file))
+    return out
+
+
+def _config_files(value: Any, path: Path) -> list[ConfigFile]:
+    """`config_files:` entries: a repository template and the container path it
+    lands at.
+
+    The two fields are checked here because they are the manifest's own shape;
+    whether the `source` exists is the renderer's question, asked against the
+    tree the repository actually shipped (spec 4).
+
+    `source` is a path *inside* the repository: an absolute path or one with a
+    `..` component would name a file the repository does not own, and the home
+    the render writes into is a mirror of the target rather than of the source.
+    `target` is an absolute path inside the container, and it is unique because
+    two entries naming one path would be two writes to one file.
+    """
+    out: list[ConfigFile] = []
+    seen: set[str] = set()
+    for entry in _entries(value, "config_files", path):
+        source = entry.get("source")
+        if not isinstance(source, str) or not source.strip():
+            raise errors.GuardenError(
+                f"the manifest {path}: a config_files entry names {source!r} as its source"
+            )
+        parts = source.split("/")
+        if source.startswith("/") or any(part in ("", ".", "..") for part in parts):
+            raise errors.GuardenError(
+                f"the manifest {path}: the config_files entry names {source!r} as its "
+                f"source, and it is a path inside the repository — not absolute, and "
+                f"without an empty, `.` or `..` component"
+            )
+        target = entry.get("target")
+        if not isinstance(target, str) or not CONFIG_TARGET_RE.match(target):
+            raise errors.GuardenError(
+                f"the manifest {path}: the config_files entry for {source!r} has "
+                f"`target: {target!r}`, and it is an absolute path inside the container "
+                f"matching {CONFIG_TARGET_RE.pattern}"
+            )
+        if target in seen:
+            raise errors.GuardenError(
+                f"the manifest {path}: two config_files entries both name the target "
+                f"{target!r}, and the rendered file would be written twice"
+            )
+        seen.add(target)
+        out.append(ConfigFile(source=source, target=target))
     return out
 
 

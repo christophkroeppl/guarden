@@ -394,6 +394,8 @@ def install(source: Path, service: str, escaped_ref: str | None = None) -> list[
             conf.write_file(mirror, body, paths.TREE_MODE, owner)
             written.append(str(mirror))
 
+    written += _config_files(out, service, owner)
+
     for path in sorted(_files(out / "system")):
         target = paths.PREFIX / "etc" / "systemd" / "system" / path.name
         conf.write_file(target, path.read_text(encoding="utf-8"), SYSTEM_UNIT_MODE)
@@ -701,6 +703,42 @@ def _files(directory: Path) -> list[Path]:
     return [path for path in sorted(directory.rglob("*")) if path.is_file()] if (
         directory.is_dir()
     ) else []
+
+
+def _config_files(out: Path, service: str, owner: tuple[int, int]) -> list[str]:
+    """The rendered config files, into the service home at each target's own path.
+
+    The home is a mirror of the container's filesystem at the paths the service
+    needs configured, so the unit source's bind mount is `<home>/<target>:<target>`
+    and reads the same on every track. The file is the service user's own — a
+    root-owned file inside a service's home is the one thing spec 2 forbids — and
+    so is every directory its path needs.
+    """
+    source = out / "config"
+    if not source.is_dir():
+        return []
+    home = paths.service_home(service)
+    written: list[str] = []
+    for path in sorted(_files(source)):
+        target = home / path.relative_to(source)
+        _config_dirs(target, home, owner)
+        conf.write_file(target, path.read_text(encoding="utf-8"), SYSTEM_UNIT_MODE, owner)
+        written.append(str(target))
+    return written
+
+
+def _config_dirs(target: Path, home: Path, owner: tuple[int, int]) -> None:
+    """The directories a config file's target needs, as the service user's own."""
+    made: list[Path] = []
+    directory = target.parent
+    while directory != home and directory.is_relative_to(home):
+        if not directory.exists():
+            made.append(directory)
+        directory = directory.parent
+    for directory in made:
+        directory.mkdir(parents=True, exist_ok=True)
+        conf.set_owner(directory, owner)
+        os.chmod(directory, paths.TREE_MODE)
 
 
 def reload_system() -> None:
