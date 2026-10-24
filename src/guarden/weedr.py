@@ -1540,7 +1540,8 @@ def _build_container(home: Path, app_dir: Path, service: str, container: str) ->
     if context_file is None:
         return []
     image_ref = images_mod.declared_or_built(app_dir, service, container)
-    service.write_build_exclusions(home, (0, 0))
+    from guarden import service as _service_mod
+    _service_mod.write_build_exclusions(home, (0, 0))
     podman = tool.runuser_as(
         service,
         "podman",
