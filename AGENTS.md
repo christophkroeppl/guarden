@@ -486,6 +486,9 @@ Rules that hold for every test:
   from the long form, it is the only one there is, and no other verb will grow one. Every
   program's `--help` lists the alias beside the long form.
 - No code comments unless a decision needs recording. If you need a comment, write the ADR.
+  Decision-record comments — why a non-obvious choice was made, with measured facts — are
+  welcome; explanatory comments that restate what the code does are not. When in doubt, write
+  the ADR and delete the comment.
 - Logs go to the journal. The last external tool each program invoked is logged, so the exact
   commands that produced the current state can be read rather than reconstructed.
 
