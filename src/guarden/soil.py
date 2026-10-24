@@ -121,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "the branch the rendered vps document clones and installs from "
-            "(default: the branch of this checkout, and `develop` when it has none)"
+            "(default: the branch of this checkout, and `main` when it has none)"
         ),
     )
     packages.add_argument(

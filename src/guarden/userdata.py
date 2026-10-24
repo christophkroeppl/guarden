@@ -48,7 +48,10 @@ VPS = "vps"
 PROFILES = (GOLDEN_VM, VPS)
 
 DEFAULT_REPO_URL = "https://github.com/christophkroeppl/guarden.git"
-DEFAULT_REPO_BRANCH = "develop"
+# The ultimate fallback when git cannot answer (tarball, no .git, no git binary).
+# own_branch() resolves to the actual checkout branch; DEFAULT_REPO_BRANCH is
+# derived from it at module load so the rest of the program sees the real branch.
+_FALLBACK_BRANCH = "main"
 DEFAULT_REPO_DIR = "/usr/local/src/guarden"
 
 
@@ -93,6 +96,10 @@ def own_branch() -> str:
     and the default is `main` — the branch a raw URL names when it names the
     repository's own head.
 
+    **Override.** `GUARDEN_REPO_BRANCH` in the environment wins over git, so
+    an operator can force a branch without changing the checkout. `--branch`
+    on the soil command wins over both.
+
     **The question is asked of git, and not of `.git/HEAD`.** A worktree's
     `.git` is a *file* naming the real git directory, and a linked
     worktree's `HEAD` is in that directory rather than beside the
@@ -106,6 +113,12 @@ def own_branch() -> str:
     answer the constant carries. The question is asked of the checkout and
     not of the remote, so a renderer never needs the network to answer it.
     """
+    import os
+
+    override = os.environ.get("GUARDEN_REPO_BRANCH")
+    if override:
+        return override
+
     checkout = Path(__file__).resolve().parent.parent.parent
     try:
         import subprocess
@@ -117,11 +130,17 @@ def own_branch() -> str:
             check=False,
         )
     except OSError:
-        return DEFAULT_REPO_BRANCH
+        return _FALLBACK_BRANCH
     branch = done.stdout.strip()
     if done.returncode != 0 or not branch or branch == "HEAD":
-        return DEFAULT_REPO_BRANCH
+        return _FALLBACK_BRANCH
     return branch
+
+
+# Resolved at module load: the actual branch of this checkout, or the fallback
+# when git cannot answer. Every default parameter and constant that used to
+# carry a hardcoded branch name now sees the real branch.
+DEFAULT_REPO_BRANCH = own_branch()
 
 
 def templates_dir() -> Path:
