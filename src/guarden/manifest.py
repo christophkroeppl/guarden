@@ -1382,7 +1382,6 @@ def combine(documents: list[Manifest], root: Path) -> Manifest:
     if not documents:
         raise errors.GuardenError("combine needs at least one manifest")
     first = documents[0]
-    schema_keys: list[manifest_mod.Key] = []
     schema_path = None
     for doc in documents:
         if doc.schema:
@@ -1438,15 +1437,32 @@ def _dump(document: Manifest) -> str:
             for edge in document.needs
         ]
     if document.ports:
-        out["ports"] = [{"container": entry.container, "port": entry.port} for entry in document.ports]
+        out["ports"] = [
+            {"container": entry.container, "port": entry.port} for entry in document.ports
+        ]
     if document.routes:
-        out["routes"] = [{"container": entry.container, "port": entry.port, "host": entry.host, "auth": entry.auth} for entry in document.routes]
+        out["routes"] = [
+            {
+                "container": entry.container,
+                "port": entry.port,
+                "host": entry.host,
+                "auth": entry.auth,
+            }
+            for entry in document.routes
+        ]
     if document.siblings:
-        out["siblings"] = [{"container": entry.container, "port": entry.port} for entry in document.siblings]
+        out["siblings"] = [
+            {"container": entry.container, "port": entry.port} for entry in document.siblings
+        ]
     if document.widgets:
-        out["widgets"] = [{"container": entry.container, "file": entry.file} for entry in document.widgets]
+        out["widgets"] = [
+            {"container": entry.container, "file": entry.file} for entry in document.widgets
+        ]
     if document.firewall:
-        out["firewall"] = [{"name": entry.name, "chain": entry.chain, "rule": entry.rule} for entry in document.firewall]
+        out["firewall"] = [
+            {"name": entry.name, "chain": entry.chain, "rule": entry.rule}
+            for entry in document.firewall
+        ]
     if document.schema:
         out["schema"] = document.schema
     return yaml.safe_dump(out, default_flow_style=False, sort_keys=False)

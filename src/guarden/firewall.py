@@ -327,7 +327,7 @@ def _service_accept_map(
         edge_names = routed.get(record.service, set())
         tunnel_names = tunnelled.get(record.service, set())
 
-        def _add(port: int, uid: int, reason: str) -> None:
+        def _add(port: int, uid: int, reason: str, allowed=allowed) -> None:
             allowed.setdefault(port, {})[uid] = reason
 
         for name, port in sorted(record.publication.items()):
@@ -389,7 +389,7 @@ def _service_file_lines(
     port_accepts: dict[int, dict[int, str]],
 ) -> list[str]:
     """The ferm lines for one service's dedicated chain."""
-    lines = [f"table filter", f"chain {service_chain_name(service)} {{"]
+    lines = ["table filter", f"chain {service_chain_name(service)} {{"]
     for port in sorted(port_accepts):
         for uid in sorted(port_accepts[port]):
             reason = port_accepts[port][uid]

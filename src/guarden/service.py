@@ -444,7 +444,11 @@ def create(
         manifest = manifest_mod.combine(documents, tree)
     else:
         manifest = manifest_mod.accept(_manifest_in(directory), held=held)
-    apps_mod.check(manifest, shipped, _manifest_in(directory) if not one_service else manifest.source)
+    apps_mod.check(
+        manifest,
+        shipped,
+        _manifest_in(directory) if not one_service else manifest.source,
+    )
     _check_config_sources(directory, manifest)
     project = manifest.project or _project_from(source)
     outcome = Outcome(resolved=resolved, app=app)
@@ -470,7 +474,11 @@ def create(
     # under its ref — the registry is one file per service, and one shared
     # field was a value an instance's ingest wrote over the service's own
     # (review finding 1).
-    source_hash = _source_hash(tree, tuple(manifest.config_files)) if source.kind in ("poke", "service", "tree") else ""
+    source_hash = (
+        _source_hash(tree, tuple(manifest.config_files))
+        if source.kind in ("poke", "service", "tree")
+        else ""
+    )
     # Before the convergence answer: a converged reconcile applies grants too.
     granted = overrides_mod.load(resolved.name)
     _check_volume_owners(manifest, resolved.name, granted)

@@ -367,8 +367,8 @@ def order(apps: list[App]) -> list[App]:
                 owner = pods.get(document.pod_name)
                 if owner is not None:
                     raise errors.GuardenError(
-                        f"the apps {_app_or_root(owner)} and {_app_or_root(app.name)} both name the "
-                        f"pod {document.pod_name!r}, and a pod never spans two services: two apps "
+                        f"the apps {_app_or_root(owner)} and {_app_or_root(app.name)} both name the"
+                        f" pod {document.pod_name!r}, and a pod never spans two services: two apps "
                         f"are two services, two Linux users and two podman pods, so one name "
                         f"cannot be one pod here. Give each app its own `[pod] name`",
                         errors.REJECTED_INPUT,

@@ -1485,7 +1485,7 @@ def _build(args) -> int:
     # may be a combined one that names no containers of its own. Build each
     # app's own directory instead.
     if manifest.grouping == manifest_mod.GROUPING_ONE_SERVICE and not source.containers():
-        shipped = apps_mod.discover(home)
+        shipped = apps.discover(home)
         for app in shipped:
             app_dir = home / app.root.relative_to(home) if app.root != home else home
             app_manifest = manifest_mod.read(app_dir / manifest_mod.MANIFEST_REL)
