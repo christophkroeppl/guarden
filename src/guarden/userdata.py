@@ -48,7 +48,7 @@ VPS = "vps"
 PROFILES = (GOLDEN_VM, VPS)
 
 DEFAULT_REPO_URL = "https://github.com/christophkroeppl/guarden.git"
-DEFAULT_REPO_BRANCH = "main"
+DEFAULT_REPO_BRANCH = "develop"
 DEFAULT_REPO_DIR = "/usr/local/src/guarden"
 
 

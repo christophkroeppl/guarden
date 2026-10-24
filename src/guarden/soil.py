@@ -118,10 +118,10 @@ def build_parser() -> argparse.ArgumentParser:
     packages.add_argument(
         "--branch",
         metavar="NAME",
-        default=None,
+        default=userdata.DEFAULT_REPO_BRANCH,
         help=(
             "the branch the rendered vps document clones and installs from "
-            "(default: the branch of this checkout, and `main` when it has none)"
+            f"(default: {userdata.DEFAULT_REPO_BRANCH})"
         ),
     )
     packages.add_argument(

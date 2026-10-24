@@ -94,29 +94,11 @@ package_upgrade: false
 # whether the host converged. The service carries the rest, and the host's own
 # answer is `soil --check`.
 #
-# **THIS DOCUMENT ENDS RED ON THE FIRST BOOT, AND THAT IS CORRECT.** The btrfs
-# conversion is a staged offline operation that crosses two reboots, and
-# `install.sh` exits **75** at each of them — *a reboot is required, then
-# re-run me*. cloud-init reads any non-zero exit as a failed module, so a
-# correct run ends with `cloud-init status: error`. The operator's recovery is
-# the same command again, by hand, after each reboot:
-#
-#   cloud-init status                      # status: error  <- expected, boot 1
-#   reboot
-#   curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
-#   reboot
-#   curl -fsSL https://raw.githubusercontent.com/christophkroeppl/guarden/develop/tools/install.sh | sudo bash
-#   soil --check                           # silent, exit 0  <- converged
-#
-# **The re-run is the operator's to make, and `cloud-init status` will not
-# report it as missing.** This document's `runcmd` is `once-per-instance`, and
-# cloud-init writes that marker BEFORE the module runs — so the failed boot
-# still counts as the instance's one, the next boot reports the step as
-# "previously ran" and does not run it again, and `cloud-init status` reads
-# `done` while the host is still unconverged. A green cloud-init status is not
-# a converged host; `soil --check` is the answer to that question.
-# `install.sh` is what resumes, and it resumes because every phase checks
-# before it applies.
+# **The manual fallback is `--inline`.** `install.sh --inline` runs the phases
+# in this process and stops with exit 75 when a phase asks for a reboot; the
+# operator then reboots and re-runs the same command. This is the path for a
+# host where systemd cannot run a service, and every phase is check-then-apply
+# so a re-run converges only what is left.
 #
 # Nothing here is fetched from PyPI. Every package comes from the distribution's
 # own repository; the one artefact from outside is the pinned `podlet` release,

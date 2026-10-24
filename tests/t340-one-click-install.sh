@@ -84,7 +84,6 @@ git -C "$REPO" config user.name tester
 git -C "$REPO" add -A
 git -C "$REPO" commit --quiet -m "the installer"
 git -C "$REPO" branch -q feature/one-click
-git -C "$REPO" checkout --quiet feature/one-click
 
 # The machine's own checkout, and the tree the installer will install from.
 INSTALL_DIR=/tmp/t340-install
