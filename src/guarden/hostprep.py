@@ -721,11 +721,15 @@ def packages_items(family: str | None = None) -> list[Item]:
 
     return [
         *items,
-        Item(
-            "the distribution's own apt timers are disabled, so nothing else "
-            "mutates the package index underneath this phase",
-            _packaged_apt_disabled,
-            lambda: [h.run("systemctl", "disable", "--now", unit) for unit in PACKAGED_APT],
+        *(
+            [Item(
+                "the distribution's own apt timers are disabled, so nothing else "
+                "mutates the package index underneath this phase",
+                _packaged_apt_disabled,
+                lambda: [h.run("systemctl", "disable", "--now", unit) for unit in PACKAGED_APT],
+            )]
+            if (family == "debian" or (family is None and packagelist.resolve(None)[0] == "debian"))
+            else []
         ),
         *[
             Item(f"the pinned {name} is installed, and the SHA256 of the program "
@@ -1237,8 +1241,14 @@ def _finish_conversion() -> None:
             + (reason[0] if reason else f"soil-storage-convert exited {result.code}"))
 
 
-def storage_items() -> list[Item]:
+def storage_items(family: str | None = None) -> list[Item]:
     config = h.read_config(h.config_path()) or h.shipped_config()
+    resolved_family = family
+    if resolved_family is None:
+        try:
+            resolved_family = packagelist.resolve(None)[0]
+        except packagelist.UnknownFamily:
+            resolved_family = None
     items: list[Item] = [
         Item(
             "btrfs with the @, @var and @tmp subvolumes",
@@ -1269,10 +1279,14 @@ def storage_items() -> list[Item]:
             )
             for parts, mode, owner, group in STORAGE_DIRECTORIES
         ],
-        h.text_item(
-            "the package hook snapshots root before every transaction",
-            hostpath(*APT_DIR, "80guarden-snapper"),
-            _template("80guarden-snapper"),
+        *(
+            [h.text_item(
+                "the package hook snapshots root before every transaction",
+                hostpath(*APT_DIR, "80guarden-snapper"),
+                _template("80guarden-snapper"),
+            )]
+            if resolved_family == "debian"
+            else []
         ),
         Item(
             "the distribution's snapper cleanup timer is disabled",
@@ -2959,7 +2973,7 @@ def items_for(
     if phase == "packages":
         return packages_items(family)
     if phase == "storage":
-        return storage_items()
+        return storage_items(family)
     if phase == "sysctl":
         return sysctl_items()
     if phase == "firewall":
