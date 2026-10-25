@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, 'feat/*', 'fix/*']
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Lint
+        run: just lint
+
+      - name: Unit tests
+        run: just unit
+
+      - name: Package tarball
+        run: just package-tarball
+
+      - name: Package deb
+        run: just package-deb
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: guarden-packages
+          path: dist/*

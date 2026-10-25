@@ -16,3 +16,7 @@ evidence/
 -ruff_cache
 
 *user-data*.yaml
+
+# packaging artifacts
+dist/
+*.deb
