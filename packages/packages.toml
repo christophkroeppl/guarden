@@ -144,3 +144,21 @@ golden = [
     "psmisc",
     "passt",
 ]
+# The LXD golden's own extras on Arch, on top of the substrate above.
+[golden.arch]
+golden = [
+    "python",
+    "iproute2",
+    "iptables",
+    "shadow",
+    "uidmap",
+    "curl",
+    "ca-certificates",
+    "sudo",
+    "util-linux",
+    "kmod",
+    "procps-ng",
+    "rsync",
+    "psmisc",
+    "passt",
+]

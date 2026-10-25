@@ -210,7 +210,16 @@ install_convert_hook() {
   }
   if ! command -v btrfs-convert >/dev/null 2>&1; then
     log "installing btrfs-progs..."
-    apt-get update && apt-get install -y btrfs-progs
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y btrfs-progs
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y btrfs-progs
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -Sy --noconfirm --needed btrfs-progs
+    else
+        err "no supported package manager to install btrfs-progs"
+        return 1
+    fi
   fi
   command -v btrfs-convert >/dev/null 2>&1 || { err "btrfs-convert missing"; return 1; }
   log "installing dracut module to ${DRACUT_MODULE_DST}..."
