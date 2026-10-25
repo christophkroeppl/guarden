@@ -172,12 +172,19 @@ class MutatorPolicyTest(unittest.TestCase):
             self.assertIn(verb, sudoers.GUARDEN_MAY)
 
     def test_the_destructive_and_the_granting_verbs_are_absent(self) -> None:
-        """A push may deploy and may not destroy, publish or grant."""
+        """A push may deploy and may not destroy, publish or grant.
+
+        `weedr service create` is intentionally excluded: it is an operator's
+        manual verb (run directly by `sudo weedr service create`), not a push
+        verb — pushes create services via `weedr service ingest`, which stays
+        out of this set. `create` names no credential, grants no port, and
+        opens no firewall rule; it only makes an identity the operator asked
+        for by name.
+        """
         for verb in (
             "weedr service purge",
             "weedr service rollback",
             "weedr service add",
-            "weedr service create",
             "weedr port open",
             "weedr firewall open",
             "weedr secret set",
