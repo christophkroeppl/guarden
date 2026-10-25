@@ -42,7 +42,9 @@ seed "$registry/app-staging.toml" \
 project=$GUARDEN_FIXTURES/project
 seed "$project/.guarden/service.yml" "project: app" "units: .guarden/quadlet/" \
     "state:" "  - data" "schema: .guarden/.env.schema" "needs:" \
-    "  - service: postgres-production" "    as: db" "    port: 5432" "    auth: database"
+    "  - service: postgres-production" "    as: db" "    port: 5432" "    auth: database" \
+    'entrypoint: ["/opt/bin/bitcoind"]' \
+    'command: ["-datadir=/var/lib/bitcoin", "-prune=20000"]'
 seed "$project/.guarden/quadlet/web.container" "[Unit]" "Description=the web container" \
     "" "[Container]" "Image=docker.io/library/nginx:1.27" \
     "Environment=APP_HOST=\${domain}" "Environment=APP_MODE=production" \
@@ -69,6 +71,9 @@ assert_file_has "$pod" "Network=pasta:--map-gw,--ipv4-only,-a,10.0.2.100,-n,24,-
 assert_file_lacks "$unit" "Network="
 assert_file_has "$unit" "Pod=app.pod"
 assert_file_has "$unit" "Image=docker.io/library/nginx:1.27"
+assert_file_has "$unit" "Entrypoint=/opt/bin/bitcoind"
+assert_file_has "$unit" "Exec=-datadir=/var/lib/bitcoin"
+assert_file_has "$unit" "Exec=-prune=20000"
 assert_file_has "$unit" "Environment=APP_MODE=production"
 
 # The options join with commas, podman's separator: podman cuts the value at the

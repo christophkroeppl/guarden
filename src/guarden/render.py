@@ -1695,6 +1695,17 @@ def _container_unit(
     for key in OWNED_KEYS:
         unit.drop("Container", key)
 
+    # Manifest entrypoint/command override: bypass the image's default
+    # entrypoint (e.g. su-exec/gosu that fails under rootless podman).
+    # These are repository-owned fields — guarden passes them through
+    # without validation, the operator is responsible for correctness.
+    # It does not depend on `context`: `check` renders the same units, so the
+    # override must appear there too, byte-identical with `render`.
+    if document.entrypoint:
+        unit.put("Container", "Entrypoint", document.entrypoint)
+    if document.command:
+        unit.put("Container", "Exec", document.command)
+
     unit_keys = _lines(unit, "Unit", domain, drop=("Description",))
     description = source.units[container].one("Unit", "Description")
     unit_keys.insert(0, f"Description={description or f'{service} {container}'.strip()}")
