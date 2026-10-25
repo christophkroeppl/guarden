@@ -138,6 +138,7 @@ GUARDEN_USER = "guarden"
 # so a push may deploy and may not do any of those.
 GUARDEN_MAY = frozenset(
     {
+        "weedr service create",
         "weedr service ingest",
         "weedr service remove",
         "weedr service gate",
