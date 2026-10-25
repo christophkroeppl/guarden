@@ -13,7 +13,6 @@ __pycache__/
 *.dump
 evidence/
 .lxc-state/
--ruff_cache
 
 *user-data*.yaml
 

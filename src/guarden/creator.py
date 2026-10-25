@@ -40,6 +40,7 @@ and use it" is false. **The real cost of an uncleaned pull is DISK.**
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -227,7 +228,7 @@ def validate_tag(value: str) -> str:
 def validate_port(value: str) -> int:
     """A port: a number in range, as a number and not as a string."""
     value = value.strip()
-    if not value.isdigit():
+    if not (value.isascii() and value.isdigit()):
         raise errors.GuardenError(f"the port {value!r} is not a number")
     number = int(value)
     if not PORT_MIN <= number <= PORT_MAX:
@@ -581,14 +582,27 @@ def _yaml_text(document: dict) -> str:
             for entry in value:
                 for index, (name, item) in enumerate(entry.items()):
                     prefix = "- " if index == 0 else "  "
-                    lines.append(f"{prefix}{name}: {item}")
+                    lines.append(f"{prefix}{name}: {_yaml_scalar(item)}")
         elif isinstance(value, list):
             lines.append(f"{key}:")
             for item in value:
-                lines.append(f"- {item}")
+                lines.append(f"- {_yaml_scalar(item)}")
         else:
-            lines.append(f"{key}: {value}")
+            lines.append(f"{key}: {_yaml_scalar(value)}")
     return "\n".join(lines) + "\n"
+
+
+def _yaml_scalar(value) -> str:
+    """Render one YAML scalar, quoting strings so they cannot be misread.
+
+    Strings are emitted as JSON (double-quoted) strings, which are a subset of
+    YAML's double-quoted scalar form; numbers and booleans stay bare.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(str(value), ensure_ascii=False)
 
 
 # --- the pull ----------------------------------------------------------------
@@ -656,14 +670,14 @@ def abort_pull(pull: Pull | None) -> None:
     if process.poll() is not None:
         return
     try:
-        process.send_signal(signal.SIGTERM)
+        os.killpg(process.pid, signal.SIGTERM)
     except (OSError, ProcessLookupError):
         return
     try:
         process.wait(timeout=PULL_ABORT_TIMEOUT)
     except subprocess.TimeoutExpired:
         try:
-            process.kill()
+            os.killpg(process.pid, signal.SIGKILL)
         except (OSError, ProcessLookupError):
             pass
         try:
@@ -714,9 +728,12 @@ def stage_tree(tree: Path) -> Path:
         relative = path.relative_to(tree)
         target = stage / relative
         if path.is_symlink():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target, follow_symlinks=False)
-            continue
+            raise errors.GuardenError(
+                f"the tree {tree} holds a link at {relative}, and a link "
+                f"is refused: the tree is copied for another account to read, and a "
+                f"link would carry something outside it in",
+                errors.REJECTED_INPUT,
+            )
         if path.is_dir():
             target.mkdir(parents=True, exist_ok=True)
             continue
@@ -725,6 +742,8 @@ def stage_tree(tree: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target, follow_symlinks=False)
     for path in [stage, *sorted(stage.rglob("*"))]:
+        if path.is_symlink():
+            continue
         os.chmod(path, 0o755 if path.is_dir() else 0o644)
     return stage
 

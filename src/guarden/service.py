@@ -1004,7 +1004,12 @@ def _allocate(resolved, record, manifest, config, source: Source,
     # preview's publication is allocated in the same namespace as the rest of the
     # box, and `records` deliberately excludes this service, so without this a
     # second preview of one service is handed the number the first holds.
-    taken = publications.held(records) | _instance_publications(record)
+    others = publications.held(records)
+    instance_pubs = _instance_publications(record)
+    # Only this service's own persisted ports are trusted as owned: a port that
+    # is held by somebody else must not be released back into the pool.
+    owned_current = {port for port in record.publication.values() if port not in others}
+    taken = (others | instance_pubs) - owned_current
 
     record.publication = publications.allocate(
         wanted, record.publication, taken, config.publication_range, record.service,
@@ -1031,9 +1036,19 @@ def _allocate(resolved, record, manifest, config, source: Source,
     if resolved.escaped_ref:
         instance = record.instances.get(resolved.escaped_ref)
         if instance is not None:
+            others = publications.held(records)
+            other_instance_pubs = {
+                port
+                for name, inst in record.instances.items()
+                if name != resolved.escaped_ref
+                for port in inst.publication.values()
+            }
+            foreign = others | other_instance_pubs
+            owned_current = {port for port in instance.publication.values() if port not in foreign}
+            taken_instance = (taken | set(record.publication.values())) - owned_current
             instance.publication = publications.allocate(
                 wanted, instance.publication,
-                taken | set(record.publication.values()),
+                taken_instance,
                 config.publication_range, f"{record.service}/{resolved.ref}",
             )
 

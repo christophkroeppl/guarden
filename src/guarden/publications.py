@@ -41,9 +41,9 @@ def allocate(wanted, current: dict[str, int], used: set[int], span, what: str) -
             f"ingress.publication_range is {first}-{last}, and a publication is a TCP/UDP number",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    taken = set(used) - {port for port in current.values() if port in used}
+    taken = set(used)
     out: dict[str, int] = {}
-    for name in sorted(wanted):
+    for name in sorted(set(wanted)):
         existing = current.get(name)
         if isinstance(existing, int) and existing not in taken:
             out[name] = existing

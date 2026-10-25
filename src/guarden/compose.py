@@ -304,7 +304,7 @@ def refuse(body: dict[str, Any], container: str, path: Path, pod_name: str) -> N
         if key not in body:
             continue
         value = body[key]
-        if key == "privileged" and value is not True:
+        if key == "privileged" and not value:
             continue
         if key == "pid" and str(value) != "host":
             continue

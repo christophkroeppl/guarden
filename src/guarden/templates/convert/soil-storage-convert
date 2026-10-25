@@ -123,7 +123,12 @@ state_set() {
 
 # The reboot marker is what spec/sysadmin.md means by "reports the reboot marker
 # and names it": --check prints the path whenever the marker is present.
-reboot_marker_set() { mkdir -p "$STATE_DIR"; : >"$REBOOT_MARKER"; }
+reboot_marker_set() {
+  mkdir -p "$STATE_DIR"
+  chown root:guarden "$STATE_DIR" 2>/dev/null || true
+  chmod 0750 "$STATE_DIR" 2>/dev/null || true
+  : >"$REBOOT_MARKER"
+}
 reboot_marker_clear() { rm -f "$REBOOT_MARKER"; }
 reboot_marker() { [[ -e "$REBOOT_MARKER" ]] && printf '%s' "$REBOOT_MARKER" || printf ''; }
 
