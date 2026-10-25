@@ -2028,7 +2028,7 @@ def ensure_volumes(
         mp = _manifest_in(root)
         if mp.is_file():
             with _render_source(root) as staged:
-                manifest = manifest_mod.read(mp)
+                manifest = manifest_mod.read(staged / mp.name)
             break
     if manifest is None:
         return
