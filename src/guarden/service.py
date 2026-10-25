@@ -1994,6 +1994,48 @@ def refuse_legacy_volumes(name: str, escaped_ref: str | None = None) -> None:
         volumes.refuse_root_data(name, vol.name, escaped_ref)
 
 
+def ensure_volumes(
+    name: str,
+    record,
+    track,
+    escaped_ref: str | None = None,
+) -> None:
+    """Ensure declared volume directories exist for template-created services
+    that never went through ingest's volume provisioning.
+
+    Idempotent: volumes that already exist are left alone. State volumes get
+    btrfs subvolumes + snapper configs; bulk volumes get plain subvolumes.
+    The owner comes from the record's keep-id pair, and retention from the
+    track's defaults.
+    """
+    # Read the manifest from the service home
+    homes = [paths.service_home(name)]
+    if escaped_ref:
+        homes.insert(0, paths.instance_home(name, escaped_ref))
+    manifest = None
+    for home in homes:
+        root = paths.app_root(home, record.app)
+        mp = _manifest_in(root)
+        if mp.is_file():
+            with _render_source(root) as staged:
+                manifest = manifest_mod.read(mp)
+            break
+    if manifest is None:
+        return
+
+    retention = volumes.retention_from(track, overrides_mod.Overrides())
+    owner = (record.owner_uid or 0, record.owner_gid or 0)
+
+    for vol in manifest.state:
+        target = paths.volume(name, volumes.SUBVOLUME, vol, escaped_ref)
+        if not target.exists():
+            volumes.create_state(name, vol, retention, owner, escaped_ref)
+    for vol in manifest.bulk:
+        target = paths.volume(name, volumes.BULK, vol, escaped_ref)
+        if not target.exists():
+            volumes.create_bulk(name, vol, owner, escaped_ref)
+
+
 def ensure_owner_line(name: str, escaped_ref: str | None = None) -> None:
     """Probe what the record does not answer yet, record it, and put guarden's
     `UserNS=` line where the generator reads it, before the units are started

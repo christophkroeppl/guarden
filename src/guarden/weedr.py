@@ -1297,6 +1297,10 @@ def _start(args) -> int:
     # names the volume, the payload directory and the work, and it is the same
     # refusal the mutator makes (ADR-0020).
     service.refuse_legacy_volumes(resolved.name, resolved.escaped_ref)
+    # Auto-create volume directories for template-created services that never
+    # went through ingest's volume provisioning. Idempotent: existing volumes
+    # are left alone.
+    service.ensure_volumes(resolved.name, record, resolved.track, resolved.escaped_ref)
     # **Step 10 again, and here because the ingest that ran it may have been too
     # early** (ticket 284). A consumer's ingest normally runs before its
     # provider's container is up, so `edges.provision` warns and creates no role —
