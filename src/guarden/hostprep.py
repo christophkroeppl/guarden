@@ -2328,6 +2328,28 @@ def _group_exists(name: str) -> bool:
     return h.run("getent", "group", name).ok
 
 
+def _linger_holds(user: str) -> bool:
+    """Whether linger is enabled for `user` and its user manager is running."""
+    linger = h.run("loginctl", "show-user", user, "-p", "Linger", "--value")
+    if not linger.ok or linger.line != "yes":
+        return False
+    state = h.run("loginctl", "show-user", user, "-p", "State", "--value")
+    if not state.ok or state.line != "lingering":
+        return False
+    uid_result = h.run("id", "-u", user)
+    if not uid_result.ok:
+        return False
+    uid = uid_result.line
+    return h.run("systemctl", "is-active", f"user@{uid}.service").line == "active"
+
+
+def _enable_linger_user(user: str) -> None:
+    h.run_or_die("loginctl", "enable-linger", user)
+    uid = h.run("id", "-u", user).line
+    if uid:
+        h.run_or_die("systemctl", "start", f"user@{uid}.service")
+
+
 def _invoking_user() -> str:
     return os.environ.get("SUDO_USER") or os.environ.get("USER") or "root"
 
@@ -2559,6 +2581,14 @@ def install_items(modules: list[str] | None = None) -> list[Item]:
             lambda: _user_primary_group("hose") == "hose",
             lambda: h.run_or_die("usermod", "--gid", "hose", "hose"),
         ),
+        *[
+            Item(
+                f"linger is enabled for {user}, so its user manager runs without a login",
+                lambda user=user: _linger_holds(user),
+                lambda user=user: _enable_linger_user(user),
+            )
+            for user in PROGRAM_USERS
+        ],
         *[
             h.directory_item(
                 f"/{'/'.join(parts)} is {mode:04o} {owner}:{group}",
