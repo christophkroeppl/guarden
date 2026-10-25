@@ -749,6 +749,15 @@ def require_template(template_name: str | None) -> Path:
         directory = templates / template_name
     if directory is not None and directory.is_dir():
         return directory
+
+    # If template_name looks like a path (contains /), try it as a local
+    # directory instead of an installed template name. This lets operators
+    # point --template at any directory they own, without installing it
+    # into /usr/lib/guarden/templates/services/ first.
+    if template_name is not None and "/" in template_name:
+        candidate = Path(template_name)
+        if candidate.is_dir():
+            return candidate
     available = (
         sorted(entry.name for entry in templates.iterdir() if entry.is_dir())
         if templates.is_dir()
