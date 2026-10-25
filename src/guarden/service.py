@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -2284,6 +2285,30 @@ def probe_image(name: str, record, reference: str) -> tuple[int, int]:
         raise _no_such_group(name, reference, gid_text)
     where = f"the gid of the group {gid_text!r} in /etc/group"
     return (uid, _number(name, reference, found[2], where))
+
+
+def warn_root_magic(name: str, record, reference: str) -> None:
+    """Warn if the image's entrypoint uses su-exec/gosu to drop privileges.
+
+    Under rootless podman, setgroups() is rejected (EPERM), so the container
+    exits immediately. The warning tells the operator to use an entrypoint
+    override in their manifest instead.
+
+    Called from `weedr service start` after `ensure_owner_line`. Never fails
+    the start — a warning only.
+    """
+    try:
+        user, entrypoint, command = _image_config(name, record, reference)
+        handoff = _entrypoint_user(name, record, reference, [*entrypoint, *command])
+        if handoff:
+            sys.stderr.write(
+                f"warning: {name}'s image {reference} uses su-exec/gosu to drop "
+                f"to {handoff}; this fails under rootless podman "
+                f"(setgroups: EPERM). Add an `entrypoint:` override to "
+                f".guarden/service.yml to bypass it.\n"
+            )
+    except errors.GuardenError:
+        pass  # Image not yet pulled or unreadable; warning is best-effort
 
 
 def _row_field(name: str, reference: str, row: list[str], index: int, field: str,

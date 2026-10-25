@@ -1314,6 +1314,10 @@ def _start(args) -> int:
     # after it is written. The line is a drop-in in the uid-scoped search
     # path, not a line in the base unit.
     service.ensure_owner_line(resolved.name, resolved.escaped_ref)
+    # Warn about root-magic entrypoints (su-exec/gosu) that fail under
+    # rootless podman. Best-effort: never fails the start.
+    if record.owner_image:
+        service.warn_root_magic(resolved.name, record, record.owner_image)
     service.start_units(resolved.name, resolved.escaped_ref)
     sys.stdout.write(f"started {resolved.name}\n")
     return 0
@@ -1410,6 +1414,10 @@ def _restart(args) -> int:
     for warning in edges.provision_pending(record):
         sys.stderr.write(f"{warning}\n")
     service.ensure_owner_line(resolved.name, resolved.escaped_ref)
+    # Warn about root-magic entrypoints (su-exec/gosu) that fail under
+    # rootless podman. Best-effort: never fails the start.
+    if record.owner_image:
+        service.warn_root_magic(resolved.name, record, record.owner_image)
     service.start_units(resolved.name, resolved.escaped_ref)
     sys.stdout.write(f"restarted {resolved.name}\n")
     return 0
