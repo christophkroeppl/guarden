@@ -52,6 +52,8 @@ TOP_LEVEL_KEYS = {
     "schema",
     "scrub",
     "config_files",
+    "entrypoint",
+    "command",
 }
 
 # Each block's own key set, closed. spec 4 is emphatic that the rule covers the
@@ -429,6 +431,8 @@ class Manifest:
     schema: str | None = None
     scrub: Scrub = field(default_factory=Scrub)
     config_files: list[ConfigFile] = field(default_factory=list)
+    entrypoint: list[str] = field(default_factory=list)
+    command: list[str] = field(default_factory=list)
 
     def volume_kind(self, name: str) -> str:
         return "state" if name in self.state else "bulk"
@@ -522,6 +526,9 @@ def read(path: Path) -> Manifest:
 
     provides = _provides(document.get("provides", []), path)
 
+    entrypoint = _string_list(document.get("entrypoint", []), path)
+    command = _string_list(document.get("command", []), path)
+
     return Manifest(
         source=path,
         project=_project(document.get("project"), path),
@@ -540,6 +547,8 @@ def read(path: Path) -> Manifest:
         schema=_schema(document.get("schema"), path),
         scrub=_scrub(document.get("scrub"), path),
         config_files=_config_files(document.get("config_files", []), path),
+        entrypoint=entrypoint,
+        command=command,
     )
 
 
@@ -745,6 +754,20 @@ def _volumes(value: Any, key: str, path: Path) -> list[str]:
             raise errors.GuardenError(
                 f"the manifest {path}: {key} entry {item!r} must be a name matching "
                 f"{VOLUME_RE.pattern}"
+            )
+        out.append(item)
+    return out
+
+
+def _string_list(value: Any, path: Path) -> list[str]:
+    """A list of plain strings, used for entrypoint/command overrides."""
+    if not isinstance(value, list):
+        raise errors.GuardenError(f"the manifest {path}: value is not a list")
+    out = []
+    for item in value:
+        if not isinstance(item, str):
+            raise errors.GuardenError(
+                f"the manifest {path}: entry {item!r} must be a string"
             )
         out.append(item)
     return out
