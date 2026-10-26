@@ -203,8 +203,8 @@ assert_file_has "$conf" "daddr 127.0.0.0/8 jump DROP;"
 # the host's loopback in userspace before the kernel's packet path, so a rule naming
 # the alias matches no packet in either direction.
 wait_for_accept_rule "$db_pub" "$provider_uid"
-[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
-    | grep -cE "^[[:space:]]+mod owner uid-owner $provider_uid daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;\$" || true)" = 1 ] \
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$svc_conf" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner $provider_uid daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;([[:space:]]+#.*)?$" || true)" = 1 ] \
     || _fail "no accept rule gives the provider the db publication on the loopback address"
 assert_file_lacks "$conf" "10.0.2.2"
 # **No interface match, per spec 7.6.** The spec was rewritten (00bdddd — `git
@@ -248,14 +248,14 @@ assert_exit 0
 assert_file_has "$svc_conf" \
     "mod owner uid-owner $needy_uid daddr 127.0.0.1 proto tcp dport $db_pub jump ACCEPT;"
 [ "$(grep -vE '^[[:space:]]*(#|$)' "$svc_conf" \
-    | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;\$" || true)" = 3 ] \
+    | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;([[:space:]]+#.*)?$" || true)" = 3 ] \
     || _fail "the db publication's accept set is not the provider and its two consumers"
 # Anchored on the whole match: a bare dport would match another publication.
-[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
-    | grep -cE "^[[:space:]]+mod owner uid-owner $needy_uid daddr 127\.0\.0\.1 proto tcp dport $vault_pub jump ACCEPT;\$" || true)" = 0 ] \
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$svc_conf" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner $needy_uid daddr 127\.0\.0\.1 proto tcp dport $vault_pub jump ACCEPT;([[:space:]]+#.*)?$" || true)" = 0 ] \
     || _fail "the vault publication's accept set gained a consumer that declared no such edge"
-[ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
-    | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $vault_pub jump ACCEPT;\$" || true)" = 2 ] \
+[ "$(grep -vE '^[[:space:]]*(#|$)' "$svc_conf" \
+    | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $vault_pub jump ACCEPT;([[:space:]]+#.*)?$" || true)" = 2 ] \
     || _fail "the vault publication's accept set gained a consumer that declared no such edge"
 
 # The rendered consumer. `AddHost=` on the POD (podman refuses the flag on a

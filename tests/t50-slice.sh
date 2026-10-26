@@ -343,10 +343,9 @@ trap flood_stop EXIT
 
 shared_count() {
     iptables-legacy -nvx -L guarden-svc 2>/dev/null \
-        | awk '$3 == "DROP" && $9 == "127.0.0.0/8" {print $1; exit}'
+        | awk '$3 == "DROP" && $9 == "127.0.0.0/8" && $0 !~ /spt:/ {print $1; exit}'
 }
 
-wait_for_port_listen "$publication"
 flood_start
 # **The witness: the shared count must actually MOVE.** An immunity claim
 # measured over a quiet machine proves nothing at all, so the flood is not

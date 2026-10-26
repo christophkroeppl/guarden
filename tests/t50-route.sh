@@ -88,7 +88,7 @@ assert_file_has "$services" \
 # One rule per uid on this publication, so nothing else reaches it.
 # Anchored on the whole match: a bare dport would count another publication's rule.
 [ "$(grep -vE '^[[:space:]]*(#|$)' "$services" \
-    | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $publication jump ACCEPT;\$" || true)" = 2 ] \
+    | grep -cE "^[[:space:]]+mod owner uid-owner [0-9]+ daddr 127\.0\.0\.1 proto tcp dport $publication jump ACCEPT;([[:space:]]+#.*)?$" || true)" = 2 ] \
     || _fail "the route publication's accept set is not the owner and the edge and nobody else"
 
 # `roots sync` turns the installed slices into the edge's file-provider

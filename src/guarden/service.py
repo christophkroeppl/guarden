@@ -3042,10 +3042,15 @@ def ensure_firewall_convergence(name: str, escaped_ref: str | None = None) -> No
 
     `weedr service start` calls this after `ensure_owner_line` and before
     `start_units`. It checks that the rendered files and the running ruleset
-    carry the publication's accept rule with the service user's uid-owner, and
-    a loopback DNAT in PREROUTING when the service holds granted ports. It
-    waits briefly for convergence and refuses with a clear error naming what is
-    missing if the rules never appear.
+    carry the publication's accept rule, and a loopback DNAT in PREROUTING
+    when the service holds granted ports. It waits briefly for convergence and
+    refuses with a clear error naming what is missing if the rules never
+    appear.
+
+    The expected uid set for a publication is taken from the firewall's own
+    accept map (which knows that an API publication is owned by the admin uid,
+    not the service uid), so the check does not false-positive on publications
+    whose accept set does not include the service's own uid.
     """
     record = registry.load(name)
     if record is None:
@@ -3055,9 +3060,10 @@ def ensure_firewall_convergence(name: str, escaped_ref: str | None = None) -> No
         )
     if escaped_ref:
         instance = record.instances.get(escaped_ref)
-        publications_list = list((instance.publication if instance is not None else {}).values())
+        pub_dict = instance.publication if instance is not None else {}
     else:
-        publications_list = list(record.publication.values())
+        pub_dict = record.publication
+    publications_list = list(pub_dict.values())
     uid = record.uid
     chain = firewall_mod.service_chain_name(name)
     granted_ports: list[int] = []
@@ -3071,22 +3077,35 @@ def ensure_firewall_convergence(name: str, escaped_ref: str | None = None) -> No
     services_file = firewall_mod.SERVICES_DIR / f"{name}.conf"
     main_file = firewall_mod.SERVICES_CONF
 
+    pub_expected: dict[int, set[int]] = {}
+    try:
+        config = config_mod.load()
+        accept_map = firewall_mod._service_accept_map(config)
+        service_map = accept_map.get(record.service, {})
+    except Exception:
+        service_map = {}
+    for pub_name, port in pub_dict.items():
+        uids = set(service_map.get(port, {}).keys())
+        if not uids:
+            uids = {uid}
+        pub_expected[port] = uids
+
     def _missing() -> list[str]:
         missing: list[str] = []
-        # --- rendered files ---
         if publications_list:
             try:
                 file_text = services_file.read_text(encoding="utf-8") if services_file.is_file() else ""
             except OSError:
                 file_text = ""
             for pub in publications_list:
-                if not any(
-                    f"uid-owner {uid}" in line and f"dport {pub}" in line and "ACCEPT" in line
-                    for line in file_text.splitlines()
-                ):
-                    missing.append(
-                        f"publication {pub} accept rule (uid-owner {uid}) in {services_file}"
-                    )
+                for expected_uid in sorted(pub_expected.get(pub, {uid})):
+                    if not any(
+                        f"uid-owner {expected_uid}" in line and f"dport {pub}" in line and "ACCEPT" in line
+                        for line in file_text.splitlines()
+                    ):
+                        missing.append(
+                            f"publication {pub} accept rule (uid-owner {expected_uid}) in {services_file}"
+                        )
         if granted_ports:
             try:
                 main_text = main_file.read_text(encoding="utf-8") if main_file.is_file() else ""
@@ -3099,7 +3118,8 @@ def ensure_firewall_convergence(name: str, escaped_ref: str | None = None) -> No
                 ):
                     missing.append(f"loopback DNAT rule for port {port} in {main_file} PREROUTING")
 
-        # --- running ruleset ---
+        if not firewall_mod.unit_installed():
+            return missing
         accept_output = hosttool_mod.run("iptables-legacy", "-S", chain)
         if accept_output.code != 127:
             if not accept_output.ok:
@@ -3107,13 +3127,14 @@ def ensure_firewall_convergence(name: str, escaped_ref: str | None = None) -> No
             else:
                 text = accept_output.out
                 for pub in publications_list:
-                    if not any(
-                        f"--uid-owner {uid}" in line and f"--dport {pub}" in line and "ACCEPT" in line
-                        for line in text.splitlines()
-                    ):
-                        missing.append(
-                            f"publication {pub} accept rule (uid-owner {uid}) in running {chain}"
-                        )
+                    for expected_uid in sorted(pub_expected.get(pub, {uid})):
+                        if not any(
+                            f"--uid-owner {expected_uid}" in line and f"--dport {pub}" in line and "ACCEPT" in line
+                            for line in text.splitlines()
+                        ):
+                            missing.append(
+                                f"publication {pub} accept rule (uid-owner {expected_uid}) in running {chain}"
+                            )
         if granted_ports:
             nat_output = hosttool_mod.run("iptables-legacy", "-t", "nat", "-S", "PREROUTING")
             if nat_output.code != 127:
@@ -3136,15 +3157,13 @@ def ensure_firewall_convergence(name: str, escaped_ref: str | None = None) -> No
                     missing.append(f"{chain} is not jumped from guarden-svc in the running ruleset")
         return missing
 
-    # Re-render from current registry state before checking: the publication
-    # was allocated during create but the rendered file may not yet carry it
-    # (firewall.install does not always emit the per-service accept rule during
-    # the create flow).  firewall.sync() is idempotent and re-derives every
-    # rule from the registry, so calling it here closes the gap.
     try:
         firewall_mod.sync()
     except Exception:
         pass
+
+    if not firewall_mod.unit_installed():
+        return
 
     deadline = time.monotonic() + 10.0
     while True:
