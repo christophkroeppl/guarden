@@ -3136,6 +3136,16 @@ def ensure_firewall_convergence(name: str, escaped_ref: str | None = None) -> No
                     missing.append(f"{chain} is not jumped from guarden-svc in the running ruleset")
         return missing
 
+    # Re-render from current registry state before checking: the publication
+    # was allocated during create but the rendered file may not yet carry it
+    # (firewall.install does not always emit the per-service accept rule during
+    # the create flow).  firewall.sync() is idempotent and re-derives every
+    # rule from the registry, so calling it here closes the gap.
+    try:
+        firewall_mod.sync()
+    except Exception:
+        pass
+
     deadline = time.monotonic() + 10.0
     while True:
         missing = _missing()
