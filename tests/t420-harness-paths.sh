@@ -329,7 +329,7 @@ assert_one_diagnostic "usage:"
 # call: with /bin/false the storage show fails, the pool cannot be created, and
 # no machine can be cut. `--no-cache` parsed, or the message would be the
 # unknown-option one.
-repo_ok=$(scratch_repo ok lxc.sh run_plan.sh failure_messages.sh aptlock.sh)
+repo_ok=$(scratch_repo ok lxc.sh run_plan.sh failure_messages.sh aptlock.sh probecut.sh)
 seed "$repo_ok/tests/t1-ok.sh" '# machine: shared'
 lxc_child "$repo_ok" run t1-ok --no-cache
 assert_exit 1
