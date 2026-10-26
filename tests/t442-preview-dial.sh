@@ -218,7 +218,7 @@ assert_file_has "$svc_conf" \
 assert_file_has "$svc_conf" \
     "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $pub_b jump ACCEPT;"
 
-run iptables-legacy -S guarden-svc
+run iptables-legacy -S guarden-svc-routed-preview
 assert_exit 0
 assert_stdout_has "--uid-owner $edge_uid"
 assert_stdout_has "dport $pub_a"
