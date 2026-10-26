@@ -821,6 +821,13 @@ def _grouping(value: Any, path: Path) -> str:
     """
     if value is None:
         return GROUPING_DEFAULT
+    if value == GROUPING_ONE_SERVICE:
+        raise errors.GuardenError(
+            f"the manifest {path}: grouping {value!r} is not implemented; the "
+            f"only value built is {GROUPING_ONE_SERVICE_PER_APP!r} "
+            f"(one-service-per-app), and accepting {value!r} and then rendering "
+            f"the default would be a key that silently does nothing"
+        )
     if not isinstance(value, str) or value not in GROUPING_VALUES:
         raise errors.GuardenError(
             f"the manifest {path}: grouping {value!r} is not one of "
