@@ -133,8 +133,17 @@ def discover(tree: Path) -> list[App]:
                 errors.REJECTED_INPUT,
             )
         seen[name] = root
-        document = manifest_mod.read(path)
-        grouping = document.grouping
+        # A manifest that does not parse (or otherwise fails validation) is
+        # not a reason to fail discovery: the app's location is known and the
+        # request is still enqueued, so the refusal lands at the ensure step
+        # where `weedr service ingest` reads the manifest (t120-queue). The
+        # grouping is only a hint for enqueue-time service creation; the
+        # invalid tree is refused before any of it is used.
+        try:
+            document = manifest_mod.read(path)
+            grouping = document.grouping
+        except errors.GuardenError:
+            grouping = manifest_mod.GROUPING_DEFAULT
         found.append(App(name=name, root=root, grouping=grouping))
     return found
 
