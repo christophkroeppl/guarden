@@ -85,6 +85,10 @@ PROVIDES_KINDS = manifest_mod.PROVIDES_KINDS
 # never asked (see the module docstring).
 NETWORK_BACKEND = "pasta"
 
+# A YAML plain scalar that needs no quoting: a name or a simple path, with no
+# whitespace, no colon and no leading indicator. Everything else is quoted.
+_PLAIN_SCALAR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/\-]*$")
+
 # The tree's own layout, relative to the tree's root.
 MANIFEST_REL = manifest_mod.MANIFEST_REL
 QUADLET_REL = manifest_mod.MANIFEST_REL.parent / "quadlet"
@@ -602,7 +606,10 @@ def _yaml_scalar(value) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
-    return json.dumps(str(value), ensure_ascii=False)
+    text = str(value)
+    if _PLAIN_SCALAR_RE.match(text):
+        return text
+    return json.dumps(text, ensure_ascii=False)
 
 
 # --- the pull ----------------------------------------------------------------
