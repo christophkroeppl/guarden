@@ -202,6 +202,7 @@ assert_file_has "$conf" "daddr 127.0.0.0/8 jump DROP;"
 # Every destination is 127.0.0.1 and never ingress.alias: pasta maps the gateway onto
 # the host's loopback in userspace before the kernel's packet path, so a rule naming
 # the alias matches no packet in either direction.
+wait_for_accept_rule "$db_pub" "$provider_uid"
 [ "$(grep -vE '^[[:space:]]*(#|$)' "$conf" \
     | grep -cE "^[[:space:]]+mod owner uid-owner $provider_uid daddr 127\.0\.0\.1 proto tcp dport $db_pub jump ACCEPT;\$" || true)" = 1 ] \
     || _fail "no accept rule gives the provider the db publication on the loopback address"

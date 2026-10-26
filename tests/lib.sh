@@ -1494,3 +1494,114 @@ apt_waits() {
     done
     apt-get "$@"
 }
+# ---------------------------------------------------------------------------
+# Convergence waits
+# ---------------------------------------------------------------------------
+
+# wait_for_firewall [timeout_seconds]
+# Poll until `soil firewall --check` reports the rendered set is in force
+# (exit 0). Default timeout 60s.
+#
+# Usage:
+#   wait_for_firewall
+#   wait_for_firewall 120
+wait_for_firewall() {
+    local timeout="${1:-60}" i
+    for i in $(seq 1 "$timeout"); do
+        if soil firewall --check >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    _fail "firewall did not converge after ${timeout}s"
+}
+
+# wait_for_port_listen <port> [timeout_seconds]
+# Poll until something is listening on <port> (ss -tln). Default timeout 60s.
+#
+# Usage:
+#   wait_for_port_listen "$publication"
+#   wait_for_port_listen 20000 30
+wait_for_port_listen() {
+    local port="$1" timeout="${2:-60}" i
+    for i in $(seq 1 "$timeout"); do
+        if ss -tln 2>/dev/null | grep -qE "[:.]${port}\b"; then
+            return 0
+        fi
+        sleep 1
+    done
+    _fail "port $port did not start listening after ${timeout}s"
+}
+
+# wait_for_accept_rule [port] [uid] [timeout_seconds]
+#   or: wait_for_accept_rule <pattern> [timeout_seconds]
+# Poll until the expected accept rule appears in the guarden-svc chain (live
+# iptables) or in a rendered firewall file under /etc/guarden/firewall. When
+# given a numeric port (and optional uid) it looks for that dport (and uid);
+# otherwise the first argument is treated as a grep pattern.
+#
+# Usage:
+#   wait_for_accept_rule "$publication"
+#   wait_for_accept_rule "$publication" "$edge_uid"
+#   wait_for_accept_rule "mod owner uid-owner 1001 daddr 127.0.0.1" 30
+wait_for_accept_rule() {
+    local port="" uid="" pattern="" timeout=60
+    if [ $# -ge 1 ]; then
+        case "$1" in
+            ''|*[!0-9]*) pattern="$1"; shift ;;
+            *) port="$1"; shift ;;
+        esac
+    fi
+    if [ -n "$port" ] && [ $# -ge 1 ]; then
+        case "$1" in
+            ''|*[!0-9]*) ;;
+            *) uid="$1"; shift ;;
+        esac
+    fi
+    if [ $# -ge 1 ]; then
+        timeout="$1"; shift
+    fi
+    local i dump ok f
+    for i in $(seq 1 "$timeout"); do
+        ok=0
+        dump="$(iptables-legacy -S 2>/dev/null; iptables -S 2>/dev/null)"
+        if [ -n "$pattern" ]; then
+            if printf '%s\n' "$dump" | grep -q -- "$pattern"; then
+                ok=1
+            fi
+        else
+            if printf '%s\n' "$dump" | grep -q "dport ${port}"; then
+                if [ -n "$uid" ]; then
+                    if printf '%s\n' "$dump" | grep -q "uid-owner ${uid}"; then
+                        ok=1
+                    fi
+                else
+                    ok=1
+                fi
+            fi
+        fi
+        if [ "$ok" = 0 ]; then
+            for f in /etc/guarden/firewall/services/*.conf /etc/guarden/firewall/50-services.conf; do
+                [ -f "$f" ] || continue
+                if [ -n "$pattern" ]; then
+                    if grep -q -- "$pattern" "$f" 2>/dev/null; then
+                        ok=1; break
+                    fi
+                elif grep -q "dport ${port}" "$f" 2>/dev/null; then
+                    if [ -n "$uid" ]; then
+                        if grep -q "uid-owner ${uid}" "$f" 2>/dev/null; then
+                            ok=1; break
+                        fi
+                    else
+                        ok=1; break
+                    fi
+                fi
+            done
+        fi
+        if [ "$ok" = 1 ]; then
+            return 0
+        fi
+        sleep 1
+    done
+    _fail "accept rule did not appear after ${timeout}s"
+}

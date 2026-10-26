@@ -346,6 +346,7 @@ shared_count() {
         | awk '$3 == "DROP" && $9 == "127.0.0.0/8" {print $1; exit}'
 }
 
+wait_for_port_listen "$publication"
 flood_start
 # **The witness: the shared count must actually MOVE.** An immunity claim
 # measured over a quiet machine proves nothing at all, so the flood is not
