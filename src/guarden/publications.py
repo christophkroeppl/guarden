@@ -124,6 +124,7 @@ def _filter_set(name: str) -> None:
         return
     try:
         firewall.print_diff(firewall.install(config_mod.load()))
+        firewall.load_set()
     except Exception as exc:  # best-effort: allocation already persisted
         sys.stderr.write(f"warning: firewall render failed for {name}: {exc}\n")
 

@@ -3136,7 +3136,7 @@ def ensure_firewall_convergence(name: str, escaped_ref: str | None = None) -> No
                     missing.append(f"{chain} is not jumped from guarden-svc in the running ruleset")
         return missing
 
-    deadline = time.monotonic() + 3.0
+    deadline = time.monotonic() + 10.0
     while True:
         missing = _missing()
         if not missing:
