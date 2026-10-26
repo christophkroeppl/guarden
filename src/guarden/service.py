@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import shutil
 import sys
 import tempfile
@@ -58,6 +59,8 @@ from guarden import (
     volumes,
 )
 from guarden import config as config_mod
+from guarden import firewall as firewall_mod
+from guarden import hosttool as hosttool_mod
 from guarden import manifest as manifest_mod
 from guarden import modules as modules_mod
 from guarden import overrides as overrides_mod
@@ -3032,3 +3035,116 @@ def _drop_admin_units(uid: int, printed: list[str]) -> None:
 
 def _stamp(now: str) -> str:
     return now.replace("-", "").replace(":", "")
+
+
+def ensure_firewall_convergence(name: str, escaped_ref: str | None = None) -> None:
+    """Wait for the service's publication firewall rules to be in place before start.
+
+    `weedr service start` calls this after `ensure_owner_line` and before
+    `start_units`. It checks that the rendered files and the running ruleset
+    carry the publication's accept rule with the service user's uid-owner, and
+    a loopback DNAT in PREROUTING when the service holds granted ports. It
+    waits briefly for convergence and refuses with a clear error naming what is
+    missing if the rules never appear.
+    """
+    record = registry.load(name)
+    if record is None:
+        raise errors.GuardenError(
+            f"{name} has no registry entry, so there is nothing to start",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    if escaped_ref:
+        instance = record.instances.get(escaped_ref)
+        publications_list = list((instance.publication if instance is not None else {}).values())
+    else:
+        publications_list = list(record.publication.values())
+    uid = record.uid
+    chain = firewall_mod.service_chain_name(name)
+    granted_ports: list[int] = []
+    try:
+        for entry in overrides_mod.load(name).open:
+            number = entry.split("/", 1)[0]
+            if number.isdigit():
+                granted_ports.append(int(number))
+    except Exception:
+        granted_ports = []
+    services_file = firewall_mod.SERVICES_DIR / f"{name}.conf"
+    main_file = firewall_mod.SERVICES_CONF
+
+    def _missing() -> list[str]:
+        missing: list[str] = []
+        # --- rendered files ---
+        if publications_list:
+            try:
+                file_text = services_file.read_text(encoding="utf-8") if services_file.is_file() else ""
+            except OSError:
+                file_text = ""
+            for pub in publications_list:
+                if not any(
+                    f"uid-owner {uid}" in line and f"dport {pub}" in line and "ACCEPT" in line
+                    for line in file_text.splitlines()
+                ):
+                    missing.append(
+                        f"publication {pub} accept rule (uid-owner {uid}) in {services_file}"
+                    )
+        if granted_ports:
+            try:
+                main_text = main_file.read_text(encoding="utf-8") if main_file.is_file() else ""
+            except OSError:
+                main_text = ""
+            for port in granted_ports:
+                if not any(
+                    "DNAT" in line and "127.0.0.1" in line and f"dport {port}" in line
+                    for line in main_text.splitlines()
+                ):
+                    missing.append(f"loopback DNAT rule for port {port} in {main_file} PREROUTING")
+
+        # --- running ruleset ---
+        accept_output = hosttool_mod.run("iptables-legacy", "-S", chain)
+        if accept_output.code != 127:
+            if not accept_output.ok:
+                missing.append(f"{chain} chain not present in the running ruleset")
+            else:
+                text = accept_output.out
+                for pub in publications_list:
+                    if not any(
+                        f"--uid-owner {uid}" in line and f"--dport {pub}" in line and "ACCEPT" in line
+                        for line in text.splitlines()
+                    ):
+                        missing.append(
+                            f"publication {pub} accept rule (uid-owner {uid}) in running {chain}"
+                        )
+        if granted_ports:
+            nat_output = hosttool_mod.run("iptables-legacy", "-t", "nat", "-S", "PREROUTING")
+            if nat_output.code != 127:
+                if not nat_output.ok:
+                    missing.append("PREROUTING chain not present in the running ruleset")
+                else:
+                    text = nat_output.out
+                    for port in granted_ports:
+                        if not any(
+                            "DNAT" in line and "127.0.0.1" in line and f"--dport {port}" in line
+                            for line in text.splitlines()
+                        ):
+                            missing.append(
+                                f"loopback DNAT rule for port {port} in running PREROUTING"
+                            )
+        if publications_list:
+            main_chain_output = hosttool_mod.run("iptables-legacy", "-S", "guarden-svc")
+            if main_chain_output.code != 127 and main_chain_output.ok:
+                if f"jump {chain}" not in main_chain_output.out and f"-j {chain}" not in main_chain_output.out:
+                    missing.append(f"{chain} is not jumped from guarden-svc in the running ruleset")
+        return missing
+
+    deadline = time.monotonic() + 3.0
+    while True:
+        missing = _missing()
+        if not missing:
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
+    raise errors.GuardenError(
+        f"{name}: firewall convergence failed: missing " + "; ".join(missing),
+        errors.HOST_NOT_AS_ASSUMED,
+    )

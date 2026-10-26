@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import shutil
 import sys
 import time
@@ -39,6 +40,7 @@ from guarden import (
     paths,
     ports,
     projects,
+    publications,
     reconcile,
     registry,
     render,
@@ -135,6 +137,7 @@ FIREWALL = (
     ("close", "revoke a granted rule"),
     ("show", "one service's dial-set and door-set"),
     ("check", "report squatted publications on the loopback"),
+    ("sync", "re-render all firewall rules from current registry state"),
 )
 
 PIN = (("sync", "recompute the snapper marks from the pin files and the registries"),)
@@ -639,24 +642,7 @@ def _filter_set(name: str) -> None:
     what the first `soil firewall --apply` loads, so a uid absent from an
     existing file meets the deny from the moment it does (spec 7.6).
     """
-    record = registry.load(name)
-    if record is None:
-        return
-    if (
-        not (record.publication or record.edges)
-        and not firewall.unit_installed()
-        and not firewall.SERVICES_CONF.exists()
-    ):
-        # Nothing to be missing from: this host holds no rendered set — no
-        # file, so no `soil firewall --apply` that could later load one without
-        # this uid — and no ruleset loaded, so no deny is refusing this uid's
-        # resolver. The FILE counts as much as the unit because other verbs
-        # write it unconditionally (`weedr port open`, a granted rule): a set
-        # that exists while the unit does not is a set the first apply loads
-        # whole, and a uid absent from it meets the deny the moment it does
-        # (spec 7.6, review finding 4).
-        return
-    firewall.print_diff(firewall.install(config_mod.load()))
+    publications._filter_set(name)
 
 
 def _ingest(args) -> int:
@@ -1050,6 +1036,7 @@ def _start_guided(name: str) -> None:
             errors.HOST_NOT_AS_ASSUMED,
         )
     service.ensure_owner_line(name)
+    service.ensure_firewall_convergence(name)
     service.start_units(name)
     sys.stdout.write(f"started {name}\n")
     unit = units_of[0]
@@ -1318,6 +1305,7 @@ def _start(args) -> int:
     # after it is written. The line is a drop-in in the uid-scoped search
     # path, not a line in the base unit.
     service.ensure_owner_line(resolved.name, resolved.escaped_ref)
+    service.ensure_firewall_convergence(resolved.name, resolved.escaped_ref)
     # Warn about root-magic entrypoints (su-exec/gosu) that fail under
     # rootless podman. Best-effort: never fails the start.
     if record.owner_image:
@@ -2389,6 +2377,12 @@ def _firewall_check(args) -> int:
     return firewallrules.check()
 
 
+def _firewall_sync(args) -> int:
+    firewall.print_diff(firewall.sync())
+    firewall.load_set()
+    return 0
+
+
 def _exposure_record(config, name: str):
     """The service's record and its track, or the refusal that names one."""
     record = registry.load(name)
@@ -2625,6 +2619,7 @@ HANDLERS = {
     "weedr firewall list": _firewall_list,
     "weedr firewall show": _firewall_show,
     "weedr firewall check": _firewall_check,
+    "weedr firewall sync": _firewall_sync,
     "weedr expose set": _expose_set,
     "weedr expose unset": _expose_unset,
     "weedr expose list": _expose_list,
@@ -2718,7 +2713,15 @@ def _guarden_may(call: str) -> None:
     if real_uid == 0 and (sudo_uid is None or sudo_uid == "0"):
         return
     # A narrowed caller: it runs as somebody, and somebody is not root.
-    if call in sudoers.GUARDEN_MAY:
+    # Only the mutator's own account, or a sudo-mediated invocation, may
+    # reach the narrowed verbs: a direct (non-sudo) service user such as
+    # `hose` is refused even when the verb is on the list, so it cannot
+    # pass the verb check and then fail later on a root-only file.
+    try:
+        guarden_uid = pwd.getpwnam(sudoers.GUARDEN_USER).pw_uid
+    except KeyError:
+        guarden_uid = None
+    if (sudo_uid is not None or real_uid == guarden_uid) and call in sudoers.GUARDEN_MAY:
         return
     raise errors.GuardenError(
         f"the {sudoers.GUARDEN_USER} account may not run {call}; the verbs it may run are "

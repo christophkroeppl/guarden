@@ -715,6 +715,19 @@ def install(config) -> str:
     return diff
 
 
+def sync() -> str:
+    """Idempotent re-render of all firewall rules from current registry state.
+
+    Re-renders ``50-services.conf`` and ``services/*.conf`` from the registry
+    and the overrides, writing them only when they changed, and returns the
+    unified diff of the main file.  A host whose on-disk rules have drifted
+    from the registry can be brought back into agreement without re-running
+    each granting operation; allocation is untouched.
+    """
+    config = config_mod.load()
+    return install(config)
+
+
 def print_diff(diff: str) -> None:
     if diff:
         sys.stdout.write(diff if diff.endswith("\n") else diff + "\n")

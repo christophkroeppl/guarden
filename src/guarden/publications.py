@@ -1,5 +1,17 @@
 """Publication and route-host allocation, from the ranges the host declares.
 
+**Decoupling from firewall rule emission.**  Allocation is persisted in the
+registry (`record.publication`, `instance.publication`) by `allocate` and
+`claim_host` and is the authority for which port a service owns.  Firewall
+rule emission is a *consequence* of that allocation plus the registry's uids
+and edges, and is re-derived on demand by `firewall.sync` / `weedr firewall
+sync` (and incrementally by `weedr`'s `_filter_set`).  The two are therefore
+deliberately independent: a firewall render failure cannot undo or fail an
+allocation that has already been persisted, and `weedr firewall sync` can
+repair a drifted ruleset without re-allocating anything.  `_filter_set` is
+wrapped so that a render failure is reported and swallowed rather than
+propagating into the allocating operation.
+
 spec 7.2 and 7.4: one loopback namespace, one publication per container, and
 the allocation persisted in the registry so it is stable across regenerations
 and unique per service and per instance. The range is
@@ -82,6 +94,38 @@ def claim_host(label: str, prefix: str, zone: str, holders: dict[str, str], serv
             errors.HOST_NOT_AS_ASSUMED,
         )
     return full
+
+
+def _filter_set(name: str) -> None:
+    """Re-render the uid-matched firewall filter set for one service.
+
+    Publication allocation is persisted in the registry before this runs and is
+    independent of it: a firewall render failure must not undo or fail an
+    allocation that already succeeded.  The render is therefore best-effort —
+    errors are reported to stderr and swallowed.
+
+    The firewall and registry modules are imported lazily: `firewall` imports
+    this module, so a top-level import here would cycle.
+    """
+    import sys
+
+    from guarden import config as config_mod
+    from guarden import firewall
+    from guarden import registry
+
+    record = registry.load(name)
+    if record is None:
+        return
+    if (
+        not (record.publication or record.edges)
+        and not firewall.unit_installed()
+        and not firewall.SERVICES_CONF.exists()
+    ):
+        return
+    try:
+        firewall.print_diff(firewall.install(config_mod.load()))
+    except Exception as exc:  # best-effort: allocation already persisted
+        sys.stderr.write(f"warning: firewall render failed for {name}: {exc}\n")
 
 
 def host_holders(records) -> dict[str, str]:

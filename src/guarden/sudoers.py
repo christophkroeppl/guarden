@@ -151,6 +151,7 @@ GUARDEN_MAY = frozenset(
         "weedr port list",
         "weedr firewall list",
         "weedr firewall show",
+        "weedr firewall sync",
         "weedr service list",
         "weedr service status",
         "weedr module list",
