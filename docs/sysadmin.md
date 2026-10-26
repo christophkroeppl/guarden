@@ -99,7 +99,8 @@ document names the branch it renders from, and the installer uses that one.
 **A boot's `cloud-init status` is not the host's convergence.** cloud-init's `runcmd` runs once
 per instance, so the document is read on the first boot and never again; the status it writes
 says whether *the document* ran, not whether the host converged. The service carries the rest,
-and the host's own answer is `soil --check`.
+and the host's own answer is `soil --check`. The installer exit 75 at each of the two staged
+reboots, so a cloud-init run that stops at `error` twice is expected, not a failure.
 
 ### the phases, by hand
 
@@ -128,7 +129,7 @@ soil install --apply                 # re-copy the programs, reinstall the units
 weedr service list                   # confirm nothing changed underneath you
 ```
 
-`/usr/lib/guarden` is where the **programs** live, root-owned; it is not a checkout and there
+`/usr/lib/guarden` is where the programs live, root-owned; it is not a checkout and there
 is no `.git` in it. The checkout is `/usr/local/src/guarden`.
 
 `soil install` is the only phase that writes outside the host's own storage. It never stops a
