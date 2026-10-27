@@ -142,12 +142,19 @@ def holder(number: int, protocol: str, excluding: str) -> str | None:
 def collect() -> list[Grant]:
     found: list[Grant] = []
     for name in registry.names():
-        record = registry.load(name)
-        if record is None:
+        try:
+            record = registry.load(name)
+            if record is None:
+                continue
+            for entry in overrides_mod.load(name).open:
+                number, _, protocol = entry.partition("/")
+                found.append(resolve(record, int(number), protocol or "tcp"))
+        except errors.GuardenError:
+            # One service's unresolvable grant must not block every other
+            # service's accept rule from being rendered. Skip it — the
+            # operator will see the missing DNAT rule at start time via
+            # ensure_firewall_convergence.
             continue
-        for entry in overrides_mod.load(name).open:
-            number, _, protocol = entry.partition("/")
-            found.append(resolve(record, int(number), protocol or "tcp"))
     return sorted(found, key=lambda grant: (grant.port, grant.protocol, grant.service))
 
 
