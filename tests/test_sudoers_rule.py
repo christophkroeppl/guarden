@@ -202,17 +202,23 @@ class MutatorPolicyTest(unittest.TestCase):
         still pass. (Found by the first security review, and it is exactly the
         failure this file exists to prevent.)
         """
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 997
         with mock.patch.dict(os.environ, {"SUDO_UID": "997"}, clear=True):
             with mock.patch.object(os, "geteuid", return_value=0):
-                with self.assertRaises(Exception) as caught:
-                    weedr._guarden_may("weedr service purge")
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    with self.assertRaises(Exception) as caught:
+                        weedr._guarden_may("weedr service purge")
         self.assertIn("may not run", str(caught.exception))
 
     def test_a_guarden_caller_may_run_a_verb_inside_the_list(self) -> None:
         """The permitted half."""
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 997
         with mock.patch.dict(os.environ, {"SUDO_UID": "997"}, clear=True):
             with mock.patch.object(os, "geteuid", return_value=0):
-                weedr._guarden_may("weedr service ingest")
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    weedr._guarden_may("weedr service ingest")
 
     def test_a_root_call_is_unrestricted(self) -> None:
         """A call that did not come through sudo is root's own call.
@@ -243,17 +249,23 @@ class MutatorPolicyTest(unittest.TestCase):
         So a caller that is not root is held to the list, whatever it says
         about itself.
         """
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 994
         with mock.patch.dict(os.environ, {"SUDO_UID": "994"}, clear=True):
             with mock.patch.object(os, "geteuid", return_value=0):
-                with self.assertRaises(Exception) as caught:
-                    weedr._guarden_may("weedr service purge")
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    with self.assertRaises(Exception) as caught:
+                        weedr._guarden_may("weedr service purge")
         self.assertIn("may not run", str(caught.exception))
 
     def test_a_narrowed_caller_may_run_a_verb_inside_the_list(self) -> None:
         """The permitted half, for a narrowed caller."""
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 994
         with mock.patch.dict(os.environ, {"SUDO_UID": "994"}, clear=True):
             with mock.patch.object(os, "geteuid", return_value=0):
-                weedr._guarden_may("weedr service ingest")
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    weedr._guarden_may("weedr service ingest")
 
 
 if __name__ == "__main__":
