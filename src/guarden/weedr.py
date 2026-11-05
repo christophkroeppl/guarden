@@ -2718,9 +2718,23 @@ def _guarden_may(call: str) -> None:
     # → narrowed to GUARDEN_MAY only.
     # When an admin runs weedr as root via sudo (sudo_uid is any other
     # non-zero uid), → unrestricted (admin has root access).
-    guarden_uid = pwd.getpwnam(sudoers.GUARDEN_USER).pw_uid
-    if real_uid == 0 and sudo_uid is not None and int(sudo_uid) == guarden_uid:
-        # Guarden account via sudo — narrowed to GUARDEN_MAY.
+    # Resolve the guarden user's uid. On hosts without a guarden user
+    # (dev machines, test runners) this raises KeyError — degrade to
+    # None so the narrowed path simply never matches the guarden uid.
+    try:
+        guarden_uid = pwd.getpwnam(sudoers.GUARDEN_USER).pw_uid
+    except KeyError:
+        guarden_uid = None
+    # Guard against a non-numeric (spoofed) SUDO_UID.
+    sudo_uid_int = None
+    if sudo_uid is not None:
+        try:
+            sudo_uid_int = int(sudo_uid)
+        except (ValueError, TypeError):
+            sudo_uid_int = None
+    # Guarden account running weedr as root via the second sudoers rule
+    # (sudo -u guarden ... weedr) — narrowed to GUARDEN_MAY only.
+    if real_uid == 0 and sudo_uid_int is not None and guarden_uid is not None and sudo_uid_int == guarden_uid:
         if call in sudoers.GUARDEN_MAY:
             return
         raise errors.GuardenError(
@@ -2728,18 +2742,13 @@ def _guarden_may(call: str) -> None:
             + ", ".join(sorted(sudoers.GUARDEN_MAY)),
             errors.REJECTED_INPUT,
         )
+    # Root's own call (direct root, sudo by root, or admin via sudo) — unrestricted.
     if real_uid == 0:
         return
-    # A narrowed caller: it runs as somebody, and somebody is not root.
-    # Only the mutator's own account, or a sudo-mediated invocation, may
-    # reach the narrowed verbs: a direct (non-sudo) service user such as
-    # `hose` is refused even when the verb is on the list, so it cannot
-    # pass the verb check and then fail later on a root-only file.
-    try:
-        guarden_uid = pwd.getpwnam(sudoers.GUARDEN_USER).pw_uid
-    except KeyError:
-        guarden_uid = None
-    if (sudo_uid is not None or real_uid == guarden_uid) and call in sudoers.GUARDEN_MAY:
+    # A narrowed caller: only the mutator's own account (direct, not via
+    # sudo) may reach the narrowed verbs. SUDO_UID is NOT trusted here —
+    # it can be set by any user, and sudo sets real_uid=0 when it mediates.
+    if real_uid == guarden_uid and guarden_uid is not None and call in sudoers.GUARDEN_MAY:
         return
     raise errors.GuardenError(
         f"the {sudoers.GUARDEN_USER} account may not run {call}; the verbs it may run are "
