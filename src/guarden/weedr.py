@@ -2708,9 +2708,11 @@ def _guarden_may(call: str) -> None:
     """
     real_uid = os.geteuid()
     sudo_uid = os.environ.get("SUDO_UID")
-    # Root's own call: the process IS root and sudo did not name another
-    # user. `SUDO_UID` absent means sudo was not in the picture.
-    if real_uid == 0 and (sudo_uid is None or sudo_uid == "0"):
+    # Root's own call: the process IS root. `real_uid` (os.geteuid())
+    # cannot be forged by a non-root user, so any process running as root
+    # is root's own regardless of SUDO_UID. SUDO_UID is only meaningful
+    # when real_uid != 0 (a narrowed caller such as the guarden account).
+    if real_uid == 0:
         return
     # A narrowed caller: it runs as somebody, and somebody is not root.
     # Only the mutator's own account, or a sudo-mediated invocation, may
