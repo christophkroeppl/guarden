@@ -258,6 +258,37 @@ class MutatorPolicyTest(unittest.TestCase):
                         weedr._guarden_may("weedr service purge")
         self.assertIn("may not run", str(caught.exception))
 
+    def test_a_direct_guarden_caller_may_run_inside_the_list(self) -> None:
+        """The permitted half for a direct (non-sudo) guarden caller."""
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 997
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=997):
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    weedr._guarden_may("weedr service ingest")
+
+    def test_an_admin_via_sudo_is_unrestricted(self) -> None:
+        """An admin running weedr as root via sudo (SUDO_UID non-guarden) is
+        unrestricted, even for destructive verbs."""
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 997
+        with mock.patch.dict(os.environ, {"SUDO_UID": "998"}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=0):
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    weedr._guarden_may("weedr service purge")
+
+    def test_a_direct_guarden_caller_is_refused_outside_the_list(self) -> None:
+        """A guarden process running weedr directly (not via sudo) is a
+        narrowed caller and is refused verbs outside GUARDEN_MAY."""
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 997
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=997):
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    with self.assertRaises(Exception) as caught:
+                        weedr._guarden_may("weedr service purge")
+        self.assertIn("may not run", str(caught.exception))
+
     def test_a_narrowed_caller_may_run_a_verb_inside_the_list(self) -> None:
         """The permitted half, for a narrowed caller."""
         fake_pw = mock.MagicMock()
