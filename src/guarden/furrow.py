@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import re
 import sys
 import time
@@ -33,6 +34,7 @@ from guarden import (
     paths,
     projects,
     registry,
+    sudoers,
     tool,
     unitsource,
 )
@@ -679,7 +681,27 @@ def _is_root_call() -> bool:
     if os.geteuid() != 0:
         return False
     sudo_uid = os.environ.get("SUDO_UID")
-    return sudo_uid is None or sudo_uid == "0"
+    # Resolve the guarden user's uid. On hosts without a guarden user
+    # (dev machines, test runners) this raises KeyError — degrade to
+    # None so the narrowed path simply never matches the guarden uid.
+    try:
+        guarden_uid = pwd.getpwnam(sudoers.GUARDEN_USER).pw_uid
+    except KeyError:
+        guarden_uid = None
+    # Guard against a non-numeric (spoofed) SUDO_UID.
+    sudo_uid_int = None
+    if sudo_uid is not None:
+        try:
+            sudo_uid_int = int(sudo_uid)
+        except (ValueError, TypeError):
+            sudo_uid_int = None
+    # Guarden account running furrow as root via the second sudoers rule
+    # (sudo -u guarden ... furrow) — narrowed, NOT root's own, so the
+    # per-project binding is enforced.
+    if sudo_uid_int is not None and guarden_uid is not None and sudo_uid_int == guarden_uid:
+        return False
+    # Root's own call (direct root, sudo by root, or admin via sudo) — unrestricted.
+    return True
 
 
 def _require_granted_project(project: str) -> None:

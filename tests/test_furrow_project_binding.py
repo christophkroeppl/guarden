@@ -44,9 +44,21 @@ class RootCallTest(unittest.TestCase):
 
     def test_a_sudo_that_ran_as_another_user_is_not_root_own(self) -> None:
         """`sudo -u guarden …`: the poke's account's call."""
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 997
         with mock.patch.dict(os.environ, {"SUDO_UID": "997"}, clear=True):
             with mock.patch.object(os, "geteuid", return_value=0):
-                self.assertFalse(furrow._is_root_call())
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    self.assertFalse(furrow._is_root_call())
+
+    def test_a_sudo_that_ran_as_an_admin_is_root_own(self) -> None:
+        """`sudo …` by an admin: root's own, unrestricted."""
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 997
+        with mock.patch.dict(os.environ, {"SUDO_UID": "998"}, clear=True):
+            with mock.patch.object(os, "geteuid", return_value=0):
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    self.assertTrue(furrow._is_root_call())
 
     def test_a_non_root_process_is_not_root_own(self) -> None:
         """A process that is not root is not root's own call."""
@@ -66,23 +78,29 @@ class GrantedProjectTest(unittest.TestCase):
 
     def test_a_narrowed_caller_may_deploy_a_granted_project(self) -> None:
         """The poke's account, deploying the project its key holds."""
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 997
         with mock.patch.dict(os.environ, {"SUDO_UID": "997"}, clear=True):
             with mock.patch.object(os, "geteuid", return_value=0):
-                with mock.patch.object(
-                    furrow.projects, "key_projects", return_value={"myapp": "ssh-ed25519 AAAA"}
-                ):
-                    furrow._require_granted_project("myapp")
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    with mock.patch.object(
+                        furrow.projects, "key_projects", return_value={"myapp": "ssh-ed25519 AAAA"}
+                    ):
+                        furrow._require_granted_project("myapp")
 
     def test_a_narrowed_caller_may_not_deploy_another_project(self) -> None:
         """**The binding, checked.** A key for one project cannot deploy
         another, whatever the argument says."""
+        fake_pw = mock.MagicMock()
+        fake_pw.pw_uid = 997
         with mock.patch.dict(os.environ, {"SUDO_UID": "997"}, clear=True):
             with mock.patch.object(os, "geteuid", return_value=0):
-                with mock.patch.object(
-                    furrow.projects, "key_projects", return_value={"myapp": "ssh-ed25519 AAAA"}
-                ):
-                    with self.assertRaises(errors.GuardenError) as caught:
-                        furrow._require_granted_project("otherproject")
+                with mock.patch("pwd.getpwnam", return_value=fake_pw):
+                    with mock.patch.object(
+                        furrow.projects, "key_projects", return_value={"myapp": "ssh-ed25519 AAAA"}
+                    ):
+                        with self.assertRaises(errors.GuardenError) as caught:
+                            furrow._require_granted_project("otherproject")
         self.assertIn("not one any key is granted", str(caught.exception))
         self.assertIn("myapp", str(caught.exception))
 
