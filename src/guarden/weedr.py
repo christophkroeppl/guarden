@@ -2709,9 +2709,25 @@ def _guarden_may(call: str) -> None:
     real_uid = os.geteuid()
     sudo_uid = os.environ.get("SUDO_UID")
     # Root's own call: the process IS root. `real_uid` (os.geteuid())
-    # cannot be forged by a non-root user, so any process running as root
-    # is root's own regardless of SUDO_UID. SUDO_UID is only meaningful
-    # when real_uid != 0 (a narrowed caller such as the guarden account).
+    # cannot be forged by a non-root user.
+    #
+    # When root runs weedr directly (no sudo), SUDO_UID is None → unrestricted.
+    # When root runs weedr via sudo (sudo_uid == "0"), → unrestricted.
+    # When the guarden account runs weedr as root via the second sudoers
+    # rule (sudo -u guarden ... weedr), SUDO_UID is the guarden user's uid
+    # → narrowed to GUARDEN_MAY only.
+    # When an admin runs weedr as root via sudo (sudo_uid is any other
+    # non-zero uid), → unrestricted (admin has root access).
+    guarden_uid = pwd.getpwnam(sudoers.GUARDEN_USER).pw_uid
+    if real_uid == 0 and sudo_uid is not None and int(sudo_uid) == guarden_uid:
+        # Guarden account via sudo — narrowed to GUARDEN_MAY.
+        if call in sudoers.GUARDEN_MAY:
+            return
+        raise errors.GuardenError(
+            f"the {sudoers.GUARDEN_USER} account may not run {call}; the verbs it may run are "
+            + ", ".join(sorted(sudoers.GUARDEN_MAY)),
+            errors.REJECTED_INPUT,
+        )
     if real_uid == 0:
         return
     # A narrowed caller: it runs as somebody, and somebody is not root.
