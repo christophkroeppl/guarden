@@ -431,7 +431,9 @@ Rules that hold for every test:
 - **One VM at a time, and do not throw the golden away.** The runner uses a single fixed instance
   name, so two agents cannot share it — give the VM to one worker at a time. `just provision`,
   `just deprovision`, `just golden-vm` and `just destroy` rebuild or discard a machine that took
-  an hour to build; do not run them to work around a problem. If a run wedges, report it with the
+  an hour to build; do not run them to work around a problem. A snapshot that is genuinely
+  contaminated (stale repo files, corrupted state) may be rebuilt by hand, but report why first.
+  If a run wedges, report it with the
   guest's process state rather than hand-driving `lxc`.
 - External behaviour only. No test imports a program's internals. The single exception is the
   manifest and registry parsers, tested directly, because their failures are invisible from

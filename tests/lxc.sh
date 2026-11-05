@@ -625,7 +625,7 @@ _reboot() {
 # developer's.
 _push() {
     local instance=$1 src=$2 dst=$3
-    tar -C "$src" --exclude=./.venv -cf - . | vm_exec_t "$instance" \
+    tar -C "$src" --exclude=./.venv --hard-dereference -cf - . | vm_exec_t "$instance" \
         "sudo mkdir -p '$dst' && sudo tar -C '$dst' -xf - && sudo find '$dst' -exec chown root:root {} +"
 }
 
