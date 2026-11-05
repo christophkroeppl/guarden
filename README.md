@@ -70,6 +70,15 @@ installer, so the same service carries the same reboots. **A boot's `cloud-init 
 the host's convergence** — cloud-init's `runcmd` runs once per instance, so the status says
 whether the document ran; `soil --check` says whether the host converged.
 
+Render the document without installing guarden (requires `uv` and a Python 3.11+ interpreter):
+
+```sh
+uv run --python 3.14 python3 -c "from guarden import userdata; print(userdata.render('vps','debian','develop'))" > cloud-init.yaml
+```
+
+`--family debian` is the default for Ubuntu/Debian; use `fedora` or `arch` for other distros.
+`--branch develop` pins the clone to the develop branch (change to `main` for a release).
+
 **Manual fallback (no one-click service).** If you are not using the temporary service, the
 installer stops at each of the two staged reboots with **exit 75** and you re-run it by hand.
 cloud-init reads any non-zero exit as a failed module, so a correct run ends with
