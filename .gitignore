@@ -19,3 +19,7 @@ evidence/
 # packaging artifacts
 dist/
 *.deb
+
+# rendered artifacts
+cloud-init.yaml
+uv.lock
