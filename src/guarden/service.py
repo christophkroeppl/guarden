@@ -441,7 +441,14 @@ def create(
     # the path says so.
     held = source.kind == "service"
     shipped = apps_mod.discover(tree)
-    apps_mod.order(shipped)
+    # `order()` validates cross-app consistency (grouping, pod names, dependency
+    # cycles) and is only meaningful for a whole-repository deploy, where every
+    # app in the tree is being created.  A deploy that names a single app of a
+    # multi-app repository sees the whole tree but creates only that one app, so
+    # the global checks are not applicable and would reject valid single-app
+    # deploys (t307).
+    if not app or len(shipped) <= 1:
+        apps_mod.order(shipped)
     one_service = len(shipped) > 1 and shipped[0].grouping == manifest_mod.GROUPING_ONE_SERVICE
     if one_service:
         documents = [manifest_mod.read(_manifest_in(app.root)) for app in shipped]
@@ -597,6 +604,12 @@ def create(
     record.environment = resolved.track.name
     record.uid = identity.uid
     record.app = app
+    # A poke deploy records the commit SHA at creation (spec 3.4), so
+    # `weedr service list` can report it without waiting for a successful build.
+    # `weedr service commit` (option B) overwrites it after a successful build,
+    # so a failed build never claims a sha that did not run.
+    if source.kind == "poke" and source.sha and not resolved.escaped_ref:
+        record.deployed_sha = source.sha
     # `provides` is written by the mutator at creation from the manifest, and it
     # is the only copy a consumer can read: the provider's own tree is 0700 to
     # the provider and loom runs as guarden.
