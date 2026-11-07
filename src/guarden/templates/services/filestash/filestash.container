@@ -25,7 +25,7 @@
 Description=filestash from a guarden service template
 
 [Container]
-Image=machines/filestash:latest
+Image=docker.io/machines/filestash:latest
 # The filestash HTTP API and UI, on loopback only. Nothing forwards it until
 # a manifest declares a port/route and an admin grants it.
 PublishPort=127.0.0.1:8334:8334
