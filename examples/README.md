@@ -10,9 +10,9 @@ $GUARDEN_TEMPLATES/services  when that is set
 ```
 
 which `soil install` creates from `src/guarden/templates/` — and that tree
-**ships a `services/` subdirectory with two templates in it** (`postgres` and
-`vaultwarden`), so a template set ships with guarden and `weedr service
-create --template postgres` works on a fresh host:
+**ships a `services/` subdirectory with three templates in it** (`postgres`,
+`vaultwarden` and `oxicloud`), so a template set ships with guarden and
+`weedr service create --template postgres` works on a fresh host:
 
 ```sh
 weedr service create postgres-staging --env staging --template postgres
@@ -57,6 +57,7 @@ in creates the volumes. See `docs/sysadmin.md`, **Deploying a service by hand**.
 | `postgres` | `docker.io/library/postgres:17-alpine` | the third-party database deployment from the app-VM runbook: loopback publication, a `Secret=` read as an environment variable, `PGDATA` a subdirectory of the mount |
 | `vaultwarden` | `docker.io/vaultwarden/server:latest` | a self-hosted web service with one data volume and no credential line |
 | `rustfs` | `docker.io/rustfs/rustfs:latest` | an S3-compatible object store, and a **provider of the `secret` kind**: a consumer edges to it with `auth: secret` and reads the minted value as `<AS>_SECRET` |
+| `oxicloud` | `docker.io/diocrafts/oxicloud:latest` | a WebDAV cloud / obsidian sync: loopback publication, a named data volume and vendor credentials (`OXICLOUD_JWT_SECRET`, `OXICLOUD_DB_CONNECTION_STRING`) planted by hand before the first start |
 
 Each is one `.container` file, which is all `create` needs. The file name is the
 unit name in the service's own user manager, and the manager is per service uid,

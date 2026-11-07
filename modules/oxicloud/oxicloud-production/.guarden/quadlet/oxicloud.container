@@ -1,0 +1,63 @@
+# OxiCloud — a lightweight WebDAV cloud / obsidian sync from a vendor image:
+# `weedr service create <name> --template oxicloud` copies this file into the
+# service's own quadlet directory, `0640` under the service uid.
+#
+# **A template declares nothing guarden reads** (spec 4): no `state:` and no
+# `bulk:`, no `ports:`, no `schema:`. So guarden creates no subvolume and no
+# snapper configuration, allocates no publication and writes no firewall rule
+# — the `PublishPort=` below binds loopback only and is reachable from this
+# box until a manifest declares a route and an admin grants it. The store is a
+# named podman volume in the service's own store (podman's, not a guarden
+# subvolume); a template declares no `state:`, so the state volume arrives with
+# the first manifest that comes in through `weedr service add`.
+#
+# A consumer such as bases-mcp dials this service over its loopback
+# publication once a manifest declares a route and an admin grants it. The
+# vendor's own WebDAV endpoint lives at /webdav/ inside the container.
+#
+# The vendor's own credentials (the JWT secret and the database connection
+# string) are what the container reads to start. Plant them before the first
+# start:
+#
+#   weedr secret set <name> OXICLOUD_JWT_SECRET
+#   weedr secret set <name> OXICLOUD_DB_CONNECTION_STRING
+#   systemctl start guarden-creds-boot.service
+#
+# which decrypts into the service's podman store, so the container reads them
+# without the value being written anywhere guarden keeps. A key nothing
+# planted is refused by the gate / podman when the container starts.
+#
+# OXICLOUD_BASE_URL must point at this service's public WebDAV URL (what
+# obsidian clients dial). Set the real domain below before the first start — a
+# template ships no manifest, so no route resolves it for you.
+
+[Unit]
+Description=OxiCloud from a guarden service template
+
+[Container]
+Image=docker.io/diocrafts/oxicloud:latest
+# OxiCloud's own WebDAV/API port inside the container, on loopback only.
+# Nothing forwards it until a manifest declares a route and an admin grants
+# it — the publication it is reached on is the one an edge (or bases-mcp)
+# dials.
+PublishPort=127.0.0.1:8086:8086
+# The store's data directory: the files OxiCloud serves over WebDAV. A named
+# podman volume, so it is podman's and not a guarden subvolume — a template
+# declares no `state:`, so guarden creates no subvolume and no snapper
+# configuration for it. The state volume arrives with the first manifest that
+# comes in through `weedr service add`.
+Volume=oxicloud-data:/app/storage
+# The vendor's own credentials, which the container reads to start. These are
+# the service's credentials and not an edge's — the edge's value is minted by
+# guarden when a consumer declares `auth: secret`. Plant them before the first
+# start (see above).
+Secret=OXICLOUD_JWT_SECRET,type=env
+Secret=OXICLOUD_DB_CONNECTION_STRING,type=env
+# Where OxiCloud keeps its data and the port it serves on, matching the
+# volume mount and the PublishPort above.
+Environment=OXICLOUD_STORAGE_PATH=/app/storage
+Environment=OXICLOUD_SERVER_PORT=8086
+# The public WebDAV URL obsidian clients dial, e.g.
+# https://oxicloud.<your-domain>/. Set this to your deployment's name before
+# the first start.
+Environment=OXICLOUD_BASE_URL=https://oxicloud.example.com/
