@@ -1,0 +1,32 @@
+# Jellyfin media server from a guarden service template:
+# this file IS the `jellyfin` service template —
+# src/guarden/templates/services/jellyfin/jellyfin.container — shipped
+# by the jellyfin module so `weedr module add jellyfin` installs
+# exactly what `weedr service create jellyfin-production --template
+# jellyfin` would copy into the service's own quadlet directory, `0640`
+# under the service uid.
+#
+# The container binds loopback only. The config and media volumes are declared
+# `state` in the manifest, so guarden creates a subvolume (and a snapper
+# configuration) for each of them; the renderer owns `Volume=` and rewrites
+# these names to the host paths.
+#
+# The route is how it is reached; with the edge module enabled the host is
+# jellyfin with the edge's sign-in in front of it (`auth: true`). Software
+# transcoding only to begin with.
+
+[Unit]
+Description=jellyfin from a guarden service template
+
+[Container]
+Image=docker.io/jellyfin/jellyfin:2026102610
+# Jellyfin's own web port inside the container, on loopback only.
+PublishPort=127.0.0.1:8096:8096
+# The vendor's config directory: the library database, users, watched metadata.
+Volume=config:/config
+# The media library. Large, and still precious.
+Volume=media:/media
+# Non-secret values (optional).
+Environment=PUID=1000
+Environment=PGID=1000
+Environment=TZ=UTC

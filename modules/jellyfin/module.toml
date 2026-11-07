@@ -1,0 +1,25 @@
+# The jellyfin module: a media server from the `jellyfin` service template
+# (spec 270).
+#
+# The container is the template's file, copied verbatim:
+# src/guarden/templates/services/jellyfin/jellyfin.container.
+#
+# Production only: one service, on the gated production track. There is no
+# staging service.
+#
+# Two `state` volumes (config, media) are declared in the service's manifest,
+# each with its own snapper configuration and covered by one snapshot. The
+# media host path is derived by guarden, never written on the live host:
+# /var/lib/guarden/services/jellyfin-production/state/media. Retention
+# (`keep_last`, `free_limit`) and the `render` supplementary group are set in
+# the service's root-owned overrides.toml on the host, not here.
+#
+# The route carries `auth: true`: Jellyfin's own login sits underneath the
+# edge's sign-in. Software transcoding only to begin with; the hardware
+# upgrade is a root-owned drop-in that survives every redeploy.
+name = "jellyfin"
+
+[[services]]
+# The media server, reached through the edge on host jellyfin with the edge's
+# sign-in in front of it.
+service = "jellyfin-production"
