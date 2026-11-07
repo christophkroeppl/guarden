@@ -57,6 +57,7 @@ in creates the volumes. See `docs/sysadmin.md`, **Deploying a service by hand**.
 | `postgres` | `docker.io/library/postgres:17-alpine` | the third-party database deployment from the app-VM runbook: loopback publication, a `Secret=` read as an environment variable, `PGDATA` a subdirectory of the mount |
 | `vaultwarden` | `docker.io/vaultwarden/server:latest` | a self-hosted web service with one data volume and no credential line |
 | `rustfs` | `docker.io/rustfs/rustfs:latest` | an S3-compatible object store, and a **provider of the `secret` kind**: a consumer edges to it with `auth: secret` and reads the minted value as `<AS>_SECRET` |
+| `umami` | `ghcr.io/umami-software/umami:postgresql-latest` | web analytics: a loopback publication on 3000, and a `DATABASE_URL` secret the operator plants from a database edge's rendered credentials |
 | `oxicloud` | `docker.io/diocrafts/oxicloud:latest` | a WebDAV cloud / obsidian sync: loopback publication, a named data volume and vendor credentials (`OXICLOUD_JWT_SECRET`, `OXICLOUD_DB_CONNECTION_STRING`) planted by hand before the first start |
 
 Each is one `.container` file, which is all `create` needs. The file name is the
