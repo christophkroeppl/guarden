@@ -1680,7 +1680,7 @@ def _verify_ssh_accept_position() -> bool:
     return True
 
 
-def _module_ingress() -> list[tuple[str, str, str]]:
+def module_ingress() -> list[tuple[str, str, str]]:
     """The enabled modules' declared ingress, each with the publication it lands on.
 
     `(port, protocol, publication)`, in the order the modules declare it. The
@@ -1913,7 +1913,7 @@ def firewall_items(family: str | None = None) -> list[Item]:
             "20-ingress-nat.conf carries one PREROUTING DNAT per forwarded port and "
             "no POSTROUTING masquerade",
             hostpath(*FIREWALL_DIR, "20-ingress-nat.conf"),
-            _ingress_nat(interface, _module_ingress()),
+            _ingress_nat(interface, module_ingress()),
         ),
     ]
 
