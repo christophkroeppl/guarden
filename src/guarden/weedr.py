@@ -1311,6 +1311,21 @@ def _start(args) -> int:
     if record.owner_image:
         service.warn_root_magic(resolved.name, record, record.owner_image)
     service.start_units(resolved.name, resolved.escaped_ref)
+    # Autostart on boot: a wants symlink in the user's default.target.wants
+    # so a lingering manager pulls the service up without a manual start.
+    uid, gid = users.passwd_entries()[resolved.name]
+    home = Path(pwd.getpwnam(resolved.name).pw_dir)
+    wants_dir = home / ".config" / "systemd" / "user" / "default.target.wants"
+    wants_dir.mkdir(parents=True, exist_ok=True)
+    os.chown(wants_dir, uid, gid)
+    for unit_path in service.units_of(resolved.name, resolved.escaped_ref):
+        link = wants_dir / Path(unit_path).name
+        try:
+            link.unlink()
+        except FileNotFoundError:
+            pass
+        link.symlink_to(unit_path)
+        os.chown(link, uid, gid, follow_symlinks=False)
     sys.stdout.write(f"started {resolved.name}\n")
     return 0
 
@@ -2189,6 +2204,50 @@ def _converge_ingress() -> None:
         )
 
 
+def _sync_hosts() -> None:
+    """Rewrite the guarden-managed block in `/etc/hosts`.
+
+    Cloudflared resolves private hostnames through the host's resolver, and
+    the only way to make a name resolve to the pasta alias without a
+    capability is a hosts entry.  The block is fenced so an operator's own
+    entries are never touched.
+    """
+    import re
+    import tomllib
+
+    hosts: set[str] = set()
+    shared = paths.SHARED
+    if shared.is_dir():
+        for route_file in sorted(shared.glob("*/routes.toml")):
+            try:
+                with route_file.open("rb") as handle:
+                    data = tomllib.load(handle)
+            except (OSError, tomllib.TOMLDecodeError):
+                continue
+            for entry in data.get("cloudflared", []):
+                host = entry.get("host")
+                if isinstance(host, str) and host:
+                    hosts.add(host)
+
+    begin = "# BEGIN guarden cloudflared (managed — do not edit)"
+    end = "# END guarden cloudflared"
+    hosts_path = pathlib.Path("/etc/hosts")
+    try:
+        text = hosts_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    text = re.sub(
+        re.escape(begin) + r".*?" + re.escape(end) + r"\n?",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    if hosts:
+        block = begin + "\n" + "".join(f"10.0.2.2 {name}\n" for name in sorted(hosts)) + end + "\n"
+        text = text.rstrip("\n") + "\n" + block
+    hosts_path.write_text(text, encoding="utf-8")
+
+
 def _sync_routes() -> None:
     """`roots sync`, as `guarden`: a route change the edge reads without a restart."""
     result = tool.call(tool.runuser_as(units.GUARDEN_USER, str(paths.BIN / "roots"), "sync"),
@@ -2198,6 +2257,7 @@ def _sync_routes() -> None:
         sys.stderr.write(
             errors.warn(f"roots sync exited {result.returncode}: {detail}") + "\n"
         )
+    _sync_hosts()
 
 
 def _sync_dashboard() -> None:

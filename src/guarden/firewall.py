@@ -468,6 +468,13 @@ def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
             f"    if {interface} proto {grant.protocol} dport {grant.port} "
             f"DNAT to 127.0.0.1:{grant.publication};"
         )
+    # Portless private hostnames: redirect loopback port 80 into Traefik's
+    # HTTP publication so a browser can omit the port.
+    try:
+        if "cloudflared" in getattr(config, "modules", []):
+            lines.append("    if lo proto tcp dport 80 REDIRECT to-ports 20006;")
+    except Exception:
+        pass
     lines += [
         "}",
         "",
