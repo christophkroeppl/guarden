@@ -1,3 +1,6 @@
 # The edge, as a service: one user, one home, one unit directory.
 project: traefik
 units: .guarden/quadlet/
+
+bulk:
+  - acme
