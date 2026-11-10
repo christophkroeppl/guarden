@@ -15,7 +15,7 @@
 #
 #   weedr secret set <name> HERMES_API_KEY          # bearer token for the API server
 #   weedr secret set <name> GEMINI_API_KEY          # default model routing
-#   weedr secret set <name> HERMES_SUBDOMAIN        # public subdomain on NAMECHEAP_DOMAIN__KROEPPL_ONLINE
+#   weedr secret set <name> HERMES_SUBDOMAIN        # public subdomain on your domain
 #   systemctl start guarden-creds-boot.service
 #
 # A template-created service has no `.guarden/.env.schema`, so the gate has

@@ -1,11 +1,3 @@
 # The edge, as a service: one user, one home, one unit directory.
-#
-# ACME certificates (Namecheap DNS challenge for Let's Encrypt) are stored in
-# a bulk volume — not snapshotted, since certificates are regenerated on demand.
-# The Namecheap API credentials are passed as environment variables in the
-# quadlet unit.
 project: traefik
 units: .guarden/quadlet/
-
-bulk:
-  - acme
