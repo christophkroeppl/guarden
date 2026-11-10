@@ -1,0 +1,34 @@
+# OxiCloud — WebDAV cloud / obsidian sync, as a service: one user, one home,
+# one unit directory.
+#
+# The unit is the `oxicloud` service template's file —
+# src/guarden/templates/services/oxicloud/oxicloud.container — shipped here so
+# `weedr module add oxicloud` installs exactly what
+# `weedr service create oxicloud-production --template oxicloud` would copy
+# in (the template pattern: the quadlet is the template, and nothing in it is
+# rendered).
+#
+# The container binds loopback only (the template's
+# PublishPort=127.0.0.1:8086:8086), and nothing forwards it until a route
+# declares it. The route below is how it is reached; obsidian clients dial the
+# host route directly, and bases-mcp can edge to this service's loopback
+# publication once an admin grants the port.
+#
+# The vendor's own credentials (OXICLOUD_JWT_SECRET,
+# OXICLOUD_DB_CONNECTION_STRING) and OXICLOUD_BASE_URL must be planted / set
+# before the first start — see the template for the `weedr secret set`
+# commands; nothing in this template is rendered, so those values are the
+# operator's to supply.
+#
+# Production only: this module declares no staging service.
+project: oxicloud
+units: .guarden/quadlet/
+
+ports:
+  - container: oxicloud
+    port: 8086
+
+routes:
+  - container: oxicloud
+    port: 8086
+    host: oxicloud

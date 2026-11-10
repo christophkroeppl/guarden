@@ -1,0 +1,44 @@
+# PgBouncer connection pooler from a guarden service template:
+# `weedr service create <name> --template pgbouncer` copies this file into the
+# service's own quadlet directory, `0640` under the service uid, exactly where
+# a rendered unit lands.
+#
+# Nothing in this file is rendered. A template carries no manifest, so guarden
+# resolves no volume name, allocates no publication and writes no credential
+# line — what the file says is what runs. Read `examples/README.md` for what
+# that costs and how a manifest brings it back.
+#
+# PgBouncer reads its upstream from `DATABASE_URL` (postgresql://user:pass@
+# host:port/dbname). The operator composes that URL from the postgres edge's
+# rendered credentials (DB_HOST/DB_PORT/DB_USER/DB_DATABASE as environment,
+# the password as the DB_PASSWORD podman secret) and plants it before the
+# first start:
+#
+#   weedr secret set <name> DATABASE_URL
+#   systemctl start guarden-creds-boot.service
+#
+# The unit references it as a type=env secret; the value has to be in the
+# service's own podman store before the container is created.
+#
+# A template declares no `state:`, no `bulk:`, no `ports:` and no `provides:`:
+# pgbouncer keeps nothing of its own, allocates no publication until a manifest
+# asks for one, and provides no consumer-facing kind — other services reach
+# pgbouncer on its publication once the operator grants one (`weedr port open`).
+
+[Unit]
+Description=pgbouncer from a guarden service template
+
+[Container]
+Image=docker.io/edoburu/pgbouncer:latest
+# Loopback only. No port of a template-created service is granted a DNAT, so
+# until a manifest and `weedr port open` say otherwise the only way to this
+# publication is from this box.
+PublishPort=127.0.0.1:6432:6432
+# PgBouncer listens on all interfaces inside the container on its own port;
+# the publication above maps it to the loopback address on this box.
+Environment=LISTEN_ADDR=0.0.0.0
+Environment=LISTEN_PORT=6432
+Environment=POOL_MODE=transaction
+# Planted by the operator before the first start (see above):
+#   weedr secret set <name> DATABASE_URL
+Secret=DATABASE_URL,type=env

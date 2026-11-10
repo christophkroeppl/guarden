@@ -19,15 +19,38 @@ service = "{{ service }}"
 project = "{{ project }}"
 track = "{{ track }}"
 basicauth = {{ "true" if basicauth else "false" }}
+
+[container]
+name = "{{ rows[0].container if rows else '' }}"
+port = {{ rows[0].port if rows else 0 }}
+publication = {{ rows[0].publication if rows else 0 }}
+
 {% for route in rows %}
-[[routes]]
-container = "{{ route.container }}"
-port = {{ route.port }}
-publication = {{ route.publication }}
+{% if route.destination == "edge" %}
+[[traefik]]
 host = "{{ route.host }}"
 label = "{{ route.label }}"
 auth = {{ "true" if route.auth else "false" }}
 target = "{{ route.target }}"
-destination = "{{ route.destination }}"
+container = "{{ route.container }}"
+port = {{ route.port }}
+publication = {{ route.publication }}
+{% if route.ref %}
 ref = "{{ route.ref }}"
+{% endif %}
+
+{% elif route.destination == "tunnel" %}
+[[cloudflared]]
+host = "{{ route.host }}"
+label = "{{ route.label }}"
+auth = {{ "true" if route.auth else "false" }}
+target = "{{ route.target }}"
+container = "{{ route.container }}"
+port = {{ route.port }}
+publication = {{ route.publication }}
+{% if route.ref %}
+ref = "{{ route.ref }}"
+{% endif %}
+
+{% endif %}
 {% endfor %}

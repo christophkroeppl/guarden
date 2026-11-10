@@ -485,9 +485,25 @@ def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
         "# number. An accept on the public port matches no packet in either",
         "# direction and the grant delivers nothing from off the box.",
     ]
-    # Deduplicated by `(protocol, publication)`: the render is a set, so two public
-    # ports forwarded onto one container are one accept at INPUT, not two.
-    for protocol, publication in sorted({(g.protocol, g.publication) for g in grants}):
+    # Collect all (protocol, publication) pairs: granted ports plus the edge
+    # module's ingress publications.  The edge declares ingress ports
+    # (80, 443) that DNAT to its publications (20006, 20007); those are
+    # module-level, not service port grants, so they must be added here or
+    # external traffic is DNAT'd and then dropped by this chain.
+    publications: set[tuple[str, str | int]] = {
+        (g.protocol, g.publication) for g in grants
+    }
+    try:
+        from guarden.hostprep import module_ingress
+        for _, protocol, publication in module_ingress():
+            try:
+                publication = int(publication)
+            except (TypeError, ValueError):
+                pass
+            publications.add((protocol, publication))
+    except (ImportError, AttributeError):
+        pass
+    for protocol, publication in sorted(publications, key=lambda p: (p[0], str(p[1]))):
         lines.append(f"    proto {protocol} dport {publication} jump ACCEPT;")
     lines += [
         "}",

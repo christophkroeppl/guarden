@@ -1,0 +1,53 @@
+# A self-hosted browser database client from a vendor you do not build for:
+# `weedr service create <name> --template dbx` copies this file into the
+# service's own quadlet directory, `0640` under the service uid.
+#
+# DBX stores its connection profiles, query history and encrypted
+# credentials under /app/data, so that directory is persisted in a named
+# podman volume. The volume is podman's, not a guarden subvolume: a
+# template declares no `state:` and no `bulk:`, so guarden creates no
+# subvolume and no snapper configuration for it. A state (snapshotted)
+# volume arrives with the first manifest that comes in through
+# `weedr service add`.
+#
+# To connect DBX to databases, write the service manifest afterwards and
+# reconcile it with `weedr service add <name> --from <name>`:
+#
+#     project: dbx
+#     units: .guarden/quadlet/
+#     bulk:
+#       - dbx-data
+#     needs:
+#       - service: postgres-production
+#         as: db
+#         port: 5432
+#         auth: database
+#
+# Each `needs:` entry mints the consumer its own role and password in the
+# target postgres and renders `<AS>_HOST`/`<AS>_PORT`/`<AS>_USER`/`<AS>_PASSWORD`
+#/`<AS>_DATABASE` into the service environment, plus an `AddHost=` entry so the
+# container can dial the provider on its publication.
+
+[Unit]
+Description=dbx from a guarden service template
+
+[Container]
+Image=docker.io/t8y2/dbx:latest
+# Loopback only. Nothing forwards it until a manifest declares a route
+# and an admin grants it (or an exposure is recorded).
+PublishPort=127.0.0.1:4224:4224
+# The vendor's data directory: the sqlite database, the secret key, the
+# plugins and drivers.
+Volume=dbx-data:/app/data
+# DBX reads its data directory from this variable.
+Environment=DBX_DATA_DIR=/app/data
+# The access password for the DBX web login. Plant it before the first
+# start:
+#
+#   weedr secret set <name> DBX_PASSWORD
+#   systemctl start guarden-creds-boot.service
+#
+# A template-created service has no `.guarden/.env.schema`, so the gate
+# has nothing to check and will not tell you the key is missing: an
+# unplanted key is refused by podman when the container starts.
+Secret=DBX_PASSWORD,type=env

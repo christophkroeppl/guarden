@@ -2004,6 +2004,14 @@ def _install_module(module: modules.Module, config) -> int:
     if provider:
         sys.stdout.write(f"auth provider {provider} in {edgeconf.MARKER}\n")
     firewall.print_diff(firewall.install(config))
+    # Auto-grant firewall rules requested by module services: a module is
+    # installed by the admin, so its requested rules are granted in the same
+    # act (spec 3.6, ADR-0008).
+    for entry in module.services:
+        record = registry.load(entry.name)
+        if record is not None:
+            for request in record.firewall_requested:
+                firewallrules.open_rule(entry.name, request.name)
     firewall.load_set()
     _edge_directory(module)
     _dashboard_directory(module)

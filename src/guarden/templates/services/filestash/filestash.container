@@ -1,0 +1,36 @@
+# A self-hosted file manager from a vendor you do not build for:
+# `weedr service create <name> --template filestash` copies this file into the
+# service's own quadlet directory, `0640` under the service uid.
+#
+# Filestash is a CONSUMER: it dials the S3-compatible stores the operator
+# configures inside it (its backends are set up through filestash's own
+# state, not through this template). It ships no `provides:` and no manifest
+# of its own, so guarden creates no publication for it — the operator reaches
+# it on its loopback publication once a manifest grants one, or dials it from
+# inside the pod where filestash shares the service's network namespace.
+#
+# **This is not a PROVIDER of the `secret` kind.** Filestash verifies nothing;
+# it is the side that holds credentials to the stores it mounts. Those arrive
+# through filestash's own configuration and state, never as plaintext here.
+# A template is a file in this repository, so no `Environment=<KEY>=<value>`
+# for a store's access key or password may live in this file.
+#
+# To point filestash at the rustfs instances, configure filestash backends to
+# the rustfs S3 endpoints the host publishes (loopback publications, one per
+# rustfs service, e.g. rustfs-production on its allocated publication and
+# rustfs-staging on its own), and plant filestash's own credentials through
+# filestash's state directory, not through this template.
+
+[Unit]
+Description=filestash from a guarden service template
+
+[Container]
+Image=docker.io/machines/filestash:latest
+# The filestash HTTP API and UI, on loopback only. Nothing forwards it until
+# a manifest declares a port/route and an admin grants it.
+PublishPort=127.0.0.1:8334:8334
+# The store's data directory: filestash's own state (config db, connections,
+# cache). A named podman volume, so it is podman's and not a guarden
+# subvolume — a template declares no `state:` or `bulk:`, so guarden creates
+# no subvolume and no snapper configuration for it.
+Volume=filestash-data:/app/data/state

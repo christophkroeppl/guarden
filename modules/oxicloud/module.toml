@@ -1,0 +1,17 @@
+# The oxicloud module: a lightweight WebDAV cloud / obsidian sync from the
+# `oxicloud` service template (spec 3.6).
+#
+# The container is the template's file, copied verbatim:
+# src/guarden/templates/services/oxicloud/oxicloud.container.
+#
+# `weedr module add oxicloud` is a whole operation and nothing else depends on
+# it. A consumer such as bases-mcp edges to this service over its loopback
+# publication once a route declares it and an admin grants the port — obsidian
+# clients dial the host route directly.
+#
+# Production only: one service, on the gated production track. There is no
+# staging service.
+name = "oxicloud"
+
+[[services]]
+service = "oxicloud-production"

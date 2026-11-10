@@ -154,6 +154,7 @@ GUARDEN_MAY = frozenset(
         "weedr firewall sync",
         "weedr service list",
         "weedr service status",
+        "weedr service commit",
         "weedr module list",
     }
 )

@@ -1,0 +1,57 @@
+# Bitcoin Knots — a pruned full node from a guarden service template:
+# `weedr service create <name> --template bitcoin-knots` copies this file into
+# the service's own quadlet directory, `0640` under the service uid.
+#
+# **A template declares nothing guarden reads** (spec 4): no `state:` and no
+# `bulk:`, no `ports:`, no `schema:`. So guarden creates no subvolume and no
+# snapper configuration, allocates no publication and writes no firewall rule
+# — the `PublishPort=` below binds loopback only and is reachable from this
+# box until a manifest requests the port and an admin grants it publicly
+# (`weedr port open <name> 8333/tcp`).
+#
+# The manifest the operator writes after creating the service:
+#
+#     project: bitcoin
+#     units: .guarden/quadlet/
+#     state:
+#       - data                 # wallet, bitcoin.conf, settings. precious, small.
+#     bulk:
+#       - chain                # blocks/, chainstate/, indexes/. never snapshotted.
+#     ports:
+#       - container: bitcoin
+#         port: 8333/tcp       # peers connect in; public grant, no edge, no routes.
+#
+# and then `weedr service add bitcoin-production --from bitcoin-production`
+# creates the volumes and allocates the publication; `weedr port open
+# bitcoin-production 8333/tcp` makes the peer port public. RPC is
+# container-local (cookie auth on 127.0.0.1 only) and 8332 is never published.
+#
+# The image is pinned to a full version tag: `:latest` changes the node's
+# behaviour between restarts. `29.4-alpine` is the latest Alpine-based tag.
+#
+# `-prune=20000` rides in the unit's command and caps the chain at ~20 GB at
+# the application layer; `Restart=always` brings the node back after a reboot.
+# The chain volume is mounted at /chain and the state volume at /data; blocks/
+# and chainstate/ live on the bulk volume through symlinks created at start.
+
+[Unit]
+Description=bitcoin knots (pruned full node) from a guarden service template
+
+[Container]
+Image=docker.io/bitcoinknots/bitcoin:29.4-alpine
+# The peer port inside the container, on loopback only. Nothing forwards it
+# until a manifest declares it and `weedr port open` grants it publicly.
+PublishPort=127.0.0.1:8333:8333
+# The wallet volume: bitcoin.conf, the wallet, settings — precious, small,
+# snapshotted with the state volume.
+Volume=data:/data
+# The chain volume: blocks/, chainstate/, indexes/. Never snapshotted; the
+# chain itself caps its size (-prune=20000), so no byte-size cap or btrfs
+# quota is needed and the whole problem is solved by not snapshotting it.
+Volume=chain:/chain
+# Put blocks/ and chainstate/ on the bulk volume, keep the wallet and the
+# configuration on the state volume, then start the node. RPC stays
+# container-local (cookie auth, 127.0.0.1 only).
+Exec=/bin/sh -c 'ln -sfnT /chain/blocks /data/blocks 2>/dev/null; ln -sfnT /chain/chainstate /data/chainstate 2>/dev/null; exec bitcoind -prune=20000 -rpcbind=127.0.0.1 -rpcallowip=127.0.0.1 -listen=1 -daemon=0'
+[Service]
+Restart=always

@@ -16,3 +16,9 @@
 project: cloudflared
 units: .guarden/quadlet/
 schema: .env.schema
+
+# Firewall: allow the tunnel to reach the edge's API (dashboard) on loopback.
+firewall:
+  - name: traefik-dashboard
+    chain: guarden-svc
+    rule: "-o lo -p tcp -d 127.0.0.1 --dport 20005 -j ACCEPT"
