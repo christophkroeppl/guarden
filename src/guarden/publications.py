@@ -85,7 +85,10 @@ def claim_host(label: str, prefix: str, zone: str, holders: dict[str, str], serv
     one place because a name is only ever right if the record and the tunnel
     agree about it).
     """
-    full = f"{prefix}{label}{zone}"
+    if "." in label:
+        full = label
+    else:
+        full = f"{prefix}{label}{zone}"
     holder = holders.get(full)
     if holder is not None and holder != service:
         raise errors.GuardenError(

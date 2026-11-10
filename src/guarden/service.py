@@ -1124,7 +1124,7 @@ def _destinations(
     return {host: recorded.get(host, destination) for host, destination in resolved.items()}
 
 
-def _zone(track, destination: str, tunnel_domain: str, service: str) -> str:
+def _zone(track, destination: str, tunnel_domain: str, service: str, label: str = "") -> str:
     """The zone a route's allocated name is published in: `""` or `.`+domain.
 
     **A tunnel route is a name in the TUNNEL's zone, and nothing else puts it
@@ -1148,6 +1148,8 @@ def _zone(track, destination: str, tunnel_domain: str, service: str) -> str:
     host says why it cannot" half of ticket 324's acceptance.
     """
     if destination != exposure.TUNNEL:
+        return ""
+    if "." in label:
         return ""
     if not tunnel_domain:
         raise errors.GuardenError(
@@ -1184,7 +1186,7 @@ def check_hosts(
         hosts[route.host] = publications.claim_host(
             route.host,
             track.host_prefix,
-            _zone(track, destinations[route.host], config.tunnel_domain, name),
+            _zone(track, destinations[route.host], config.tunnel_domain, name, route.host),
             holders,
             name,
         )
@@ -1218,7 +1220,7 @@ def claim_route_hosts(
         label: publications.claim_host(
             label,
             track.host_prefix,
-            _zone(track, destination, config.tunnel_domain, record.service),
+            _zone(track, destination, config.tunnel_domain, record.service, label),
             holders,
             record.service,
         )

@@ -1120,8 +1120,8 @@ def _routes(value: Any, path: Path) -> list[Route]:
         if not isinstance(host, str) or not HOST_RE.match(host):
             raise errors.GuardenError(
                 f"the manifest {path}: the routes entry for {container!r} has `host: "
-                f"{host!r}`, and it is a label rather than a domain — the full name is the "
-                f"track's host_prefix plus this, and it must match {HOST_RE.pattern}"
+                f"{host!r}`, and it must match {HOST_RE.pattern} (a label like `web` "
+                f"or a full hostname like `lol.lol`)"
             )
         out.append(
             Route(
