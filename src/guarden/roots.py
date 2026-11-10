@@ -71,21 +71,70 @@ def slices() -> dict[str, list[dict]]:
     `shared/<service>/instances/<escaped-ref>/routes.toml`, so two instances of
     one service both reach the edge and neither — nor the slot's own file — is
     overwritten by the other.
+
+    Supports two formats:
+    - Legacy: ``[[routes]]`` with a ``destination`` field
+    - Idiomatic: ``[container]`` header + ``[[edge]]``/``[[tunnel]]`` sections
     """
     out: dict[str, list[dict]] = {}
     if not paths.SHARED.is_dir():
         return out
     for directory in sorted(path for path in paths.SHARED.iterdir() if path.is_dir()):
-        routes = list(conf.read_toml(directory / "routes.toml").get("routes") or [])
+        raw = conf.read_toml(directory / "routes.toml")
+        routes = _normalize_routes(raw)
         instances = directory / "instances"
         if instances.is_dir():
             for own in sorted(path for path in instances.iterdir() if path.is_dir()):
-                routes.extend(
-                    conf.read_toml(own / "routes.toml").get("routes") or []
-                )
+                raw_inst = conf.read_toml(own / "routes.toml")
+                routes.extend(_normalize_routes(raw_inst))
         if routes:
             out[directory.name] = [dict(route) for route in routes]
     return out
+
+
+def _normalize_routes(raw: dict) -> list[dict]:
+    """Normalize a routes.toml into a flat list of route dicts.
+
+    Only the idiomatic v2 format is supported:
+    ``[container]`` header + ``[[traefik]]``/``[[cloudflared]]`` sections.
+    """
+    routes = []
+
+    container = raw.get("container", {})
+    if not isinstance(container, dict):
+        container = {}
+
+    section_map = {
+        "traefik": "edge",
+        "cloudflared": "tunnel",
+    }
+
+    for section_name, dest in section_map.items():
+        for route in (raw.get(section_name) or []):
+            if not isinstance(route, dict):
+                continue
+            merged = dict(route)
+            # Merge container config: route-level overrides shared header
+            if isinstance(merged.get("container"), dict):
+                rc = merged.pop("container")
+                if rc.get("name") and "container" not in merged:
+                    merged["container"] = rc.get("name", "")
+                if "port" not in merged and rc.get("port"):
+                    merged["port"] = rc.get("port")
+                if "publication" not in merged and rc.get("publication"):
+                    merged["publication"] = rc.get("publication")
+            # Fall back to shared [container] header
+            if not merged.get("container") and container.get("name"):
+                merged["container"] = container.get("name", "")
+            if "port" not in merged and container.get("port"):
+                merged["port"] = container.get("port")
+            if "publication" not in merged and container.get("publication"):
+                merged["publication"] = container.get("publication")
+            # Tag with destination
+            merged["destination"] = dest
+            routes.append(merged)
+
+    return routes
 
 
 def basicauth_flags() -> tuple[dict[str, bool], list[str]]:
@@ -215,6 +264,27 @@ def _rule(route: dict) -> str:
     return f"Host(`{host}`) && PathPrefix(`/{ref}`)"
 
 
+def _route_destinations(route: dict) -> list[str]:
+    """The destinations a route is published to.
+
+    A route may carry a single ``destination`` (the legacy shape, one string)
+    or a ``destinations`` list (the new shape, several). Both are accepted so a
+    slice written by an older render and one written by hand agree, and a
+    missing answer is an empty list rather than a guess.
+    """
+    if "destinations" in route:
+        value = route.get("destinations")
+        if isinstance(value, (list, tuple)):
+            return [str(item) for item in value if item is not None]
+        if isinstance(value, str):
+            return [value]
+        return []
+    value = route.get("destination")
+    if value is None:
+        return []
+    return [value]
+
+
 def _recorded(service: str, routes: list[dict]) -> list[dict]:
     """The slice's routes with the **record's** destination where it has one.
 
@@ -242,7 +312,7 @@ def _recorded(service: str, routes: list[dict]) -> list[dict]:
     out = []
     for route in routes:
         destination = record.route_destinations.get(route.get("label", ""))
-        if destination:
+        if destination and "destination" not in route and "destinations" not in route:
             route = {**route, "destination": destination}
         out.append(route)
     return out
@@ -276,7 +346,7 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
             "basicauth": bool(basicauthed),
         }
         for route in routes
-        if route.get("destination") == "edge"
+        if "edge" in _route_destinations(route)
     ]
     if not rows:
         return ""
@@ -356,14 +426,14 @@ def render_tunnel(routes: list[dict], config) -> str:
             "service": f"http://{route.get('target', '')}",
         }
         for route in routes
-        if route.get("destination") == "tunnel" and not route.get("ref")
+        if "tunnel" in _route_destinations(route) and not route.get("ref")
     ]
 
     previews = []
     if config.tunnel_domain:
         for _service_name, entries in slices().items():
             for route in _recorded(_service_name, entries):
-                if route.get("destination") == "tunnel" and route.get("ref"):
+                if "tunnel" in _route_destinations(route) and route.get("ref"):
                     # This is a tunnel route for a preview instance
                     previews.append({
                         "hostname": f"preview.{config.tunnel_domain}",
@@ -390,6 +460,56 @@ def write_tunnel(body: str) -> None:
         return
     paths.TUNNEL.mkdir(parents=True, exist_ok=True)
     conf.write_file(paths.TUNNEL_CONFIG, body, 0o640)
+
+
+def render_hosts(routes: list[dict], config) -> str:
+    """`/etc/hosts` entries for the cloudflared service.
+
+    cloudflared runs in a container and resolves the tunnel's private hostnames
+    through the system resolver; on this host those names are not in DNS, so
+    they are given to it as hosts entries, one per tunnel route, mapping each
+    hostname to the ingress alias — the same answer `AddHost=` gives a service's
+    own containers. An empty result means there is nothing for the tunnel to
+    carry, and the file is swept.
+    """
+    if not config.tunnel_domain:
+        return ""
+    hostnames: list[str] = []
+    seen: set[str] = set()
+    for route in routes:
+        if "tunnel" not in _route_destinations(route):
+            continue
+        if route.get("ref"):
+            continue
+        hostname = route.get("host", "")
+        if isinstance(hostname, str) and hostname and hostname not in seen:
+            seen.add(hostname)
+            hostnames.append(hostname)
+    for _service_name, entries in slices().items():
+        for route in _recorded(_service_name, entries):
+            if "tunnel" not in _route_destinations(route) or not route.get("ref"):
+                continue
+            hostname = f"preview.{config.tunnel_domain}"
+            if hostname not in seen:
+                seen.add(hostname)
+                hostnames.append(hostname)
+    if not hostnames:
+        return ""
+    lines = ["# Generated by roots. Cloudflared private hostname resolution."]
+    for hostname in hostnames:
+        lines.append(f"{config.alias} {hostname}")
+    return "\n".join(lines) + "\n"
+
+
+def write_hosts(body: str) -> None:
+    """The cloudflared service's hosts file, written — and swept."""
+    path = paths.TUNNEL / "hosts"
+    if not body:
+        if path.is_file():
+            path.unlink()
+        return
+    paths.TUNNEL.mkdir(parents=True, exist_ok=True)
+    conf.write_file(path, body, 0o640)
 
 
 def sweep(written: set[str]) -> list[str]:
@@ -467,7 +587,7 @@ def provider_publication(provider: str) -> int:
     configured.
     """
     slice_path = paths.SHARED / provider / "routes.toml"
-    for route in conf.read_toml(slice_path).get("routes") or []:
+    for route in _normalize_routes(conf.read_toml(slice_path)):
         publication = route.get("publication")
         if isinstance(publication, int) and not isinstance(publication, bool) and publication:
             return publication
@@ -531,12 +651,17 @@ def sync() -> int:
         [route for entries in routes.values() for route in entries], config
     )
 
+    hosts_body = render_hosts(
+        [route for entries in routes.values() for route in entries], config
+    )
+
     for service, body in plan:
         write(service, body)
     if auth_body is not None:
         conf.write_file(paths.EDGE_DYNAMIC / FORWARD_AUTH, auth_body, 0o640)
         written.add(FORWARD_AUTH)
     write_tunnel(tunnel_body)
+    write_hosts(hosts_body)
     printed = [f"{service} {len(routes[service])} routes" for service, _ in plan]
     for name in sweep(written):
         printed.append(f"removed {name}")
