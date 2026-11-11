@@ -2231,7 +2231,7 @@ def _sync_hosts() -> None:
 
     begin = "# BEGIN guarden cloudflared (managed — do not edit)"
     end = "# END guarden cloudflared"
-    hosts_path = pathlib.Path("/etc/hosts")
+    hosts_path = Path("/etc/hosts")
     try:
         text = hosts_path.read_text(encoding="utf-8")
     except FileNotFoundError:

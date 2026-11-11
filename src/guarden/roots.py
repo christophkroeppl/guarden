@@ -698,13 +698,12 @@ def sync() -> int:
     # tunnel (.guarden) routes only; the rest serve edge (public) routes.
     tunnel_ep = "cloudflared"
     tunnel_entrypoints = [tunnel_ep] if tunnel_ep in entrypoints else []
-    # Cloudflared dials the edge's web entrypoint (port 80) for WARP private
-    # hostname routing; serve tunnel (.guarden) hostnames there too, but keep
-    # public routers off it so port 80 is effectively cloudflared-only.
-    # Also serve on websecure (port 443) because the CF WARP origin defaults
-    # to https://10.0.2.2 (port 443) and cannot be changed.
-    if "web" in entrypoints and "web" not in tunnel_entrypoints:
-        tunnel_entrypoints = ["web", "websecure"] + tunnel_entrypoints
+    # Cloudflared's WARP origin defaults to https://10.0.2.2 (port 443 =
+    # websecure entrypoint) and cannot be changed, so serve tunnel (.guarden)
+    # hostnames on websecure too. Port 80 (web) is a redirect entrypoint, not
+    # a serving one, so it is never in `entrypoints`.
+    if "websecure" in entrypoints and "websecure" not in tunnel_entrypoints:
+        tunnel_entrypoints = ["websecure"] + tunnel_entrypoints
     edge_entrypoints = [e for e in entrypoints if e != tunnel_ep and e != "web"]
     if not edge_entrypoints:
         edge_entrypoints = list(entrypoints)
@@ -783,6 +782,7 @@ def sync() -> int:
             "      rule: \"Host(`traefik.guarden`)\"\n"
             "      entryPoints:\n"
             "        - web\n"
+            "        - websecure\n"
             "        - cloudflared\n"
             "      service: api@internal\n"
         )
