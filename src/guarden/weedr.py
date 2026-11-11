@@ -2242,6 +2242,21 @@ def _sync_hosts() -> None:
         text,
         flags=re.DOTALL,
     )
+    # Also include .guarden hostnames from the edge's dynamic files, so the
+    # Traefik dashboard (traefik.guarden) and any other .guarden route that
+    # is not a cloudflared tunnel entry stays resolvable on the box.
+    edge_dynamic = Path("/var/lib/guarden/edge/dynamic")
+    if edge_dynamic.is_dir():
+        for edge_file in sorted(edge_dynamic.glob("*.yml")):
+            try:
+                etext = edge_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for match in re.finditer(r"Host\(`([^`]+)`\)", etext):
+                host = match.group(1)
+                if isinstance(host, str) and host.endswith(".guarden"):
+                    hosts.add(host)
+
     if hosts:
         block = begin + "\n" + "".join(f"10.0.2.2 {name}\n" for name in sorted(hosts)) + end + "\n"
         text = text.rstrip("\n") + "\n" + block
