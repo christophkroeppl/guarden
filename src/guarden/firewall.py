@@ -591,6 +591,12 @@ def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
         # A granted rule renders ABOVE the deny and never after it: position is
         # guarden's, and a grant that landed below a default deny would be
         # unreachable while still appearing in the file.
+        # Cloudflared dials the host's port 80 (Traefik's web entrypoint) for WARP
+        # private hostname routing; allow it through the loopback deny.
+        *(
+            f"    mod owner uid-owner {uid} daddr {LOOPBACK} proto tcp dport 80 jump ACCEPT;"
+            for uid in sorted(tunnel_uids())
+        ),
         *granted_rule_lines(),
         f"    daddr {LOOPBACK_NETWORK} jump DROP;",
         "}",
