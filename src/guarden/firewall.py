@@ -592,9 +592,15 @@ def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
         # guarden's, and a grant that landed below a default deny would be
         # unreachable while still appearing in the file.
         # Cloudflared dials the host's port 80 (Traefik's web entrypoint) for WARP
-        # private hostname routing; allow it through the loopback deny.
+        # private hostname routing; allow it through the loopback deny. Also allow
+        # port 443 (websecure entrypoint) since the CF WARP origin defaults to
+        # https://10.0.2.2 (port 443) and cannot be changed.
         *(
             f"    mod owner uid-owner {uid} daddr {LOOPBACK} proto tcp dport 80 jump ACCEPT;"
+            for uid in sorted(tunnel_uids())
+        ),
+        *(
+            f"    mod owner uid-owner {uid} daddr {LOOPBACK} proto tcp dport 443 jump ACCEPT;"
             for uid in sorted(tunnel_uids())
         ),
         *granted_rule_lines(),
