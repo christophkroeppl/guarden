@@ -347,6 +347,7 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
     """
     tunnel_entrypoints = tunnel_entrypoints or []
     rows = []
+    seen_routers: set[str] = set()
     for route in routes:
         dests = _route_destinations(route)
         is_edge = "edge" in dests
@@ -359,14 +360,19 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
             row_entrypoints = list(tunnel_entrypoints)
         else:
             row_entrypoints = list(entrypoints)
+        base_router = _router(service, route)
+        router_key = base_router
+        if router_key in seen_routers:
+            router_key = f"{base_router}-tunnel"
+        seen_routers.add(router_key)
         rows.append({
-            "router": _router(service, route),
+            "router": router_key,
             "rule": _rule(route),
             "entrypoints": row_entrypoints,
             "target": f"http://{route.get('target', '')}",
             "middleware": bool(route.get("auth")) and provider is not None
             and service != provider and is_edge,
-            "basicauth": bool(basicauthed),
+            "basicauth": bool(basicauthed) and is_edge,
         })
         # Preview instance reached through the tunnel: add a router on the
         # preview host so Traefik can route `preview.<tunnel_domain>/<ref>`.
@@ -376,8 +382,10 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
                 f"Host(`{preview_host}`) && PathPrefix(`/{ref}`)"
                 if ref else f"Host(`{preview_host}`)"
             )
+            preview_key = f"{_router(service, route)}-preview"
+            seen_routers.add(preview_key)
             rows.append({
-                "router": f"{_router(service, route)}-preview",
+                "router": preview_key,
                 "rule": rule,
                 "entrypoints": list(tunnel_entrypoints),
                 "target": f"http://{route.get('target', '')}",
