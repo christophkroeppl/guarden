@@ -309,11 +309,19 @@ def _recorded(service: str, routes: list[dict]) -> list[dict]:
     record = registry.load(service)
     if record is None:
         return routes
+    existing: dict[str, set[str]] = {}
+    for route in routes:
+        label = route.get("label", "")
+        existing.setdefault(label, set()).update(_route_destinations(route))
     out = []
     for route in routes:
-        destination = record.route_destinations.get(route.get("label", ""))
-        if destination and "destination" not in route and "destinations" not in route:
-            route = {**route, "destination": destination}
+        label = route.get("label", "")
+        destination = record.route_destinations.get(label)
+        if destination and len(existing[label]) <= 1:
+            if "destinations" in route:
+                route = {**route, "destinations": [destination]}
+            else:
+                route = {**route, "destination": destination}
         out.append(route)
     return out
 
