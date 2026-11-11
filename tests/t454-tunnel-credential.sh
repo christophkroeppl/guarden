@@ -217,11 +217,12 @@ assert_file_lacks "$tunnel" "basicAuth"
 assert_file_lacks "$tunnel" "usersFile"
 assert_file_lacks "$tunnel" "forward-auth"
 
-# And a tunnel route has NO edge file: the edge is not a route that declines
-# to serve, it is a different terminator. A file that existed here would be a
-# route served by traefik with no middleware on it — the exact impression this
-# ticket exists to remove.
-assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
+# Amendment 0029: a tunnel route now renders an edge router (cloudflared dials
+# Traefik), but it carries no middleware — the edge file exists with a router
+# and no basicAuth/forward-auth.
+assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
+assert_file_lacks "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml" "basicAuth:"
+assert_file_lacks "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml" "forward-auth"
 
 # The EDGE half is untouched by the promotion: another service, left on the
 # edge, still gets its login in front of its route. This is the case the
@@ -243,10 +244,10 @@ assert_file_exists "$rendered"
 assert_file_has "$rendered" "basicAuth:"
 assert_file_has "$rendered" 'usersFile: "/etc/guarden/basicauth/edgeapp-staging.htpasswd"'
 
-# And the promoted service's OWN edge file does not exist, while the edge
-# half of another service does: the difference is the destination, not the
-# service.
-assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
+# Amendment 0029: the promoted service's edge file exists (Traefik routes it)
+# but carries no middleware; the edge half of another service still does.
+assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
+assert_file_lacks "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml" "basicAuth:"
 
 # --- claim 3: the credential is the vendor's, and guarden names its own -----
 #

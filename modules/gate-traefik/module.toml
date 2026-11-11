@@ -18,6 +18,9 @@ ingress = [ "web:80/tcp", "websecure:443/tcp", "websecure:443/udp" ]
 # The API is a control surface, not ingress: it gets a loopback publication and
 # an accept set restricted to `host.admin_user`, and it is never forwarded.
 api = true
+# Plaintext entrypoint dialed by cloudflared for tunnel (.guarden) hostnames.
+# Not forwarded; not TLS; no redirect.
+tunnel_entrypoint = "cloudflared"
 
 [[switches]]
 program = "roots"

@@ -23,7 +23,7 @@ Description=the edge
 # does not own, and this user holds exactly two groups. ADR-0017.
 GroupAdd=keep-groups
 Image=docker.io/library/traefik:v3.2
-Exec=--providers.file.directory=/etc/guarden/edge --providers.file.watch=true --entrypoints.web.address=:80 --entrypoints.web.http.redirections.entrypoint.to=websecure --entrypoints.websecure.address=:443 --entrypoints.websecure.http.tls=true --entrypoints.websecure.http.tls.certResolver=le --entrypoints.websecure.http3 --entrypoints.traefik.address=:8080 --api=true --api.dashboard=true --api.insecure=true --certificatesresolvers.le.acme.httpchallenge=true --certificatesresolvers.le.acme.httpchallenge.entrypoint=web --certificatesresolvers.le.acme.email=ch.kroeppl@gmx.at --certificatesresolvers.le.acme.storage=/etc/guarden/acme/acme.json --accesslog=true --log.level=INFO
+Exec=--providers.file.directory=/etc/guarden/edge --providers.file.watch=true --entrypoints.web.address=:80 --entrypoints.web.http.redirections.entrypoint.to=websecure --entrypoints.websecure.address=:443 --entrypoints.websecure.http.tls=true --entrypoints.websecure.http.tls.certResolver=le --entrypoints.websecure.http3 --entrypoints.cloudflared.address=:8081 --entrypoints.traefik.address=:8080 --api=true --api.dashboard=true --api.insecure=true --certificatesresolvers.le.acme.httpchallenge=true --certificatesresolvers.le.acme.httpchallenge.entrypoint=web --certificatesresolvers.le.acme.email=ch.kroeppl@gmx.at --certificatesresolvers.le.acme.storage=/etc/guarden/acme/acme.json --accesslog=true --log.level=INFO
 Volume=/var/lib/guarden/edge/dynamic:/etc/guarden/edge:ro
 # ACME certificate storage.
 Volume=/var/lib/guarden/services/traefik-production/volume/acme:/etc/guarden/acme:rw

@@ -105,7 +105,7 @@ tunnel_uid=$(getent passwd cloudflared-production | cut -d: -f3)
     || _fail "with cloudflared installed a new service rendered destination $(destination_of "$prodslice"), not tunnel"
 run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
-assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
+assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-production.yml"
 assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml"
 # The ingress hostname is asserted as a WHOLE LINE, not as a substring.
 # **A tunnel route's name is in the TUNNEL's zone** (ticket 324):

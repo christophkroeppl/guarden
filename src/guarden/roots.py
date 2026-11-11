@@ -327,7 +327,9 @@ def _recorded(service: str, routes: list[dict]) -> list[dict]:
 
 
 def render_service(service: str, routes: list[dict], entrypoints: list[str],
-                   provider: str | None, basicauthed: bool = False) -> str:
+                   provider: str | None, basicauthed: bool = False,
+                   tunnel_entrypoints: list[str] | None = None,
+                   preview_host: str | None = None) -> str:
     """One service's routes, as the file provider reads them.
 
     A route carries the forward-auth middleware only when it asked for it,
@@ -343,19 +345,45 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
     registry and the setting is the root-owned `overrides.toml` (ADR-0024) —
     so there is no key that removes it (spec 4's closed key sets, spec 10).
     """
-    rows = [
-        {
+    tunnel_entrypoints = tunnel_entrypoints or []
+    rows = []
+    for route in routes:
+        dests = _route_destinations(route)
+        is_edge = "edge" in dests
+        is_tunnel = "tunnel" in dests
+        if not (is_edge or is_tunnel):
+            continue
+        if is_tunnel and is_edge:
+            row_entrypoints = list(dict.fromkeys(entrypoints + tunnel_entrypoints))
+        elif is_tunnel:
+            row_entrypoints = list(tunnel_entrypoints)
+        else:
+            row_entrypoints = list(entrypoints)
+        rows.append({
             "router": _router(service, route),
             "rule": _rule(route),
-            "entrypoints": entrypoints,
+            "entrypoints": row_entrypoints,
             "target": f"http://{route.get('target', '')}",
             "middleware": bool(route.get("auth")) and provider is not None
-            and service != provider,
+            and service != provider and is_edge,
             "basicauth": bool(basicauthed),
-        }
-        for route in routes
-        if "edge" in _route_destinations(route)
-    ]
+        })
+        # Preview instance reached through the tunnel: add a router on the
+        # preview host so Traefik can route `preview.<tunnel_domain>/<ref>`.
+        if is_tunnel and preview_host and route.get("ref"):
+            ref = route.get("ref", "")
+            rule = (
+                f"Host(`{preview_host}`) && PathPrefix(`/{ref}`)"
+                if ref else f"Host(`{preview_host}`)"
+            )
+            rows.append({
+                "router": f"{_router(service, route)}-preview",
+                "rule": rule,
+                "entrypoints": list(tunnel_entrypoints),
+                "target": f"http://{route.get('target', '')}",
+                "middleware": False,
+                "basicauth": False,
+            })
     if not rows:
         return ""
     # One file, one definition: a service with no policy renders byte for byte
@@ -411,7 +439,9 @@ def _ingress_path(ref: str) -> str:
     return pattern.replace("\\", "\\\\")
 
 
-def render_tunnel(routes: list[dict], config) -> str:
+def render_tunnel(routes: list[dict], config, traefik_target: str | None = None,
+                  dashboard_host: str | None = None,
+                  dashboard_target: str | None = None) -> str:
     """The host's tunnel ingress, as `cloudflared` reads it.
 
     Only routes whose destination is `tunnel` are rendered. The catch-all is
@@ -428,10 +458,15 @@ def render_tunnel(routes: list[dict], config) -> str:
     """
     if not config.tunnel_domain:
         return ""
+    target_for = traefik_target if traefik_target else None
     rows = [
         {
             "hostname": route.get("host", ""),
-            "service": f"http://{route.get('target', '')}",
+            "service": (
+                f"http://{target_for}"
+                if target_for
+                else f"http://{route.get('target', '')}"
+            ),
         }
         for route in routes
         if "tunnel" in _route_destinations(route) and not route.get("ref")
@@ -445,9 +480,24 @@ def render_tunnel(routes: list[dict], config) -> str:
                     # This is a tunnel route for a preview instance
                     previews.append({
                         "hostname": f"preview.{config.tunnel_domain}",
-                        "service": f"http://{route.get('target', '')}",
+                        "service": (
+                            f"http://{target_for}"
+                            if target_for
+                            else f"http://{route.get('target', '')}"
+                        ),
                         "path": _ingress_path(route["ref"]),
                     })
+
+    # Dashboard, tunnel-only.
+    if dashboard_host and dashboard_target:
+        rows.append({
+            "hostname": dashboard_host,
+            "service": (
+                f"http://{dashboard_target}"
+                if not dashboard_target.startswith("http")
+                else dashboard_target
+            ),
+        })
 
     if not rows and not previews:
         return ""
@@ -635,6 +685,13 @@ def sync() -> int:
             f"the enabled modules are: {', '.join(config.modules) or 'none'}",
             errors.HOST_NOT_AS_ASSUMED,
         )
+    # Split serving entrypoints: the tunnel (cloudflared) entrypoint is for
+    # tunnel (.guarden) routes only; the rest serve edge (public) routes.
+    tunnel_ep = "cloudflared"
+    tunnel_entrypoints = [tunnel_ep] if tunnel_ep in entrypoints else []
+    edge_entrypoints = [e for e in entrypoints if e != tunnel_ep]
+    if not edge_entrypoints:
+        edge_entrypoints = list(entrypoints)
     provider = provider_for(config)
     # The record answers the destination, the slice supplies everything else.
     # Both are read here rather than in the renderers so that the edge files
@@ -648,15 +705,39 @@ def sync() -> int:
     # writes the routes and then complains has already broken the routes that
     # were working, which is the one outcome this exists to prevent.
     plan = [
-        (service, render_service(service, entries, entrypoints, provider,
-                                 policies.get(service, False)))
+        (service, render_service(service, entries, edge_entrypoints, provider,
+                                 policies.get(service, False),
+                                 tunnel_entrypoints=tunnel_entrypoints,
+                                 preview_host=(f"preview.{config.tunnel_domain}"
+                                               if config.tunnel_domain else None)))
         for service, entries in routes.items()
     ]
     auth_body = forward_auth(provider) if provider else None
     written = {file_name(service) for service, body in plan if body}
 
+    # Traefik target for tunnel routes: cloudflared dials the edge's plaintext
+    # entrypoint publication instead of each service directly.
+    traefik_target = None
+    dashboard_host = "traefik.guarden"
+    dashboard_target = None
+    for module in config.modules:
+        try:
+            entry = modules_mod.read(module).edge()
+        except errors.GuardenError:
+            continue
+        if entry is None:
+            continue
+        record = registry.load(entry.name)
+        if record is not None and entry.tunnel_entrypoint:
+            pub = record.publication.get(entry.tunnel_entrypoint)
+            if pub is not None:
+                traefik_target = f"{entry.name}:{pub}"
+                dashboard_target = f"{entry.name}:{pub}"
     tunnel_body = render_tunnel(
-        [route for entries in routes.values() for route in entries], config
+        [route for entries in routes.values() for route in entries], config,
+        traefik_target=traefik_target,
+        dashboard_host=dashboard_host,
+        dashboard_target=dashboard_target,
     )
 
     hosts_body = render_hosts(
@@ -670,6 +751,22 @@ def sync() -> int:
         written.add(FORWARD_AUTH)
     write_tunnel(tunnel_body)
     write_hosts(hosts_body)
+    # Dashboard file (tunnel-only), owned by roots so sweep keeps it.
+    dashboard_body = ""
+    if dashboard_target:
+        dashboard_body = (
+            "# Written by roots. Do not edit: the next sync overwrites this file.\n"
+            "http:\n"
+            "  routers:\n"
+            "    traefik-dashboard:\n"
+            "      rule: \"Host(`traefik.guarden`)\"\n"
+            "      entryPoints:\n"
+            "        - cloudflared\n"
+            "      service: api@internal\n"
+        )
+    if dashboard_body:
+        conf.write_file(paths.EDGE_DYNAMIC / "traefik-dashboard.yml", dashboard_body, 0o640)
+        written.add("traefik-dashboard.yml")
     printed = [f"{service} {len(routes[service])} routes" for service, _ in plan]
     for name in sweep(written):
         printed.append(f"removed {name}")
