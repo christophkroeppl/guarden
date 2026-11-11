@@ -176,6 +176,7 @@ class Config:
     admin_user: str
     alias: str
     tunnel_domain: str
+    tunnel_id: str
     publication_range: tuple[int, int]
     modules: tuple[str, ...]
     lanes: int
@@ -282,7 +283,7 @@ def load(path: Any = None) -> Config:
     firewall = document.get("firewall", {})
     for table, name, keys in (
         (host, "host", {"domain", "interface", "admin_user"}),
-        (ingress, "ingress", {"alias", "tunnel_domain", "publication_range", "forwarded"}),
+        (ingress, "ingress", {"alias", "tunnel_domain", "tunnel_id", "publication_range", "forwarded"}),
         (network, "network", NETWORK_KEYS),
         (share, "share", SHARE_KEYS),
         (firewall, "firewall", FIREWALL_KEYS),
@@ -317,6 +318,7 @@ def load(path: Any = None) -> Config:
         admin_user=_str(host, "admin_user", f"{where_file} [host]"),
         alias=_str(ingress, "alias", f"{where_file} [ingress]"),
         tunnel_domain=_str(ingress, "tunnel_domain", f"{where_file} [ingress]"),
+        tunnel_id=_str(ingress, "tunnel_id", f"{where_file} [ingress]"),
         publication_range=(span[0], span[1]),
         modules=tuple(enabled),
         lanes=int_value(build, "lanes", f"{where_file} [build]"),

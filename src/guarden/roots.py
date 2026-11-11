@@ -449,7 +449,8 @@ def _ingress_path(ref: str) -> str:
 
 def render_tunnel(routes: list[dict], config, traefik_target: str | None = None,
                   dashboard_host: str | None = None,
-                  dashboard_target: str | None = None) -> str:
+                  dashboard_target: str | None = None,
+                  tunnel_id: str | None = None) -> str:
     """The host's tunnel ingress, as `cloudflared` reads it.
 
     Only routes whose destination is `tunnel` are rendered. The catch-all is
@@ -509,7 +510,7 @@ def render_tunnel(routes: list[dict], config, traefik_target: str | None = None,
 
     if not rows and not previews:
         return ""
-    return render.render_template(TUNNEL_TEMPLATE, rows=rows, previews=previews)
+    return render.render_template(TUNNEL_TEMPLATE, rows=rows, previews=previews, tunnel_id=tunnel_id or "")
 
 
 def write_tunnel(body: str) -> None:
@@ -750,6 +751,7 @@ def sync() -> int:
         traefik_target=traefik_target,
         dashboard_host=dashboard_host,
         dashboard_target=dashboard_target,
+        tunnel_id=config.tunnel_id,
     )
 
     hosts_body = render_hosts(
