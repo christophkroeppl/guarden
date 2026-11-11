@@ -732,7 +732,7 @@ def sync() -> int:
     # Traefik target for tunnel routes: cloudflared dials the edge's plaintext
     # entrypoint publication instead of each service directly.
     traefik_target = None
-    dashboard_host = "traefik.guarden"
+    dashboard_host = None  # dashboard is tunnel-only; no public DNS
     dashboard_target = None
     for module in config.modules:
         try:
