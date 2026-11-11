@@ -698,7 +698,12 @@ def sync() -> int:
     # tunnel (.guarden) routes only; the rest serve edge (public) routes.
     tunnel_ep = "cloudflared"
     tunnel_entrypoints = [tunnel_ep] if tunnel_ep in entrypoints else []
-    edge_entrypoints = [e for e in entrypoints if e != tunnel_ep]
+    # Cloudflared dials the edge's web entrypoint (port 80) for WARP private
+    # hostname routing; serve tunnel (.guarden) hostnames there too, but keep
+    # public routers off it so port 80 is effectively cloudflared-only.
+    if "web" in entrypoints and "web" not in tunnel_entrypoints:
+        tunnel_entrypoints = ["web"] + tunnel_entrypoints
+    edge_entrypoints = [e for e in entrypoints if e != tunnel_ep and e != "web"]
     if not edge_entrypoints:
         edge_entrypoints = list(entrypoints)
     provider = provider_for(config)

@@ -360,6 +360,10 @@ def _service_accept_map(
                     for e_uid in sorted(edge):
                         e_name = uid_to_name.get(e_uid, str(e_uid))
                         _add(port, e_uid, f"cloudflared:{e_name}")
+                if record.uid in edge and name == "web":
+                    for t_uid in sorted(tunnel):
+                        t_name = uid_to_name.get(t_uid, str(t_uid))
+                        _add(port, t_uid, f"cloudflared:{t_name}")
                 if name == "cloudflared":
                     for t_uid in sorted(tunnel):
                         t_name = uid_to_name.get(t_uid, str(t_uid))
@@ -383,6 +387,10 @@ def _service_accept_map(
                     for e_uid in sorted(edge):
                         e_name = uid_to_name.get(e_uid, str(e_uid))
                         _add(port, e_uid, f"cloudflared:{e_name}")
+                if record.uid in edge and name == "web":
+                    for t_uid in sorted(tunnel):
+                        t_name = uid_to_name.get(t_uid, str(t_uid))
+                        _add(port, t_uid, f"cloudflared:{t_name}")
                 if name == "cloudflared":
                     for t_uid in sorted(tunnel):
                         t_name = uid_to_name.get(t_uid, str(t_uid))
