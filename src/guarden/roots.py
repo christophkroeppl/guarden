@@ -525,7 +525,7 @@ def write_tunnel(body: str) -> None:
             paths.TUNNEL_CONFIG.unlink()
         return
     paths.TUNNEL.mkdir(parents=True, exist_ok=True)
-    conf.write_file(paths.TUNNEL_CONFIG, body, 0o640)
+    conf.write_file(paths.TUNNEL_CONFIG, body, 0o644)
 
 
 def render_hosts(routes: list[dict], config) -> str:
@@ -575,7 +575,7 @@ def write_hosts(body: str) -> None:
             path.unlink()
         return
     paths.TUNNEL.mkdir(parents=True, exist_ok=True)
-    conf.write_file(path, body, 0o640)
+    conf.write_file(path, body, 0o644)
 
 
 def sweep(written: set[str]) -> list[str]:
