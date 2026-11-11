@@ -2,7 +2,7 @@
 Description=the tunnel, which dials out and is reached by nobody
 
 [Container]
-Image=docker.io/cloudflare/cloudflared:2026.10.0
+Image=docker.io/cloudflare/cloudflared:latest
 # One config for the whole host. `cloudflared` reads a single `ingress:` list, so
 # there is no per-service file and the tunnel is one process rather than one per
 # route — which is why `roots` renders into this directory and not into a
