@@ -356,6 +356,14 @@ def _service_accept_map(
                     for t_uid in sorted(tunnel):
                         t_name = uid_to_name.get(t_uid, str(t_uid))
                         _add(port, t_uid, f"tunnel:{t_name}")
+                if name in tunnel_names and name not in edge_names:
+                    for e_uid in sorted(edge):
+                        e_name = uid_to_name.get(e_uid, str(e_uid))
+                        _add(port, e_uid, f"cloudflared:{e_name}")
+                if name == "cloudflared":
+                    for t_uid in sorted(tunnel):
+                        t_name = uid_to_name.get(t_uid, str(t_uid))
+                        _add(port, t_uid, f"tunnel:{t_name}")
         for instance in record.instances.values():
             for name, port in sorted(instance.publication.items()):
                 if name == publications.API:
@@ -368,6 +376,14 @@ def _service_accept_map(
                         e_name = uid_to_name.get(e_uid, str(e_uid))
                         _add(port, e_uid, f"edge:{e_name}")
                 if name in tunnel_names:
+                    for t_uid in sorted(tunnel):
+                        t_name = uid_to_name.get(t_uid, str(t_uid))
+                        _add(port, t_uid, f"tunnel:{t_name}")
+                if name in tunnel_names and name not in edge_names:
+                    for e_uid in sorted(edge):
+                        e_name = uid_to_name.get(e_uid, str(e_uid))
+                        _add(port, e_uid, f"cloudflared:{e_name}")
+                if name == "cloudflared":
                     for t_uid in sorted(tunnel):
                         t_name = uid_to_name.get(t_uid, str(t_uid))
                         _add(port, t_uid, f"tunnel:{t_name}")

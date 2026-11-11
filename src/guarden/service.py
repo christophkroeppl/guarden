@@ -1005,6 +1005,8 @@ def _wanted(manifest: manifest_mod.Manifest, source: Source) -> list[str]:
                     out.append(endpoint)
             if entry.api and publications.API not in out:
                 out.append(publications.API)
+            if entry.tunnel_entrypoint and entry.tunnel_entrypoint not in out:
+                out.append(entry.tunnel_entrypoint)
     return out
 
 

@@ -151,7 +151,10 @@ run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 tunnel_config=$GUARDEN_PREFIX/var/lib/guarden/tunnel/config.yml
 assert_file_exists "$tunnel_config"
-assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
+# Amendment 0029: the tunnel route now also renders an edge router (cloudflared
+# dials Traefik), but it carries no middleware.
+assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
+assert_file_lacks "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml" "basicAuth:"
 
 # **One file for the whole host, and it is a real cloudflared config**: the
 # credential it reads and a single `ingress:` list. Not a bare list of rules,
@@ -187,7 +190,7 @@ assert_exit 0
 run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
 assert_exit 0
 assert_file_exists "$tunnel_config"
-assert_file_missing "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
+assert_file_exists "$GUARDEN_PREFIX/var/lib/guarden/edge/dynamic/routed-staging.yml"
 
 # The loopback deny still applies to the tunnel's uid: it is one more service
 # uid, closed to loopback by exactly the same rule as every other, and being the

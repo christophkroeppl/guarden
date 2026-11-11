@@ -2653,7 +2653,10 @@ the route, once, on every sync — so `auth: true` in a manifest is never silent
 (`/var/lib/guarden/tunnel/config.yml`, spec 2), which is cloudflared's configuration and carries
 no traefik vocabulary — no `middlewares:`, no `basicAuth`, no `usersFile`. Cloudflared dials the
 service's publication directly, so the edge is never in that path and neither the edge's
-`basicAuth` middleware nor its forward-auth rule can be in it.
+`basicAuth` middleware nor its forward-auth rule can be in it. (Amendment 0029: cloudflared now
+dials Traefik's plaintext `cloudflared` entrypoint instead of the service's publication, so the
+edge DOES render a router for the tunnel hostname, but it still attaches no middleware — the
+`auth:` field is ignored for tunnel-only routes, preserving ADR-0024.)
 
 **So a tunnel route's protection is the vendor's Access policy, and the edge's default basic-auth
 login does not follow the service there** (ADR-0024). Guarden's own instrument for the vendor's
@@ -3289,7 +3292,9 @@ services **must not** be given the same publication, and the allocator refuses t
 ### 7.3 Names
 
 There is no name map and no `/etc/hosts`. For each edge, the renderer writes into the consumer's
-pod — its `[Pod]` table, which every member inherits (see above):
+pod — its `[Pod]` table, which every member inherits (see above): (Amendment 0029: the
+cloudflared service retains `/etc/hosts` entries mapping private hostnames to the ingress alias,
+because it has no `AddHost` and resolves through the system resolver; this is the sole exception.)
 
 ```
 AddHost=<provider-service>:<ingress.alias>
@@ -3497,7 +3502,10 @@ Two consequences an operator must know. Locally generated traffic does not trave
 another machine on a local network cannot reach the box by its public name.
 
 The edge's API and dashboard are a control surface, not ingress: published on loopback,
-restricted in `OUTPUT` to `host.admin_user`, and never forwarded.
+restricted in `OUTPUT` to `host.admin_user`, and never forwarded. (Amendment 0029: the dashboard
+may additionally be exposed as a tunnel-only route on the plaintext `cloudflared` entrypoint,
+reachable only through the Cloudflare tunnel and localhost; it is never attached to the
+forwarded `web`/`websecure` entrypoints.)
 
 ### 7.6 Isolation between services
 

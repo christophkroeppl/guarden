@@ -1319,6 +1319,13 @@ def ingress_ports(service: str) -> list[str]:
             )
             if publication is not None and port:
                 out.append(f"{LOOPBACK}:{publication}:{port}")
+        if entry.tunnel_entrypoint:
+            found = edgeconf.of_source(modules_mod.source_of(module, entry.name), entry.name)
+            publication = record.publication.get(entry.tunnel_entrypoint)
+            ep = found.get(entry.tunnel_entrypoint)
+            port = ep.port if ep is not None else 0
+            if publication is not None and port:
+                out.append(f"{LOOPBACK}:{publication}:{port}")
     return out
 
 

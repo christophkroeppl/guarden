@@ -24,7 +24,7 @@ from typing import Any
 from guarden import conf, edgeconf, errors, names, paths
 
 TOP_LEVEL_KEYS = {"name", "requires", "services", "switches"}
-SERVICE_KEYS = {"service", "ingress", "api"}
+SERVICE_KEYS = {"service", "ingress", "api", "tunnel_entrypoint"}
 SWITCH_KEYS = {"program"}
 PROGRAMS = ("soil", "weedr", "loom", "roots", "twig", "furrow", "hose", "stakes")
 
@@ -38,6 +38,7 @@ class Service:
     name: str
     ingress: tuple[str, ...]
     api: bool
+    tunnel_entrypoint: str = ""
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,9 @@ def read(name: str) -> Module:
                 name=service,
                 ingress=tuple(_ingress(row, service, where)),
                 api=_bool(row, "api", f"{where} the service {service}"),
+                tunnel_entrypoint=_str(
+                    row, "tunnel_entrypoint", f"{where} the service {service}", ""
+                ),
             )
         )
     seen = [entry.name for entry in services]

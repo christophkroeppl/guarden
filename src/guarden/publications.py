@@ -27,6 +27,7 @@ from __future__ import annotations
 from guarden import errors
 
 API = "api"
+CLOUDFLARED = "cloudflared"
 
 
 def held(records) -> set[int]:

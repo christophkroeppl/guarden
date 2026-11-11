@@ -156,10 +156,12 @@ assert_exit 0
 # gone, which is the half a whole-line match alone does not prove.
 assert_file_lacks "$tunnel" 'hostname: "web"'
 
-# The row is the tunnel's and the tunnel's alone: a tunnel route is not
-# rendered into the edge's directory (ticket 220), so the edge never answers
-# this name.
-assert_file_missing /var/lib/guarden/edge/dynamic/routed-production.yml
+# Amendment 0029: a tunnel route now also renders into the edge's directory,
+# because cloudflared dials Traefik and Traefik routes by Host header. The
+# edge answers this name, but attaches no middleware (ADR-0024).
+assert_file_exists /var/lib/guarden/edge/dynamic/routed-production.yml
+run grep -q 'web.tunnel.example.net' /var/lib/guarden/edge/dynamic/routed-production.yml
+assert_exit 0
 
 # The name is read back as the YAML cloudflared will parse it, and it is the
 # name in the ingress list — not a line that happens to contain it.
