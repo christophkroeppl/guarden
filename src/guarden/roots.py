@@ -739,8 +739,12 @@ def sync() -> int:
         if record is not None and entry.tunnel_entrypoint:
             pub = record.publication.get(entry.tunnel_entrypoint)
             if pub is not None:
-                traefik_target = f"{entry.name}:{pub}"
-                dashboard_target = f"{entry.name}:{pub}"
+                # cloudflared runs in its own container and cannot resolve
+                # service names (its AddHost only maps *.guarden hosts). The
+                # alias is the container's gateway == the host's loopback, so
+                # dial it directly.
+                traefik_target = f"{config.alias}:{pub}"
+                dashboard_target = f"{config.alias}:{pub}"
     tunnel_body = render_tunnel(
         [route for entries in routes.values() for route in entries], config,
         traefik_target=traefik_target,
