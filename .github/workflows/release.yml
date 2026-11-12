@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (semver). Leave empty to use VERSION file.'
+        required: false
+        default: ''
+      prerelease:
+        description: 'Mark as prerelease'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Resolve version ──────────────────────────────────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: resolve
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [ -f VERSION ]; then
+            VERSION="$(cat VERSION | tr -d '[:space:]')"
+          else
+            VERSION="0.0.0-alpha-1"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $VERSION (tag: v$VERSION)"
+
+  # ── Tag the commit ───────────────────────────────────────────────
+  tag:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ needs.version.outputs.tag }}" -m "Release ${{ needs.version.outputs.version }}"
+          git push origin "${{ needs.version.outputs.tag }}"
+
+  # ── Create GitHub Release ────────────────────────────────────────
+  release:
+    needs: [version, tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease || true }}
+          body: |
+            ## Release ${{ needs.version.outputs.version }}
+
+            ### Changes
+            See commit history for details.
+
+            ### Artifacts
+            (Future: Rust binaries, .deb packages, tarballs, etc.)
+
+  # ── Future: Build Rust programs ──────────────────────────────────
+  # build-rust:
+  #   needs: [version, tag]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - run: cargo build --release
+  #     - run: |
+  #         mkdir -p dist
+  #         for bin in target/release/guarden-*; do
+  #           [ -f "$bin" ] || continue
+  #           zip -j "dist/$(basename $bin).zip" "$bin"
+  #         done
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: rust-binaries
+  #         path: dist/*.zip
+
+  # ── Future: Package for Debian ───────────────────────────────────
+  # package-deb:
+  #   needs: [version, tag]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install just
+  #       uses: extractions/setup-just@v2
+  #     - run: just package-deb
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: deb-packages
+  #         path: dist/*.deb
+
+  # ── Future: Upload artifacts to release ──────────────────────────
+  # upload-artifacts:
+  #   needs: [version, tag, build-rust, package-deb]
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: write
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         path: artifacts
+  #         merge-multiple: true
+  #     - uses: softprops/action-gh-release@v2
+  #       with:
+  #         tag_name: ${{ needs.version.outputs.tag }}
+  #         files: artifacts/**/*
