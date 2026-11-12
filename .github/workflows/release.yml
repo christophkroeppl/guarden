@@ -6,90 +6,38 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (semver). Leave empty to use VERSION file.'
+        description: "Override version (semver). Leave empty for auto."
         required: false
-        default: ''
-      prerelease:
-        description: 'Mark as prerelease'
-        type: boolean
-        default: true
-
-concurrency:
-  group: release
-  cancel-in-progress: false
+        default: ""
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  # ── Resolve version ──────────────────────────────────────────────
-  version:
+  # ── release-please: maintain release PR + tag on merge ────────────
+  release-please:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.resolve.outputs.version }}
-      tag: ${{ steps.resolve.outputs.tag }}
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.major }}.${{ steps.release.outputs.minor }}.${{ steps.release.outputs.patch }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve version
-        id: resolve
-        run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          elif [ -f VERSION ]; then
-            VERSION="$(cat VERSION | tr -d '[:space:]')"
-          else
-            VERSION="0.0.0-alpha-1"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: $VERSION (tag: v$VERSION)"
-
-  # ── Tag the commit ───────────────────────────────────────────────
-  tag:
-    needs: version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - uses: googleapis/release-please-action@v4
+        id: release
         with:
-          fetch-depth: 0
-
-      - name: Create and push tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ needs.version.outputs.tag }}" -m "Release ${{ needs.version.outputs.version }}"
-          git push origin "${{ needs.version.outputs.tag }}"
-
-  # ── Create GitHub Release ────────────────────────────────────────
-  release:
-    needs: [version, tag]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          name: ${{ needs.version.outputs.tag }}
-          draft: false
-          prerelease: ${{ github.event.inputs.prerelease || true }}
-          body: |
-            ## Release ${{ needs.version.outputs.version }}
-
-            ### Changes
-            See commit history for details.
-
-            ### Artifacts
-            (Future: Rust binaries, .deb packages, tarballs, etc.)
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   # ── Future: Build Rust programs ──────────────────────────────────
   # build-rust:
-  #   needs: [version, tag]
+  #   needs: release-please
+  #   if: ${{ needs.release-please.outputs.release_created }}
   #   runs-on: ubuntu-latest
   #   steps:
   #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ needs.release-please.outputs.tag_name }}
   #     - uses: dtolnay/rust-toolchain@stable
   #     - run: cargo build --release
   #     - run: |
@@ -105,10 +53,13 @@ jobs:
 
   # ── Future: Package for Debian ───────────────────────────────────
   # package-deb:
-  #   needs: [version, tag]
+  #   needs: release-please
+  #   if: ${{ needs.release-please.outputs.release_created }}
   #   runs-on: ubuntu-latest
   #   steps:
   #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ needs.release-please.outputs.tag_name }}
   #     - name: Install just
   #       uses: extractions/setup-just@v2
   #     - run: just package-deb
@@ -119,7 +70,8 @@ jobs:
 
   # ── Future: Upload artifacts to release ──────────────────────────
   # upload-artifacts:
-  #   needs: [version, tag, build-rust, package-deb]
+  #   needs: [release-please, build-rust, package-deb]
+  #   if: ${{ needs.release-please.outputs.release_created }}
   #   runs-on: ubuntu-latest
   #   permissions:
   #     contents: write
@@ -130,5 +82,16 @@ jobs:
   #         merge-multiple: true
   #     - uses: softprops/action-gh-release@v2
   #       with:
-  #         tag_name: ${{ needs.version.outputs.tag }}
+  #         tag_name: ${{ needs.release-please.outputs.tag_name }}
   #         files: artifacts/**/*
+
+  # ── Manual override: workflow_dispatch ────────────────────────────
+  # To override the version, trigger manually:
+  #   gh workflow run release.yml -f version=1.2.3
+  # Or use release-please's force-run label on a merged PR.
+
+# ── Override version ─────────────────────────────────────────────
+# To override the version for a specific release, add to the squash commit:
+#   release-as: 0.0.0-alpha-1
+# Or edit .release-please-manifest.json before merging.
+# release-please will use that version instead of the auto-determined one.
