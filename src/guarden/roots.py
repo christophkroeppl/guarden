@@ -782,6 +782,7 @@ def sync() -> int:
             "      rule: \"Host(`traefik.guarden`)\"\n"
             "      entryPoints:\n"
             "        - web\n"
+            "        - websecure\n"
             "        - cloudflared\n"
             "      service: api@internal\n"
         )
