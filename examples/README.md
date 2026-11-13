@@ -55,12 +55,12 @@ in creates the volumes. See `docs/sysadmin.md`, **Deploying a service by hand**.
 | template | image | what it shows |
 |---|---|---|
 | `postgres` | `docker.io/library/postgres:17-alpine` | the third-party database deployment from the app-VM runbook: loopback publication, a `Secret=` read as an environment variable, `PGDATA` a subdirectory of the mount |
-| `vaultwarden` | `docker.io/vaultwarden/server:latest` | a self-hosted web service with one data volume and no credential line |
+|`vaultwarden` | `docker.io/vaultwarden/server:latest` | a self-hosted web service with one data volume and no credential line |
 | `rustfs` | `docker.io/rustfs/rustfs:latest` | an S3-compatible object store, and a **provider of the `secret` kind**: a consumer edges to it with `auth: secret` and reads the minted value as `<AS>_SECRET` |
 | `umami` | `ghcr.io/umami-software/umami:postgresql-latest` | web analytics: a loopback publication on 3000, and a `DATABASE_URL` secret the operator plants from a database edge's rendered credentials |
 | `pgbouncer` | `docker.io/edoburu/pgbouncer:latest` | Postgres connection pooler: loopback publication on 6432, and a `DATABASE_URL` secret the operator plants to point it at a postgres instance |
 | `oxicloud` | `docker.io/diocrafts/oxicloud:latest` | a WebDAV cloud / obsidian sync: loopback publication, a named data volume and vendor credentials (`OXICLOUD_JWT_SECRET`, `OXICLOUD_DB_CONNECTION_STRING`) planted by hand before the first start |
-| `bitcoin-knots` | `docker.io/bitcoinknots/bitcoin:29.4-alpine` | a pruned Bitcoin full node: loopback publication on the peer port 8333 (granted publicly by the admin, no edge, no routes), `-prune=20000`, `Restart=always`, a snapshotted `data` wallet volume and a bulk `chain` volume that is never snapshotted |
+| `bitcoin-knots` | `docker.io/bitcoinknots/bitcoin:latest-alpine` | a pruned Bitcoin full node: loopback publication on the peer port 8333 (granted publicly by the admin, no edge, no routes), `-prune=20000`, `Restart=always`, a snapshotted `data` wallet volume and a bulk `chain` volume that is never snapshotted |
 
 Each is one `.container` file, which is all `create` needs. The file name is the
 unit name in the service's own user manager, and the manager is per service uid,

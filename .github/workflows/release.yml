@@ -23,11 +23,11 @@ jobs:
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.major }}.${{ steps.release.outputs.minor }}.${{ steps.release.outputs.patch }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          config-file: .release/release-please-config.json
+          manifest-file: .release/.release-please-manifest.json
 
   # ── Future: Build Rust programs ──────────────────────────────────
   # build-rust:
@@ -84,14 +84,3 @@ jobs:
   #       with:
   #         tag_name: ${{ needs.release-please.outputs.tag_name }}
   #         files: artifacts/**/*
-
-  # ── Manual override: workflow_dispatch ────────────────────────────
-  # To override the version, trigger manually:
-  #   gh workflow run release.yml -f version=1.2.3
-  # Or use release-please's force-run label on a merged PR.
-
-# ── Override version ─────────────────────────────────────────────
-# To override the version for a specific release, add to the squash commit:
-#   release-as: 0.0.0-alpha-1
-# Or edit .release-please-manifest.json before merging.
-# release-please will use that version instead of the auto-determined one.

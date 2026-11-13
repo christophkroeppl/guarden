@@ -5,21 +5,22 @@ CLAUDE.md
 !.env.schema
 
 __pycache__/
+.pytest_cache
 *.pyc
 .venv
 *.egg-info/
 .ruff_cache/
 *.tar.gz
 *.dump
+uv.lock
 evidence/
 .lxc-state/
 
-*user-data*.yaml
 
 # packaging artifacts
 dist/
 *.deb
 
 # rendered artifacts
+*user-data*.yaml
 cloud-init.yaml
-uv.lock
