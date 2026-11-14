@@ -1,0 +1,13 @@
+[Unit]
+Description=the dashboard
+
+[Container]
+Image=ghcr.io/gethomepage/homepage:latest
+# Everything `twig sync` writes is merged into this one directory, and the
+# dashboard reads it. Read-only for the same reason the edge's route directory
+# is: `twig` runs as `guarden` and writes it, the dashboard is a service and
+# reads it, and neither can write where the other writes. The host path is
+# seeded into this service's root-owned `[mounts] allow` by the same
+# `weedr module add` that installs the unit.
+Volume=/var/lib/guarden/shared/dashboard:/app/config:ro
+Environment=HOMEPAGE_ALLOWED_HOSTS=*

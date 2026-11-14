@@ -1,0 +1,30 @@
+# The vaultwarden password manager, as a service: one user, one home, one unit
+# directory.
+#
+# The unit is the `vaultwarden` service template's file —
+# src/guarden/templates/services/vaultwarden/vaultwarden.container — shipped
+# here so `weedr module add vaultwarden` installs exactly what
+# `weedr service create vaultwarden-production --template vaultwarden` would
+# copy in (the template pattern: the quadlet is the template, and nothing in it
+# is rendered).
+#
+# The container binds loopback only (the template's
+# PublishPort=127.0.0.1:8082:80), and nothing forwards it until a route
+# declares it. The route below is how it is reached; with the cloudflared
+# module enabled the production track's default exposure is the tunnel, and
+# `weedr expose set vaultwarden-production tunnel` pins it there. The route
+# carries no `auth:` — the vendor's own login is the gate, and the tunnel's
+# protection is Cloudflare's Access policy, granted with `weedr share issue`.
+#
+# Production only: this module declares no staging service.
+project: vaultwarden
+units: .guarden/quadlet/
+
+ports:
+  - container: vaultwarden
+    port: 80
+
+routes:
+  - container: vaultwarden
+    port: 80
+    host: vaultwarden

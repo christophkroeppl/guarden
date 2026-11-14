@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Override version (semver). Leave empty for auto."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # ── release-please: maintain release PR + tag on merge ────────────
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.major }}.${{ steps.release.outputs.minor }}.${{ steps.release.outputs.patch }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          config-file: .release/release-please-config.json
+          manifest-file: .release/.release-please-manifest.json
+
+  # ── Future: Build Rust programs ──────────────────────────────────
+  # build-rust:
+  #   needs: release-please
+  #   if: ${{ needs.release-please.outputs.release_created }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ needs.release-please.outputs.tag_name }}
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - run: cargo build --release
+  #     - run: |
+  #         mkdir -p dist
+  #         for bin in target/release/guarden-*; do
+  #           [ -f "$bin" ] || continue
+  #           zip -j "dist/$(basename $bin).zip" "$bin"
+  #         done
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: rust-binaries
+  #         path: dist/*.zip
+
+  # ── Future: Package for Debian ───────────────────────────────────
+  # package-deb:
+  #   needs: release-please
+  #   if: ${{ needs.release-please.outputs.release_created }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ needs.release-please.outputs.tag_name }}
+  #     - name: Install just
+  #       uses: extractions/setup-just@v2
+  #     - run: just package-deb
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: deb-packages
+  #         path: dist/*.deb
+
+  # ── Future: Upload artifacts to release ──────────────────────────
+  # upload-artifacts:
+  #   needs: [release-please, build-rust, package-deb]
+  #   if: ${{ needs.release-please.outputs.release_created }}
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: write
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         path: artifacts
+  #         merge-multiple: true
+  #     - uses: softprops/action-gh-release@v2
+  #       with:
+  #         tag_name: ${{ needs.release-please.outputs.tag_name }}
+  #         files: artifacts/**/*

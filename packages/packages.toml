@@ -1,0 +1,164 @@
+[families.debian]
+install = ["apt-get", "install", "-y"]
+query = ["dpkg-query", "-W", "-f=${db:Status-Status}"]
+installed = "installed"
+update = ["apt-get", "update"]
+packages = [
+    "btrfs-progs",
+    "snapper",
+    "ferm",
+    "fail2ban",
+    "podman",
+    "python3-yaml",
+    "python3-jinja2",
+    "python3-pip",
+    "git",
+    "dracut-core",
+]
+
+[families.debian.variant]
+name = "legacy"
+set = ["update-alternatives", "--set", "iptables", "/usr/sbin/iptables-legacy"]
+report = ["iptables", "--version"]
+
+[families.fedora]
+install = ["dnf", "install", "-y"]
+query = ["rpm", "-q"]
+installed = ""
+update = ["dnf", "check-update"]
+packages = [
+    "btrfs-progs",
+    "snapper",
+    "ferm",
+    "fail2ban",
+    "podman",
+    "python3-pyyaml",
+    "python3-jinja2",
+    "dracut",
+]
+
+[families.arch]
+install = ["pacman", "-S", "--needed", "--noconfirm"]
+query = ["pacman", "-Q"]
+installed = ""
+update = ["pacman", "-Sy"]
+packages = [
+    "btrfs-progs",
+    "snapper",
+    "ferm",
+    "fail2ban",
+    "podman",
+    "python-yaml",
+    "python-jinja2",
+    "dracut",
+]
+
+[conditional.debian]
+zram = ["systemd-zram-generator"]
+
+[conditional.fedora]
+zram = ["systemd-zram-generator"]
+
+[conditional.arch]
+zram = ["systemd-zram-generator"]
+
+[harness.debian]
+harness = [
+    "passt",
+    "subvolume-subtools",
+    "snapper-support",
+    "python3",
+    "git",
+    "rsync",
+    "ca-certificates",
+    "curl",
+    "jq",
+    "iptables",
+    "nftables",
+    "iproute2",
+    "iputils-ping",
+    "dnsutils",
+    "netcat-openbsd",
+    "nginx",
+    "postgresql-client",
+    "libpq-dev",
+    "psmisc",
+]
+
+[harness.fedora]
+harness = [
+    "passt",
+    "python3",
+    "git",
+    "rsync",
+    "ca-certificates",
+    "curl",
+    "jq",
+    "nftables",
+    "iproute",
+    "iputils",
+    "bind-utils",
+    "nginx",
+    "postgresql",
+    "libpq-devel",
+    "psmisc",
+]
+
+[harness.arch]
+harness = [
+    "passt",
+    "python",
+    "git",
+    "rsync",
+    "ca-certificates",
+    "curl",
+    "jq",
+    "nftables",
+    "iproute2",
+    "iputils",
+    "nginx",
+    "postgresql",
+    "libpq",
+    "psmisc",
+]
+
+# The LXD golden's own extras, on top of the substrate above, installed once at
+# build time. Debian only: the harness's image is Ubuntu, and naming these on a
+# family nobody has built a golden on would be inventing packages. The role is
+# complete for its machine, so where it overlaps `harness` the overlap is
+# visible rather than inherited.
+[golden.debian]
+golden = [
+    "python3",
+    "iproute2",
+    "iptables",
+    "passwd",
+    "uidmap",
+    "curl",
+    "ca-certificates",
+    "sudo",
+    "util-linux",
+    "kmod",
+    "procps",
+    "rsync",
+    "psmisc",
+    "passt",
+]
+# The LXD golden's own extras on Arch, on top of the substrate above.
+[golden.arch]
+golden = [
+    "python",
+    "iproute2",
+    "iptables",
+    "shadow",
+    "uidmap",
+    "curl",
+    "ca-certificates",
+    "sudo",
+    "util-linux",
+    "kmod",
+    "procps-ng",
+    "rsync",
+    "psmisc",
+    "passt",
+]

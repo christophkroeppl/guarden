@@ -1,0 +1,32 @@
+project: quadlet-app
+units: .guarden/quadlet/
+
+state:
+  - data
+bulk:
+  - chainstate
+
+needs:
+  - service: postgres-staging
+    as: db
+    port: 5432
+    auth: database
+
+provides:
+  - secret
+
+routes:
+  - container: web
+    port: 8080
+    host: web
+    auth: true
+
+ports:
+  - container: web
+    port: 8080
+
+widgets:
+  - container: web
+    file: .guarden/widgets/web.yml
+
+schema: .guarden/.env.schema

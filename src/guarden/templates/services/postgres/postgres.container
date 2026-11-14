@@ -1,0 +1,36 @@
+# A third-party image with no repository behind it: `weedr service create
+# <name> --template postgres` copies this file into the service's own quadlet
+# directory, `0640` under the service uid, exactly where a rendered unit lands.
+#
+# Nothing in this file is rendered. A template carries no manifest, so guarden
+# resolves no volume name, allocates no publication and writes no credential
+# line — what the file says is what runs. Read `examples/README.md` for what
+# that costs and how a manifest brings it back.
+
+[Unit]
+Description=postgres from a guarden service template
+
+[Container]
+Image=docker.io/library/postgres:17-alpine
+# Loopback only. No port of a template-created service is granted a DNAT, so
+# until a manifest and `weedr port open` say otherwise the only way to this
+# publication is from this box.
+PublishPort=127.0.0.1:5432:5432
+# A named podman volume in the service's own store. A template declares no
+# `state:` and no `bulk:`, so guarden creates no subvolume and no snapper
+# configuration for it; the state volumes arrive with the first manifest that
+# comes in through `weedr service add`.
+Volume=postgres-data:/var/lib/postgresql/data
+# PGDATA has to be a subdirectory of the mount rather than the mount itself
+# (tickets 273 and 277).
+Environment=PGDATA=/var/lib/postgresql/data/pgdata
+# Read as an environment variable, which is what postgres reads. Plant it before
+# the first start:
+#
+#   weedr secret set <name> POSTGRES_PASSWORD
+#   systemctl start guarden-creds-boot.service
+#
+# A template-created service has no `.guarden/.env.schema`, so the gate has
+# nothing to check and will not tell you the key is missing: an unplanted key is
+# refused by podman when the container starts.
+Secret=POSTGRES_PASSWORD,type=env

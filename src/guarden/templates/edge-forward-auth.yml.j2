@@ -1,0 +1,27 @@
+{#
+  The forward-auth middleware, as traefik's file provider reads it.
+
+  One file for the whole edge directory rather than a block inside every
+  rendered route file: a route with no `auth:` renders byte for byte what it
+  rendered before, and the provider merges this directory into one
+  configuration, so the definition needs to exist exactly once.
+
+  The address is `<name>:<publication>` — the provider's own service name and
+  the publication its container is already listening on, the same form every
+  route target uses (spec 7.3). The edge resolves it through the `AddHost=`
+  entry loom wrote, and a loopback address here would be the host's, which a
+  container does not share.
+
+  `trustForwardHeader` and `authResponseHeaders` are what turn the provider's
+  "yes" into something traefik acts on, and the header carrying the decision is
+  the provider's own answer rather than anything the client sent.
+#}
+# Written by roots. Do not edit: the next sync overwrites this file.
+http:
+  middlewares:
+    {{ middleware }}:
+      forwardAuth:
+        address: "http://{{ address }}"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-Guarden-Authenticated-User

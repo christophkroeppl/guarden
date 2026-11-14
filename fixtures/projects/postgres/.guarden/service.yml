@@ -1,0 +1,14 @@
+# A provider of the `database` kind, named `postgres` so the providers table
+# can map the logical name `postgres` to a concrete per-environment name.
+project: postgres
+units: .guarden/quadlet/
+provides:
+  - db
+# A `db` provider declares a volume (spec 4): without one the data lives in
+# podman's anonymous volume, which the collector removes on the next
+# re-ingest (ticket 326). Declared here and mounted by the container below.
+state:
+  - pgdata
+ports:
+  - container: db
+    port: 5432

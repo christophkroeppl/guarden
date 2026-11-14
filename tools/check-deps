@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import ast
+import os
+import sys
+from pathlib import Path
+
+DISTRIBUTION_PACKAGES = ("yaml", "jinja2")
+FIRST_PARTY = ("guarden",)
+
+SEARCHED = ("src/guarden", "tools/check-deps", "tests")
+
+
+def allowed_roots() -> frozenset[str]:
+    return (
+        frozenset(sys.stdlib_module_names)
+        | frozenset(DISTRIBUTION_PACKAGES)
+        | frozenset(FIRST_PARTY)
+    )
+
+
+def imported_roots(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(), filename=str(path))
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                roots.add(node.module.split(".")[0])
+    return roots
+
+
+def python_files(root: Path) -> list[Path]:
+    if root.is_file():
+        return [root]
+    return sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
+
+
+def main(argv: list[str]) -> int:
+    here = Path(argv[0]).resolve().parent.parent
+    args = argv[1:]
+    imports_only = "--imports-only" in args
+    paths = [arg for arg in args if not arg.startswith("--")] or list(SEARCHED)
+    roots = [Path(arg) if os.sep in arg else here / arg for arg in paths]
+
+    allowed = allowed_roots()
+    found = False
+
+    if not imports_only:
+        for name in DISTRIBUTION_PACKAGES:
+            try:
+                __import__(name)
+            except ImportError:
+                sys.stderr.write(
+                    f"error: {name} is not importable; it is the distribution's "
+                    f"python3-{name}, installed by `soil packages`.\n"
+                )
+                found = True
+
+    for root in roots:
+        if not root.exists():
+            sys.stderr.write(f"error: {root} is not a file or a directory.\n")
+            found = True
+            continue
+        for path in python_files(root):
+            try:
+                imported = imported_roots(path)
+            except SyntaxError as exc:
+                try:
+                    relative = path.relative_to(here)
+                except ValueError:
+                    relative = path
+                sys.stderr.write(f"error: {relative} does not parse: {exc.msg}.\n")
+                found = True
+                continue
+            for module in sorted(imported):
+                if module not in allowed:
+                    try:
+                        relative = path.relative_to(here)
+                    except ValueError:
+                        relative = path
+                    sys.stderr.write(
+                        f"error: {relative} imports {module}, which is neither in the "
+                        f"standard library nor python3-yaml/python3-jinja2.\n"
+                    )
+                    found = True
+
+    if not found:
+        sys.stdout.write(
+            f"imports ok: the standard library, guarden, and "
+            f"{' and '.join(DISTRIBUTION_PACKAGES)}\n"
+        )
+    return 1 if found else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

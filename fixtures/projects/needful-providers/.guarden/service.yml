@@ -1,0 +1,9 @@
+# A consumer that declares the LOGICAL name `postgres`. The providers table
+# resolves it to the concrete per-environment name at ingest time.
+project: needful-providers
+units: .guarden/quadlet/
+needs:
+  - service: postgres
+    as: db
+    port: 5432
+    auth: database

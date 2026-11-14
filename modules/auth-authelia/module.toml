@@ -1,0 +1,20 @@
+name = "auth-authelia"
+requires = []
+
+[[services]]
+# The auth service is a service like any other: its own user, its own home,
+# its own quadlet unit directory, in a gated track. The module declares no
+# credentials, and the gate blocks only on declared keys — whether the gated
+# track is still the right home is ticket 150's open item. It is reachable
+# through the edge by a `routes:` entry in its own shipped manifest, so it
+# declares no forwarded port of its own and
+# is not a control surface.
+service = "authelia-production"
+
+[[switches]]
+# `roots` is the program this module switches on, and it is the existing one:
+# a route declaring `auth: true` is rendered by the program that already renders
+# routes. There is no second renderer and no per-module code path — the whole
+# connection between this module and the middleware is the one root-owned
+# marker file.
+program = "roots"

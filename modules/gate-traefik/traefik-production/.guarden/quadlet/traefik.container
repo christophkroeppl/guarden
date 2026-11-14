@@ -1,0 +1,39 @@
+[Unit]
+Description=the edge
+
+[Container]
+# The edge reads its routes from `/etc/guarden/edge`, which is
+# `/var/lib/guarden/edge/dynamic` on the host: `guarden:edge 2750`. The service
+# user is in the `edge` group and can read it.
+#
+# **The container cannot, and this is why the line below exists.** A rootless
+# container's group numbers are translated through `/etc/subgid`
+# (`traefik-production:231072:65536`), so container group `981` means host group
+# `232053` and never host group `981`. No `--group-add <gid>` reaches the host's
+# `edge` group, because `981` sits outside every window that user has. Traefik
+# then starts, binds its default `:80`, fails to read its own provider
+# directory, and serves nothing:
+#
+#   ERR Cannot start the provider *file.Provider
+#   error="unable to read directory /etc/guarden/edge: permission denied"
+#
+# `keep-groups` is the one mechanism that carries the user's own supplementary
+# groups into the container, undoing the translation for them. It is on this
+# unit and not on every unit: the edge is the service that reads a directory it
+# does not own, and this user holds exactly two groups. ADR-0017.
+GroupAdd=keep-groups
+Image=docker.io/library/traefik:v3.2
+Exec=--providers.file.directory=/etc/guarden/edge --providers.file.watch=true --entrypoints.web.address=:80 --entrypoints.web.http.redirections.entrypoint.to=websecure --entrypoints.websecure.address=:443 --entrypoints.websecure.http.tls=true --entrypoints.websecure.http.tls.certResolver=le --entrypoints.websecure.http3 --entrypoints.cloudflared.address=:8081 --entrypoints.traefik.address=:8080 --api=true --api.dashboard=true --api.insecure=true --certificatesresolvers.le.acme.httpchallenge=true --certificatesresolvers.le.acme.httpchallenge.entrypoint=web --certificatesresolvers.le.acme.email=ch.kroeppl@gmx.at --certificatesresolvers.le.acme.storage=/etc/guarden/acme/acme.json --accesslog=true --log.level=INFO
+Volume=/var/lib/guarden/edge/dynamic:/etc/guarden/edge:ro
+# ACME certificate storage.
+Volume=/var/lib/guarden/services/traefik-production/volume/acme:/etc/guarden/acme:rw
+# Ticket 292: the per-service htpasswd entries the mutator mints, mounted
+# read-only at the path each service's `usersFile` names. The host directory
+# sits beside `dynamic/` under `/var/lib/guarden/edge` — never under
+# `/etc/guarden/edge`, which is `0750 root:guarden`: the bind source has to be
+# traversable by this unit's own uid, and one that is not makes the container
+# fail to start rather than degrade. `soil install` converges the directory
+# before any unit mounts it, so podman never has to mkdir it as this user.
+# `keep-groups` (above) is what lets the container read the `0640 root:edge`
+# files inside.
+Volume=/var/lib/guarden/edge/basicauth:/etc/guarden/basicauth:ro

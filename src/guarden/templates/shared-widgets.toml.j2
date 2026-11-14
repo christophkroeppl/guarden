@@ -1,0 +1,20 @@
+{#
+  The widget slice `twig` reads from /var/lib/guarden/shared/<service>/.
+
+  The card files are beside it, copied through unparsed; this file is what says
+  which card is which container, and `containers` is the set the unit source
+  defined. `twig` runs as `guarden` and a service's tree is 0700 to that
+  service, so the container set is carried here: `loom` saw the unit source when
+  it rendered and this is the one reader of what it saw. The renderer refuses
+  a `widgets:` entry naming a container this list does not carry (spec 1.2),
+  and `twig` checks the installed slice again, which is what catches a slice
+  left behind by an older render.
+#}
+# Rendered by loom. The mutator installs this read-only; `twig` reads it.
+service = "{{ service }}"
+containers = [{% for name in containers %}"{{ name }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% for entry in rows %}
+[[widgets]]
+container = "{{ entry.container }}"
+file = "{{ entry.file }}"
+{% endfor %}

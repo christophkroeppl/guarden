@@ -1,0 +1,20 @@
+# The vaultwarden module: a self-hosted password manager from the `vaultwarden`
+# service template (spec 3.6).
+#
+# The container is the template's file, copied verbatim:
+# src/guarden/templates/services/vaultwarden/vaultwarden.container.
+#
+# `requires` names cloudflared: the service is reached through the CF tunnel,
+# so the tunnel terminator has to be installed first. `weedr module add
+# vaultwarden` is a whole operation and nothing else depends on it.
+#
+# Production only: one service, on the gated production track. There is no
+# staging service.
+name = "vaultwarden"
+requires = ["cloudflared"]
+
+[[services]]
+# The password manager, reached through the tunnel. With the cloudflared
+# module enabled the production track's default exposure is the tunnel, and
+# the operator pins it with `weedr expose set vaultwarden-production tunnel`.
+service = "vaultwarden-production"

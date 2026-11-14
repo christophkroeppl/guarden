@@ -1,0 +1,46 @@
+# Hermes agent gateway from a guarden service template:
+# `weedr service create <name> --template hermes` copies this file into the
+# service's own quadlet directory, `0640` under the service uid, exactly where
+# a rendered unit lands. Nothing in this file is rendered: a template carries
+# no manifest, so guarden resolves no volume name, allocates no publication
+# and writes no credential line — what the file says is what runs.
+#
+# Hermes serves its API gateway on 8642 inside the container; the publication
+# below maps it to loopback on this box. Until a manifest declares a route and
+# an admin grants it (`weedr port open <name> 8642/tcp`), the only way to the
+# gateway is from this box — which is also how the health check is meant to be
+# asked: curl http://127.0.0.1:<publication>/health
+#
+# The operator plants the runtime credentials before the first start:
+#
+#   weedr secret set <name> HERMES_API_KEY          # bearer token for the API server
+#   weedr secret set <name> GEMINI_API_KEY          # default model routing
+#   weedr secret set <name> HERMES_SUBDOMAIN        # public subdomain on your domain
+#   systemctl start guarden-creds-boot.service
+#
+# A template-created service has no `.guarden/.env.schema`, so the gate has
+# nothing to check and will not tell you a key is missing: an unplanted key is
+# refused by podman when the container starts. Plant first, then start.
+#
+# After the container is running, reconcile the manifest with
+# `weedr service add <name> --from <source-service>` so hermes reaches dbx
+# and bases-mcp through their rendered edges (MCP__DBX__URL / MCP__DAV__URL
+# style variables or the mounted hermes config, depending on the manifest).
+
+[Unit]
+Description=hermes agent from a guarden service template
+
+[Container]
+Image=docker.io/library/hermes:latest
+# Loopback only. Nothing forwards it until a manifest declares a route
+# and an admin grants it (or an exposure is recorded).
+PublishPort=127.0.0.1:8642:8642
+# HERMES_HOME is the container's data dir: config, memories, skills, vault.
+Volume=hermes-data:/data
+Environment=HERMES_HOME=/data
+Environment=API_SERVER_ENABLED=true
+Environment=API_SERVER_HOST=0.0.0.0
+Environment=API_SERVER_PORT=8642
+# Planted by the operator before the first start (see above):
+#   weedr secret set <name> HERMES_API_KEY
+Secret=HERMES_API_KEY,type=env

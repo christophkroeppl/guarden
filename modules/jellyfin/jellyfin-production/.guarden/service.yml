@@ -1,0 +1,44 @@
+# The jellyfin media server, as a service: one user, one home, one unit
+# directory.
+#
+# The unit is the `jellyfin` service template's file —
+# src/guarden/templates/services/jellyfin/jellyfin.container — shipped
+# here so `weedr module add jellyfin` installs exactly what
+# `weedr service create jellyfin-production --template jellyfin` would copy
+# in (the template pattern: the quadlet is the template, and nothing in it is
+# rendered).
+#
+# The container binds loopback only (PublishPort=127.0.0.1:8096:8096), and
+# nothing forwards it until a route declares it. The route below is how it is
+# reached; the edge dials the service's loopback publication on host jellyfin,
+# with the edge's sign-in in front of it (`auth: true`) on top of Jellyfin's
+# own login.
+#
+# Two `state` volumes: `config` (library database, users, watched metadata)
+# and `media` (the library). Both are snapshotted; the media library is the
+# largest volume on the box and still `state`, because somebody deleting a
+# film by accident is an incident. Retention (`keep_last`, `free_limit`) and
+# the `render` supplementary group are set in the service's root-owned
+# overrides.toml on the host, not here.
+#
+# The media host path is derived by guarden, never written on the live host:
+# /var/lib/guarden/services/jellyfin-production/state/media.
+#
+# No `ports:` entry: the service is reached through the edge, and the only
+# host port involved is the edge's own. No `bulk:` list at all: this service
+# has no data whose history is worthless.
+#
+# Production only: this module declares no staging service.
+project: jellyfin
+units: .guarden/quadlet/
+schema: .guarden/.env.schema
+
+state:
+  - config
+  - media
+
+routes:
+  - container: jellyfin
+    port: 8096
+    host: jellyfin
+    auth: true

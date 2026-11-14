@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Render the cloud-init user-data from the repository's own template.
+#
+# **A thin wrapper, and deliberately so.** The renderer, the package list, the
+# phase sequence and the template all live in the program: this finds the
+# checkout they live in and forwards. It used to carry its own copy of the
+# parsing and the jinja rendering, which is exactly the drift it now exists to
+# avoid — a second renderer is a second answer to what the document says.
+#
+# This is what the VPS-prep case uses, where the operator has a checkout and no
+# installed host:
+#
+#   tools/render-user-data --profile vps --branch develop --output user-data.yaml
+#   tools/render-user-data --profile vps --branch feat/testing > user-data.yaml
+#   tools/render-user-data --profile golden-vm --output user-data.yaml
+#   tools/render-user-data                     # the golden VM document, to stdout
+#
+# `--output` is the old spelling and maps to the program's positional PATH; with
+# no `--output` the document goes to stdout, which is what it did before.
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+output=""
+forward=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --output) output="${2-}"; shift 2 ;;
+        --output=*) output="${1#--output=}"; shift ;;
+        *) forward+=("$1"); shift ;;
+    esac
+done
+
+exec env PYTHONPATH="${root}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+    python3 -m guarden.soil packages \
+    --render-user-data "${output:--}" \
+    ${forward[@]+"${forward[@]}"}

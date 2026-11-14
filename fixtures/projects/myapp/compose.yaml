@@ -1,0 +1,18 @@
+# A Compose project, translated by the pinned `podlet` in the renderer.
+#
+# The `ports:` entry is here on purpose: podlet turns it into a `PublishPort=`
+# line verbatim, and the renderer's whole job on that field is to strip it and
+# regenerate the set from the allocations. A repository cannot publish a port by
+# asking for one in a Compose file (ADR-0006).
+services:
+  web:
+    image: docker.io/library/nginx:1.27
+    ports:
+      - "3000:3000"
+    volumes:
+      - data:/var/lib/nginx
+
+  node:
+    image: docker.io/bitcoin/bitcoin:27.0
+    volumes:
+      - chainstate:/var/lib/bitcoin

@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+# The gate-traefik module: `weedr module list`, `weedr module add gate-traefik`, and the state
+# the add leaves behind (ticket 50, spec 3.6, 6.2, 7.4, 7.5, ADR-0008).
+#
+# There is no staged host here and that is the whole of what this file is about:
+# a module's service is a real `useradd`, a real uid and a real delegated
+# `/etc/subuid` range, and a staged `/etc/passwd` reconciled with the real one
+# reports a uid no account carries. `GUARDEN_PREFIX=/` and the machine's own
+# tools, the way `t30-create` and `t60-gate` already do.
+#
+# **The edge binds no privileged port, and there is no capability anywhere.**
+# Both are asserted against the rendered unit rather than against the module's
+# own file, because the unit is what podman reads.
+#
+# machine: fresh
+
+. "$(dirname "$0")/lib.sh"
+
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export GUARDEN_PREFIX=/
+
+# `soil install` owns the `guarden` group and the `guarden` user, and this file
+# needs both: the registry is `root:guarden` and `loom` runs as `guarden`.
+# The host configuration below names `operator` as `host.admin_user`, and the
+# firewall renders the edge's API accept set with that account's uid. On a real
+# host `soil install` records the invoking user, so the account is the fixture's
+# own claim and it has to exist for the answer to be about the design rather
+# than about a name nothing holds.
+id -u operator >/dev/null 2>&1 || {
+    getent group operator >/dev/null 2>&1 || groupadd --system operator
+    useradd --system --no-create-home --gid operator --shell /usr/sbin/nologin operator
+}
+ensure_accounts
+stage_config guarden-nomodules.toml
+
+# `soil install` is this suite's precondition and not its subject: the module
+# directory is guarden's own installation, and a module added months later must
+# not need the phase to run again.
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
+assert_mode /etc/guarden/guarden.toml 640
+assert_owner /etc/guarden/guarden.toml "root:guarden"
+assert_file_exists /usr/lib/guarden/modules/gate-traefik/module.toml
+assert_file_exists /usr/lib/guarden/modules/gate-traefik/traefik-production/.guarden/service.yml
+
+# The registry: the directory plus `guarden.toml` and nothing else. The edge is
+# not installed yet, so it is available and not enabled.
+run weedr module list --json
+assert_exit 0
+assert_json available.0 '"auth-authelia"'
+assert_json available.1 '"cloudflared"'
+assert_json enabled '[]'
+run weedr module list
+assert_exit 0
+assert_stdout_has "gate-traefik"
+assert_stderr_empty
+
+# A module that ships nothing is rejected input, and nothing was written.
+run weedr module add nosuchmodule
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "nosuchmodule"
+assert_file_lacks /etc/guarden/guarden.toml "nosuchmodule"
+
+# The add itself. `soil install` ran above and is not run again: this is the
+# claim that a module can be added without it.
+run weedr module add gate-traefik
+assert_exit 0
+assert_file_has /etc/guarden/guarden.toml 'enabled = ["gate-traefik"]'
+assert_mode /etc/guarden/guarden.toml 640
+assert_owner /etc/guarden/guarden.toml "root:guarden"
+
+# The edge is a service, like any other: its own user, its own home, a uid the
+# host's own user database allocated, and a distinct delegated range.
+assert_passwd traefik-production
+edge_uid=$(getent passwd traefik-production | cut -d: -f3)
+assert_file_exists "/etc/containers/systemd/users/$edge_uid"
+assert_file_has /var/lib/guarden/registry/traefik-production.toml \
+    'installed_by = "gate-traefik"'
+assert_file_has /var/lib/guarden/registry/traefik-production.toml "uid = $edge_uid"
+
+# **`edge` belongs to this verb and to no other phase.** `soil install` creates
+# the `guarden` group and no other, so this is the first time `edge` exists.
+assert_group edge
+assert_supplementary_group traefik-production edge
+# ... and the edge's user is in `edge` and NOT in `guarden`: it is a service, and
+# a service reads `/etc/guarden` and nothing of the unprivileged programs'.
+assert_no_supplementary_group traefik-production guarden
+
+# The edge's configuration directory, written by `roots` as `guarden` and read by
+# the edge: `guarden:edge 2750`, so neither can write where the other writes.
+assert_file_exists /var/lib/guarden/edge/dynamic
+assert_mode /var/lib/guarden/edge/dynamic 2750
+assert_owner /var/lib/guarden/edge/dynamic "guarden:edge"
+# `roots` can write it and the edge cannot; the edge can read it and `roots` has
+# no business in the edge's own tree, which is `0700` to the edge. Every write
+# goes through `run`, or the exit code asserted below is the previous command's.
+run runuser -u guarden -- touch /var/lib/guarden/edge/dynamic/.written-by-roots
+assert_exit 0
+assert_file_exists /var/lib/guarden/edge/dynamic/.written-by-roots
+run runuser -u traefik-production -- touch /var/lib/guarden/edge/dynamic/refused
+assert_exit 1
+assert_file_missing /var/lib/guarden/edge/dynamic/refused
+run runuser -u guarden -- touch /var/lib/guarden/services/traefik-production/home/refused
+assert_exit 1
+assert_file_missing /var/lib/guarden/services/traefik-production/home/refused
+
+# The publications: one per entrypoint the module declares and one for the API,
+# every one of them inside `ingress.publication_range` and every one different.
+# They are loopback publications, not ports the edge binds on a public address.
+registry=/var/lib/guarden/registry/traefik-production.toml
+assert_file_has "$registry" "[publication]"
+web_publication=$(sed -n 's/^web = \([0-9]*\)$/\1/p' "$registry")
+tls_publication=$(sed -n 's/^websecure = \([0-9]*\)$/\1/p' "$registry")
+api_publication=$(sed -n 's/^api = \([0-9]*\)$/\1/p' "$registry")
+[ -n "$web_publication" ] || _fail "the edge's redirect publication was never allocated"
+[ -n "$tls_publication" ] || _fail "the edge's TLS publication was never allocated"
+[ -n "$api_publication" ] || _fail "the module declares api = true and no API publication exists"
+[ "$web_publication" != "$tls_publication" ] \
+    || _fail "the redirect and TLS entrypoints share one publication"
+[ "$api_publication" != "$web_publication" ] \
+    || _fail "the API shares a publication with an ingress entrypoint"
+for publication in "$web_publication" "$tls_publication" "$api_publication"; do
+    [ "$publication" -ge 20000 ] && [ "$publication" -le 32767 ] \
+        || _fail "publication $publication is outside ingress.publication_range"
+done
+
+# `weedr service list` reports the numbers, and `weedr port list` shows the API
+# on its own line — it is a control surface, not a requested public port.
+run weedr service list
+assert_exit 0
+assert_stdout_has "web=$web_publication"
+assert_stdout_has "websecure=$tls_publication"
+run weedr port list
+assert_exit 0
+assert_stdout_has "api $api_publication"
+assert_stdout_has "never forwarded"
+
+# The rendered edge unit and the pod it belongs to: every `PublishPort` is a
+# loopback publication in the range on the POD (podman binds a pod's ports on
+# the pod), and there is no capability, no privileged port and no non-loopback
+# address anywhere in either file.
+unit=/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.container
+pod=/var/lib/guarden/services/traefik-production/home/.config/containers/systemd/traefik.pod
+assert_file_exists "$unit"
+assert_file_exists "$pod"
+assert_file_has "$unit" "Rendered by loom"
+assert_file_has "$unit" "Pod=traefik.pod"
+assert_file_has "$pod" "Network=pasta:"
+assert_file_has "$pod" "PublishPort=127.0.0.1:$web_publication:80"
+assert_file_has "$pod" "PublishPort=127.0.0.1:$tls_publication:443"
+# The API publication is bound too. `api = true` allocates it and the firewall
+# admits it for `host.admin_user`, so leaving it unbound would be a port the
+# host accepts on and the edge answers nothing on. The container port comes from
+# the entrypoint the edge's own source serves the API on.
+assert_file_has "$pod" "PublishPort=127.0.0.1:$api_publication:8080"
+assert_file_lacks "$unit" "AmbientCapabilities"
+assert_file_lacks "$unit" "CapAdd"
+assert_file_lacks "$unit" "Privileged"
+assert_file_lacks "$pod" "0.0.0.0:$web_publication"
+assert_file_lacks "$pod" "$web_publication:$web_publication"
+# The edge reads the shared directory read-only, which is the only direction it
+# has any business writing it in.
+assert_file_has "$unit" "Volume=/var/lib/guarden/edge/dynamic:/etc/guarden/edge:ro"
+
+# One job each: `web` redirects, `websecure` terminates TLS, `traefik` serves the
+# control surface. An entrypoint doing both the redirect and TLS is refused, and
+# the refusal is exit 2 naming it.
+#
+# **The API entrypoint is named `traefik` because traefik names it.** `--api.insecure`
+# is documented as "Activate API directly on the entryPoint named traefik" and no
+# flag overrides the name. It is not `api`: `--entrypoints.api.http.api` is not a
+# traefik v3 field at all, and traefik refuses to start on it
+# (`field not found, node: api`) -- which is what this assertion used to require.
+assert_file_has "$unit" "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+assert_file_has "$unit" "--entrypoints.websecure.http3"
+assert_file_has "$unit" "--entrypoints.traefik.address=:8080"
+assert_file_has "$unit" "--api.insecure=true"
+
+# The shared slice `roots` reads is installed, and the order target is in the
+# system path podman's generator looks in.
+assert_file_exists /var/lib/guarden/shared/traefik-production/routes.toml
+assert_file_exists /etc/systemd/system/guarden-order.target
+
+# `20-ingress-nat.conf`: three rules, one per forwarded port, each a DNAT onto
+# the publication of the entrypoint that answers it. `443/udp` shares the TLS
+# publication because it is served from the same entrypoint.
+nat=/etc/guarden/firewall/20-ingress-nat.conf
+run soil firewall --apply
+assert_not_rejected
+assert_file_has "$nat" \
+    "proto tcp dport 80 DNAT to 127.0.0.1:$web_publication"
+assert_file_has "$nat" \
+    "proto tcp dport 443 DNAT to 127.0.0.1:$tls_publication"
+assert_file_has "$nat" \
+    "proto udp dport 443 DNAT to 127.0.0.1:$tls_publication"
+assert_rule_count "$nat" 3
+# Bare target words: the `-j` spelling ferm never emits asserted nothing.
+assert_file_lacks "$nat" "MASQUERADE"
+assert_file_lacks "$nat" "POSTROUTING"
+assert_file_lacks "$nat" "REDIRECT"
+assert_file_lacks "$nat" "SNAT"
+assert_file_lacks "$nat" "jump DNAT"
+
+# The intra-host rule set: accepts above one drop, and the drop carries no uid.
+services=/etc/guarden/firewall/50-services.conf
+svc_conf=/etc/guarden/firewall/services/traefik-production.conf
+# spec 7.6's loopback deny is `daddr 127.0.0.0/8 jump DROP;` and carries NO
+# interface match: `ip route get 127.0.0.1` answers `local 127.0.0.1 dev lo`, so
+# the destination already scopes the interface. `-o lo` was removed from the
+# spec as redundant; git log -S 'o lo' -- src/guarden/firewall.py returns nothing.
+assert_file_has "$services" "daddr 127.0.0.0/8 jump DROP;"
+if grep -E 'jump DROP' "$services" | grep -q 'lo'; then
+    _fail "the loopback deny names an interface; spec 7.6 has none and the kernel routes 127.0.0.0/8 over lo"
+fi
+assert_file_exists "$services"
+assert_file_has "$services" "chain guarden-svc"
+assert_file_has "$svc_conf" \
+    "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $web_publication jump ACCEPT;"
+assert_file_has "$svc_conf" \
+    "mod owner uid-owner $edge_uid daddr 127.0.0.1 proto tcp dport $tls_publication jump ACCEPT;"
+assert_file_lacks "$services" "10.0.2.2"
+# The API's accept set is `host.admin_user` and nobody else.
+admin_uid=$(getent passwd operator | cut -d: -f3)
+assert_file_has "$svc_conf" \
+    "mod owner uid-owner $admin_uid daddr 127.0.0.1 proto tcp dport $api_publication jump ACCEPT;"
+# The drop is the last rule and names no uid: a default deny that enumerates who
+# it applies to leaves every other uid with the box's own default policy.
+# Rule lines only, so the provenance comments cannot move the numbers.
+drop_line=$(grep -vE '^[[:space:]]*(#|$)' "$services" | grep -n 'jump DROP;' | tail -1 | cut -d: -f1)
+accept_line=$(grep -vE '^[[:space:]]*(#|$)' "$services" | grep -n 'jump ACCEPT;' | tail -1 | cut -d: -f1)
+[ "$drop_line" -gt "$accept_line" ] \
+    || _fail "the loopback drop is not the last rule in 50-services.conf"
+run grep 'jump DROP;' "$services"
+assert_exit 0
+assert_stdout_lacks "uid-owner"
+assert_stdout_has "daddr 127.0.0.0/8"
+
+# A second add is a no-op: the service converges, the list does not grow a
+# second copy, and the ingress is still three rules.
+run weedr module add gate-traefik
+assert_exit 0
+run soil firewall --apply
+assert_not_rejected
+assert_rule_count "$nat" 3
+assert_file_has /etc/guarden/guarden.toml 'enabled = ["gate-traefik"]'
+
+# `weedr module list` after the add reports both halves.
+run weedr module list --json
+assert_exit 0
+assert_json enabled.0 '"gate-traefik"'
+assert_json available.0 '"auth-authelia"'
+assert_json available.1 '"cloudflared"'

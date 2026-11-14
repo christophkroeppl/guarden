@@ -1,0 +1,831 @@
+"""roots — the edge's routes.
+
+spec 6.4. Reads the rendered route slice of every service from
+`/var/lib/guarden/shared/<name>/` and renders the edge's file-provider
+configuration into `/var/lib/guarden/edge/dynamic/`, which is the one directory
+it may write for the edge. Traefik-specific by decision and with no
+intermediate route format: if the edge is ever replaced, `roots` is replaced.
+
+The slice carries the routes; the **registry record carries the destination**
+(§ `_recorded`), because the record is what `weedr expose set` moves and what
+the firewall's accept set is already rendered from. One file per service, so a
+route change is one file changing and the edge picks it up from its own watch
+without a restart, and a service that is removed takes its routes with it.
+
+With the tunnel module, `roots` also renders the tunnel's ingress file into
+`/var/lib/guarden/tunnel/config.yml` for routes whose destination is `tunnel`,
+and removes that file when nothing is left for the tunnel to carry.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+
+from guarden import basicauth, cli, conf, edgeconf, errors, names, paths, registry, render
+from guarden import config as config_mod
+from guarden import modules as modules_mod
+
+GROUPS = (("sync", "render every service's routes into the edge's directory", None),)
+
+TEMPLATE = "edge-routes.yml.j2"
+EXTENSION = ".yml"
+# The per-service basic-auth middleware's name suffix, shared with the template
+# that emits it so the name is written once (ticket 292).
+BASICAUTH_SUFFIX = "-basicauth"
+FORWARD_AUTH = f"_{edgeconf.MIDDLEWARE}{EXTENSION}"
+
+TUNNEL_TEMPLATE = "tunnel-ingress.yml.j2"
+
+EPILOG = """\\
+`roots sync` writes one file per service into the edge's configuration
+directory and nowhere else. The edge reads that directory, so a route change
+appears without a restart.
+
+With the auth-authelia module installed, /etc/guarden/edge/auth-provider names the
+service a route declaring `auth: true` is put behind, and roots validates that
+name on every sync: it must be a service that exists in a track with
+`gated = true`, and anything else is exit 1 with nothing written at all.
+With the module not installed, roots emits the route without a middleware and
+writes one warning naming the service and the route, on every sync.
+"""
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="roots",
+        description="The edge's routes.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    cli.add_groups(parser, "group", GROUPS)
+    return parser
+
+
+def slices() -> dict[str, list[dict]]:
+    """Every service's rendered routes, in service-name order.
+
+    The service's own slice **and every instance's beneath it** (spec 2 and
+    §6.4): an instance's render installs at
+    `shared/<service>/instances/<escaped-ref>/routes.toml`, so two instances of
+    one service both reach the edge and neither — nor the slot's own file — is
+    overwritten by the other.
+
+    Supports two formats:
+    - Legacy: ``[[routes]]`` with a ``destination`` field
+    - Idiomatic: ``[container]`` header + ``[[edge]]``/``[[tunnel]]`` sections
+    """
+    out: dict[str, list[dict]] = {}
+    if not paths.SHARED.is_dir():
+        return out
+    for directory in sorted(path for path in paths.SHARED.iterdir() if path.is_dir()):
+        raw = conf.read_toml(directory / "routes.toml")
+        routes = _normalize_routes(raw)
+        instances = directory / "instances"
+        if instances.is_dir():
+            for own in sorted(path for path in instances.iterdir() if path.is_dir()):
+                raw_inst = conf.read_toml(own / "routes.toml")
+                routes.extend(_normalize_routes(raw_inst))
+        if routes:
+            out[directory.name] = [dict(route) for route in routes]
+    return out
+
+
+def _normalize_routes(raw: dict) -> list[dict]:
+    """Normalize a routes.toml into a flat list of route dicts.
+
+    Only the idiomatic v2 format is supported:
+    ``[container]`` header + ``[[traefik]]``/``[[cloudflared]]`` sections.
+    """
+    routes = []
+
+    container = raw.get("container", {})
+    if not isinstance(container, dict):
+        container = {}
+
+    section_map = {
+        "traefik": "edge",
+        "cloudflared": "tunnel",
+    }
+
+    for section_name, dest in section_map.items():
+        for route in (raw.get(section_name) or []):
+            if not isinstance(route, dict):
+                continue
+            merged = dict(route)
+            # Merge container config: route-level overrides shared header
+            if isinstance(merged.get("container"), dict):
+                rc = merged.pop("container")
+                if rc.get("name") and "container" not in merged:
+                    merged["container"] = rc.get("name", "")
+                if "port" not in merged and rc.get("port"):
+                    merged["port"] = rc.get("port")
+                if "publication" not in merged and rc.get("publication"):
+                    merged["publication"] = rc.get("publication")
+            # Fall back to shared [container] header
+            if not merged.get("container") and container.get("name"):
+                merged["container"] = container.get("name", "")
+            if "port" not in merged and container.get("port"):
+                merged["port"] = container.get("port")
+            if "publication" not in merged and container.get("publication"):
+                merged["publication"] = container.get("publication")
+            # Tag with destination
+            merged["destination"] = dest
+            routes.append(merged)
+
+    return routes
+
+
+def basicauth_flags() -> tuple[dict[str, bool], list[str]]:
+    """The per-service basic-auth middleware the edge attaches, and what could
+    not be decided.
+
+    The MINT is read from the same slice files `slices()` reads, so the login the
+    edge attaches and the routes it attaches it to can never come from two
+    sources. A service whose slice predates the flag (or carries `false`) is
+    grandfathered: no flag, no middleware, byte-identical output.
+
+    **An instance's slice is one of the places the flag is read from, and that
+    is what keeps the middleware on a preview.** The flag is a SERVICE's
+    policy — one login, one record, one slice flag — and the instance's render
+    carries it into the instance's own slice at
+    `shared/<service>/instances/<escaped-ref>/routes.toml`. Reading only the
+    service's own `routes.toml` found nothing for a preview: on an instance
+    track no render writes the slot's file, so the flag was absent and the
+    edge served the preview with no basic auth at all — on the one posture
+    where it matters, `expose = "edge"` (review r2, finding F4).
+
+    The flag is a service's, so any one of the service's slices answers for
+    it: an instance's slice carries the same value the service's own would.
+    The service's own file is read first, so a service with a slot slice and
+    an instance slice renders exactly as it did before.
+
+    **The slice's flag is the MINT; whether the login is attached is the
+    operator's setting** (ADR-0024). `[basicauth] required = false` in the
+    service's root-owned `overrides.toml` is read HERE, at the moment the
+    edge's own file is written, and that is the whole reason the act takes
+    effect on the next sync instead of the service's next full render: the
+    mint never changes and the setting is asked for afresh. Absent is the
+    default (attached), so a service nobody has opted out renders byte for byte
+    what it rendered before.
+
+    **A setting that cannot be read fails CLOSED, which here means the login
+    stays on.** The overrides file is root-owned and this program is
+    unprivileged; a file it cannot parse is the host not being in the assumed
+    state, and the one outcome a malformed grant surface must not produce is a
+    route that silently lost its login. So the middleware stays and the caller
+    gets one `warning:` line naming the service.
+    """
+    out: dict[str, bool] = {}
+    diagnostics: list[str] = []
+    if not paths.SHARED.is_dir():
+        return out, diagnostics
+    for directory in sorted(path for path in paths.SHARED.iterdir() if path.is_dir()):
+        flag = bool(conf.read_toml(directory / "routes.toml").get("basicauth"))
+        if not flag:
+            instances = directory / "instances"
+            if instances.is_dir():
+                for own in sorted(path for path in instances.iterdir() if path.is_dir()):
+                    if conf.read_toml(own / "routes.toml").get("basicauth"):
+                        flag = True
+                        break
+        if flag:
+            try:
+                flag = not basicauth.opted_out(directory.name)
+            except errors.GuardenError as failure:
+                diagnostics.append(
+                    errors.warn(
+                        f"{directory.name}: {failure.message}; the basic-auth middleware stays on"
+                    )
+                )
+        out[directory.name] = flag
+    return out, diagnostics
+
+
+def file_name(service: str) -> str:
+    return f"{service}{EXTENSION}"
+
+
+def _router(service: str, route: dict) -> str:
+    """The router's key in the edge's file: unique per route, per service.
+
+    **An instance's router is keyed by its ref, and this is what makes two
+    instances of one service both routable.** A preview service's route host is
+    the SERVICE's own (`record.route_hosts` is per service), so every instance
+    of one service produced the same key and the same `Host()` rule — and a
+    YAML map holds one definition per key, so only one instance was served
+    (spec 9, spec 7.4).
+
+    The key is `<service>-<label>-<suffix>` for an instance and
+    `<service>-<label>` for a slot's own route, and a slot's key is byte for
+    byte what it was before, so a service with no instance renders exactly as
+    it did.
+
+    **The suffix is the ref in hex, and the reason is the name's grammar.** A
+    ref is a path of unreserved segments and may hold `/` (spec 5.2), and the
+    edge's element names take no `/`; the escaped key holds a backslash, which
+    they take neither. Hex of the escaped key is `[0-9a-f]` only — always a
+    valid name — and it is injective, so two instances of one service never
+    answer to one router. The same encoding the container's name carries, and
+    for the same reason (spec 5.2).
+    """
+    label = route.get("label", route.get("host", "route"))
+    ref = route.get("ref", "")
+    if not ref:
+        return f"{service}-{label}"
+    return f"{service}-{label}-{names.systemd_escape(ref).encode().hex()}"
+
+
+def _rule(route: dict) -> str:
+    """The edge's rule for one route: the host, and a path for an instance.
+
+    **An instance is a path prefix on the service's own host, and this is the
+    whole of how two instances of one service are told apart.** A preview
+    service's route host is the SERVICE's own — `record.route_hosts` is per
+    service, and the spec says so: "Route hosts for an instance are a **path
+    prefix** on one host: `preview.<tunnel_domain>/<ref>`" (spec 9). So the rule
+    for an instance is `Host(...) && PathPrefix(...)` and the rule for a slot's
+    own route is `Host(...)`, byte for byte what it was before.
+
+    The path is the RAW ref, quoted, because the rule is a matcher and the ref
+    is a path: `feature/x` is two segments and `/feature/x` is the path that
+    reaches it. A ref is a path of unreserved segments (spec 5.2), so it holds
+    no character a matcher reads as a metacharacter — but the path is quoted
+    anyway, so a future ref that does cannot silently become a wildcard.
+
+    The same shape the tunnel renders for a preview (`roots._ingress_path`),
+    so the two postures agree on what a preview's URL is.
+    """
+    host = route.get("host", "")
+    ref = route.get("ref", "")
+    if not ref:
+        return f"Host(`{host}`)"
+    return f"Host(`{host}`) && PathPrefix(`/{ref}`)"
+
+
+def _route_destinations(route: dict) -> list[str]:
+    """The destinations a route is published to.
+
+    A route may carry a single ``destination`` (the legacy shape, one string)
+    or a ``destinations`` list (the new shape, several). Both are accepted so a
+    slice written by an older render and one written by hand agree, and a
+    missing answer is an empty list rather than a guess.
+    """
+    if "destinations" in route:
+        value = route.get("destinations")
+        if isinstance(value, (list, tuple)):
+            return [str(item) for item in value if item is not None]
+        if isinstance(value, str):
+            return [value]
+        return []
+    value = route.get("destination")
+    if value is None:
+        return []
+    return [value]
+
+
+def _recorded(service: str, routes: list[dict]) -> list[dict]:
+    """The slice's routes with the **record's** destination where it has one.
+
+    The record is the destination's authority: `render._routes` reads it at
+    render time and `firewall.accept_lines` reads it at install time, so this
+    is the third renderer and it has to agree with the other two or the three
+    answers diverge — which is the defect this ticket exists to remove.
+
+    The slice cannot be that authority because it is the *next render*'s
+    (ticket 294): `weedr expose set` moves the record and the firewall's
+    accept set in one act and touches no rendered slice. Between the act and
+    the service's next render, a row the record no longer carries is a dial to
+    a publication the publishing uid is not accepted on any more. The OUTPUT
+    deny catches it, so the host is not exposed — but a configuration that
+    names a route nothing accepts is wrong whether or not it is caught, and
+    "latently wrong" is what the deny makes it, not what makes it right.
+
+    A label the record does not name keeps the slice's answer: a service
+    created before the field existed has no entry, and its slice is the only
+    answer there is (the same grandfathering `render._routes` applies).
+    """
+    record = registry.load(service)
+    if record is None:
+        return routes
+    existing: dict[str, set[str]] = {}
+    for route in routes:
+        label = route.get("label", "")
+        existing.setdefault(label, set()).update(_route_destinations(route))
+    out = []
+    for route in routes:
+        label = route.get("label", "")
+        destination = record.route_destinations.get(label)
+        if destination and len(existing[label]) <= 1:
+            if "destinations" in route:
+                route = {**route, "destinations": [destination]}
+            else:
+                route = {**route, "destination": destination}
+        out.append(route)
+    return out
+
+
+def render_service(service: str, routes: list[dict], entrypoints: list[str],
+                   provider: str | None, basicauthed: bool = False,
+                   tunnel_entrypoints: list[str] | None = None,
+                   preview_host: str | None = None) -> str:
+    """One service's routes, as the file provider reads them.
+
+    A route carries the forward-auth middleware only when it asked for it,
+    there is a provider to ask for it from, and it is not the provider's own
+    route. The provider's own route is the lockout this excludes: a sign-in
+    page behind itself cannot be reached, whatever its manifest declares.
+
+    The **basic-auth** middleware (ticket 292) is the other half of the story
+    and is deliberately not a route's to choose: when the login was minted for
+    this service and the operator has not opted out of it, every route the edge
+    serves here carries it, in front of forward-auth when both apply. No
+    manifest reaches this answer — the mint arrives in the slice from the
+    registry and the setting is the root-owned `overrides.toml` (ADR-0024) —
+    so there is no key that removes it (spec 4's closed key sets, spec 10).
+    """
+    tunnel_entrypoints = tunnel_entrypoints or []
+    rows = []
+    seen_routers: set[str] = set()
+    for route in routes:
+        dests = _route_destinations(route)
+        is_edge = "edge" in dests
+        is_tunnel = "tunnel" in dests
+        if not (is_edge or is_tunnel):
+            continue
+        if is_tunnel and is_edge:
+            row_entrypoints = list(dict.fromkeys(entrypoints + tunnel_entrypoints))
+        elif is_tunnel:
+            row_entrypoints = list(tunnel_entrypoints)
+        else:
+            row_entrypoints = list(entrypoints)
+        base_router = _router(service, route)
+        router_key = base_router
+        if router_key in seen_routers:
+            router_key = f"{base_router}-tunnel"
+        seen_routers.add(router_key)
+        rows.append({
+            "router": router_key,
+            "rule": _rule(route),
+            "entrypoints": row_entrypoints,
+            "target": f"http://{route.get('target', '')}",
+            "middleware": bool(route.get("auth")) and provider is not None
+            and service != provider and is_edge,
+            "basicauth": bool(basicauthed) and is_edge,
+        })
+        # Preview instance reached through the tunnel: add a router on the
+        # preview host so Traefik can route `preview.<tunnel_domain>/<ref>`.
+        if is_tunnel and preview_host and route.get("ref"):
+            ref = route.get("ref", "")
+            rule = (
+                f"Host(`{preview_host}`) && PathPrefix(`/{ref}`)"
+                if ref else f"Host(`{preview_host}`)"
+            )
+            preview_key = f"{_router(service, route)}-preview"
+            seen_routers.add(preview_key)
+            rows.append({
+                "router": preview_key,
+                "rule": rule,
+                "entrypoints": list(tunnel_entrypoints),
+                "target": f"http://{route.get('target', '')}",
+                "middleware": False,
+                "basicauth": False,
+            })
+    if not rows:
+        return ""
+    # One file, one definition: a service with no policy renders byte for byte
+    # what it rendered before, and the file provider merges this directory, so
+    # the definition exists only in the files that use it.
+    return render.render_template(
+        TEMPLATE,
+        service=service,
+        rows=rows,
+        basicauth_name=f"{service}{BASICAUTH_SUFFIX}",
+        users_file=basicauth.users_file(service) if basicauthed else "",
+    )
+
+
+def write(service: str, body: str) -> None:
+    if not body:
+        return
+    conf.write_file(paths.EDGE_DYNAMIC / file_name(service), body, 0o640)
+
+
+def _quote_ref(escaped_ref: str) -> str:
+    r"""`escaped_ref` as a regex fragment: its `\xNN` byte escapes kept, the
+    rest quoted.
+
+    cloudflared's `ingress.path` is a regex, and `systemd_escape` already
+    leaves a ref in a form the engine reads byte for byte: a byte outside the
+    safe set is `\xNN`, a hex escape matching that raw byte of the request
+    path, while what it passes through raw is the safe set — and `.` among
+    those is a metacharacter. So the `\xNN` runs stay as they are and
+    everything else goes through `re.escape`.
+    """
+    parts = re.split(r"(\\x[0-9a-fA-F]{2})", escaped_ref)
+    return "".join(
+        part if index % 2 else re.escape(part) for index, part in enumerate(parts)
+    )
+
+
+def _ingress_path(ref: str) -> str:
+    r"""A preview ref as cloudflared's `ingress.path`: quoted, anchored, and
+    written to survive the template's double-quoted YAML scalar.
+
+    `^/<quoted>(/|$)` because ingress matching is first-match-wins and the
+    `http_status:404` catch-all is last: an unanchored `/abc` answers `/abcd`
+    and a raw `.` answers every request on the preview hostname, so whichever
+    preview renders first wins every contested path.
+
+    The backslashes are doubled because `path:` is written between double
+    quotes, where `\xNN` is itself an escape — undoubled it decodes in transit
+    and hands the regex a bare `-` instead of `systemd_escape`'s output,
+    undoing the escaping the ref's validation depends on.
+    """
+    pattern = f"^/{_quote_ref(names.systemd_escape(ref))}(/|$)"
+    return pattern.replace("\\", "\\\\")
+
+
+def render_tunnel(routes: list[dict], config, traefik_target: str | None = None,
+                  dashboard_host: str | None = None,
+                  dashboard_target: str | None = None,
+                  tunnel_id: str | None = None) -> str:
+    """The host's tunnel ingress, as `cloudflared` reads it.
+
+    Only routes whose destination is `tunnel` are rendered. The catch-all is
+    `http_status:404` and is last, so a hostname in the tunnel's zone that no
+    service claims is a 404 from the tunnel rather than a default page.
+
+    Preview instances on the tunnel are published at preview.<tunnel_domain>/<ref>
+    as a path on one host. **A route with a
+    `ref` is therefore never a `rows` entry of its own**: an instance's recorded
+    name is `preview.web` — the track's prefix and a label, which is the path's
+    shape and not a name in the tunnel's zone — so publishing it as a hostname
+    would put a name in no zone in the file, first-match-wins above the path
+    rules (spec 9, ticket 324).
+    """
+    if not config.tunnel_domain:
+        return ""
+    target_for = traefik_target if traefik_target else None
+    rows = [
+        {
+            "hostname": route.get("host", ""),
+            "service": (
+                f"http://{target_for}"
+                if target_for
+                else f"http://{route.get('target', '')}"
+            ),
+        }
+        for route in routes
+        if "tunnel" in _route_destinations(route) and not route.get("ref")
+    ]
+
+    previews = []
+    if config.tunnel_domain:
+        for _service_name, entries in slices().items():
+            for route in _recorded(_service_name, entries):
+                if "tunnel" in _route_destinations(route) and route.get("ref"):
+                    # This is a tunnel route for a preview instance
+                    previews.append({
+                        "hostname": f"preview.{config.tunnel_domain}",
+                        "service": (
+                            f"http://{target_for}"
+                            if target_for
+                            else f"http://{route.get('target', '')}"
+                        ),
+                        "path": _ingress_path(route["ref"]),
+                    })
+
+    # Dashboard, tunnel-only.
+    if dashboard_host and dashboard_target:
+        rows.append({
+            "hostname": dashboard_host,
+            "service": (
+                f"http://{dashboard_target}"
+                if not dashboard_target.startswith("http")
+                else dashboard_target
+            ),
+        })
+
+    if not rows and not previews:
+        return ""
+    return render.render_template(TUNNEL_TEMPLATE, rows=rows, previews=previews, tunnel_id=tunnel_id or "")
+
+
+def write_tunnel(body: str) -> None:
+    """The tunnel's ingress file, written — and swept, like the edge's files.
+
+    An empty body is not "write nothing": it is "this host publishes nothing
+    through the tunnel", so a config left behind would keep dialling rows for
+    routes that are gone. `sweep` gives the edge's per-service files that
+    guarantee; this is the same guarantee for the one file the tunnel reads.
+    """
+    if not body:
+        if paths.TUNNEL_CONFIG.is_file():
+            paths.TUNNEL_CONFIG.unlink()
+        return
+    paths.TUNNEL.mkdir(parents=True, exist_ok=True)
+    conf.write_file(paths.TUNNEL_CONFIG, body, 0o644)
+
+
+def render_hosts(routes: list[dict], config) -> str:
+    """`/etc/hosts` entries for the cloudflared service.
+
+    cloudflared runs in a container and resolves the tunnel's private hostnames
+    through the system resolver; on this host those names are not in DNS, so
+    they are given to it as hosts entries, one per tunnel route, mapping each
+    hostname to the ingress alias — the same answer `AddHost=` gives a service's
+    own containers. An empty result means there is nothing for the tunnel to
+    carry, and the file is swept.
+    """
+    if not config.tunnel_domain:
+        return ""
+    hostnames: list[str] = []
+    seen: set[str] = set()
+    for route in routes:
+        if "tunnel" not in _route_destinations(route):
+            continue
+        if route.get("ref"):
+            continue
+        hostname = route.get("host", "")
+        if isinstance(hostname, str) and hostname and hostname not in seen:
+            seen.add(hostname)
+            hostnames.append(hostname)
+    for _service_name, entries in slices().items():
+        for route in _recorded(_service_name, entries):
+            if "tunnel" not in _route_destinations(route) or not route.get("ref"):
+                continue
+            hostname = f"preview.{config.tunnel_domain}"
+            if hostname not in seen:
+                seen.add(hostname)
+                hostnames.append(hostname)
+    if not hostnames:
+        return ""
+    lines = ["# Generated by roots. Cloudflared private hostname resolution."]
+    for hostname in hostnames:
+        lines.append(f"{config.alias} {hostname}")
+    return "\n".join(lines) + "\n"
+
+
+def write_hosts(body: str) -> None:
+    """The cloudflared service's hosts file, written — and swept."""
+    path = paths.TUNNEL / "hosts"
+    if not body:
+        if path.is_file():
+            path.unlink()
+        return
+    paths.TUNNEL.mkdir(parents=True, exist_ok=True)
+    conf.write_file(path, body, 0o644)
+
+
+def sweep(written: set[str]) -> list[str]:
+    """Remove the file of a service that is gone, and nothing else."""
+    removed: list[str] = []
+    for path in sorted(paths.EDGE_DYNAMIC.glob(f"*{EXTENSION}")):
+        if path.name in written:
+            continue
+        path.unlink()
+        removed.append(path.name)
+    return removed
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.group != "sync":
+        return cli.pending(cli.invocation("roots", args.group, None))
+    try:
+        return sync()
+    except errors.GuardenError as failure:
+        sys.stderr.write(failure.report("roots") + "\n")
+        return failure.code
+
+
+def provider_for(config) -> str | None:
+    """The auth service a `auth: true` route is put behind, or `None`.
+
+    The module not being enabled is `None` and not an error: the ticket makes an
+    absent provider a warning on every sync rather than a failure, because a
+    host without the auth-authelia module is a host whose routes were never protected and
+    making `roots` fail would break the edge on top of it.
+
+    The module being enabled and the marker being unusable IS an error, raised
+    from `edgeconf.provider` and caught by `main` as exit 1 with nothing
+    written.
+    """
+    if "auth-authelia" not in config.modules:
+        return None
+    return edgeconf.provider(config)
+
+
+def _warnings(routes: dict[str, list[dict]], provider: str | None) -> list[str]:
+    """One `warning:` line per route that asked for the middleware and did not
+    get it, every sync.
+
+    Repeated rather than once-ever on purpose: a warning somebody scrolled past
+    is the same as no warning at all. There is no provider's-own-route case to
+    skip: with no provider named, no route is the provider's.
+    """
+    if provider is not None:
+        return []
+    out: list[str] = []
+    for service, entries in routes.items():
+        for route in entries:
+            if not route.get("auth"):
+                continue
+            out.append(
+                errors.warn(
+                    f"{service}: the route {_router(service, route)} declares `auth: true` "
+                    f"and the auth-authelia module is not installed, so it is emitted without a "
+                    f"middleware"
+                )
+            )
+    return out
+
+
+def provider_publication(provider: str) -> int:
+    """The loopback publication the provider's own sign-in page is reached on.
+
+    Read from the provider's own route slice rather than guessed from its
+    registry: the slice says which container serves the route, and a provider
+    with two containers would otherwise be aimed at whichever publication sorted
+    first. A registry with no entry for it at all is exit `1` naming the service,
+    because a forward-auth rule aimed at port 0 answers nothing and looks
+    configured.
+    """
+    slice_path = paths.SHARED / provider / "routes.toml"
+    for route in _normalize_routes(conf.read_toml(slice_path)):
+        publication = route.get("publication")
+        if isinstance(publication, int) and not isinstance(publication, bool) and publication:
+            return publication
+    record = registry.load(provider)
+    held = sorted(set(record.publication.values())) if record is not None else []
+    if held:
+        return held[0]
+    raise errors.GuardenError(
+        f"the auth provider {provider} holds no publication, so a route put behind it would "
+        f"be aimed at nothing; `weedr service list` reports the publications a service holds",
+        errors.HOST_NOT_AS_ASSUMED,
+    )
+
+
+def forward_auth(provider: str) -> str:
+    """The middleware definition, aimed at the provider's own publication.
+
+    Forward-auth is one request to the provider, answered with a redirect to its
+    sign-in page or with 2xx carrying the header, so the address is
+    `<name>:<publication>` — the same form every route target uses (spec 7.3),
+    because the edge resolves the name through the `AddHost=` entry loom wrote
+    and a loopback address would be the host's, which a container does not share.
+    """
+    return render.render_template(
+        "edge-forward-auth.yml.j2",
+        middleware=edgeconf.MIDDLEWARE,
+        address=f"{provider}:{provider_publication(provider)}",
+    )
+
+
+def sync() -> int:
+    config = config_mod.load()
+    entrypoints = _entrypoints(config)
+    if not entrypoints:
+        raise errors.GuardenError(
+            f"no enabled module declares an edge, so there is nothing to render routes into; "
+            f"the enabled modules are: {', '.join(config.modules) or 'none'}",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    # Split serving entrypoints: the tunnel (cloudflared) entrypoint is for
+    # tunnel (.guarden) routes only; the rest serve edge (public) routes.
+    tunnel_ep = "cloudflared"
+    tunnel_entrypoints = [tunnel_ep] if tunnel_ep in entrypoints else []
+    # Cloudflared's WARP origin defaults to https://10.0.2.2 (port 443 =
+    # websecure entrypoint) and cannot be changed, so serve tunnel (.guarden)
+    # hostnames on websecure too. Port 80 (web) is a redirect entrypoint, not
+    # a serving one, so it is never in `entrypoints`.
+    if "websecure" in entrypoints and "websecure" not in tunnel_entrypoints:
+        tunnel_entrypoints = ["websecure"] + tunnel_entrypoints
+    edge_entrypoints = [e for e in entrypoints if e != tunnel_ep and e != "web"]
+    if not edge_entrypoints:
+        edge_entrypoints = list(entrypoints)
+    provider = provider_for(config)
+    # The record answers the destination, the slice supplies everything else.
+    # Both are read here rather than in the renderers so that the edge files
+    # and the tunnel config — which are written in one sync and read by two
+    # different uids — cannot disagree about where a route went.
+    routes = {service: _recorded(service, entries)
+              for service, entries in slices().items()}
+    policies, policy_diagnostics = basicauth_flags()
+    # **The whole plan is rendered before the first byte is written**, after
+    # `provider_for` has refused a marker that does not hold. A validator that
+    # writes the routes and then complains has already broken the routes that
+    # were working, which is the one outcome this exists to prevent.
+    plan = [
+        (service, render_service(service, entries, edge_entrypoints, provider,
+                                 policies.get(service, False),
+                                 tunnel_entrypoints=tunnel_entrypoints,
+                                 preview_host=(f"preview.{config.tunnel_domain}"
+                                               if config.tunnel_domain else None)))
+        for service, entries in routes.items()
+    ]
+    auth_body = forward_auth(provider) if provider else None
+    written = {file_name(service) for service, body in plan if body}
+
+    # Traefik target for tunnel routes: cloudflared dials the edge's plaintext
+    # entrypoint publication instead of each service directly.
+    traefik_target = None
+    dashboard_host = None  # dashboard is tunnel-only; no public DNS
+    dashboard_target = None
+    for module in config.modules:
+        try:
+            entry = modules_mod.read(module).edge()
+        except errors.GuardenError:
+            continue
+        if entry is None:
+            continue
+        record = registry.load(entry.name)
+        if record is not None and entry.tunnel_entrypoint:
+            pub = record.publication.get(entry.tunnel_entrypoint)
+            if pub is not None:
+                # cloudflared runs in its own container and cannot resolve
+                # service names (its AddHost only maps *.guarden hosts). The
+                # alias is the container's gateway == the host's loopback, so
+                # dial it directly.
+                traefik_target = f"{config.alias}:{pub}"
+                dashboard_target = f"{config.alias}:{pub}"
+    tunnel_body = render_tunnel(
+        [route for entries in routes.values() for route in entries], config,
+        traefik_target=traefik_target,
+        dashboard_host=dashboard_host,
+        dashboard_target=dashboard_target,
+        tunnel_id=config.tunnel_id,
+    )
+
+    hosts_body = render_hosts(
+        [route for entries in routes.values() for route in entries], config
+    )
+
+    for service, body in plan:
+        write(service, body)
+    if auth_body is not None:
+        conf.write_file(paths.EDGE_DYNAMIC / FORWARD_AUTH, auth_body, 0o640)
+        written.add(FORWARD_AUTH)
+    write_tunnel(tunnel_body)
+    write_hosts(hosts_body)
+    # Dashboard file (tunnel-only), owned by roots so sweep keeps it.
+    dashboard_body = ""
+    if dashboard_target:
+        dashboard_body = (
+            "# Written by roots. Do not edit: the next sync overwrites this file.\n"
+            "http:\n"
+            "  routers:\n"
+            "    traefik-dashboard:\n"
+            "      rule: \"Host(`traefik.guarden`)\"\n"
+            "      entryPoints:\n"
+            "        - web\n"
+            "        - websecure\n"
+            "        - cloudflared\n"
+            "      service: api@internal\n"
+        )
+    if dashboard_body:
+        conf.write_file(paths.EDGE_DYNAMIC / "traefik-dashboard.yml", dashboard_body, 0o640)
+        written.add("traefik-dashboard.yml")
+    printed = [f"{service} {len(routes[service])} routes" for service, _ in plan]
+    for name in sweep(written):
+        printed.append(f"removed {name}")
+
+    for line in [*policy_diagnostics, *_warnings(routes, provider)]:
+        sys.stderr.write(line + "\n")
+    for line in printed:
+        sys.stdout.write(line + "\n")
+    return 0
+
+
+def _entrypoints(config) -> list[str]:
+    """The entrypoints a route may be attached to: the ones that serve.
+
+    Read from the edge's own shipped unit source, so the answer is what the
+    edge was built with and not a list here that could drift from it. The
+    redirect entrypoint is never one of them: every request to it becomes a
+    redirect, so a router on it would answer a 301 for a host it was meant to
+    proxy.
+    """
+    for module in config.modules:
+        try:
+            entry = modules_mod.read(module).edge()
+        except errors.GuardenError:
+            continue
+        if entry is None:
+            continue
+        found = edgeconf.of_source(modules_mod.source_of(module, entry.name), entry.name)
+        serving = edgeconf.routing_entrypoints(found)
+        if not serving:
+            raise errors.GuardenError(
+                f"the edge {entry.name} declares no entrypoint that serves, so every route "
+                f"would land on the redirect and answer a redirect instead of the container"
+            )
+        return serving
+    return []
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

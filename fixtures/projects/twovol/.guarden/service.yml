@@ -1,0 +1,7 @@
+project: twovol
+units: compose.yaml
+state:
+  - data
+  - cache
+bulk:
+  - scratch

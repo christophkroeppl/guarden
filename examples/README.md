@@ -1,0 +1,83 @@
+# Example service templates
+
+`weedr service create <name> --template <template>` copies the files of one
+directory out of the installed template set into the service's own quadlet
+directory. The set is read from
+
+```
+$GUARDEN_TEMPLATES/services  when that is set
+<prefix>/usr/lib/guarden/templates/services/      otherwise
+```
+
+which `soil install` creates from `src/guarden/templates/` — and that tree
+**ships a `services/` subdirectory with three templates in it** (`postgres`,
+`vaultwarden` and `oxicloud`), so a template set ships with guarden and
+`weedr service create --template postgres` works on a fresh host:
+
+```sh
+weedr service create postgres-staging --env staging --template postgres
+```
+
+**And then check that it answers** — `weedr service start` returning
+`started` is the mutator's word for it, not the service's. The runbook's
+**verifying a service answers** section has the command per example, what a
+healthy answer looks like, and the client tooling each one needs:
+[`docs/sysadmin.md`](../docs/sysadmin.md).
+
+`soil install` copies the checkout's `src/guarden/templates/` over the installed
+tree and does not delete anything the checkout does not carry, and
+`soil install --check` compares the other way — installed against the checkout —
+so a `services/` set installed by hand is neither overwritten nor reported as
+drift.
+
+## What a template is
+
+A template is a directory of quadlet files and nothing else. `create` walks it
+and writes **every file in it** into `home/.config/containers/systemd/`, `0640`
+owned by the service user, so a `.guarden/` or a `compose.yaml` dropped in here
+would land in the unit directory rather than where the renderer looks for it.
+
+A template is not a manifest, and it declares nothing guarden reads:
+
+* no `state:` and no `bulk:` — no subvolume and no snapper configuration is
+  created, so a `Volume=` in the template names a podman volume in the service's
+  own store;
+* no `ports:` — no publication is allocated and no firewall rule is written, so
+  a `PublishPort=` binds loopback;
+* no `schema:` — the credential gate has nothing to check, so a `Secret=` line
+  names a key that has to be planted by hand before the first start.
+
+A manifest brings all of that, and the first `weedr service add` that copies one
+in creates the volumes. See `docs/sysadmin.md`, **Deploying a service by hand**.
+
+## The set
+
+| template | image | what it shows |
+|---|---|---|
+| `postgres` | `docker.io/library/postgres:17-alpine` | the third-party database deployment from the app-VM runbook: loopback publication, a `Secret=` read as an environment variable, `PGDATA` a subdirectory of the mount |
+|`vaultwarden` | `docker.io/vaultwarden/server:latest` | a self-hosted web service with one data volume and no credential line |
+| `rustfs` | `docker.io/rustfs/rustfs:latest` | an S3-compatible object store, and a **provider of the `secret` kind**: a consumer edges to it with `auth: secret` and reads the minted value as `<AS>_SECRET` |
+| `umami` | `ghcr.io/umami-software/umami:postgresql-latest` | web analytics: a loopback publication on 3000, and a `DATABASE_URL` secret the operator plants from a database edge's rendered credentials |
+| `pgbouncer` | `docker.io/edoburu/pgbouncer:latest` | Postgres connection pooler: loopback publication on 6432, and a `DATABASE_URL` secret the operator plants to point it at a postgres instance |
+| `oxicloud` | `docker.io/diocrafts/oxicloud:latest` | a WebDAV cloud / obsidian sync: loopback publication, a named data volume and vendor credentials (`OXICLOUD_JWT_SECRET`, `OXICLOUD_DB_CONNECTION_STRING`) planted by hand before the first start |
+| `bitcoin-knots` | `docker.io/bitcoinknots/bitcoin:latest-alpine` | a pruned Bitcoin full node: loopback publication on the peer port 8333 (granted publicly by the admin, no edge, no routes), `-prune=20000`, `Restart=always`, a snapshotted `data` wallet volume and a bulk `chain` volume that is never snapshotted |
+
+Each is one `.container` file, which is all `create` needs. The file name is the
+unit name in the service's own user manager, and the manager is per service uid,
+so two services created from the same template do not share a unit.
+
+**A template carries no `provides:`**, and the `rustfs` one is where that
+matters: a consumer's edge to a provider is checked against the provider's
+**registry** (spec 7.3), and the kinds reach the registry from the provider's
+manifest — which a template does not ship. So the operator writes it, and
+`weedr service add <name> --from <name>` reconciles it in:
+
+```yaml
+project: rustfs
+units: .guarden/quadlet/
+provides:
+  - secret
+ports:
+  - container: rustfs
+    port: 9000
+```

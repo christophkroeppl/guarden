@@ -1,0 +1,175 @@
+{% if profile == 'golden-vm' %}
+#cloud-config
+#
+# Rendered by `tools/render-user-data` from packages/packages.toml. Do not edit
+# the package list here: this file is generated from the one in the repository,
+# and a package named in both is a package that can drift.
+#
+# The golden VM is the harness that cannot be faked: a throwaway machine with
+# real tools, proving the claims the fast harness cannot — that a rootless
+# container reaches a dependency by the pinned alias (ADR-0018), that nothing
+# unprivileged binds below 1024, and that a clone of a live data volume starts
+# and recovers. `tools/golden-vm` is the entry point and asserts none of it; a
+# runner that also decided what a pass was would be a harness whose result
+# nobody could audit.
+#
+# This document only PROVISIONS and then CONVERGES. It installs what the soil
+# phases run over, and it installs nothing guarden owns: it does not create the
+# program users, does not write /usr/lib/guarden, and does not set the ingress
+# alias. `soil install` does those, and a document that pre-empted them would
+# make the phases untestable — a phase that finds its own work already done is a
+# phase that proves nothing.
+#
+# It fetches nothing from PyPI and no wheel. Everything below is a distribution
+# package, and the one artefact from outside a distribution repository — the
+# pinned `podlet` release — is fetched by `soil packages` and verified against
+# the SHA256 recorded in this repository.
+#
+# What it must get right, and why:
+#
+# - podman must be new enough for pasta. Podman 5.0 made pasta the default
+#   rootless network; below that, rootless containers get slirp4netns and the
+#   pinned alias's premise does not hold. Ubuntu 26.04 ships 5.x, so `pasta` is a
+#   plain package install and the binary is /usr/bin/pasta. Installing it
+#   explicitly rather than relying on Recommends is deliberate: a golden VM that
+#   silently lost pasta to a Recommends change would report "not run" for every
+#   networking claim, which is how ticket 15's eleven checks came back unproven
+#   in the first place.
+#
+# - btrfs-progs and snapper are needed because `soil storage` converges a btrfs
+#   layout and a snapper value set. Ticket 15 measured a real deviation here
+#   (5.16.2), so the version is recorded rather than assumed.
+#
+# - `sysctl` and the kernel modules the sysctl phase writes (route_localnet on
+#   the ingress interface, IPv6 off) must be loadable. The sysctl phase is
+#   `route_localnet` on one interface; a machine that cannot set it will report
+#   drift forever and that is a real answer, not a harness failure.
+#
+# - iproute2 and nftables-family tooling because `soil firewall` converges ferm
+#   and the inspection in ticket 140 reads the installed `nat PREROUTING` chain.
+#   **The chain ferm installs is in iptables-LEGACY, and that is ferm's own
+#   choice** -- ferm 2.7 prefers the `iptables-legacy*` names when resolving the
+#   xtables binary it loads a policy with, measured on the golden by reading the
+#   argv out of `ferm --shell`. Both families of tooling are therefore installed:
+#   the nft ones for what an operator reading nft sees, and the legacy table for
+#   the rules actually in force. See
+#   docs/notes/iptables-variant-must-be-stated.md.
+#
+# The runcmd step below records which table the rules go in before any phase
+# runs, so a machine booting into the two halves disagreeing says so there rather
+# than after six phases report success.
+
+package_update: true
+package_upgrade: false
+
+{% else %}
+#cloud-config
+#
+# Rendered by `soil packages --render-user-data` from this template and
+# `packages/packages.toml`. Do not edit the package list here: this file is
+# generated from the one in the repository, and a package named in both is a
+# package that can drift.
+#
+# **This document provisions a host; it does not converge one.** It installs the
+# substrate the phases need, clones the repository, and hands the rest to
+# `tools/install.sh`, which owns convergence and knows how to resume: the btrfs
+# conversion reboots twice, and a cloud-init runcmd that tried to span a reboot
+# would be a document that silently stopped half way.
+#
+# **The branch is set here, once.** The renderer knows the branch of the
+# checkout it renders from — that is what `--branch` says — and it is written
+# into both the clone step and the installer's call, so the two cannot disagree
+# about which tree the host installs from. The installer records it in the
+# service's environment, so the run after the first reboot uses the same branch
+# without the document naming it again.
+#
+# **The install is ONE CLICK from here.** The installer hands the work to a
+# temporary systemd service that carries the run across the conversion's two
+# reboots, and the machine reboots itself. Nothing is asked of the operator
+# after this document has run.
+#
+# **A boot's `cloud-init status` is not the host's convergence.** cloud-init's
+# runcmd runs once per instance, so the document is read on the first boot and
+# never again; the status it writes says whether *the document* ran, not
+# whether the host converged. The service carries the rest, and the host's own
+# answer is `soil --check`.
+#
+# **The manual fallback is `--inline`.** `install.sh --inline` runs the phases
+# in this process and stops with exit 75 when a phase asks for a reboot; the
+# operator then reboots and re-runs the same command. This is the path for a
+# host where systemd cannot run a service, and every phase is check-then-apply
+# so a re-run converges only what is left.
+#
+# Nothing here is fetched from PyPI. Every package comes from the distribution's
+# own repository; the one artefact from outside is the pinned `podlet` release,
+# which `soil packages` verifies against the SHA256 recorded in the repository.
+
+package_update: true
+package_upgrade: false
+{% endif %}
+packages:
+  # substrate: what `soil packages` converges, from packages.toml
+{% for package in substrate %}  - {{ package }}
+{% endfor %}{% if harness %}
+  # harness: the throwaway machine's check tooling, and no host's
+{% for package in harness %}  - {{ package }}
+{% endfor %}{% endif %}
+
+{% if profile == 'golden-vm' %}
+write_files:
+  # The evidence the run leaves behind: the directory holds substrate.txt
+  # (written by verify-substrate.sh) and this marker.
+  #
+  # **There is no separate entry for the directory itself.** A write_files entry
+  # with no `content` writes a BLANK FILE (cloud-init's read_url_or_decode:
+  # "empty URL and content -> write a blank file"), so an entry for
+  # /var/lib/guarden-evidence would leave a 0-byte regular file there and every
+  # redirect into evidence/substrate.txt fails ENOTDIR under `set -eu`, killing
+  # the whole shellified runcmd before any phase runs. Writing this file is what
+  # creates the directory: util.write_file has ensure_dir_exists=True and
+  # ensures os.path.dirname(filename) exists first.
+  #
+  # The marker also keeps a stale evidence directory from an earlier image from
+  # being mistaken for this run's result.
+  - path: /var/lib/guarden-evidence/PROVENANCE
+    permissions: "0644"
+    content: |
+      guarden golden VM user-data, rendered from packages/packages.toml
+      image: ubuntu 26.04 (resolute)
+      provisioned by cloud-init; guarden itself is converged by `soil`
+
+
+runcmd:
+  # Verify the substrate the checks depend on, loudly and early.
+  - |
+{{ verify_substrate | indent(4, first=True) }}
+
+  # Which iptables table the firewall rules go in, before any phase runs.
+  - |
+{{ record_iptables | indent(4, first=True) }}
+
+  # Converge every phase, then check every phase. The order and the phase list
+  # are `soil list`'s, read from the program at render time, so this line and
+  # the program cannot disagree about what converged state is.
+  - |
+    set -eu
+    {{ sequence }}
+{% else %}
+
+write_files:
+  # The clone step, tracked in the repository and inlined here so the bytes a
+  # machine runs and the bytes in the repository are the same.
+  - path: /usr/local/bin/guarden-provision.sh
+    permissions: "0755"
+    content: |
+{{ provision_script | indent(6, first=True) }}
+
+runcmd:
+  - /usr/local/bin/guarden-provision.sh
+  # The installer hands the work to a temporary systemd service and returns;
+  # the service carries the run across the conversion's reboots and the
+  # machine reboots itself. The branch is named here, once.
+  - bash "{{ repo_dir }}/tools/install.sh" --branch "{{ repo_branch }}"
+{% endif %}
+
+final_message: "{{ final_message }}"

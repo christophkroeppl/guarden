@@ -1,0 +1,16 @@
+# A project with one route, which is what the first vertical slice needs: a
+# manifest in, and a route the edge can answer with the right Host header.
+#
+# The container port is the container's own. The loopback publication guarden
+# forwards to it is allocated from `ingress.publication_range` and named in
+# neither this file nor anything else a repository can edit.
+#
+# It is 80 because that is what `nginx:1.27` listens on inside the container: a
+# route that named a port nothing binds is a publication the edge dials and gets
+# nothing back from.
+project: routed
+units: .guarden/quadlet/
+routes:
+  - container: web
+    port: 80
+    host: web

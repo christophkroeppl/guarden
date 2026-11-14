@@ -1,0 +1,3 @@
+# Written by soil storage. A snapshot of `root` before every package transaction,
+# so a distribution upgrade is a rollback rather than an incident.
+DPkg::Pre-Invoke { "/usr/bin/snapper -c root create --cleanup-algorithm number --description 'before a package transaction'"; };

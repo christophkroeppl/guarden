@@ -1,0 +1,688 @@
+"""`/var/lib/guarden/registry/<name>.toml`: the record of a service's identity.
+
+The registry is a **projection** (spec 3.4): anything derivable from the
+manifest and the host is recomputed, and only what cannot be is stored — the
+uid, the deployed sha, the allocated publications, the snapshot numbers and the
+seeds. It is the single record of a service's identity, its edges, its
+publications, its lineage and its ports, and it is `0640 root:guarden` because it
+describes the whole topology: a service that can read it can read the map of the
+box.
+
+Written only by the mutator, and only through the spec 3.5 protocol. Read with
+no lock, because a writer renames and a reader therefore sees the old file or
+the new one and never a partial one.
+
+A configuration's *name* is opaque and nothing parses it (spec 8.1): workload
+and volume names may both contain `-`, so `<service>-<volume>` cannot be
+decomposed. The service's `environment` is a field here precisely so that
+anything needing the track reads it from this file rather than guessing from the
+name.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from guarden import conf, errors, paths
+from guarden import manifest as manifest_mod
+
+REGISTRY_MODE = 0o640
+SOURCE_MANUAL = "manual"
+SOURCE_GITOPS = "gitops"
+
+
+@dataclass
+class Volume:
+    name: str
+    kind: str
+    config: str | None = None
+    snapshots: int | None = None
+
+    def to_document(self) -> dict[str, Any]:
+        document: dict[str, Any] = {}
+        if self.config is not None:
+            document["config"] = self.config
+        if self.snapshots is not None:
+            document["snapshots"] = self.snapshots
+        return document
+
+    @classmethod
+    def from_document(cls, kind: str, name: str, document: dict) -> Volume:
+        return cls(
+            name=name,
+            kind=kind,
+            config=document.get("config"),
+            snapshots=document.get("snapshots"),
+        )
+
+
+@dataclass
+class Seed:
+    """The snapshot a service was forked from, per its own state volume.
+
+    spec 3.4's example writes `seed = { data = 38 }`, and the value here is a
+    table rather than a number because **the snapshot belongs to the source**:
+    a preview is protected because something was forked from the production
+    snapshot it came from, and a number with no service beside it names nothing
+    that can be marked. §8.5 requires the reconciler to mark "every snapshot
+    named as a `seed` by any service's registry", and a bare number cannot be
+    named by anything.
+    """
+
+    service: str
+    volume: str
+    number: int
+
+    def to_document(self) -> dict[str, Any]:
+        return {"service": self.service, "volume": self.volume, "number": int(self.number)}
+
+    @classmethod
+    def from_document(cls, document: Any) -> Seed:
+        """Three fields or a refusal, because a seed missing two of them is not one.
+
+        The registry is guarden's own file and this is the only place a value in
+        it can be checked against what it has to be, so a hand edit that dropped
+        `service` is caught here rather than becoming a mark on `:@41` — a
+        snapshot id with an empty service in it, which is not a snapshot anything
+        holds.
+        """
+        if not isinstance(document, dict):
+            raise errors.GuardenError(
+                "a seed names the snapshot it was forked from, and a bare number names "
+                "nothing that can be marked; it is a table of service, volume and number",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        missing = [
+            key for key in ("service", "volume", "number") if not document.get(key)
+        ]
+        if missing:
+            raise errors.GuardenError(
+                f"a seed is missing {', '.join(missing)}; a seed names the snapshot it was "
+                f"forked from, and a seed with no service and volume beside it names "
+                f"nothing that can be marked",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        return cls(
+            service=str(document["service"]),
+            volume=str(document["volume"]),
+            number=int(document["number"]),
+        )
+
+
+def _seeds(document: Any) -> dict[str, Seed]:
+    return {
+        name: Seed.from_document(entry)
+        for name, entry in (document or {}).items()
+    }
+
+
+@dataclass
+class Instance:
+    ref: str
+    escaped_ref: str
+    created: str
+    publication: dict[str, int] = field(default_factory=dict)
+    seed: dict[str, Seed] = field(default_factory=dict)
+    # The tree THIS ref last deployed from. The registry is one file per
+    # service and an instance's create() saves the service's record, so a
+    # hash kept only at the top was one value the service's deploys and every
+    # instance's took turns writing — and the next `add` of an unchanged
+    # service then compared the service's tree against an instance's and
+    # re-deployed, which spec 5.3's idempotency forbids.
+    source_hash: str | None = None
+
+    def to_document(self) -> dict[str, Any]:
+        # `ref` is stored alongside the escaped key, because the escaping is
+        # deliberately many-to-one: `feature/x` and `feature-x` both become
+        # `feature\x2dx` so that they cannot collide, which is exactly why the raw
+        # ref cannot be recovered from the key. spec 3.4's example does not list
+        # this key, and an operator shown `feature\x2dx` where they typed
+        # `feature-login` would be reading a storage detail as a name.
+        document: dict[str, Any] = {"ref": self.ref, "created": self.created}
+        if self.publication:
+            document["publication"] = dict(self.publication)
+        if self.seed:
+            document["seed"] = {name: seed.to_document() for name, seed in self.seed.items()}
+        if self.source_hash:
+            document["source_hash"] = self.source_hash
+        return document
+
+    @classmethod
+    def from_document(cls, escaped_ref: str, document: dict) -> Instance:
+        return cls(
+            ref=document.get("ref", escaped_ref),
+            escaped_ref=escaped_ref,
+            created=document.get("created", ""),
+            publication=dict(document.get("publication", {})),
+            seed=_seeds(document.get("seed")),
+            source_hash=document.get("source_hash"),
+        )
+
+
+@dataclass
+class RuleEntry:
+    """One requested `firewall:` rule: the name a grant names, the chain, the text.
+
+    The name is a request's stable identity and the text is its content, because
+    deduplication is by content and the count of grants is by name (spec 7.7).
+    A grant is `overrides.toml`'s answer and never enters here as text: this is
+    what the manifest asked for, in manifest order, and it installs nothing.
+    """
+
+    name: str
+    chain: str
+    rule: str
+
+    def to_document(self) -> dict[str, str]:
+        return {"name": self.name, "chain": self.chain, "rule": self.rule}
+
+    @classmethod
+    def from_document(cls, document: Any) -> RuleEntry:
+        """Three fields or a refusal, for the reason `Seed.from_document` gives.
+
+        A request missing its `rule` is not a request, and a grant naming it
+        would resolve to nothing to install.
+        """
+        if not isinstance(document, dict):
+            raise errors.GuardenError(
+                "a requested firewall rule names the rule it wants installed, and a bare "
+                "value names no rule; it is a table of name, chain and rule",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        missing = [key for key in ("name", "chain", "rule") if not document.get(key)]
+        if missing:
+            raise errors.GuardenError(
+                f"a requested firewall rule is missing {', '.join(missing)}; a request names "
+                f"what it wants installed, and one with no rule behind it is nothing to grant",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        return cls(
+            name=str(document["name"]),
+            chain=str(document["chain"]),
+            rule=str(document["rule"]),
+        )
+
+
+def _rule_entries(value: Any) -> list[RuleEntry]:
+    return [RuleEntry.from_document(entry) for entry in (value or [])]
+
+
+def _probe_number(value: Any) -> int | None:
+    """One of the probe's two numbers as the document spells it, or `None`
+    when the document does not carry one: a real `int`, or a decimal string.
+
+    Every other scalar TOML can put in that key is refused by the caller
+    instead of coerced, because each of them has its own silent damage:
+    `4242.9` truncates to a pin nobody recorded, `true` is `True` and
+    `int(True)` is 1, and `inf` raises **OverflowError** out of `int()` — a
+    traceback out of `weedr service start` rather than the one line spec 1.2
+    promises, which is the class the string case was fixed in (measured,
+    t350: `owner_uid = inf` came back as 21 traceback lines). The bool check
+    comes before the int check for the same reason, and `OverflowError` is
+    caught regardless: the one conversion left is a decimal string, which
+    `int()` cannot overflow on, but a reader that lets that class escape is
+    the defect this refuses to reintroduce.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdecimal():
+        try:
+            return int(value)
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+
+@dataclass
+class OwnerUnit:
+    """One unit's own probe answer, for a service whose units name more than one
+    image (ADR-0019): the image the pair was read from, and the pair.
+
+    The image is in the record because the pair is only true of the image it
+    was read from — a unit whose `Image=` changes is the probe's condition
+    again, and a record that could not say which image answered which unit
+    could only answer every unit with ONE image's user, which is the failure
+    this field exists to prevent.
+    """
+
+    image: str
+    uid: int
+    gid: int
+
+    def to_document(self) -> dict[str, Any]:
+        return {"image": self.image, "uid": self.uid, "gid": self.gid}
+
+    @classmethod
+    def from_document(cls, entry: Any, service: str = "", unit: str = "") -> OwnerUnit:
+        """Three fields or a refusal, for the reason `RuleEntry.from_document`
+        gives: an entry that does not name an image and two numbers is not an
+        answer, and rendering it would pin a unit nobody probed.
+
+        **The refusal names the service and the unit it is about.** The twin
+        reader for the scalar keys (`_owner_id`) names both, and AGENTS.md asks
+        a diagnostic to name the thing it is about: with several services on a
+        host, a refusal that names neither leaves the operator with a broken
+        record and no way to say which one.
+        """
+        if not isinstance(entry, dict):
+            raise errors.GuardenError(
+                f"{_whose(service, unit)}a per-unit image owner is a table of image, uid and "
+                "gid, and this one is not",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        try:
+            image = str(entry["image"])
+            raw_uid = entry["uid"]
+            raw_gid = entry["gid"]
+        except KeyError:
+            raise errors.GuardenError(
+                f"{_whose(service, unit)}a per-unit image owner is a table of image, uid and "
+                "gid, and this one does not carry all three",
+                errors.HOST_NOT_AS_ASSUMED,
+            ) from None
+        uid = _probe_number(raw_uid)
+        gid = _probe_number(raw_gid)
+        if uid is None or gid is None:
+            raise errors.GuardenError(
+                f"{_whose(service, unit)}a per-unit image owner is a table of image, uid and "
+                "gid, and this one's uid or gid is not a whole number",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
+        return cls(image=image, uid=uid, gid=gid)
+
+
+def _whose(service: str, unit: str) -> str:
+    """The subject of a per-unit diagnostic: the service, and the unit when
+    the reader knows which one it is reading."""
+    if service and unit:
+        return f"{service}: the unit {unit}: "
+    if service:
+        return f"{service}: "
+    if unit:
+        return f"the unit {unit}: "
+    return ""
+
+
+def _owner_units(document: dict) -> dict[str, OwnerUnit]:
+    """The per-unit table, and a refusal when the document's `owner_units` is
+    not a table at all.
+
+    The container's shape was the one thing the reader did not guard: a
+    hand-edited `owner_units = 5` (or a list) raised `AttributeError` out of
+    `weedr service start` — a traceback where spec 1.2 promises one line.
+    The ENTRIES are guarded by `OwnerUnit.from_document` and the two scalars
+    by `_probe_number`; the container itself was not, and a hand edit is
+    exactly the input those guards exist for (measured, t350: the same class
+    was paid for twice on the scalar keys).
+    """
+    raw = document.get("owner_units")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise errors.GuardenError(
+            f"{document.get('service', 'the service')}: the registry entry's owner_units is "
+            "a table of per-unit image owners, and this one is not",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return {
+        name: OwnerUnit.from_document(entry, str(document.get("service", "")), str(name))
+        for name, entry in raw.items()
+    }
+
+def _exposure(value: Any) -> str | None:
+    """Ticket 294's record: a `[exposure] value` table, or `None` for default.
+
+    A table rather than a bare string so the registry's own key set says what
+    it is (the `[gate]`, `[generated]` and `[immutable]` tables speak this way),
+    and an empty table is the same as no record: an act that wrote nothing is
+    not a posture.
+    """
+    if not isinstance(value, dict):
+        return None
+    found = value.get("value")
+    if not isinstance(found, str) or not found:
+        return None
+    return found
+
+
+@dataclass
+class Registry:
+    service: str
+    workload: str
+    project: str
+    environment: str
+    uid: int
+    created: str
+    # The uid and gid guarden probed out of the service's image at its first
+    # start, and the only source the renderer's `UserNS=keep-id:uid=...,gid=...`
+    # line is written from (ADR-0019). `None` is "not probed yet", which is the
+    # probe's own condition; `0` is the image declaring no user at all, whose
+    # container root the default map already moves onto the service identity.
+    owner_uid: int | None = None
+    owner_gid: int | None = None
+    # The image those two were read from. The pair is only true of that image,
+    # so a unit naming another one is the probe's condition again rather than a
+    # unit this pair answers (ADR-0019).
+    owner_image: str | None = None
+    # Per-unit answers, written only when the service's units name MORE THAN
+    # ONE image: `owner_uid`/`owner_gid` stay the single-image record they have
+    # always been — the drift anchor and the field an operator edits by hand —
+    # and this map is what the renderer answers each unit from when the units
+    # disagree about their user. An empty map writes no table at all, so a
+    # single-image document gains only `owner_image` and never a table.
+    owner_units: dict[str, OwnerUnit] = field(default_factory=dict)
+    source: str = SOURCE_MANUAL
+    installed_by: str | None = None
+    # Where the service's app sits inside the source tree, as the tree spells it
+    # (`apps/web`), and the empty string for the tree root — which is the shape
+    # every single-app repository has, and the value an older guarden's record
+    # reads back as (spec 5.3). It is a PATH and not the app's name, because it
+    # is what locates the manifest and the unit source in the home.
+    app: str = ""
+    grouping: str = manifest_mod.GROUPING_DEFAULT
+    deployed_sha: str | None = None
+    source_hash: str | None = None
+    publication: dict[str, int] = field(default_factory=dict)
+    edges: dict[str, dict] = field(default_factory=dict)
+    provides: list[str] = field(default_factory=list)
+    route_hosts: dict[str, str] = field(default_factory=dict)
+    route_destinations: dict[str, str] = field(default_factory=dict)
+    ports_requested: list[int] = field(default_factory=list)
+    ports_granted: list[int] = field(default_factory=list)
+    firewall_requested: list[RuleEntry] = field(default_factory=list)
+    # Never read when rendering: `overrides.toml` is the authority (spec 7.7).
+    firewall_granted: list[str] = field(default_factory=list)
+    volumes: dict[str, Volume] = field(default_factory=dict)
+    # A slot service's own seed, per state volume. An instance's is inside its
+    # own `[instances."<escaped-ref>"]` table, because an instance's volumes are
+    # the instance's and a seed recorded against the service would be ambiguous
+    # between two previews of the same workload.
+    seed: dict[str, Seed] = field(default_factory=dict)
+    instances: dict[str, Instance] = field(default_factory=dict)
+    # `gate` is `None` when the gate has never been evaluated, and that is **not**
+    # the same as `state = "ready"` (spec 3.4): the registry omits the table
+    # entirely rather than writing a verdict nobody took.
+    gate: dict[str, Any] | None = None
+    generated: dict[str, str] = field(default_factory=dict)
+    immutable: dict[str, str] = field(default_factory=dict)
+    # Ticket 292: the basic-auth login was minted for this service. True is a
+    # record and absent is a state — a service created before the gate module
+    # generated the policy has no flag and renders without the middleware, which
+    # is the whole of what grandfathering means here (spec 3.4: only what cannot
+    # be derived is stored, and this was decided once, at creation).
+    basicauth: bool = False
+    # Ticket 294: the operator's exposure record for this service in this
+    # environment — "loopback" | "tunnel" | "public". Absent means the default,
+    # and that absence is a state rather than a value, exactly like `gate`.
+    exposure: str | None = None
+
+    def volume_list(self) -> list[Volume]:
+        """`state` before `bulk`, then by name: a fixed order, so a regenerated
+        registry and a rendered list agree byte for byte."""
+        return sorted(self.volumes.values(), key=lambda v: (v.kind != "state", v.name))
+
+    def answer_for(self, unit: str, image: str) -> tuple[int, int] | None:
+        """The pair this record holds for THIS unit when it names THIS image,
+        and `None` when what the record holds was read from another image or
+        from no image at all — either of which makes the unit the probe's
+        condition again (ADR-0019).
+
+        One predicate for the two halves that read it: the start path, which
+        asks whether the record still answers a unit before deciding to probe,
+        and the renderer, which asks whether it may write a line at all. They
+        were two answers — the renderer took only the unit, so a record whose
+        `owner_image` named one thing wrote that pair into a unit naming
+        another (round-3 finding 4: the deploy path installs a line the start
+        path would have probed first). A record with no `owner_image` — the
+        shape written before that field existed — still answers every unit
+        with its pair, which is the only case where the image is not part of
+        the answer, and a record holding only one of the two numbers has no
+        pair to give: unanswered like one never probed.
+        """
+        if self.owner_units:
+            entry = self.owner_units.get(unit)
+            if entry is None or entry.image != image:
+                return None
+            return (entry.uid, entry.gid)
+        if self.owner_image and self.owner_image != image:
+            return None
+        if self.owner_uid is None or self.owner_gid is None:
+            return None
+        return (self.owner_uid, self.owner_gid)
+
+    def to_document(self) -> dict[str, Any]:
+        document: dict[str, Any] = {
+            "service": self.service,
+            "workload": self.workload,
+            "project": self.project,
+            "environment": self.environment,
+            "uid": self.uid,
+            "created": self.created,
+            "source": self.source,
+        }
+        if self.installed_by:
+            document["installed_by"] = self.installed_by
+        if self.app:
+            document["app"] = self.app
+        if self.deployed_sha:
+            document["deployed_sha"] = self.deployed_sha
+        if self.source_hash:
+            document["source_hash"] = self.source_hash
+        if self.owner_uid is not None:
+            document["owner_uid"] = self.owner_uid
+        if self.owner_gid is not None:
+            document["owner_gid"] = self.owner_gid
+        if self.owner_image:
+            document["owner_image"] = self.owner_image
+        if self.owner_units:
+            document["owner_units"] = {
+                name: unit.to_document() for name, unit in sorted(self.owner_units.items())
+            }
+        if self.publication:
+            document["publication"] = dict(self.publication)
+        if self.edges:
+            document["edges"] = {name: dict(edge) for name, edge in self.edges.items()}
+        if self.provides:
+            document["provides"] = {"kinds": list(self.provides)}
+        if self.route_hosts:
+            document["route_hosts"] = dict(self.route_hosts)
+        if self.route_destinations:
+            document["route_destinations"] = dict(self.route_destinations)
+        if self.ports_requested or self.ports_granted:
+            document["ports"] = {
+                "requested": list(self.ports_requested),
+                "granted": list(self.ports_granted),
+            }
+        if self.firewall_requested or self.firewall_granted:
+            firewall: dict[str, Any] = {
+                "requested": [entry.to_document() for entry in self.firewall_requested]
+            }
+            if self.firewall_granted:
+                firewall["granted"] = list(self.firewall_granted)
+            document["firewall"] = firewall
+        state = {v.name: v for v in self.volumes.values() if v.kind == "state"}
+        bulk = {v.name: v for v in self.volumes.values() if v.kind == "bulk"}
+        if state:
+            document["state"] = {name: v.to_document() for name, v in sorted(state.items())}
+        if bulk:
+            document["bulk"] = {name: v.to_document() for name, v in sorted(bulk.items())}
+        if self.seed:
+            document["seed"] = {
+                name: seed.to_document() for name, seed in sorted(self.seed.items())
+            }
+        if self.instances:
+            document["instances"] = {
+                key: instance.to_document() for key, instance in sorted(self.instances.items())
+            }
+        if self.gate is not None:
+            document["gate"] = dict(self.gate)
+        if self.generated:
+            document["generated"] = dict(self.generated)
+        if self.immutable:
+            document["immutable"] = dict(self.immutable)
+        if self.basicauth:
+            document["basicauth"] = True
+        if self.exposure:
+            document["exposure"] = {"value": self.exposure}
+        return document
+
+    @classmethod
+    def from_document(cls, document: dict) -> Registry:
+        volumes: dict[str, Volume] = {}
+        for kind in ("state", "bulk"):
+            for name, entry in (document.get(kind) or {}).items():
+                volumes[name] = Volume.from_document(kind, name, entry or {})
+        instances = {
+            key: Instance.from_document(key, entry or {})
+            for key, entry in (document.get("instances") or {}).items()
+        }
+        ports = document.get("ports") or {}
+        firewall = document.get("firewall") or {}
+        provides = (document.get("provides") or {}).get("kinds") or []
+        return cls(
+            service=document["service"],
+            workload=document.get("workload", ""),
+            project=document.get("project", ""),
+            environment=document.get("environment", ""),
+            uid=document.get("uid", 0),
+            created=document.get("created", ""),
+            source=document.get("source", SOURCE_MANUAL),
+            installed_by=document.get("installed_by"),
+            app=_app_of_document(document),
+            deployed_sha=document.get("deployed_sha"),
+            source_hash=document.get("source_hash"),
+            owner_uid=_owner_id(document, "owner_uid"),
+            owner_gid=_owner_id(document, "owner_gid"),
+            owner_image=document.get("owner_image"),
+            owner_units=_owner_units(document),
+            publication=dict(document.get("publication") or {}),
+            edges={name: dict(edge or {}) for name, edge in (document.get("edges") or {}).items()},
+            provides=list(provides),
+            route_hosts=dict(document.get("route_hosts") or {}),
+            route_destinations=dict(document.get("route_destinations") or {}),
+            ports_requested=list(ports.get("requested") or []),
+            ports_granted=list(ports.get("granted") or []),
+            firewall_requested=_rule_entries(firewall.get("requested")),
+            firewall_granted=[str(name) for name in (firewall.get("granted") or [])],
+            volumes=volumes,
+            seed=_seeds(document.get("seed")),
+            instances=instances,
+            gate=document.get("gate"),
+            generated=dict(document.get("generated") or {}),
+            immutable=dict(document.get("immutable") or {}),
+            basicauth=bool(document.get("basicauth")),
+            exposure=_exposure(document.get("exposure")),
+        )
+
+
+def _app_of_document(document: dict) -> str:
+    """The recorded app root, refused unless it is a path inside a tree.
+
+    An absent key is the tree root — the shape every record written before a
+    repository could hold several apps has, and the shape a single-app
+    repository still has — so absence is a state and not a gap. A value that is
+    not a string, or a path that leaves the tree, is host state that does not
+    hold what guarden wrote (spec 1.2, exit 1): the value is a directory the
+    mutator reads with root's sight.
+    """
+    value = document.get("app", "")
+    if not isinstance(value, str):
+        raise errors.GuardenError(
+            f"the registry entry for {document.get('service', 'a service')} records an app "
+            f"root that is not a path inside its tree",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    from guarden import apps as apps_mod
+
+    return apps_mod.clean(value)
+
+
+def _owner_id(document: dict, key: str) -> int | None:
+    """One of the probe's two numbers as the document spells it: converted,
+    or refused.
+
+    `owner_uid` is the field an operator edits BY HAND, so a quoted value
+    reaches this reader as a string — and unconverted it walked into the
+    renderer's `uid and uid > 0` and out of `weedr service start` as a
+    TypeError (measured, t350), a traceback instead of the one line spec 1.2
+    promises. Converting is what `OwnerUnit.from_document` already does for
+    the per-unit table, and every OTHER scalar a hand edit can put there — a
+    float (which `int()` truncates into a pin nobody recorded), a bool (which
+    `int()` makes 1), `inf` (which `int()` raises **OverflowError** on, the
+    21-line traceback measured in t350 before this reader refused it) — is
+    refused through the same helper, naming the service and the field: host
+    state that does not hold what guarden wrote (spec 1.2, exit 1).
+    """
+    value = document.get(key)
+    if value is None:
+        return None
+    found = _probe_number(value)
+    if found is None:
+        raise errors.GuardenError(
+            f"{document.get('service', 'the service')}: the registry entry carries "
+            f"{value!r} as {key}, and a uid or gid the probe recorded is a whole number",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from None
+    return found
+
+
+def path_for(service: str) -> Path:
+    return paths.registry(service)
+
+
+def load(service: str) -> Registry | None:
+    """A service's record, or `None` when it has none. Absent is not an error."""
+    document = conf.read_toml(path_for(service))
+    if not document:
+        return None
+    try:
+        return Registry.from_document(document)
+    except KeyError as exc:
+        raise errors.GuardenError(
+            f"{path_for(service)} has no {exc.args[0]!r}", errors.HOST_NOT_AS_ASSUMED
+        ) from exc
+
+
+def save(registry: Registry, owner: tuple[int, int]) -> None:
+    conf.write_toml(path_for(registry.service), registry.to_document(), REGISTRY_MODE, owner)
+
+def delete(service: str) -> bool:
+    target = path_for(service)
+    if not target.exists():
+        return False
+    target.unlink()
+    return True
+
+
+def names() -> list[str]:
+    """Every service with a record, in name order."""
+    if not paths.REGISTRY.is_dir():
+        return []
+    return sorted(path.stem for path in paths.REGISTRY.glob("*.toml"))
+
+
+def remove_report() -> list[tuple[str, str, str]]:
+    """What `weedr service list` says about the removed directory: one
+    `(service, when, volume)` per moved volume, in a stable order.
+
+    A removed service has no registry entry — `remove` reverses all of it — so
+    there is no `services` object to hang this on, and the human report is where
+    it belongs. The JSON field set in spec 1.2 covers `weedr service list --json`
+    only, and it is `services`.
+    """
+    if not paths.REMOVED.is_dir():
+        return []
+    out: list[tuple[str, str, str]] = []
+    for service_dir in sorted(paths.REMOVED.iterdir()):
+        if not service_dir.is_dir():
+            continue
+        for when_dir in sorted(service_dir.iterdir()):
+            if not when_dir.is_dir():
+                continue
+            for volume_dir in sorted(when_dir.iterdir()):
+                out.append((service_dir.name, when_dir.name, volume_dir.name))
+    return out

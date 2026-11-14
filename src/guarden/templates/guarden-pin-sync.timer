@@ -1,0 +1,11 @@
+[Unit]
+Description=hourly mark reconciliation
+Requires=guarden-pin-sync.service
+
+[Timer]
+OnCalendar=*-*-* *:45:00
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

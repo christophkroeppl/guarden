@@ -1,0 +1,14 @@
+# Two state volumes and a bulk one, for the complete-set claim.
+#
+# btrfs has no atomic multi-subvolume snapshot primitive, so a service with a
+# `data` and a `cache` volume is in exactly the state a crash is about: half one
+# instant, half another. `weedr service fork` and `weedr service rollback` both
+# resolve the whole set before anything moves, and a volume with no snapshot is
+# the failure that costs the most if it is assembled in pieces.
+services:
+  web:
+    image: docker.io/library/nginx:1.27
+    volumes:
+      - data:/var/lib/nginx
+      - cache:/var/cache/nginx
+      - scratch:/var/tmp/nginx

@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# The mounts: what a rendered unit may name on the host, and who widens that
+# (ticket 40, spec 6.3, 10).
+#
+# `[mounts] allow` in the root-owned `overrides.toml` is the only way a host path
+# outside the service's own volumes and `/etc/guarden` becomes bindable, and an
+# entry there is a grant in the same sense a port is. A repository cannot widen
+# its own mounts, so the renderer never writes that file and never reads one the
+# repository supplied.
+#
+# machine: shared
+# `guarden_prefix` stages the host, and every registry row, admin grant,
+# rendered unit and checked host path is under `$GUARDEN_PREFIX` or
+# `$GUARDEN_FIXTURES`. `install_pinned_converter` reaches real apt and the
+# machine's apt timers; see the note in t40-manifest.sh, the same leak in
+# the same four suites.
+
+. "$(dirname "$0")/lib.sh"
+
+guarden_prefix
+stage_config guarden-measured.toml
+
+# Two of the three fixture projects this file renders ship a `compose.yaml`, so the
+# property it asserts — that no rendered unit names a host path outside the
+# service's own volumes — is a property of a converter's output as much as of the
+# renderer's. The converter is installed by the phase that owns the fetch, at the
+# pinned path, and is a program; `t20-podlet.sh` is where that is the subject.
+install_pinned_converter
+
+registry=$GUARDEN_PREFIX/var/lib/guarden/registry
+overrides=$GUARDEN_PREFIX/etc/guarden/services
+
+# The provider every consumer in this file declares an edge to. Its `provides:`
+# is read from its registry and not from its manifest, because a consumer cannot
+# read a provider's tree and `loom` runs as `guarden` (spec 4).
+seed "$registry/postgres-staging.toml" \
+    'service = "postgres-staging"' 'workload = "postgres"' 'project = "postgres"' \
+    'environment = "staging"' 'uid = 1099' 'created = "2026-09-30T09:00:00Z"' \
+    '[provides]' 'kinds = [ "db" ]'
+
+stage_service() {
+    seed "$registry/$1.toml" \
+        "service = \"$1\"" "workload = \"myapp\"" "project = \"myapp\"" \
+        "environment = \"staging\"" "uid = 1101" "created = \"2026-09-30T09:00:00Z\"" \
+        '[publication]' 'web = 20114' 'node = 20115' \
+        '[edges."postgres-staging:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+        'publications = [ 20007 ]'
+}
+stage_service myapp-staging
+
+# The property belongs to the renderer, so it is asserted once over every fixture
+# project rather than per service. Each project is rendered as its own service on
+# the staging track, and every host path any of them renders is checked against
+# the service's own volumes, `/etc/guarden` and the admin's allow list.
+for project in myapp quadlet-app hostnet; do
+    service=$project-staging
+    stage_service $service
+    run loom render "$GUARDEN_ROOT/fixtures/projects/$project" --service $service \
+        --out "$GUARDEN_FIXTURES/render-$project"
+    assert_exit 0
+done
+
+seed "$overrides/myapp-staging/overrides.toml" '[mounts]' 'allow = [ "/dev/dri" ]'
+allowed=$GUARDEN_PREFIX/var/lib/guarden/services:/etc/guarden:/dev/dri
+run python3 "$GUARDEN_ROOT/tests/t40-hostpaths.py" "$allowed" \
+    "$GUARDEN_FIXTURES/render-myapp" "$GUARDEN_FIXTURES/render-quadlet-app" \
+    "$GUARDEN_FIXTURES/render-hostnet"
+assert_exit 0
+assert_stderr_empty
+
+# The one host path a repository may add, and only because the admin put it in
+# the file. A `groups.add` entry is how a transcoding service reaches /dev/dri
+# without the renderer knowing anything about video (spec 3.3).
+seed "$registry/myapp-staging.toml" \
+    'service = "myapp-staging"' 'workload = "myapp"' 'project = "myapp"' \
+    'environment = "staging"' 'uid = 1101' 'created = "2026-09-30T09:00:00Z"' \
+    '[publication]' 'web = 20114' 'node = 20115' \
+    '[edges."postgres-staging:5432:db"]' 'port = 5432' 'as = "db"' 'auth = "database"' \
+    'publications = [ 20007 ]'
+seed "$GUARDEN_FIXTURES/dri/.guarden/service.yml" "project: myapp" "units: .guarden/quadlet/"
+seed "$GUARDEN_FIXTURES/dri/.guarden/quadlet/web.container" "[Container]" \
+    "Image=docker.io/library/nginx:1.27" "Volume=/dev/dri:/dev/dri"
+run loom render "$GUARDEN_FIXTURES/dri" --service myapp-staging --out "$GUARDEN_FIXTURES/render-dri"
+assert_exit 0
+assert_file_has "$GUARDEN_FIXTURES/render-dri/units/web.container" "Volume=/dev/dri:/dev/dri"
+
+# Take the grant away and the same unit is refused, naming the path: the allow
+# list is the grant, and nothing else turns it on.
+seed "$overrides/myapp-staging/overrides.toml" '[mounts]' 'allow = [ ]'
+run loom render "$GUARDEN_FIXTURES/dri" --service myapp-staging --out "$GUARDEN_FIXTURES/render-dri"
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "/dev/dri"
+
+# A repository cannot widen its own mounts. The renderer does not write the
+# admin's file, and the file it read is byte for byte the file it was given.
+seed "$overrides/myapp-staging/overrides.toml" '[mounts]' 'allow = [ "/dev/dri" ]'
+cp "$overrides/myapp-staging/overrides.toml" "$GUARDEN_FIXTURES/overrides.before"
+run loom render "$GUARDEN_ROOT/fixtures/projects/myapp" --service myapp-staging \
+    --out "$GUARDEN_FIXTURES/render-myapp"
+assert_exit 0
+assert_file_exists "$overrides/myapp-staging/overrides.toml"
+run diff "$GUARDEN_FIXTURES/overrides.before" "$overrides/myapp-staging/overrides.toml"
+assert_exit 0
+# The mode and the owner of the admin's file are `weedr`'s to write, not the
+# renderer's: the claim this test can make is the one that belongs to `loom`,
+# which is that a render neither creates that file nor changes one it read. The
+# mode itself is asserted where the file is written, in t30.
+seed "$registry/plain-staging.toml" \
+    'service = "plain-staging"' 'workload = "myapp"' 'project = "myapp"' \
+    'environment = "staging"' 'uid = 1101' 'created = "2026-09-30T09:00:00Z"' \
+    '[publication]' 'web = 20114'
+run loom render "$GUARDEN_ROOT/fixtures/projects/hostnet" --service plain-staging \
+    --out "$GUARDEN_FIXTURES/render-plain"
+assert_exit 0
+assert_file_missing "$overrides/plain-staging/overrides.toml"
+
+# The renderer writes no firewall rule of its own: a grant is a translation the
+# mutator renders into `50-services.conf`. The render output is under `--out`;
+# assert it contains no firewall-related lines.
+assert_file_lacks "$GUARDEN_FIXTURES/render-myapp/units/web.container" "firewall"
+assert_file_lacks "$GUARDEN_FIXTURES/render-myapp/units/web.container" "50-services"

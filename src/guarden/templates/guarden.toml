@@ -1,0 +1,112 @@
+# The host configuration. Four writers, all under the `modules` lock and all
+# through the spec §3.5 protocol: `soil install` seeds it, `soil install` writes
+# the `ingress.alias` derived from `[network] pasta_options`, `soil install` writes
+# `host.admin_user`, and `weedr module add` appends to `[modules] enabled`. Each
+# rewrites only the keys it owns.
+#
+# A track is this table's row and not a name in the code: adding `preprod` is
+# appending a block, and nothing branches on the word.
+
+[host]
+domain = ""
+interface = ""                   # empty: resolve the ingress interface from the default route
+admin_user = ""                  # empty: the invoking user at install time
+
+[ingress]
+alias = ""                       # the address a rootless container reaches the host on, per spec
+                                 # 7.1; `soil install` derives it from the -g in pasta_options,
+                                 # and it is a NAME the consumer resolves and never a firewall
+                                 # destination
+publication_range = [20000, 32767]
+forwarded = [ "80/tcp", "443/tcp", "443/udp" ]
+# The zone delegated to the tunnel's provider, and empty by default. Empty means
+# the tunnel is NOT configured: `weedr module add cloudflared` refuses to install it
+# and `soil --check` reports the absence, which is a state rather than a failure.
+# Root-owned like the alias beside it, and no manifest carries it — a repository
+# cannot choose the zone public traffic is answered in.
+tunnel_domain = ""
+
+[network]
+backend = "pasta"
+pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g", "10.0.2.2" ]
+
+[build]
+lanes = 1
+
+# The time-bounded grants that reach a tunnel route. Root-owned: a repository
+# cannot set any of it, and `weedr share` is on no sudoers rule.
+#
+#   max         the longest a `--until` may be. There is no spelling of "never",
+#               and a grant above this is refused naming the value. Guarden's own
+#               duration syntax: <number><unit> terms, units s m h d w.
+#   account     the Cloudflare account id the reconciler projects onto
+#   app         the Access application id whose policies are the projection
+#   token_name  the name of the API token, read from /etc/guarden/share.api-token
+#               (0600 root). The *value* is never in this file.
+#   scopes      what that token needs, recorded here so an operator can audit
+#               what a leaked one would reach. The reconciler is the only thing
+#               that calls the vendor.
+#
+# `session_duration` on every projected policy is `max`, converted to the vendor's
+# Go duration syntax (days become hours: `7d` -> `168h`). See
+# docs/notes/220-session-duration-decision.md for why it is a constant and not the
+# time remaining on each grant.
+[share]
+max = "168h"
+account = ""
+app = ""
+token_name = "share"
+scopes = [ "Access: Apps and Policies Write" ]
+
+[modules]
+enabled = ["gate-traefik", "homepage"]
+
+# A compressed swap device. This table is ABSENT by default and its absence is
+# the default rather than a value: with no [zram] here, `soil packages` installs
+# no generator, `soil install` writes no configuration and creates no device, and
+# `soil sysctl` says nothing about swappiness.
+#
+#   algorithm      zstd, and only zstd
+#   level          1-22; above about 6 the CPU cost outruns the memory it saves
+#   size_percent   a percentage of this host's RAM, and never over 100
+#
+# Add the block to ask for one and `soil install --apply` to converge it; remove
+# it again and the next `--apply` takes the device down.
+# [zram]
+# algorithm = "zstd"
+# level = 6
+# size_percent = 50
+
+# No track states `expose`: a fresh host's posture resolves from the module
+# set (ticket 293) — the tunnel when `cloudflared` is enabled, loopback-only
+# when it is not — and a track that wants one of those by name says so.
+[[environments]]
+name = "production"
+host_prefix = ""
+gated = true
+weight = 1000
+free_limit = 0.10
+keep_last = 7
+kind = "slot"
+fork_from = ""
+
+[[environments]]
+name = "staging"
+host_prefix = "staging."
+gated = false
+weight = 100
+free_limit = 0.20
+keep_last = 0
+kind = "slot"
+fork_from = "production"
+
+[[environments]]
+name = "preview"
+host_prefix = "preview."
+gated = false
+weight = 10
+free_limit = 0.20
+keep_last = 0
+kind = "instance"
+fork_from = "staging"
+cap = 3

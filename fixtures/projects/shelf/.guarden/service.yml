@@ -1,0 +1,11 @@
+project: shelf
+units: compose.yaml
+schema: .guarden/.env.schema
+state:
+  - data
+bulk:
+  - cache
+routes:
+  - container: web
+    port: 80
+    host: shelf

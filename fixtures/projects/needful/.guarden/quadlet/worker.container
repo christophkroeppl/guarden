@@ -1,0 +1,10 @@
+# The second container, and the one that makes the `AddHost=` claim plural.
+[Unit]
+Description=the consumer's worker container
+
+[Container]
+Image=docker.io/library/alpine:3.20
+Network=pasta:--map-gw
+
+[Service]
+Restart=always

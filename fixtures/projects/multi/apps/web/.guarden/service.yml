@@ -1,0 +1,25 @@
+# The provider app of a two-app repository (ticket 307a).
+#
+# Its service is `shop-web-<environment>`: the project `shop`, the app `web`
+# (the directory's last path component), and the track. It offers the `http`
+# kind, which is what a sibling app is reached as, and its `ports:` entry is
+# what names the container behind that kind — the same mechanism `pgprov` uses
+# for its two containers, and the request grants nothing (spec 4, spec 7.3).
+project: shop
+units: .guarden/quadlet/
+
+provides:
+  - http
+
+ports:
+  - container: web
+    port: 3000
+
+# A container of THIS unit source another container of it may dial. It shares a
+# manifest with the `app:` edge above on purpose: the two are different
+# mechanisms, and the suite asserts they render the same pair of values.
+siblings:
+  - container: cache
+    port: 6379
+
+schema: .guarden/.env.schema

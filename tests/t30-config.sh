@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# guarden.toml is TOML read with the standard library, and the environment set is
+# that table rather than a code enum (spec 3.1, ticket 30 item 1).
+#
+# The two exit codes are the point and they are not the same code: a file that
+# will not parse, or a key whose type is wrong, is the host and so is exit `1`
+# with the file and the key named; a well-formed file that breaks a rule the
+# document states is exit `2` naming the track. The proof that the table is data
+# — that a `preprod` block works and nothing in the code knows the word — is in
+# t30-create.sh, because it needs a service to exist.
+
+. "$(dirname "$0")/lib.sh"
+
+export GUARDEN_PREFIX=/
+# The real path, not a relocated one: stage_config writes where guarden reads,
+# and /etc/guarden is absent on a host where `soil install` has never run.
+stage_config guarden.toml
+
+# A host with the shipped table and no services is a done state, not a failure.
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
+run weedr service list
+assert_exit 0
+assert_stdout_has "no services"
+
+# With the shipped table staged, the complaint is about the poke's tree rather
+# than about the configuration: that is what this ticket's first item claims, and
+# it is the only thing a staged host can say about the table before a service
+# exists. That every row of the shipped table writes free_limit as a TOML float
+# is pinned by the case below; each reader's refusal of the quoted form is
+# proven where its line lives -- the create path below, the converge in
+# t20-storage's closing case.
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "the manifest"
+assert_stderr_lacks "free_limit"
+
+# A file that will not parse names the file and the line.
+stage_config guarden-badtoml.toml
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 1
+assert_one_diagnostic "error:"
+assert_stderr_has "guarden.toml is not valid TOML"
+# The status command still answers on a host whose table will not parse: it reads
+# the registries and not the configuration, so a corrupt file is a rejected
+# ingest rather than a box that cannot report itself.
+run weedr service list
+assert_exit 0
+assert_stdout_has "no services"
+
+# A key of the wrong type names the key. `weight = "heavy"` is a typo in a
+# root-owned file, not a manifest a stranger wrote, and the dividing line in
+# spec 1.2 is input against host.
+stage_config guarden-badweight.toml
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 1
+assert_stderr_has "weight is not an integer"
+assert_stderr_has "guarden.toml"
+
+# **A number written as a string is refused, not coerced.** TOML's types are
+# distinct and its standard defines no conversion between them; Rust's serde,
+# the reference behaviour for typed configuration, refuses a string where a
+# number is required. The quoted spelling the shipped table once carried is a
+# rejected row now, and the message names the key and the file.
+stage_config guarden-badfree.toml
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 1
+assert_stderr_has "free_limit is not a number"
+assert_stderr_has "guarden.toml"
+
+# cap on a slot track: a rule the document states about a track, so exit 2, and
+# it names the track. `cap` appears nowhere else in the file, because a second
+# place to set it is a second place for it to be wrong.
+stage_config guarden-slotcap.toml
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 2
+assert_one_diagnostic "error:"
+assert_stderr_has "'lab'"
+assert_stderr_has "must not carry a cap"
+
+# fork_from naming no track in the same table, which is the rule that stops a
+# production service forking from a track the operator never wrote down.
+stage_config guarden-badfork.toml
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 2
+assert_stderr_has "fork_from 'nope' names no track"
+run weedr service list
+assert_exit 0
+assert_stdout_has "no services"
+
+# A track with kind = "instance" and no cap is the same rule from the other side,
+# so it is checked in a file of its own rather than a copy of the shipped one.
+stage_config guarden-nocap.toml
+run weedr service ingest myapp-production --from poke myapp@9f2c1ab
+assert_exit 2
+assert_stderr_has "'previews'"
+assert_stderr_has 'must carry a cap'
+
+# Every row of the shipped table writes free_limit as a TOML float, and the
+# quoted form is refused -- by the create path in the type-error case above,
+# and by the converge in t20-storage's closing case. What the value converges
+# to once read is proven where it is actually used, in t30-create.sh.
+stage_config guarden.toml
+assert_file_has "$GUARDEN_PREFIX/etc/guarden/guarden.toml" 'free_limit = 0.10'
+assert_file_has "$GUARDEN_PREFIX/etc/guarden/guarden.toml" 'free_limit = 0.20'

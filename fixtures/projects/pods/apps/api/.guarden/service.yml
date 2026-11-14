@@ -1,0 +1,18 @@
+# Two apps of one repository, each naming its OWN pod (ticket 307c's shapes 2
+# and 4). `pods-web` and `pods-api` are two names, so the repository deploys as
+# two services and two pods — one per app, because a pod never spans services
+# (ADR-0026, spec §7.1).
+#
+# The app holds two containers on purpose: both declare `Pod=pods-api.pod` and
+# one `.pod` unit is rendered for the pair.
+project: pods
+units: .guarden/quadlet/
+
+pod:
+  name: pods-api
+
+ports:
+  - container: api
+    port: 4000
+  - container: worker
+    port: 4001

@@ -1,0 +1,6 @@
+[Unit]
+Description=the api container of the pod fixture
+
+[Container]
+Image=docker.io/library/alpine:3.20
+Exec=sleep 3600

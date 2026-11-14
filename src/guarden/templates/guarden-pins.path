@@ -1,0 +1,27 @@
+[Unit]
+# The pin store and the registry directory: the two places a pin's existence
+# changes. spec 6.9.
+#
+# `weedr pin sync` is the bridge, and it is the only one that exists: `stakes`
+# runs as `guarden` and cannot write snapper's metadata, so it records the intent
+# and this recomputes the marks. A pin is a priority with a budget rather than a
+# promise, and the difference between "marked" and "will be marked" is exactly
+# this path unit.
+#
+# The unit writes neither directory, so there is no TriggerLimit here: the
+# limit exists for a program that writes into the directory it watches, and
+# adding one anyway would be a rate limit on an operator's `stakes pin`.
+Description=Reconcile the snapper marks when a pin or a seed changes
+
+Requires=guarden-pin-sync.service
+After=guarden-pin-sync.service
+
+[Path]
+# `PathChanged` and not `PathExists`: the seed lives in the registry, and a
+# service's first ingest is a file appearing rather than changing.
+PathChanged=/var/lib/guarden/stakes
+PathChanged=/var/lib/guarden/registry
+PathModified=/var/lib/guarden/stakes
+
+[Install]
+WantedBy=multi-user.target

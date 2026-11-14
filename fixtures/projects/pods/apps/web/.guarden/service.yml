@@ -1,0 +1,10 @@
+# The provider app of the pod fixture: one container, one pod of its own.
+project: pods
+units: .guarden/quadlet/
+
+pod:
+  name: pods-web
+
+ports:
+  - container: web
+    port: 3000

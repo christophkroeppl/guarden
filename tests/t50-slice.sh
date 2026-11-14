@@ -1,0 +1,510 @@
+#!/usr/bin/env bash
+# The slice with a real HTTP request in it (ticket 50's last box item).
+#
+# Everything else in `t50-*` is state: a registry number, a rendered file, a
+# uid-matched rule. This file starts the edge and the container it routes to and
+# asks the edge a question over the wire, which is the only thing that proves a
+# manifest became an answer.
+#
+# **The request goes to the edge's published loopback port, never to the host's
+# port 80.** Locally generated traffic does not traverse `PREROUTING`, so a
+# request this box makes to its own public address never reaches the forwarding
+# rules and would pass whether or not they worked at all; that is what a second
+# machine is for, and the golden VM has one.
+#
+# **It is over http, through the redirect entrypoint, and that is deliberate.**
+# A throwaway machine cannot complete ACME, so the TLS entrypoint has no
+# certificate to present and a request to it cannot complete a handshake. What
+# this file asserts is therefore that the edge answers on its redirect
+# publication and carries the requested Host back — and, separately, that the
+# file `roots` wrote names the router. **The 301 does not by itself show that
+# traefik matched that router, and this file must not claim it does.** Nor does
+# the grep on the rendered file: it proves the file's *contents*, not that the
+# edge read it. Reading it is an inference — the only source of that host name
+# is that file — and this file says so rather than attributing it to an
+# assertion that cannot see it. The redirect is entrypoint-level
+# (`http.redirections.entrypoint.to=https`), so it fires before any router is
+# consulted and *every* host on this entrypoint gets a 301 — which is exactly
+# what the `nosuchhost.example` request below demonstrates, an unclaimed name
+# answered with its own redirect. Router matching would need a 404 for the
+# unclaimed host, and that is only observable on the TLS entrypoint. Not because
+# a throwaway machine cannot have a certificate — traefik has a default
+# self-signed one — but because `curl` without `--insecure` rejects it, and this
+# machine has no CA-signed certificate. The router's existence is asserted where
+# it can be: `Host(\`staging.web\`)` in the rendered file. **What no assertion
+# here shows is the edge having read that file, or a request being routed to the
+# container.** Both are real gaps rather than claims this file makes; the block
+# below says what was measured about each. Both
+# entrypoints are also asserted listening on their publications, and the routed
+# container on its own.
+#
+# machine: fresh
+
+. "$(dirname "$0")/lib.sh"
+
+export PATH="$GUARDEN_ROOT/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export GUARDEN_PREFIX=/
+
+# The host configuration below names `operator` as `host.admin_user`, and the
+# firewall renders the edge's API accept set with that account's uid. On a real
+# host `soil install` records the invoking user, so the account is the fixture's
+# own claim and it has to exist for the answer to be about the design rather
+# than about a name nothing holds.
+id -u operator >/dev/null 2>&1 || {
+    getent group operator >/dev/null 2>&1 || groupadd --system operator
+    useradd --system --no-create-home --gid operator --shell /usr/sbin/nologin operator
+}
+ensure_accounts
+stage_config guarden-nomodules.toml
+# The pinned podlet record must exist before `packages` runs: the verb resolves it
+# and refuses with exit 2 when it is absent. `soil install` is what seeds it, and
+# install runs AFTER packages here, so the seed is this suite's job — the same
+# copy tests/lib.sh's install_pinned_converter makes.
+stage_podlet_release
+run soil packages --apply
+assert_not_rejected
+run soil install --apply
+assert_not_rejected
+run weedr module add gate-traefik
+assert_exit 0
+
+edge_registry=/var/lib/guarden/registry/traefik-production.toml
+web_publication=$(sed -n 's/^web = \([0-9]*\)$/\1/p' "$edge_registry")
+tls_publication=$(sed -n 's/^websecure = \([0-9]*\)$/\1/p' "$edge_registry")
+api_publication=$(sed -n 's/^api = \([0-9]*\)$/\1/p' "$edge_registry")
+[ -n "$web_publication" ] && [ -n "$tls_publication" ] && [ -n "$api_publication" ] \
+    || _fail "the edge holds no publications; `weedr module add gate-traefik` allocated none"
+
+staged=$GUARDEN_PREFIX/var/lib/guarden/staging/routed/9f2c1ab
+mkdir -p "$staged"
+cp -r "$GUARDEN_ROOT/fixtures/projects/routed/." "$staged/"
+run weedr service ingest routed-staging --from poke routed@9f2c1ab
+assert_exit 0
+registry=/var/lib/guarden/registry/routed-staging.toml
+publication=$(sed -n 's/^web = \([0-9]*\)$/\1/p' "$registry")
+
+# `roots sync` runs as `guarden`, which is the whole of the writer/reader split.
+run runuser -u guarden -- /usr/lib/guarden/bin/roots sync
+assert_exit 0
+rendered=/var/lib/guarden/edge/dynamic/routed-staging.yml
+assert_file_exists "$rendered"
+
+# Start the edge and the routed service. The units are installed into the
+# service user's own quadlet directory, so they are generated by that manager
+# and started by the mutator verb that owns starting.
+# traefik-production is the `gate-traefik` module's service, so the module is what creates
+# it: nothing ingests it, and without it the start below is refused with
+# "Unit traefik.service not found" because no unit was ever generated.
+run weedr module add gate-traefik
+assert_exit 0
+
+# The edge must be running for its publications to be bound. `module add gate-traefik`
+# creates the service; starting it is a separate verb.
+run weedr service start traefik-production
+assert_exit 0
+# ---------------------------------------------------------------------------
+# ticket 250: the manager generates the unit, and the answer was not either cause
+# ---------------------------------------------------------------------------
+
+svc_home=/var/lib/guarden/services/routed-staging/home
+uid=$(id -u routed-staging)
+runtime=/run/user/"$uid"
+
+# A service-user command needs the suite's directory scrubbed out of its
+# environment: `env -C` changes the cwd but not `PWD`, and `OLDPWD` still carried
+# the suite's 0700 root tree, which quadlet then resolved its unit directory from.
+# Measured one variable at a time; `run_in` lives in lib.sh for the same reason.
+run_svc() {
+    run_in "$svc_home" setpriv --reuid=routed-staging --regid=routed-staging \
+        --clear-groups env -u OLDPWD HOME="$svc_home" PWD="$svc_home" \
+        XDG_RUNTIME_DIR="$runtime" "$@"
+}
+
+# The same scrub for the edge's own service user. `podman inspect` is refused by
+# the harness's own 0700 root tree before podman does any work -- "cannot chdir to
+# /home/ubuntu/guarden: Permission denied" -- so the cwd has to be one this user
+# can enter, and the shell's PWD/OLDPWD have to stop pointing at the suite's.
+edge_home=/var/lib/guarden/services/traefik-production/home
+edge_runtime=/run/user/"$(id -u traefik-production)"
+run_edge() {
+    run_in "$edge_home" setpriv --reuid=traefik-production --regid=traefik-production \
+        --clear-groups env -u OLDPWD HOME="$edge_home" PWD="$edge_home" \
+        XDG_RUNTIME_DIR="$edge_runtime" "$@"
+}
+
+# The manager is asked to reload, and what it produced is the claim. A user manager
+# writes its generators' output to `$XDG_RUNTIME_DIR/systemd/generator{,.late}`.
+run_svc systemctl --user daemon-reload
+assert_exit 0
+
+# **The manager generates it.** Both causes ticket 250 set out to separate are
+# refuted by measurement, and so is the premise:
+#
+# - The runtime directory EXISTS and is owned by the service uid, so "nothing gives
+#   a service user a /run/user/<uid>" is false.
+# - There is no `systemd/user/` level — a user manager writes to
+#   `$XDG_RUNTIME_DIR/systemd/generator{,.late}`, which is what `daemon-reload`
+#   populated — a 1516-byte `web.service`, byte-identical to what the generator
+#   writes when run by hand with those same three directories.
+# - `generator.late/` holds the xdg-desktop-autostart generator's output, which is
+#   what a late generator is for; podman's quadlet generator is a normal one.
+#
+# So the generator is reached, the manager loads what it produced, and whatever
+# stops the container from starting is neither of the two this ticket named.
+assert_file_has "$runtime/systemd/generator/web.service" "ExecStart"
+assert_file_has "$runtime/systemd/generator/web.service" "podman"
+
+# ---------------------------------------------------------------------------
+# is the loopback deny still closed, and is the stub resolver the one hole in it?
+# ---------------------------------------------------------------------------
+#
+# The deny is `daddr 127.0.0.0/8 jump DROP` in `guarden-svc`, which the OUTPUT path
+# jumps to, and 127.0.0.53 is systemd-resolved's stub.
+#
+# **This measurement was inverted by ticket 260 and had to be inverted back.** It
+# read the DROP counter and asserted it MOVED when a service uid sent one packet to the
+# stub — which was true, and was the bug: the deny was refusing the host's own
+# resolver, so `podman pull` could not complete and no first deploy of a new workload
+# could succeed. Ticket 260 renders one owner-matched accept for the stub above the
+# deny, so that packet is now accepted and the counter correctly stays at 0.
+#
+# So the claim here is the one that matters and was never asserted: the deny must still
+# refuse loopback, and it must refuse everything except the one address. The stub is
+# measured as the ACCEPT's counter moving, and a DIFFERENT loopback destination is
+# measured as the DROP's counter moving — which is the negative that would catch an
+# accept rendered too wide.
+run soil firewall --apply
+assert_exit 0
+# A host fact that changes what this measurement means, recorded rather than worked
+# around: `/usr/sbin/iptables` is **nft**, and guarden's rules are in
+# **iptables-legacy**. `ferm` invokes `iptables` by name, so whichever the
+# alternatives system names when it runs is the table that gets written, and this
+# golden had it pointing at legacy. Reading the chain through `iptables` looks for a
+# chain that is not there.
+#
+# The deny is therefore read from the table that HOLDS it.
+run iptables-legacy -S guarden-svc
+assert_exit 0
+assert_stdout_has "127.0.0.0/8"
+assert_stdout_has "DROP"
+
+# **THE DENY IS STILL CLOSED, AND THE STUB RESOLVER IS THE ONE HOLE IN IT.**
+#
+# **THE MEASUREMENT BELOW IS ABOUT THE RULES, NOT ABOUT A COUNTER, AND THAT IS
+# THE WHOLE OF THE FIX.**
+#
+# The rule guarden renders is `daddr 127.0.0.0/8 jump DROP;` with no owner
+# match — that is what makes it a default deny — so every uid's loopback
+# traffic that falls past the accepts above it lands on this one rule and
+# moves its count. A count on that rule is a property of THE HOST'S LOOPBACK
+# TRAFFIC, not of the packet a test sent.
+#
+# **The previous version of this file read that count, and it was racy in both
+# directions.** It used TWO different destinations — the stub at 127.0.0.53 and
+# the discard port at 127.0.0.1:9 — and read the count on both. That does not
+# close the race: both halves read the SAME rule and therefore the SAME count.
+# A destination chooses which rule absorbs a packet; it does not make a count
+# private to the sender. Measured on the RED step of this commit, with a
+# stranger's loopback traffic running: `DENY_DROP=0->1`, and the suite said
+# "the stub was dropped, so the accept is not above the deny" — when the stub
+# accept had taken its packet (`STUB_ACCEPT=14->15`) and the count had moved
+# by the stranger's one packet.
+#
+# **What replaces it is a fact about the RULES, and traffic cannot move a
+# rule.** The properties below are read from ONE snapshot of the LIVE
+# ruleset — the rules the kernel is actually enforcing — and each is about a
+# rule's text or its position, never about a count:
+#
+#   1. the single deny on 127.0.0.0/8 exists and is the chain's LAST rule;
+#   2. the stub's accept for THIS service's uid is rendered ABOVE that deny,
+#      so the stub is reachable and everything else on loopback is not;
+#   3. no accept anywhere in the chain matches the whole of 127.0.0.0/8 — the
+#      over-wide accept, which would pass every positive assertion above and
+#      turn the default deny into decoration.
+#
+# **The live ruleset is the authority, and it is read ONCE.** The rendered
+# file `/etc/guarden/firewall/50-services.conf` is what guarden INTENDS and
+# the kernel's chain is what is ENFORCED; reading both, at two different
+# moments, would compare two rulesets and could answer about neither — so the
+# file is not read for these properties at all. One `iptables-legacy -S
+# guarden-svc` is a consistent view: the rules come out in chain-traversal
+# order, so their line numbers ARE their positions.
+#
+# **The unit is settled before the read, because the apply restarts it.** The
+# firewall reaches the kernel through `systemctl reload-or-restart`
+# (`firewall.load_set`), and the unit's ExecStop runs `ferm -F`, which blocks
+# while it flushes the chains — so a restart spends real time deactivating and
+# an immediate read sees the intermediate state rather than the outcome.
+wait_settled guarden-firewall.service
+assert_active guarden-firewall.service
+
+run iptables-legacy -S guarden-svc
+assert_exit 0
+assert_stdout_has "127.0.0.0/8"
+assert_stdout_has "DROP"
+
+# **ONE snapshot, and every property is read out of it.** `GUARDEN_STDOUT`
+# holds what the `run` above captured, so the ruleset is read once and the
+# three assertions below cannot disagree about which ruleset they describe.
+ruleset=$(cat "$GUARDEN_STDOUT")
+[ -n "$ruleset" ] || _fail "the guarden-svc chain is empty, so there is no ruleset to read"
+
+# The deny, as the kernel holds it: `iptables -S` prints the address as
+# `127.0.0.0/8` and the target as `-j DROP`.
+deny_line=$(printf '%s\n' "$ruleset" | grep -n -- '-A guarden-svc -d 127.0.0.0/8 -j DROP' | head -1 | cut -d: -f1)
+[ -n "$deny_line" ] || _fail "the guarden-svc chain has no DROP on 127.0.0.0/8 to measure"
+[ "$(printf '%s\n' "$ruleset" | grep -c -- '-A guarden-svc -d 127.0.0.0/8 -j DROP')" = 1 ] \
+    || _fail "the loopback deny is not the single rule on 127.0.0.0/8, so the chain denies in two places"
+
+# The stub's accept, for THIS service's uid, in the kernel's own spelling:
+# `-d 127.0.0.53/32 -p udp -m owner --uid-owner <uid> -m udp --dport 53 -j ACCEPT`.
+svc_uid=$(id -u routed-staging)
+stub_line=$(printf '%s\n' "$ruleset" \
+    | grep -n -- "-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner $svc_uid -m udp --dport 53 -j ACCEPT" \
+    | head -1 | cut -d: -f1)
+[ -n "$stub_line" ] \
+    || _fail "the stub accept for uid $svc_uid is not in the enforced chain, so a service cannot resolve"
+
+# **Property 2: the accept is ABOVE the deny.** Position is guarden's, and an
+# accept below the single deny matches no packet while still appearing in the
+# chain — so this is the property that makes the stub reachable and the rest
+# of loopback not, and it is a fact about two lines of text.
+[ "$stub_line" -lt "$deny_line" ] \
+    || _fail "the stub accept is at line $stub_line and the deny at $deny_line, so the stub is dropped"
+
+# **Property 3: NO accept matches the whole loopback network.** This is the
+# over-wide accept — the one that would turn the default deny into decoration
+# — and it is the negative every positive assertion above cannot see. An
+# accept naming 127.0.0.0/8 admits every loopback address, so the deny below
+# it would never be reached.
+[ "$(printf '%s\n' "$ruleset" | grep -- '-j ACCEPT' | grep -c -- '127.0.0.0/8')" = 0 ] \
+    || _fail "an accept matches the whole loopback network, so the deny is unreachable"
+
+# **And the deny is the LAST rule of the chain**, which is what "a default
+# deny" means: a rule after it would have the last word, not the deny.
+#
+# **Both sides of that comparison are LINE NUMBERS, not counts.** `iptables -S`
+# prints the chain's own declaration (`-N guarden-svc`) as its first line, so
+# a rule's line number in that output is one more than its position among the
+# rules — comparing a line number against a count of rules is off by one and
+# would fail on a correct ruleset. Measured: the deny at line 9 and eight
+# rules in the chain, which is the same ruleset.
+last_line=$(printf '%s\n' "$ruleset" | grep -n -- '-A guarden-svc ' | tail -1 | cut -d: -f1)
+[ "$deny_line" = "$last_line" ] \
+    || _fail "the deny is at line $deny_line and the chain's last rule is at line $last_line"
+
+echo "MEASURE: RULES deny=$deny_line stub_accept=$stub_line last=$last_line"
+
+# **The reachability of the stub is still MEASURED, and it is sound** because
+# this counter is private to the property it measures: the accept names ONE
+# address and ONE port and is owner-matched to service uids, so the only
+# packets that can move it are stub queries from a service uid — the test's
+# own datagram and any other service's resolver traffic. No other traffic can
+# reach it, so its movement is attributable even under load.
+stub_packets() {
+    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
+        | awk '$3 == "ACCEPT" && $9 == "127.0.0.53" {n += $1} END {print n + 0}'
+}
+stub_before=$(stub_packets)
+run_svc sh -c 'printf "\x00\x00" | nc -u -w1 127.0.0.53 53' || true
+stub_after=$(stub_packets)
+echo "MEASURE: STUB_ACCEPT=$stub_before->$stub_after"
+[ "$stub_after" -gt "$stub_before" ] \
+    || _fail "the stub accept did not take the packet, so a service still cannot resolve"
+
+# **AND THE IMMUNITY IS MEASURED, NOT ASSUMED.** The properties above are
+# about a ruleset, and a ruleset cannot be moved by traffic — but a claim of
+# immunity that was never exercised against traffic is a claim about a machine
+# nobody disturbed. So the traffic that broke the OLD assertions is started
+# here, on purpose, and the properties are read again with the shared count
+# in motion. That is the difference between the two shapes, measured on the
+# same machine in the same run.
+#
+# `guarden` is the account guarden's own programs run as, and it is NOT a
+# service uid: nothing above the deny accepts its packets, so they fall
+# through to the drop and move the shared count. The destination is the
+# discard port and the protocol is UDP — no accept above the deny names them.
+flood_pid=""
+flood_start() {
+    env -C /tmp setpriv --reuid=guarden --regid=guarden --clear-groups \
+        env -u OLDPWD HOME=/tmp PWD=/tmp \
+        sh -c 'while :; do printf "\x00\x00" | nc -u -w1 127.0.0.1 9; sleep 0.1; done' \
+        >/dev/null 2>&1 &
+    flood_pid=$!
+}
+flood_stop() {
+    if [ -n "$flood_pid" ]; then
+        kill "$flood_pid" 2>/dev/null || true
+        wait "$flood_pid" 2>/dev/null || true
+        flood_pid=""
+    fi
+}
+trap flood_stop EXIT
+
+shared_count() {
+    iptables-legacy -nvx -L guarden-svc 2>/dev/null \
+        | awk '$3 == "DROP" && $9 == "127.0.0.0/8" && $0 !~ /spt:/ {print $1; exit}'
+}
+
+flood_start
+# **The witness: the shared count must actually MOVE.** An immunity claim
+# measured over a quiet machine proves nothing at all, so the flood is not
+# accepted until the count is seen to move.
+shared_before=$(shared_count)
+[ -n "$shared_before" ] || _fail "guarden-svc has no DROP rule on 127.0.0.0/8 to count"
+moved=""
+for _ in $(seq 1 50); do
+    sleep 0.2
+    if [ "$(shared_count)" != "$shared_before" ]; then
+        moved=yes
+        break
+    fi
+done
+[ -n "$moved" ] \
+    || _fail "the concurrent loopback traffic moved nothing, so the immunity measured below proves nothing"
+echo "MEASURE: CONCURRENT_LOOPBACK_TRAFFIC=movable SHARED_DENY=$shared_before->$(shared_count)"
+
+# **THE SAME PROPERTIES, READ AGAIN, WITH THE SHARED COUNT IN MOTION.** This
+# is what the ticket asks for: the properties must hold under concurrent
+# loopback traffic. They are read from a fresh snapshot, because a re-read is
+# the honest way to say "the ruleset still says this".
+ruleset_after=$(iptables-legacy -S guarden-svc 2>/dev/null)
+deny_after_line=$(printf '%s\n' "$ruleset_after" | grep -n -- '-A guarden-svc -d 127.0.0.0/8 -j DROP' | head -1 | cut -d: -f1)
+stub_after_line=$(printf '%s\n' "$ruleset_after" \
+    | grep -n -- "-A guarden-svc -d 127.0.0.53/32 -p udp -m owner --uid-owner $svc_uid -m udp --dport 53 -j ACCEPT" \
+    | head -1 | cut -d: -f1)
+[ -n "$deny_after_line" ] && [ -n "$stub_after_line" ] \
+    || _fail "the enforced chain changed under the concurrent traffic, so the measurement is not of one ruleset"
+[ "$stub_after_line" -lt "$deny_after_line" ] \
+    || _fail "the stub accept moved below the deny under concurrent traffic"
+[ "$(printf '%s\n' "$ruleset_after" | grep -- '-j ACCEPT' | grep -c -- '127.0.0.0/8')" = 0 ] \
+    || _fail "an accept matching the whole loopback network appeared under concurrent traffic"
+last_after_line=$(printf '%s\n' "$ruleset_after" | grep -n -- '-A guarden-svc ' | tail -1 | cut -d: -f1)
+[ "$deny_after_line" = "$last_after_line" ] \
+    || _fail "the deny is no longer the last rule of guarden-svc under concurrent traffic"
+echo "MEASURE: UNDER_CONCURRENT_TRAFFIC deny=$deny_after_line stub_accept=$stub_after_line last=$last_after_line"
+
+flood_stop
+
+# The unit is generated, loaded and found, so whatever happens next is podman's and
+# not systemd's.
+run weedr service start routed-staging
+assert_exit 0
+
+# Both entrypoints answer on their own publication and on nothing else. `ss` on
+# the host is the kernel's own answer about what is bound, which is why this is
+# not a claim about what a unit file says.
+run ss -ltn
+assert_exit 0
+assert_stdout_has "127.0.0.1:$web_publication"
+assert_stdout_has "127.0.0.1:$tls_publication"
+assert_stdout_has "127.0.0.1:$api_publication"
+# Nothing is bound on a non-loopback address: the public ports belong to the
+# kernel, and a container listening on one would be the edge doing the kernel's
+# job. Asked of the tcp listing, which is the one that carries the redirect.
+assert_stdout_lacks "0.0.0.0:$web_publication"
+assert_stdout_lacks "*:$web_publication"
+# 443/udp is HTTP/3 served from the same TLS publication, and it is a different
+# protocol and therefore a different socket.
+run ss -lun
+assert_exit 0
+assert_stdout_has "127.0.0.1:$tls_publication"
+
+# The routed container is listening on its own publication, which is the only
+# address the edge is allowed to reach it on.
+run ss -ltn
+assert_exit 0
+assert_stdout_has "127.0.0.1:$publication"
+
+# The request. The right `Host` header, the edge's redirect publication, and the
+# answer carries the routed name back.
+run curl -s -o /dev/null -w '%{http_code} %{redirect_url}' \
+    -H 'Host: staging.web' "http://127.0.0.1:$web_publication/" || true
+assert_exit 0
+assert_stdout_has "301"
+assert_stdout_has "https://staging.web/"
+
+# **A `Host` no route claims is redirected to its own name, not proxied.** The
+# redirect is entrypoint-level (`http.redirections.entrypoint.to=https`), so it
+# fires before any router is consulted and every host on this entrypoint gets a
+# 301 — a 404 for an unclaimed host is only observable on the TLS entrypoint,
+# which needs a certificate a throwaway machine cannot have. That it carries the
+# requested name back is still a real property: the edge echoes what it was
+# asked for rather than falling back to somebody else's route.
+run curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: nosuchhost.example' \
+    "http://127.0.0.1:$web_publication/"
+assert_exit 0
+assert_stdout_has "301"
+assert_stdout_has "https://nosuchhost.example/"
+# And the file `roots` wrote names the router. This asserts the FILE'S CONTENTS
+# and nothing about what the edge did with them -- see the block below, which is
+# the correction of an earlier version of this comment that claimed otherwise.
+assert_file_has "$rendered" 'Host(`staging.web`)'
+# **Whether the edge has read this file, and the search that ended in a
+# permission denial.** The edge runs with the API on an asserted publication
+# (above), so its router table is readable, and the assertion at the end of
+# this file now reads it. Before the fix that table held only traefik's three
+# internal routers -- `api@internal`, `dashboard@internal` and
+# `web-to-websecure@internal` -- and not `routed-staging-web`. Traefik's own
+# journal said why:
+#
+#   ERR Cannot start the provider *file.Provider error="unable to read
+#   directory /etc/guarden/edge: open /etc/guarden/edge: permission denied"
+#
+# `roots sync` above runs before the edge starts, so the file was on disk
+# before the container was created and a file watcher had nothing to catch:
+# the file was there and the container could not read it. An earlier version
+# of this comment claimed the watcher missed a late write; the suite's own
+# order refutes that and ticket 263 records the refutation so it is not tried
+# again.
+#
+# **The cause, measured (ticket 263; ADR-0017).** A systemd user manager's
+# supplementary groups are fixed when the manager starts, and `loginctl
+# enable-linger` starts it before `_edge_group` adds the user to `edge`. So
+# `keep-groups` -- which faithfully carries the *manager's* set -- carried one
+# without `edge`, and the 2750 directory refused the read. No gid number
+# stands in for this: `/etc/subgid` maps the container's gids far above the
+# host group's number. `_edge_group` now restarts the manager when it lacks
+# the group, and the two assertions at the end of this file pin the fix: the
+# manager's own group set, and the route the provider now loads.
+
+# The edge is a reader of that directory and nothing more: the container's own
+# user is in `edge`, and the mount it reads through is read-only.
+# **`RW=false` is how podman says read-only here.** Asking for the struct with
+# `{{.Mounts}}` prints its Go fields, where the read-only flag is the boolean
+# `RW` and the string "ro" appears nowhere -- so an assertion for "ro" could
+# never pass, and one exact string covering source, destination and read-only
+# is stronger than two loose ones anyway.
+run run_edge podman inspect \
+    --format '{{range .Mounts}}{{.Source}} {{.Destination}} rw={{.RW}}{{end}}' \
+    traefik-production-traefik
+assert_exit 0
+assert_stdout_has "/var/lib/guarden/edge/dynamic /etc/guarden/edge rw=false"
+assert_supplementary_group traefik-production edge
+assert_mode /var/lib/guarden/edge/dynamic 2750
+
+# **The user manager carries the `edge` group, and `id -nG` cannot see this.**
+# The assertion above reads the user database, where the membership is
+# correct; the container inherits the *manager's* supplementary groups through
+# `keep-groups`, and those are fixed at the manager's creation. Measured in
+# ticket 263: `id traefik-production` -> groups 982,981(edge) while the
+# manager ran with 982 alone, and traefik's journal then held `open
+# /etc/guarden/edge: permission denied`. /proc/<MainPID>/status is the
+# manager's own word for its set.
+edge_gid=$(getent group edge | cut -d: -f3)
+edge_uid=$(id -u traefik-production)
+run systemctl show "user@$edge_uid.service" --property=MainPID --value
+assert_exit 0
+manager_pid=$(cat "$GUARDEN_STDOUT")
+run grep '^Groups' "/proc/$manager_pid/status"
+assert_exit 0
+grep -qw "$edge_gid" "$GUARDEN_STDOUT" \
+    || _fail "the user manager for $edge_uid has no edge group ($edge_gid): $(cat "$GUARDEN_STDOUT")"
+
+# **And what it buys: the edge has loaded the route.** The api publication
+# answers with the router table, and `routed-staging-web@file` being in it is
+# the consequence the fix was for -- before it, the file provider could not
+# read the directory and only the three internal routers were listed.
+run curl -s "http://127.0.0.1:$api_publication/api/http/routers"
+assert_exit 0
+assert_stdout_has "routed-staging-web@file"

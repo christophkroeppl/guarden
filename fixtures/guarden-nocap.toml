@@ -1,0 +1,17 @@
+[[environments]]
+name = "production"
+gated = true
+kind = "slot"
+fork_from = ""
+
+[[environments]]
+name = "staging"
+gated = false
+kind = "slot"
+fork_from = "production"
+
+[[environments]]
+name = "previews"
+gated = false
+kind = "instance"
+fork_from = "staging"

@@ -1,0 +1,26 @@
+.kilo
+CLAUDE.md
+
+.env*
+!.env.schema
+
+__pycache__/
+.pytest_cache
+*.pyc
+.venv
+*.egg-info/
+.ruff_cache/
+*.tar.gz
+*.dump
+uv.lock
+evidence/
+.lxc-state/
+
+
+# packaging artifacts
+dist/
+*.deb
+
+# rendered artifacts
+*user-data*.yaml
+cloud-init.yaml

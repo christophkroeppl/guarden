@@ -1,0 +1,25 @@
+# The authelia service, as a service: one user, one home, one unit directory.
+#
+# No volumes and no `state:`: a session or a key cache is not worth a snapshot,
+# and a forward-auth provider that owned its own key material would be a secret
+# outside the credential materialiser.
+#
+# The route is how sign-in is reached, and it is an ordinary `routes:` entry —
+# the edge still holds 80 and 443 and forwards them, and it dials this service's
+# loopback publication on the label `authelia`.
+#
+# **`auth: true` is declared here on purpose.** A provider behind itself cannot
+# answer its own sign-in page, and the fix for that is not "remember not to
+# declare it": `roots` withholds the middleware on the provider's own route
+# whatever the manifest says (roots.py:94-95) — the declaration stays true to
+# what the service is, and the route builder is where the rule lives. Shipping
+# the declaration is what keeps that rule honest — the one manifest in the tree
+# that asks for the middleware and must not get it.
+project: authelia
+units: .guarden/quadlet/
+
+routes:
+  - container: authelia
+    port: 9000
+    host: authelia
+    auth: true
