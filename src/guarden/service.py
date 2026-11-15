@@ -280,7 +280,13 @@ def parse_from(values: list[str], verb: str) -> Source:
     raise errors.GuardenError(f"unknown verb {verb!r}")
 
 
-def _manifest_in(directory: Path) -> Path:
+def _manifest_in(directory: Path, environment: str | None = None) -> Path:
+    if environment:
+        guarden = directory / ".guarden"
+        for candidate in (f"service.{environment}.yml", f"{environment}.service.yml"):
+            path = guarden / candidate
+            if path.is_file():
+                return path
     return directory / manifest_mod.MANIFEST_REL
 
 
@@ -440,7 +446,7 @@ def create(
     # and a tree an operator wrote are declarations by where they live, and
     # the path says so.
     held = source.kind == "service"
-    shipped = apps_mod.discover(tree)
+    shipped = apps_mod.discover(tree, resolved.track.name)
     # `order()` validates cross-app consistency (grouping, pod names, dependency
     # cycles) and is only meaningful for a whole-repository deploy, where every
     # app in the tree is being created.  A deploy that names a single app of a
@@ -450,15 +456,16 @@ def create(
     if not app or len(shipped) <= 1:
         apps_mod.order(shipped)
     one_service = len(shipped) > 1 and shipped[0].grouping == manifest_mod.GROUPING_ONE_SERVICE
+    manifest_path = _manifest_in(directory, resolved.track.name)
     if one_service:
-        documents = [manifest_mod.read(_manifest_in(app.root)) for app in shipped]
+        documents = [manifest_mod.read(_manifest_in(app.root, resolved.track.name)) for app in shipped]
         manifest = manifest_mod.combine(documents, tree)
     else:
-        manifest = manifest_mod.accept(_manifest_in(directory), held=held)
+        manifest = manifest_mod.accept(manifest_path, held=held)
     apps_mod.check(
         manifest,
         shipped,
-        _manifest_in(directory) if not one_service else manifest.source,
+        manifest_path if not one_service else manifest.source,
     )
     _check_config_sources(directory, manifest)
     project = manifest.project or _project_from(source)
@@ -566,6 +573,20 @@ def create(
 
     _make_tree(resolved.name, owner, resolved.escaped_ref)
     _copy_source(tree, resolved.name, owner, manifest.config_files)
+
+    # **Per-environment manifest normalization.** A repository may ship an
+    # environment-specific manifest (e.g. `.guarden/service.staging.yml`) that
+    # selects a different host/exposure set for this track. The deploy reads it
+    # above; everything downstream reads the canonical `.guarden/service.yml`
+    # from the service's home, so the selected document is copied over that
+    # name here, and the home carries one manifest under its canonical name
+    # regardless of which environment selected it.
+    base_manifest_path = directory / manifest_mod.MANIFEST_REL
+    if manifest_path != base_manifest_path and manifest_path.is_file():
+        home_manifest = paths.service_home(resolved.name) / ".guarden" / "service.yml"
+        home_manifest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest_path, home_manifest, follow_symlinks=False)
+        conf.set_owner(home_manifest, owner)
 
     # **The read, the seed and the write are one act under the `overrides`
     # lock.** Every other writer of this file takes it — `weedr port open`,
@@ -730,7 +751,7 @@ def create(
         # nothing and `weedr service start <name>/<ref>` answers 1 (ticket 295).
         with _render_source(directory) as staged:
             if one_service:
-                _flatten_one_service(staged, tree, shipped)
+                _flatten_one_service(staged, tree, shipped, resolved.track.name)
             outcome.notes += units.install(staged, resolved.name, resolved.escaped_ref)
     return outcome
 
@@ -1818,7 +1839,7 @@ def _reap_staging(parent: Path) -> None:
             entry.unlink(missing_ok=True)
 
 
-def _flatten_one_service(staged: Path, tree: Path, shipped: list[apps_mod.App]) -> None:
+def _flatten_one_service(staged: Path, tree: Path, shipped: list[apps_mod.App], environment: str | None = None) -> None:
     """Flatten all apps' containers into the root quadlet dir and write the combined manifest.
 
     A `one-service` tree ships each app's containers in its own `.guarden/quadlet/`
@@ -1857,7 +1878,7 @@ def _flatten_one_service(staged: Path, tree: Path, shipped: list[apps_mod.App]) 
                 )
             seen[dst.name] = app.root
             shutil.copy2(src, dst, follow_symlinks=False)
-    documents = [manifest_mod.read(_manifest_in(app.root)) for app in shipped]
+    documents = [manifest_mod.read(_manifest_in(app.root, environment)) for app in shipped]
     combined = manifest_mod.combine(documents, staged)
     manifest_path = staged / manifest_mod.MANIFEST_REL
     manifest_path.parent.mkdir(parents=True, exist_ok=True)

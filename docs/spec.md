@@ -1043,6 +1043,16 @@ the directory holding the manifest, and the app at the repository root has the *
 The name is a path component and not a path, so the roots may sit at any depth and `apps/web` is
 the app `web`.
 
+**Per-environment manifests (Option B).** A repository may ship an environment-specific manifest
+beside the base one: `.guarden/service.<environment>.yml` or `.guarden/<environment>.service.yml`,
+where `<environment>` is a track name from the host's `[[environments]]` table. When a deploy is
+made on that track, the environment-specific manifest is selected in preference to the base
+`.guarden/service.yml`; on any other track the base manifest is used. The selected document is
+copied into the service's home under the canonical `.guarden/service.yml` name, so everything
+downstream reads one manifest regardless of which environment selected it. When both forms exist
+for one app root, the environment-specific one wins; a duplicate app name across two different
+roots is still refused.
+
 Three rules follow, and each is a fact about the tree rather than a preference:
 
 - **An app's name is the middle segment of its service's name** (§5.3), so it must match

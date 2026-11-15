@@ -96,7 +96,7 @@ def _host_owned(relative: Path) -> bool:
     return parts[: len(paths.QUADLET.parts[:2])] == paths.QUADLET.parts[:2]
 
 
-def discover(tree: Path) -> list[App]:
+def discover(tree: Path, environment: str | None = None) -> list[App]:
     """Every app this tree ships, by the manifest's location, sorted by root.
 
     **A name two apps share is refused**, because the name is what a service is
@@ -111,7 +111,17 @@ def discover(tree: Path) -> list[App]:
     """
     found: list[App] = []
     seen: dict[str, Path] = {}
-    for path in sorted(tree.rglob(str(MANIFEST_REL))):
+    candidate_names = [str(MANIFEST_REL)]
+    if environment:
+        candidate_names.append(str(Path(".guarden") / f"service.{environment}.yml"))
+        candidate_names.append(str(Path(".guarden") / f"{environment}.service.yml"))
+    collected: list[tuple[Path, bool]] = []
+    for index, candidate in enumerate(candidate_names):
+        env_specific = index != 0
+        for path in tree.rglob(candidate):
+            collected.append((path, env_specific))
+    collected.sort(key=lambda item: (item[0].parent.parent, 0 if item[1] else 1))
+    for path, _env_specific in collected:
         root = path.parent.parent
         if root == tree:
             name = ROOT_APP
@@ -126,6 +136,8 @@ def discover(tree: Path) -> list[App]:
                     errors.REJECTED_INPUT,
                 )
         if name in seen:
+            if seen[name] == root:
+                continue
             raise errors.GuardenError(
                 f"the tree {tree} holds two apps called {name!r} (at {seen[name]} and {root}), "
                 f"and an app's name is the name of its service, so the two would deploy over "
@@ -133,12 +145,6 @@ def discover(tree: Path) -> list[App]:
                 errors.REJECTED_INPUT,
             )
         seen[name] = root
-        # A manifest that does not parse (or otherwise fails validation) is
-        # not a reason to fail discovery: the app's location is known and the
-        # request is still enqueued, so the refusal lands at the ensure step
-        # where `weedr service ingest` reads the manifest (t120-queue). The
-        # grouping is only a hint for enqueue-time service creation; the
-        # invalid tree is refused before any of it is used.
         try:
             document = manifest_mod.read(path)
             grouping = document.grouping

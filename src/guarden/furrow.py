@@ -437,7 +437,7 @@ def _enqueue(args) -> list[dict]:
     project, sha = _poke(args.from_values, args.sha, known, resolved.name)
     _require_granted_project(project)
     source = paths.STAGING / project / sha
-    shipped = apps.discover(source)
+    shipped = apps.discover(source, resolved.track.name)
     if not shipped:
         raise errors.GuardenError(
             f"the staged tree {source} carries no {manifest_mod.MANIFEST_REL}, so there is "

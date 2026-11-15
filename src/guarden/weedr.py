@@ -966,15 +966,26 @@ def _create_guided_root(args) -> int:
         )
     manifest_path = tree / manifest_mod.MANIFEST_REL
     if not manifest_path.is_file():
-        raise errors.GuardenError(
-            f"the tree {tree} carries no {manifest_mod.MANIFEST_REL}, so there is nothing to "
-            "create the service from",
-            errors.HOST_NOT_AS_ASSUMED,
+        # An environment-specific manifest may be the only one shipped.
+        env_manifests = list(tree.rglob(".guarden/service.*.yml")) + list(
+            tree.rglob(".guarden/*.service.yml")
         )
+        if not env_manifests:
+            raise errors.GuardenError(
+                f"the tree {tree} carries no {manifest_mod.MANIFEST_REL}, so there is nothing to "
+                "create the service from",
+                errors.HOST_NOT_AS_ASSUMED,
+            )
     # The manifest is READ, and the read is the validation: a manifest that does
     # not parse, names a volume that is not a name, or carries a `provides:`
     # that is not a kind is refused here, before the service exists.
-    manifest_mod.read(manifest_path)
+    validation_manifest = manifest_path
+    if not manifest_path.is_file():
+        # fallback to any env-specific manifest shipped
+        _envs = list(tree.rglob(".guarden/service.*.yml")) + list(tree.rglob(".guarden/*.service.yml"))
+        if _envs:
+            validation_manifest = _envs[0]
+    manifest_mod.read(validation_manifest)
 
     envs = [env.strip() for env in args.environments.split(",") if env.strip()] or ["production"]
     config = config_mod.load()
