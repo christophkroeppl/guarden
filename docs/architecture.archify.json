@@ -1,0 +1,467 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "guarden: one VPS deployment host",
+    "output": "docs/architecture.html",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "repository": {
+      "url": "git@github.com:christophkroeppl/guarden.git",
+      "provider": "github",
+      "link_mode": "local-only",
+      "revision": "08a5b85d53cf101d89f59234579c2266534c4c49"
+    }
+  },
+  "components": [
+    {
+      "id": "repo",
+      "type": "external",
+      "label": "Project repo + CI",
+      "sublabel": "compose · manifest · env",
+      "tag": "one ssh key",
+      "icon": "external",
+      "pos": [40, 40],
+      "size": [140, 76],
+      "sources": [
+        { "path": "README.md", "line": 170, "end_line": 186, "label": "app layout" },
+        { "path": "README.md", "line": 660, "end_line": 675, "label": "gitops contract" }
+      ]
+    },
+    {
+      "id": "visitors",
+      "type": "external",
+      "label": "Visitors",
+      "sublabel": "browser · HTTP/3",
+      "tag": "real client address",
+      "icon": "person",
+      "pos": [1000, 40],
+      "size": [140, 76]
+    },
+    {
+      "id": "hose",
+      "type": "backend",
+      "label": "hose",
+      "sublabel": "ssh poke · forced cmd",
+      "tag": "no git state",
+      "pos": [280, 40],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/hose.py", "line": 1, "end_line": 30, "label": "receiver role" },
+        { "path": "src/guarden/hose.py", "line": 118, "end_line": 150, "label": "project binding" },
+        { "path": "src/guarden/hose.py", "line": 554, "end_line": 575, "label": "entry point" }
+      ]
+    },
+    {
+      "id": "furrow",
+      "type": "backend",
+      "label": "furrow",
+      "sublabel": "deploy queue · one lane",
+      "tag": "weight order",
+      "pos": [520, 40],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/furrow.py", "line": 1, "end_line": 13, "label": "queue and order" },
+        { "path": "src/guarden/furrow.py", "line": 828, "end_line": 866, "label": "deploy sequence" },
+        { "path": "src/guarden/furrow.py", "line": 637, "end_line": 665, "label": "gate step" }
+      ]
+    },
+    {
+      "id": "loom",
+      "type": "backend",
+      "label": "loom",
+      "sublabel": "renderer · quadlet units",
+      "tag": "refuses unresolved",
+      "pos": [520, 240],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/loom.py", "line": 1, "end_line": 10, "label": "renderer contract" },
+        { "path": "src/guarden/render.py", "line": 1, "end_line": 35, "label": "pure render plan" }
+      ]
+    },
+    {
+      "id": "weedr",
+      "type": "security",
+      "label": "weedr",
+      "sublabel": "root mutator · installs",
+      "tag": "only root writer",
+      "icon": "security",
+      "pos": [760, 240],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/weedr.py", "line": 1, "end_line": 8, "label": "privileged mutator" },
+        { "path": "src/guarden/units.py", "line": 1, "end_line": 8, "label": "installs units" },
+        { "path": "src/guarden/credentials.py", "line": 1, "end_line": 40, "label": "credentials and gate" }
+      ]
+    },
+    {
+      "id": "registry",
+      "type": "database",
+      "label": "Registry",
+      "sublabel": "service records · uid",
+      "tag": "0640 root:guarden",
+      "pos": [520, 440],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/registry.py", "line": 1, "end_line": 12, "label": "projection record" }
+      ]
+    },
+    {
+      "id": "services",
+      "type": "backend",
+      "label": "Services",
+      "sublabel": "one Linux user · one pod",
+      "tag": "rootless podman",
+      "pos": [760, 440],
+      "size": [140, 76],
+      "sources": [
+        { "path": "docs/spec.md", "line": 127, "end_line": 160, "label": "host layout" },
+        { "path": "docs/spec.md", "line": 1640, "end_line": 1665, "label": "what a service owns" }
+      ]
+    },
+    {
+      "id": "edge",
+      "type": "security",
+      "label": "Gate edge",
+      "sublabel": "traefik · public door",
+      "tag": "3 nat rules",
+      "icon": "security",
+      "pos": [1000, 440],
+      "size": [140, 76],
+      "sources": [
+        { "path": "modules/gate-traefik/module.toml", "line": 1, "end_line": 25, "label": "gate-traefik module" },
+        { "path": "CONTEXT.md", "line": 230, "end_line": 239, "label": "edge definition" }
+      ]
+    },
+    {
+      "id": "homepage",
+      "type": "frontend",
+      "label": "homepage",
+      "sublabel": "dashboard service",
+      "tag": "default module",
+      "pos": [760, 640],
+      "size": [140, 76],
+      "sources": [
+        { "path": "modules/homepage/module.toml", "line": 1, "end_line": 26, "label": "homepage module" },
+        { "path": "modules/homepage/homepage-production/.guarden/service.yml", "line": 1, "end_line": 17, "label": "ordinary route" }
+      ]
+    },
+    {
+      "id": "roots",
+      "type": "backend",
+      "label": "roots",
+      "sublabel": "routes for the edge",
+      "tag": "picked up live",
+      "pos": [1000, 640],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/roots.py", "line": 1, "end_line": 16, "label": "route renderer" },
+        { "path": "src/guarden/roots.py", "line": 688, "end_line": 712, "label": "sync" }
+      ]
+    },
+    {
+      "id": "twig",
+      "type": "backend",
+      "label": "twig",
+      "sublabel": "dashboard cards",
+      "tag": "homepage module",
+      "pos": [760, 840],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/twig.py", "line": 1, "end_line": 16, "label": "widget merger" },
+        { "path": "src/guarden/twig.py", "line": 263, "end_line": 285, "label": "sync" }
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "State volumes",
+      "sublabel": "btrfs · snapper config",
+      "tag": "0700 per service",
+      "pos": [520, 640],
+      "size": [140, 76],
+      "sources": [
+        { "path": "CONTEXT.md", "line": 166, "end_line": 171, "label": "state volume" },
+        { "path": "README.md", "line": 463, "end_line": 489, "label": "volumes and bulk" }
+      ]
+    },
+    {
+      "id": "snapshots",
+      "type": "database",
+      "label": "Snapshots",
+      "sublabel": "timeline + number tags",
+      "tag": "snapper cleans",
+      "pos": [520, 840],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/lineage.py", "line": 134, "end_line": 165, "label": "snapshot while running" },
+        { "path": "README.md", "line": 468, "end_line": 482, "label": "two kinds" }
+      ]
+    },
+    {
+      "id": "stakes",
+      "type": "database",
+      "label": "stakes",
+      "sublabel": "pin files · intent",
+      "tag": "budget, not promise",
+      "pos": [40, 840],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/stakes.py", "line": 1, "end_line": 40, "label": "pin registry" },
+        { "path": "src/guarden/pins.py", "line": 1, "end_line": 19, "label": "pin protects nothing" }
+      ]
+    },
+    {
+      "id": "pinsync",
+      "type": "security",
+      "label": "weedr pin sync",
+      "sublabel": "writes snapper marks",
+      "tag": "root · one lock",
+      "icon": "security",
+      "pos": [280, 840],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/reconcile.py", "line": 1, "end_line": 38, "label": "mark reconciler" }
+      ]
+    },
+    {
+      "id": "soil",
+      "type": "backend",
+      "label": "soil",
+      "sublabel": "host converger · ferm",
+      "tag": "no ufw",
+      "pos": [40, 640],
+      "size": [140, 76],
+      "sources": [
+        { "path": "src/guarden/soil.py", "line": 1, "end_line": 27, "label": "two modes" },
+        { "path": "src/guarden/hostprep.py", "line": 2996, "end_line": 2996, "label": "phase list" },
+        { "path": "src/guarden/hostprep.py", "line": 1720, "end_line": 1755, "label": "ingress DNAT" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "guarden host · Ubuntu 26.04",
+      "wraps": [
+        "hose",
+        "furrow",
+        "loom",
+        "weedr",
+        "registry",
+        "services",
+        "edge",
+        "homepage",
+        "roots",
+        "twig",
+        "state",
+        "snapshots",
+        "stakes",
+        "pinsync",
+        "soil"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "repo-poke",
+      "from": "repo",
+      "to": "hose",
+      "label": "ssh poke",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "hose-deploy",
+      "from": "hose",
+      "to": "furrow",
+      "label": "deploy",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "furrow-render",
+      "from": "furrow",
+      "to": "loom",
+      "label": "render",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "furrow-order",
+      "from": "furrow",
+      "to": "weedr",
+      "label": "deploy order",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "loom-record",
+      "from": "loom",
+      "to": "registry",
+      "label": "reads record",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "weedr-record",
+      "from": "weedr",
+      "to": "registry",
+      "label": "writes record"
+    },
+    {
+      "id": "weedr-units",
+      "from": "weedr",
+      "to": "services",
+      "label": "installs units",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "services-state",
+      "from": "services",
+      "to": "state",
+      "label": "mounts",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "state-snapshots",
+      "from": "state",
+      "to": "snapshots",
+      "label": "snapshot each",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "stakes-pins",
+      "from": "stakes",
+      "to": "pinsync",
+      "label": "pin files",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "pins-marks",
+      "from": "pinsync",
+      "to": "snapshots",
+      "label": "writes marks",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "roots-edge",
+      "from": "roots",
+      "to": "edge",
+      "label": "writes routes",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "twig-homepage",
+      "from": "twig",
+      "to": "homepage",
+      "label": "writes cards",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "edge-homepage",
+      "from": "edge",
+      "to": "homepage",
+      "label": "dials",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "edge-services",
+      "from": "edge",
+      "to": "services",
+      "label": "publication",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "visitors-edge",
+      "from": "visitors",
+      "to": "edge",
+      "label": "HTTPS · HTTP/3",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "soil-state",
+      "from": "soil",
+      "to": "state",
+      "label": "snapper configs",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Deploy order",
+      "items": [
+        "furrow runs ensure → render → build → gate → stop → install → start",
+        "build and gate land before the stop, so either failure leaves the old container running",
+        "one build lane; a separate deploy-<service> lock bounds deploys",
+        "a poke is a service, ref, sha and tree: never a path, and the box keeps no git state"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Gate and credentials",
+      "items": [
+        "a gated track will not start on a key that is missing, empty, EXAMPLE- or changeme",
+        "the deploy still exits 0: the service is installed and waiting, and weedr service start re-checks",
+        "systemd-creds encrypts the typed value with the host key or TPM2; a root materialiser writes the service's podman secret store",
+        "the container reads /run/secrets/<KEY> by default; a snapshot never carries credentials"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "State and snapshots",
+      "items": [
+        "weedr creates each declared state volume as a btrfs subvolume; soil writes its own snapper configuration",
+        "a routine snapshot is timeline-tagged and ages up the ladder; an on-demand one is number-tagged",
+        "weedr snapshots every state volume while the service keeps running",
+        "fork and rollback clone copy-on-write from a recorded per-volume number set; a bulk volume is never cloned",
+        "retention belongs to snapper: guarden writes marks, never a delete loop"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Pins",
+      "items": [
+        "stakes writes one file per <service>:<volume>@<number>, with no shared index and no lock",
+        "weedr pin sync runs root-side under one snapshots lock and writes important=yes",
+        "a pin is a priority with a budget: under disk pressure a marked snapshot can still be reaped"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Host substrate",
+      "items": [
+        "soil phases: packages, storage, sysctl, firewall, install, units",
+        "ferm is the only firewall; route_localnet plus nat DNAT forwards 80/tcp, 443/tcp and 443/udp",
+        "the kernel owns 80 and 443; every service binds only an allocated loopback publication",
+        "soil units installs the nightly snapshot timer and the pin-sync path unit, and the btrfs conversion spans two reboots"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Modules",
+      "items": [
+        "gate-traefik ships traefik-production and switches roots on",
+        "homepage ships homepage-production and switches twig on",
+        "cloudflared is an optional outbound terminator with no forwarded port",
+        "modules talk through documented root-owned files and write none of each other's"
+      ]
+    }
+  ]
+}
