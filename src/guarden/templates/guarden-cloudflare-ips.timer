@@ -1,0 +1,12 @@
+[Unit]
+Description=weekly refresh of the Cloudflare origin ranges
+Requires=guarden-cloudflare-ips.service
+
+[Timer]
+OnCalendar=weekly
+AccuracySec=1h
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

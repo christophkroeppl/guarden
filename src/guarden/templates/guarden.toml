@@ -60,14 +60,17 @@ scopes = [ "Access: Apps and Policies Write" ]
 
 # Host-level edge posture. Root-owned.
 #
-#   dashboard         "tunnel": the dashboard route exists only on the
-#                     cloudflared entrypoint, reached through the tunnel and
-#                     Cloudflare Access. "off": no route.
+#   dashboard         "off": no route. "tunnel": the dashboard route exists
+#                     only on the cloudflared entrypoint, so it is reachable
+#                     through the tunnel hostname and nowhere else. Nothing on
+#                     this host checks that hostname's own authentication, so
+#                     `tunnel` is opt-in: enable it only when that hostname is
+#                     covered by an Access policy or an equivalent barrier.
 #   origin_allowlist  "cloudflare": inbound 443 from outside is accepted only
 #                     from the ranges in /etc/guarden/cloudflare-ips.conf.
 #                     "off": the previous behaviour.
 [edge]
-dashboard = "tunnel"
+dashboard = "off"
 origin_allowlist = "off"
 
 [modules]

@@ -9,7 +9,9 @@ knowing anything about video; `[mounts] allow` is the only way a host path
 outside the service's own volumes and `/etc/guarden` becomes bind-mountable;
 `[firewall] allow` names the requested firewall rules the admin agreed to
 install; `[expose] tunnel` names route LABELS published through the tunnel
-INSTEAD of the edge; `[basicauth] required` is the operator's per-service
+INSTEAD of the edge, and `[expose] tunnel_only` names a subset of them that
+renders on the `cloudflared` entrypoint alone; `[basicauth] required` is the
+operator's per-service
 opt-out from the default basic-auth middleware (ADR-0024); and `[ownership]
 volumes` names the host uid that owns a volume's tree ON THE HOST (ADR-0021).
 There is deliberately no `[expose] edge` because

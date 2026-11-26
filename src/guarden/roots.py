@@ -339,11 +339,14 @@ def _tunnel_only_labels(
     if not requested:
         return set()
     if "cloudflared" not in tunnel_entrypoints:
-        raise errors.GuardenError(
-            f"{service}: [expose] tunnel_only is set but the cloudflared entrypoint is not "
-            f"enabled, so a tunnel-only route would have no entrypoint",
-            errors.HOST_NOT_AS_ASSUMED,
+        sys.stderr.write(
+            errors.warn(
+                f"{service}: [expose] tunnel_only is set but the cloudflared entrypoint is "
+                f"not enabled; tunnel-only routes are not rendered on websecure"
+            )
+            + "\n"
         )
+        return set(requested)
     by_label: dict[str, list[dict]] = {}
     for route in routes:
         label = route.get("label", "")
@@ -416,6 +419,8 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
         tunnel_only_here = bool(
             tunnel_only and label in tunnel_only and is_tunnel and not is_edge
         )
+        if tunnel_only_here and "cloudflared" not in tunnel_entrypoints:
+            continue
         if is_tunnel and is_edge:
             row_entrypoints = list(dict.fromkeys(entrypoints + tunnel_entrypoints))
         elif is_tunnel:

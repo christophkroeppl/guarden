@@ -1311,6 +1311,51 @@ Disabling it instead — removing `api.dashboard` and `api.insecure` from the ed
 configuration — is the other acceptable answer, and the module owns the choice: no manifest can
 turn it on and no grant can forward it.
 
+**A tunnel-only dashboard is opt-in and off by default.** `[edge] dashboard = "tunnel"` in
+`/etc/guarden/guarden.toml` renders the dashboard on the plaintext `cloudflared` entrypoint at
+`traefik.<tunnel_domain>`, with a matching tunnel ingress row. It never reaches `web` or
+`websecure`, so a direct dial to the box's 443 cannot serve it:
+
+```sh
+grep -A3 '^\[edge\]' /etc/guarden/guarden.toml
+sudo -u guarden roots sync
+sudo grep -A4 'traefik-dashboard' /var/lib/guarden/edge/dynamic/traefik-dashboard.yml
+```
+
+The barrier for `tunnel` is **not** something guarden can check. The hostname is not public DNS,
+so only a client with the tunnel's DNS reaches it, but any such client reaches the dashboard
+without a login. Cloudflare Access can only be attached to a hostname in a zone this account
+owns; where `.guarden` is resolved by a private resolver instead, write an Access app against a
+zone-covered name (and point the tunnel at that name) before enabling `tunnel`, or leave it
+`off`. `off` renders no file and no ingress row, and `roots sync` sweeps the old ones.
+
+### the origin allowlist
+
+`[edge] origin_allowlist = "cloudflare"` restricts **external 443** to Cloudflare's published
+ranges. It is off by default and it only narrows the edge: loopback traffic (cloudflared's own
+dial, WARP through the connector, health checks) is accepted before the check, and port 80 is
+untouched because ACME HTTP-01 needs it.
+
+```sh
+grep -A2 '^\[edge\]' /etc/guarden/guarden.toml
+cat /etc/guarden/cloudflare-ips.conf          # IPv4 lines are what the firewall renders
+systemctl status guarden-cloudflare-ips.timer # weekly refresh, Persistent=true
+sudo weedr firewall check                     # names the range count, or refuses
+sudo weedr firewall sync                      # re-render after editing the file
+```
+
+The ranges file is owned by `guarden-cloudflare-ips.timer`, which runs `cfranges` and then
+`weedr firewall sync`. A refresh that cannot reach Cloudflare, or whose body names no IPv4
+prefix, leaves the previous file in place and exits non-zero: an empty allowlist would lock the
+tunnel out of 443. Editing the file by hand is supported — the timer's next successful run
+replaces it — but a malformed line or a missing file makes `weedr firewall sync` and
+`weedr port open` fail with exit 1 rather than load a ruleset with an empty allowlist.
+
+Two limits are worth knowing. The host's firewall is `iptables-legacy` and IPv6 is pinned off,
+so only IPv4 prefixes are rendered; the file may carry v6 lines and they are ignored. And the
+deny is on the **original destination port** (`ctorigdstport 443`), because DNAT has already
+rewritten the packet to the edge's publication by the time `guarden-in` sees it.
+
 ---
 
 ## Credentials

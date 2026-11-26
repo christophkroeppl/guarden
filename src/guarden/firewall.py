@@ -513,7 +513,6 @@ def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
             )
         lines += [
             "    proto tcp mod conntrack ctorigdstport 443 jump DROP;",
-            "    proto udp mod conntrack ctorigdstport 443 jump DROP;",
             "}",
             "",
         ]
@@ -731,7 +730,7 @@ def _cloudflare_ranges() -> list[str]:
             f"{path} names no IPv4 CIDR prefix, and [edge] origin_allowlist is cloudflare",
             errors.HOST_NOT_AS_ASSUMED,
         )
-    return ranges
+    return sorted(set(ranges), key=ipaddress.ip_network)
 
 
 def installed() -> str:

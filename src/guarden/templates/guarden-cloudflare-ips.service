@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh the Cloudflare origin ranges for the [edge] allowlist
+Documentation=file:///usr/share/doc/guarden/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/guarden/bin/cfranges
+ExecStartPost=/usr/bin/weedr firewall sync

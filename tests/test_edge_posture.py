@@ -17,7 +17,7 @@ from guarden import config, errors, firewall
 class EdgeTableTest(unittest.TestCase):
     def test_defaults(self) -> None:
         edge = config._edge({}, "guarden.toml")
-        self.assertEqual(edge.dashboard, "tunnel")
+        self.assertEqual(edge.dashboard, "off")
         self.assertEqual(edge.origin_allowlist, "off")
 
     def test_values_are_accepted(self) -> None:
@@ -47,7 +47,7 @@ class CloudflareRangesTest(unittest.TestCase):
     def test_comments_and_blank_lines_are_ignored(self) -> None:
         self.assertEqual(
             self.ranges("# ranges\n\n173.245.48.0/20\n104.16.0.0/13\n"),
-            ["173.245.48.0/20", "104.16.0.0/13"],
+            ["104.16.0.0/13", "173.245.48.0/20"],
         )
 
     def test_ipv6_ranges_are_not_rendered(self) -> None:

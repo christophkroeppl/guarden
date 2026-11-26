@@ -2578,7 +2578,8 @@ def _expose_list(args) -> int:
         ineffective = [
             label
             for label in tunnel_only
-            if record.route_destinations.get(label) != "tunnel"
+            if label in record.route_destinations
+            and record.route_destinations.get(label) != "tunnel"
         ]
         services.append(
             {

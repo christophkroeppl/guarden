@@ -421,6 +421,19 @@ pasta_options = [ "--map-gw", "--ipv4-only", "-a", "10.0.2.100", "-n", "24", "-g
 [build]
 lanes = 1  # concurrent builds; 1 is the default and the recommendation
 
+[edge]  # host-level edge posture. Root-owned, and nothing in a manifest reaches it
+dashboard = "off"  # "off": no dashboard route. "tunnel": the dashboard is served
+  # on the plaintext `cloudflared` entrypoint only, through
+  # `traefik.<tunnel_domain>`. That hostname is not public DNS, but
+  # nothing on the host verifies its own authentication: enable it only
+  # when an Access policy or an equivalent barrier covers the name.
+origin_allowlist = "off"  # "cloudflare": external traffic that dialled 443 is
+  # accepted only from the prefixes in /etc/guarden/cloudflare-ips.conf,
+  # refreshed weekly by guarden-cloudflare-ips.timer. Port 80 stays open
+  # for ACME HTTP-01. A missing or empty ranges file is exit 1, not an
+  # empty allowlist: `weedr firewall sync` refuses rather than locking the
+  # tunnel out of its own origin
+
 [share]  # the time-bounded grants that reach a tunnel route .
   # Root-owned, and no repository sets any of it.
 max = "168h"  # the longest a `weedr share issue --until` may be. Guarden's own
@@ -682,6 +695,12 @@ allow = ["/dev/dri"]  # host paths this service's units may bind-mount
 [expose]
 tunnel = ["web"]  # route labels published through the tunnel instead of the service's
   # resolved destination; a loopback record still wins (§3.3)
+tunnel_only = ["api"]  # a subset of `tunnel`: these labels render on the
+  # `cloudflared` entrypoint ONLY, so the edge never accepts them on
+  # `web`/`websecure`. Off unless named. A label that names no route, a
+  # route that also has `edge`, or a host without the cloudflared
+  # module is warned about and ignored — never exit 2, because a
+  # root-owned file must not wedge every later `roots sync`
 
 [basicauth]
 required = false  # the default basic-auth middleware (§6.2 `weedr basicauth off`)
@@ -694,6 +713,13 @@ volumes = { "scratch" = 999 }  # the host uid that owns a bulk volume's tree
   # name the manifest does not declare, and a `state`
   # volume are each refused
 ```
+
+`[expose] tunnel_only` is the per-service half of "this route is reachable through the tunnel
+and not from the edge". It names a subset of `[expose] tunnel`; a route it names renders with
+`cloudflared` as its only entrypoint, and its preview router does the same. It cannot name a
+route that also has an `edge` destination — that would remove an entrypoint the route needs —
+and it cannot name a label the slice does not carry. Both are warnings rather than refusals: the
+file is root-owned and a stale label must not stop `roots sync` for every other service.
 
 `keep_last` and `free_limit` override the track's defaults. `groups.add` gives the service
 user supplementary groups, which is how a hardware-transcoding service reaches `/dev/dri`
@@ -3512,10 +3538,13 @@ Two consequences an operator must know. Locally generated traffic does not trave
 another machine on a local network cannot reach the box by its public name.
 
 The edge's API and dashboard are a control surface, not ingress: published on loopback,
-restricted in `OUTPUT` to `host.admin_user`, and never forwarded. (Amendment 0029: the dashboard
-may additionally be exposed as a tunnel-only route on the plaintext `cloudflared` entrypoint,
-reachable only through the Cloudflare tunnel and localhost; it is never attached to the
-forwarded `web`/`websecure` entrypoints.)
+restricted in `OUTPUT` to `host.admin_user`, and never forwarded. The `api` publication is
+recognised by the record's `control_surface` flag, not by the publication's name, so an
+application whose own service is called `api` keeps the ordinary grants. (Amendment 0029: with
+`[edge] dashboard = "tunnel"` the dashboard may additionally be exposed on the plaintext
+`cloudflared` entrypoint at `traefik.<tunnel_domain>`; it is never attached to the forwarded
+`web`/`websecure` entrypoints. The default is `off`, because the host cannot verify that the
+tunnel hostname has an authentication layer of its own.)
 
 ### 7.6 Isolation between services
 

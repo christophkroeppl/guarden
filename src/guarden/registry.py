@@ -700,7 +700,7 @@ def _control_surface(document: dict) -> bool:
     if not isinstance(value, bool):
         raise errors.GuardenError(
             f"registry: control_surface must be a boolean, got {value!r}",
-            errors.REJECTED_INPUT,
+            errors.HOST_NOT_AS_ASSUMED,
         )
     return value
 

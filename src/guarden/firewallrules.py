@@ -179,7 +179,7 @@ def check() -> int:
         try:
             ranges = firewall_mod._cloudflare_ranges()
         except errors.GuardenError as exc:
-            sys.stdout.write(f"origin allowlist: cloudflare, unnecessary: {exc}\n")
+            sys.stdout.write(f"origin allowlist: cloudflare, unusable: {exc}\n")
             return 1
         sys.stdout.write(f"origin allowlist: cloudflare, {len(ranges)} ranges\n")
     else:

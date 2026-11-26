@@ -30,6 +30,7 @@ import lzma
 import os
 import platform
 import pwd
+import re
 import shutil
 import stat
 import tarfile
@@ -1886,6 +1887,42 @@ def _exposure_offenders() -> list[str]:
     return sorted(found)
 
 
+def _edge_declared() -> bool:
+    """`guarden.toml` names its `[edge]` table explicitly.
+
+    The table's keys have defaults, so a file that omits it behaves the same and
+    `config.load` cannot tell the two apart. That is exactly why it needs its own
+    item: an operator who believes the allowlist is on cannot see that the
+    table never existed, and a default that changed later would change the host
+    silently.
+    """
+    path = h.config_path()
+    if not path.is_file():
+        return True
+    return re.search(r"(?m)^\s*\[edge\]\s*$", path.read_text(encoding="utf-8")) is not None
+
+
+def _seed_edge() -> None:
+    path = h.config_path()
+    body = path.read_text(encoding="utf-8")
+    if not body.endswith("\n"):
+        body += "\n"
+    body += '\n[edge]\ndashboard = "off"\norigin_allowlist = "off"\n'
+    h.write_file(path, body, 0o640)
+
+
+def _ranges_readable() -> bool:
+    """The allowlist can be rendered: the file exists and names an IPv4 prefix."""
+    from guarden import errors
+    from guarden import firewall as firewall_mod
+
+    try:
+        firewall_mod._cloudflare_ranges()
+    except errors.GuardenError:
+        return False
+    return True
+
+
 def firewall_items(family: str | None = None) -> list[Item]:
     config = h.read_config(h.config_path()) or h.shipped_config()
     interface = h.ingress_interface(config)
@@ -1991,6 +2028,68 @@ def firewall_items(family: str | None = None) -> list[Item]:
             correctable=False,
         )
     )
+    items.append(
+        Item(
+            "guarden.toml declares the [edge] posture",
+            _edge_declared,
+            _seed_edge,
+        )
+    )
+    allowlist = (config.get("edge", {}) or {}).get("origin_allowlist", "off")
+    items.append(
+        h.text_item(
+            "guarden-cloudflare-ips.service is installed",
+            hostpath(*SYSTEMD_DIR, "guarden-cloudflare-ips.service"),
+            _template("guarden-cloudflare-ips.service"),
+            0o644,
+        )
+    )
+    items.append(
+        h.text_item(
+            "guarden-cloudflare-ips.timer is installed",
+            hostpath(*SYSTEMD_DIR, "guarden-cloudflare-ips.timer"),
+            _template("guarden-cloudflare-ips.timer"),
+            0o644,
+        )
+    )
+    if allowlist == "cloudflare":
+        items.append(
+            Item(
+                "the Cloudflare origin range refresh timer is enabled",
+                lambda: h.run(
+                    "systemctl", "is-enabled", "guarden-cloudflare-ips.timer"
+                ).line
+                in ("enabled", "enabled-runtime"),
+                lambda: h.run_or_die(
+                    "systemctl", "enable", "--now", "guarden-cloudflare-ips.timer"
+                )
+                and None,
+            )
+        )
+        items.append(
+            Item(
+                "the origin ranges file names at least one IPv4 prefix",
+                _ranges_readable,
+                lambda: h.run_or_die(
+                    "systemctl", "start", "guarden-cloudflare-ips.service"
+                )
+                and None,
+            )
+        )
+    else:
+        items.append(
+            Item(
+                "the Cloudflare origin range refresh timer is disabled",
+                lambda: h.run(
+                    "systemctl", "is-enabled", "guarden-cloudflare-ips.timer"
+                ).line
+                not in ("enabled", "enabled-runtime"),
+                lambda: h.run(
+                    "systemctl", "disable", "--now", "guarden-cloudflare-ips.timer"
+                )
+                and None,
+            )
+        )
     return items
 
 
@@ -1998,7 +2097,8 @@ def firewall_items(family: str | None = None) -> list[Item]:
 # install
 # --------------------------------------------------------------------------
 
-_PROGRAMS = ("soil", "weedr", "loom", "roots", "twig", "furrow", "hose", "stakes")
+_PROGRAMS = ("soil", "weedr", "loom", "roots", "twig", "furrow", "hose", "stakes",
+             "cfranges")
 
 # The interpreter line the installed programs carry. The programs are modules in
 # the checkout (spec 11: a Python module with a `main`, exposed as a console
@@ -2185,7 +2285,7 @@ def _link_programs() -> None:
     """One symlink per program in `/usr/bin`, pointing into `/usr/lib/guarden`.
 
     spec 2. Without this a program is installed and cannot be run by name: the
-    eight console scripts are the interface, and a box where `loom` exists under
+    programs are the interface, and a box where `loom` exists under
     `/usr/lib/guarden/bin` and not on `PATH` is a box whose interface is a
     directory listing.
 

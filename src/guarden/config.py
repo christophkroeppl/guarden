@@ -176,7 +176,7 @@ class Firewall:
 class Edge:
     """The `[edge]` table: host-level edge posture."""
 
-    dashboard: str = "tunnel"
+    dashboard: str = "off"
     origin_allowlist: str = "off"
 
 
@@ -348,7 +348,7 @@ def load(path: Any = None) -> Config:
 
 
 def _edge(table: dict, where_file: Any) -> Edge:
-    dashboard = _str(table, "dashboard", f"{where_file} [edge]") or "tunnel"
+    dashboard = _str(table, "dashboard", f"{where_file} [edge]") or "off"
     if dashboard not in DASHBOARD_VALUES:
         raise errors.GuardenError(
             f"{where_file}: [edge] dashboard is {dashboard!r}; the values are "
