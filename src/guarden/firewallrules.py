@@ -171,4 +171,17 @@ def check() -> int:
                 found = True
     if not found:
         sys.stdout.write("no squatted publications\n")
+    from guarden import config as config_mod
+    from guarden import firewall as firewall_mod
+
+    allowlist = config_mod.load().edge.origin_allowlist
+    if allowlist == "cloudflare":
+        try:
+            ranges = firewall_mod._cloudflare_ranges()
+        except errors.GuardenError as exc:
+            sys.stdout.write(f"origin allowlist: cloudflare, unnecessary: {exc}\n")
+            return 1
+        sys.stdout.write(f"origin allowlist: cloudflare, {len(ranges)} ranges\n")
+    else:
+        sys.stdout.write("origin allowlist: off\n")
     return 0

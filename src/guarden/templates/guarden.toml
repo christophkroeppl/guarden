@@ -58,6 +58,18 @@ app = ""
 token_name = "share"
 scopes = [ "Access: Apps and Policies Write" ]
 
+# Host-level edge posture. Root-owned.
+#
+#   dashboard         "tunnel": the dashboard route exists only on the
+#                     cloudflared entrypoint, reached through the tunnel and
+#                     Cloudflare Access. "off": no route.
+#   origin_allowlist  "cloudflare": inbound 443 from outside is accepted only
+#                     from the ranges in /etc/guarden/cloudflare-ips.conf.
+#                     "off": the previous behaviour.
+[edge]
+dashboard = "tunnel"
+origin_allowlist = "off"
+
 [modules]
 enabled = ["gate-traefik", "homepage"]
 

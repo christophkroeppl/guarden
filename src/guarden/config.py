@@ -48,6 +48,7 @@ TOP_LEVEL_KEYS = {
     "environments",
     "share",
     "firewall",
+    "edge",
     "providers",
 }
 TRACK_KEYS = {
@@ -101,6 +102,9 @@ SHARE_DEFAULTS = {
 # `admin_dropin` controls whether the 30-admin.conf drop-in file is installed.
 # When enabled (default), the file is managed by soil and may be edited by an admin.
 FIREWALL_KEYS = {"admin_dropin"}
+EDGE_KEYS = {"dashboard", "origin_allowlist"}
+DASHBOARD_VALUES = {"tunnel", "off"}
+ALLOWLIST_VALUES = {"off", "cloudflare"}
 FIREWALL_DEFAULTS = {
     "admin_dropin": True,
 }
@@ -169,6 +173,14 @@ class Firewall:
 
 
 @dataclass(frozen=True)
+class Edge:
+    """The `[edge]` table: host-level edge posture."""
+
+    dashboard: str = "tunnel"
+    origin_allowlist: str = "off"
+
+
+@dataclass(frozen=True)
 class Config:
     path: str
     domain: str
@@ -183,6 +195,7 @@ class Config:
     tracks: tuple[Track, ...]
     share: Share
     firewall: Firewall
+    edge: Edge = field(default_factory=Edge)
     backend: str = BACKEND
     pasta_options: tuple[str, ...] = PASTA_OPTIONS
     zram: zram.Zram | None = None
@@ -281,12 +294,14 @@ def load(path: Any = None) -> Config:
     modules = document.get("modules", {})
     share = document.get("share", {})
     firewall = document.get("firewall", {})
+    edge = document.get("edge", {})
     for table, name, keys in (
         (host, "host", {"domain", "interface", "admin_user"}),
         (ingress, "ingress", {"alias", "tunnel_domain", "tunnel_id", "publication_range", "forwarded"}),
         (network, "network", NETWORK_KEYS),
         (share, "share", SHARE_KEYS),
         (firewall, "firewall", FIREWALL_KEYS),
+        (edge, "edge", EDGE_KEYS),
         (build, "build", {"lanes"}),
         (modules, "modules", {"enabled"}),
     ):
@@ -325,10 +340,29 @@ def load(path: Any = None) -> Config:
         tracks=tuple(tracks),
         share=_share(share, where_file),
         firewall=_firewall(firewall, where_file),
+        edge=_edge(edge, where_file),
         backend=_backend(network, where_file),
         pasta_options=_pasta_options(network, where_file),
         zram=zram.knob(document, str(where_file)),
     )
+
+
+def _edge(table: dict, where_file: Any) -> Edge:
+    dashboard = _str(table, "dashboard", f"{where_file} [edge]") or "tunnel"
+    if dashboard not in DASHBOARD_VALUES:
+        raise errors.GuardenError(
+            f"{where_file}: [edge] dashboard is {dashboard!r}; the values are "
+            f"{', '.join(sorted(DASHBOARD_VALUES))}",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    allowlist = _str(table, "origin_allowlist", f"{where_file} [edge]") or "off"
+    if allowlist not in ALLOWLIST_VALUES:
+        raise errors.GuardenError(
+            f"{where_file}: [edge] origin_allowlist is {allowlist!r}; the values are "
+            f"{', '.join(sorted(ALLOWLIST_VALUES))}",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return Edge(dashboard=dashboard, origin_allowlist=allowlist)
 
 
 def _share(table: dict, where_file: Any) -> Share:

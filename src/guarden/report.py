@@ -119,9 +119,13 @@ def _service_object(record, invariants: list[str]) -> dict:
             "containers": [
                 {"container": container, "port": port}
                 for container, port in sorted(record.publication.items())
-                if container != "api"
+                if not (registry.is_control_surface(record) and container == "api")
             ],
-            "api": record.publication.get("api"),
+            "api": (
+                record.publication.get("api")
+                if registry.is_control_surface(record)
+                else None
+            ),
         },
         "edges": [
             {

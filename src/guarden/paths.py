@@ -29,6 +29,8 @@ PREFIX = Path(os.environ.get("GUARDEN_PREFIX") or "/")
 ETC = PREFIX / "etc"
 ETC_GUARDEN = ETC / "guarden"
 GUARDEN_TOML = ETC_GUARDEN / "guarden.toml"
+# Root-owned Cloudflare CIDR list for the origin allowlist; the timer owns it.
+CLOUDFLARE_IPS = ETC_GUARDEN / "cloudflare-ips.conf"
 # spec 3.1b: the operator's edge overrides, `0640 root:guarden`, written by no
 # program. It sits beside `guarden.toml`; `soil install` seeds it empty once, so
 # the path exists for an operator to edit, and every later read of it is a read

@@ -649,8 +649,14 @@ def create(
         registry.RuleEntry(name=entry.name, chain=entry.chain, rule=entry.rule)
         for entry in manifest.firewall
     ]
+    control_entry = None
     if source.kind == "module":
+        module = modules_mod.read(str(source.module))
+        control_entry = module.service(str(source.service))
         record.installed_by = str(source.module)
+    else:
+        record.installed_by = None
+    record.control_surface = bool(control_entry and control_entry.api)
     # Ticket 292: the basic-auth login is minted once, for a brand-new service,
     # while the gate module's policy marker exists. `existing is None` is the
     # grandfathering: a re-ingest or a redeploy of a running fleet mints

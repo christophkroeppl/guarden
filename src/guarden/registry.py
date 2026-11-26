@@ -377,6 +377,10 @@ class Registry:
     owner_units: dict[str, OwnerUnit] = field(default_factory=dict)
     source: str = SOURCE_MANUAL
     installed_by: str | None = None
+    # True only for a module service that declares `api = true` (the edge's
+    # control surface). The name "api" is NOT reserved for repositories: an app
+    # may own a publication called `api`, and it gets normal grants.
+    control_surface: bool = False
     # Where the service's app sits inside the source tree, as the tree spells it
     # (`apps/web`), and the empty string for the tree root — which is the shape
     # every single-app repository has, and the value an older guarden's record
@@ -466,6 +470,8 @@ class Registry:
         }
         if self.installed_by:
             document["installed_by"] = self.installed_by
+        if self.control_surface:
+            document["control_surface"] = True
         if self.app:
             document["app"] = self.app
         if self.deployed_sha:
@@ -552,6 +558,7 @@ class Registry:
             created=document.get("created", ""),
             source=document.get("source", SOURCE_MANUAL),
             installed_by=document.get("installed_by"),
+            control_surface=_control_surface(document),
             app=_app_of_document(document),
             deployed_sha=document.get("deployed_sha"),
             source_hash=document.get("source_hash"),
@@ -686,3 +693,37 @@ def remove_report() -> list[tuple[str, str, str]]:
             for volume_dir in sorted(when_dir.iterdir()):
                 out.append((service_dir.name, when_dir.name, volume_dir.name))
     return out
+
+
+def _control_surface(document: dict) -> bool:
+    value = document.get("control_surface", False)
+    if not isinstance(value, bool):
+        raise errors.GuardenError(
+            f"registry: control_surface must be a boolean, got {value!r}",
+            errors.REJECTED_INPUT,
+        )
+    return value
+
+
+def is_control_surface(record) -> bool:
+    """Whether this record is the edge's control surface.
+
+    The flag is authoritative. Legacy records predate it, so an installed
+    module is consulted; a module that can no longer be read is treated as the
+    control surface (fail closed) rather than downgraded to a normal service.
+    An app service has no `installed_by` and is never the control surface.
+    """
+    if record is None:
+        return False
+    if record.control_surface:
+        return True
+    if not record.installed_by:
+        return False
+    from guarden import modules as modules_mod
+
+    try:
+        module = modules_mod.read(record.installed_by)
+    except (errors.GuardenError, OSError):
+        return True
+    entry = module.service(record.service)
+    return bool(entry and entry.api)

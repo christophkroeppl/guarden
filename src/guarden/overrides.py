@@ -72,7 +72,7 @@ RETENTION_KEYS = {"keep_last", "free_limit", "weekly", "monthly", "quarterly"}
 GROUP_KEYS = {"add"}
 MOUNT_KEYS = {"allow"}
 FIREWALL_KEYS = {"allow"}
-EXPOSE_KEYS = {"tunnel"}
+EXPOSE_KEYS = {"tunnel", "tunnel_only"}
 BASICAUTH_KEYS = {"required"}
 OWNERSHIP_KEYS = {"volumes"}
 
@@ -93,6 +93,7 @@ class Overrides:
     mounts: list[str] = field(default_factory=list)
     firewall: list[str] = field(default_factory=list)
     expose_tunnel: list[str] = field(default_factory=list)
+    expose_tunnel_only: list[str] = field(default_factory=list)
     basicauth_required: bool | None = None
     volume_owners: dict[str, int] = field(default_factory=dict)
 
@@ -119,8 +120,13 @@ class Overrides:
             document["mounts"] = {"allow": list(self.mounts)}
         if self.firewall:
             document["firewall"] = {"allow": list(self.firewall)}
+        expose: dict[str, Any] = {}
         if self.expose_tunnel:
-            document["expose"] = {"tunnel": list(self.expose_tunnel)}
+            expose["tunnel"] = list(self.expose_tunnel)
+        if self.expose_tunnel_only:
+            expose["tunnel_only"] = list(self.expose_tunnel_only)
+        if expose:
+            document["expose"] = expose
         if self.basicauth_required is not None:
             document["basicauth"] = {"required": self.basicauth_required}
         if self.volume_owners:
@@ -281,6 +287,9 @@ def load(service: str) -> Overrides:
         ),
         expose_tunnel=_string_list(
             document.get("expose", {}), "tunnel", EXPOSE_KEYS, f"{where} [expose]"
+        ),
+        expose_tunnel_only=_string_list(
+            document.get("expose", {}), "tunnel_only", EXPOSE_KEYS, f"{where} [expose]"
         ),
         basicauth_required=_bool(
             document.get("basicauth", {}), "required", f"{where} [basicauth]"

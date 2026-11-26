@@ -26,6 +26,7 @@ import sys
 from guarden import basicauth, cli, conf, edgeconf, errors, names, paths, registry, render
 from guarden import config as config_mod
 from guarden import modules as modules_mod
+from guarden import overrides as overrides_mod
 
 GROUPS = (("sync", "render every service's routes into the edge's directory", None),)
 
@@ -326,10 +327,67 @@ def _recorded(service: str, routes: list[dict]) -> list[dict]:
     return out
 
 
+def _tunnel_only_labels(
+    service: str, routes: list[dict], tunnel_entrypoints: list[str]
+) -> set[str]:
+    """The `[expose] tunnel_only` labels that are effective for this service.
+
+    A stale or contradictory label is warned about and ignored, never an error:
+    a root-owned key must not wedge every future `roots sync` for every service.
+    """
+    requested = list(overrides_mod.load(service).expose_tunnel_only)
+    if not requested:
+        return set()
+    if "cloudflared" not in tunnel_entrypoints:
+        raise errors.GuardenError(
+            f"{service}: [expose] tunnel_only is set but the cloudflared entrypoint is not "
+            f"enabled, so a tunnel-only route would have no entrypoint",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    by_label: dict[str, list[dict]] = {}
+    for route in routes:
+        label = route.get("label", "")
+        if label:
+            by_label.setdefault(label, []).append(route)
+    effective: set[str] = set()
+    for label in requested:
+        candidates = by_label.get(label, [])
+        if not candidates:
+            sys.stderr.write(
+                errors.warn(
+                    f"{service}: [expose] tunnel_only names {label!r}, "
+                    f"which is not a route; ignored"
+                )
+                + "\n"
+            )
+            continue
+        if any("edge" in _route_destinations(route) for route in candidates):
+            sys.stderr.write(
+                errors.warn(
+                    f"{service}: [expose] tunnel_only names {label!r}, whose destination "
+                    f"includes edge; ignored because it would remove the public entrypoint"
+                )
+                + "\n"
+            )
+            continue
+        if not any("tunnel" in _route_destinations(route) for route in candidates):
+            sys.stderr.write(
+                errors.warn(
+                    f"{service}: [expose] tunnel_only names {label!r}, which is not a tunnel "
+                    f"route; ignored"
+                )
+                + "\n"
+            )
+            continue
+        effective.add(label)
+    return effective
+
+
 def render_service(service: str, routes: list[dict], entrypoints: list[str],
                    provider: str | None, basicauthed: bool = False,
                    tunnel_entrypoints: list[str] | None = None,
-                   preview_host: str | None = None) -> str:
+                   preview_host: str | None = None,
+                   tunnel_only: set[str] | None = None) -> str:
     """One service's routes, as the file provider reads them.
 
     A route carries the forward-auth middleware only when it asked for it,
@@ -354,10 +412,16 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
         is_tunnel = "tunnel" in dests
         if not (is_edge or is_tunnel):
             continue
+        label = route.get("label", route.get("host", ""))
+        tunnel_only_here = bool(
+            tunnel_only and label in tunnel_only and is_tunnel and not is_edge
+        )
         if is_tunnel and is_edge:
             row_entrypoints = list(dict.fromkeys(entrypoints + tunnel_entrypoints))
         elif is_tunnel:
-            row_entrypoints = list(tunnel_entrypoints)
+            row_entrypoints = (
+                ["cloudflared"] if tunnel_only_here else list(tunnel_entrypoints)
+            )
         else:
             row_entrypoints = list(entrypoints)
         base_router = _router(service, route)
@@ -387,7 +451,9 @@ def render_service(service: str, routes: list[dict], entrypoints: list[str],
             rows.append({
                 "router": preview_key,
                 "rule": rule,
-                "entrypoints": list(tunnel_entrypoints),
+                "entrypoints": (
+                    ["cloudflared"] if tunnel_only_here else list(tunnel_entrypoints)
+                ),
                 "target": f"http://{route.get('target', '')}",
                 "middleware": False,
                 "basicauth": False,
@@ -714,6 +780,10 @@ def sync() -> int:
     # different uids — cannot disagree about where a route went.
     routes = {service: _recorded(service, entries)
               for service, entries in slices().items()}
+    tunnel_only = {
+        service: _tunnel_only_labels(service, entries, tunnel_entrypoints)
+        for service, entries in routes.items()
+    }
     policies, policy_diagnostics = basicauth_flags()
     # **The whole plan is rendered before the first byte is written**, after
     # `provider_for` has refused a marker that does not hold. A validator that
@@ -724,7 +794,8 @@ def sync() -> int:
                                  policies.get(service, False),
                                  tunnel_entrypoints=tunnel_entrypoints,
                                  preview_host=(f"preview.{config.tunnel_domain}"
-                                               if config.tunnel_domain else None)))
+                                               if config.tunnel_domain else None),
+                                 tunnel_only=tunnel_only.get(service)))
         for service, entries in routes.items()
     ]
     auth_body = forward_auth(provider) if provider else None
@@ -752,6 +823,14 @@ def sync() -> int:
                 # dial it directly.
                 traefik_target = f"{config.alias}:{pub}"
                 dashboard_target = f"{config.alias}:{pub}"
+    if (
+        config.edge.dashboard == "tunnel"
+        and config.tunnel_domain
+        and dashboard_target
+    ):
+        # The tunnel ingress row is what makes the dashboard reachable from
+        # WARP; the router itself is cloudflared-only, so no direct :443 path.
+        dashboard_host = f"traefik.{config.tunnel_domain}"
     tunnel_body = render_tunnel(
         [route for entries in routes.values() for route in entries], config,
         traefik_target=traefik_target,
@@ -773,16 +852,14 @@ def sync() -> int:
     write_hosts(hosts_body)
     # Dashboard file (tunnel-only), owned by roots so sweep keeps it.
     dashboard_body = ""
-    if dashboard_target:
+    if dashboard_target and dashboard_host:
         dashboard_body = (
             "# Written by roots. Do not edit: the next sync overwrites this file.\n"
             "http:\n"
             "  routers:\n"
             "    traefik-dashboard:\n"
-            "      rule: \"Host(`traefik.guarden`)\"\n"
+            f"      rule: \"Host(`{dashboard_host}`)\"\n"
             "      entryPoints:\n"
-            "        - web\n"
-            "        - websecure\n"
             "        - cloudflared\n"
             "      service: api@internal\n"
         )

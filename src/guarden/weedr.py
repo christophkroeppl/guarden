@@ -2573,18 +2573,32 @@ def _expose_list(args) -> int:
         if record is None:
             continue
         track = config.track(record.environment)
+        granted = overrides.load(record.service)
+        tunnel_only = list(granted.expose_tunnel_only)
+        ineffective = [
+            label
+            for label in tunnel_only
+            if record.route_destinations.get(label) != "tunnel"
+        ]
         services.append(
             {
                 "service": record.service,
                 "exposure": record.exposure or "default",
                 "destination": exposure.resolve(record, track, config.modules),
+                "tunnel_only": tunnel_only,
+                "tunnel_only_ineffective": ineffective,
             }
         )
     if args.json:
         sys.stdout.write(json.dumps({"services": services}) + "\n")
         return 0
     for row in services:
-        sys.stdout.write(f"{row['service']} {row['exposure']} {row['destination']}\n")
+        line = f"{row['service']} {row['exposure']} {row['destination']}"
+        if row["tunnel_only"]:
+            line += f" tunnel_only={','.join(row['tunnel_only'])}"
+            if row["tunnel_only_ineffective"]:
+                line += f" (ineffective: {','.join(row['tunnel_only_ineffective'])})"
+        sys.stdout.write(line + "\n")
     return 0
 
 

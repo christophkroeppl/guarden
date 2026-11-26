@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import ipaddress
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -339,7 +340,7 @@ def _service_accept_map(
             allowed.setdefault(port, {})[uid] = reason
 
         for name, port in sorted(record.publication.items()):
-            if name == publications.API:
+            if registry.is_control_surface(record) and name == publications.API:
                 if admin is None:
                     admin = admin_uid(config)
                 _add(port, admin, "admin")
@@ -370,7 +371,7 @@ def _service_accept_map(
                         _add(port, t_uid, f"tunnel:{t_name}")
         for instance in record.instances.values():
             for name, port in sorted(instance.publication.items()):
-                if name == publications.API:
+                if registry.is_control_surface(record) and name == publications.API:
                     # An instance never holds the API: the API belongs to the
                     # edge's own service, and the edge is not a preview.
                     continue
@@ -495,6 +496,28 @@ def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
     lines += [
         "}",
         "",
+    ]
+    allowlist = getattr(getattr(config, "edge", None), "origin_allowlist", "off")
+    if allowlist == "cloudflare":
+        ranges = _cloudflare_ranges()
+        lines += [
+            "# The origin allowlist: external traffic that dialled 443 is accepted only",
+            "# from Cloudflare. The test is the ORIGINAL destination port, because",
+            "# 20-ingress-nat.conf has already rewritten the packet to the publication.",
+            "table filter",
+            "chain guarden-edge-in {",
+        ]
+        for cidr in ranges:
+            lines.append(
+                f"    proto tcp mod conntrack ctorigdstport 443 saddr {cidr} jump ACCEPT;"
+            )
+        lines += [
+            "    proto tcp mod conntrack ctorigdstport 443 jump DROP;",
+            "    proto udp mod conntrack ctorigdstport 443 jump DROP;",
+            "}",
+            "",
+        ]
+    lines += [
         "table filter",
         f"chain {INPUT_CHAIN} {{",
         "",
@@ -527,6 +550,14 @@ def render(config, grants: list[Grant]) -> tuple[str, dict[str, str]]:
             publications.add((protocol, publication))
     except (ImportError, AttributeError):
         pass
+    if allowlist == "cloudflare":
+        lines += [
+            "    # Before the publication accepts: otherwise the generic edge accept",
+            "    # matches an external packet from any source and the check is a no-op.",
+            "    proto tcp mod conntrack ctorigdstport 443 jump guarden-edge-in;",
+            "    proto udp mod conntrack ctorigdstport 443 jump DROP;",
+            "",
+        ]
     for protocol, publication in sorted(publications, key=lambda p: (p[0], str(p[1]))):
         lines.append(f"    proto {protocol} dport {publication} jump ACCEPT;")
     lines += [
@@ -664,6 +695,38 @@ def granted_rule_lines() -> list[str]:
         out.append(f"# {rule.rule} — granted by {granted_by}")
         out.append(f"    {rules.parse(rule.rule, 'a granted rule').ferm_line()}")
     return out
+
+
+def _cloudflare_ranges() -> list[str]:
+    """The Cloudflare CIDRs the origin allowlist accepts, or a refusal."""
+    path = paths.CLOUDFLARE_IPS
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise errors.GuardenError(
+            f"{path} cannot be read, and [edge] origin_allowlist is cloudflare; "
+            f"write the ranges or set origin_allowlist back to off",
+            errors.HOST_NOT_AS_ASSUMED,
+        ) from exc
+    ranges: list[str] = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        try:
+            network = ipaddress.ip_network(line, strict=False)
+        except ValueError as exc:
+            raise errors.GuardenError(
+                f"{path}: {line!r} is not a CIDR prefix",
+                errors.HOST_NOT_AS_ASSUMED,
+            ) from exc
+        ranges.append(str(network))
+    if not ranges:
+        raise errors.GuardenError(
+            f"{path} names no CIDR prefix, and [edge] origin_allowlist is cloudflare",
+            errors.HOST_NOT_AS_ASSUMED,
+        )
+    return ranges
 
 
 def installed() -> str:
@@ -839,7 +902,7 @@ def as_text(services: list[dict]) -> str:
 
 def _api_publication(service: str) -> int | None:
     record = registry.load(service)
-    if record is None:
+    if record is None or not registry.is_control_surface(record):
         return None
     return record.publication.get("api")
 
