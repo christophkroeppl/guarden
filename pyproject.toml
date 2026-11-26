@@ -10,7 +10,7 @@ guarden = ["templates/*"]
 
 [project]
 name = "guarden"
-version = "0.0.0a1"
+version = "0.1.0"
 description = "One VPS, a handful of projects, one edge."
 requires-python = ">=3.11"
 
