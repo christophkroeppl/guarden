@@ -1329,6 +1329,26 @@ owns; where `.guarden` is resolved by a private resolver instead, write an Acces
 zone-covered name (and point the tunnel at that name) before enabling `tunnel`, or leave it
 `off`. `off` renders no file and no ingress row, and `roots sync` sweeps the old ones.
 
+### after a tunnel route change, restart the tunnel
+
+`roots sync` rewrites `/var/lib/guarden/tunnel/config.yml`, but cloudflared reads that file at
+start and does not watch it. A hostname added or removed by `roots` is not live until the tunnel
+restarts — the old ingress keeps serving, and a new one returns the connector's default 404:
+
+```sh
+user=$(id -u cloudflared-production)
+sudo -u "#$user" env XDG_RUNTIME_DIR="/run/user/$user" \
+  systemctl --user restart cloudflared-pod.service
+sudo -u "#$user" env XDG_RUNTIME_DIR="/run/user/$user" \
+  systemctl --user is-active cloudflared-pod.service
+```
+
+Restart the **pod** unit, not the container unit. Stopping the container alone takes its pod
+down with it, and a later `start` of the container alone fails with a dependency job error.
+
+Traefik does watch its own dynamic directory, so a route change that stays on an existing
+entrypoint needs no restart of the edge.
+
 ### the origin allowlist
 
 `[edge] origin_allowlist = "cloudflare"` restricts **external 443** to Cloudflare's published
