@@ -46,8 +46,15 @@ class CloudflareRangesTest(unittest.TestCase):
 
     def test_comments_and_blank_lines_are_ignored(self) -> None:
         self.assertEqual(
-            self.ranges("# ranges\n\n173.245.48.0/20\n2606:4700::/32\n"),
-            ["173.245.48.0/20", "2606:4700::/32"],
+            self.ranges("# ranges\n\n173.245.48.0/20\n104.16.0.0/13\n"),
+            ["173.245.48.0/20", "104.16.0.0/13"],
+        )
+
+    def test_ipv6_ranges_are_not_rendered(self) -> None:
+        # iptables-legacy cannot load an IPv6 prefix; the host is IPv4-only.
+        self.assertEqual(
+            self.ranges("173.245.48.0/20\n2606:4700::/32\n"),
+            ["173.245.48.0/20"],
         )
 
     def test_a_missing_file_is_a_refusal(self) -> None:

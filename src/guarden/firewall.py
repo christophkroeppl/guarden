@@ -720,10 +720,15 @@ def _cloudflare_ranges() -> list[str]:
                 f"{path}: {line!r} is not a CIDR prefix",
                 errors.HOST_NOT_AS_ASSUMED,
             ) from exc
+        # The host firewall is iptables-legacy: an IPv6 prefix reaches
+        # iptables-restore and fails the whole ruleset. IPv6 is a host
+        # invariant (`report` pins it off), so only IPv4 ranges are rendered.
+        if network.version != 4:
+            continue
         ranges.append(str(network))
     if not ranges:
         raise errors.GuardenError(
-            f"{path} names no CIDR prefix, and [edge] origin_allowlist is cloudflare",
+            f"{path} names no IPv4 CIDR prefix, and [edge] origin_allowlist is cloudflare",
             errors.HOST_NOT_AS_ASSUMED,
         )
     return ranges
