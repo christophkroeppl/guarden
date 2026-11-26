@@ -28,7 +28,10 @@ class RefreshTest(unittest.TestCase):
     def run_main(self, v4: str, v6: str = ""):
         bodies = {"ips-v4": v4, "ips-v6": v6}
 
-        def fake_urlopen(url, timeout=0):
+        def fake_urlopen(request, timeout=0):
+            url = request.full_url
+            if request.get_header("User-agent") != cfranges.USER_AGENT:
+                raise AssertionError("the refresh must identify itself")
             return _Response(bodies[url.rsplit("/", 1)[-1]].encode("utf-8"))
 
         with tempfile.TemporaryDirectory() as directory:

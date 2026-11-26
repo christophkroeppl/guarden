@@ -25,6 +25,10 @@ URLS = (
     "https://www.cloudflare.com/ips-v6",
 )
 
+# Cloudflare's edge answers a bare `Python-urllib/3` client with 403. The
+# request identifies the caller and the project, nothing more.
+USER_AGENT = "guarden-cfranges/1 (+https://github.com/christophkroeppl/guarden)"
+
 HEADER = (
     "# Cloudflare origin ranges for [edge] origin_allowlist.\n"
     "# Refreshed by guarden-cloudflare-ips.timer; a failed refresh leaves this\n"
@@ -33,7 +37,8 @@ HEADER = (
 
 
 def _fetch(url: str) -> list[str]:
-    with urllib.request.urlopen(url, timeout=30) as response:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=30) as response:
         body = response.read().decode("utf-8")
     found = []
     for raw in body.splitlines():
